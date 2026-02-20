@@ -1,36 +1,102 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NoSite Leads
 
-## Getting Started
+Private single-user lead discovery workspace for website-sales side hustle operations.
 
-First, run the development server:
+## Phase 1 Status
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Implemented in this milestone:
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- Next.js App Router foundation with TypeScript and Tailwind.
+- Supabase authentication baseline (email/password).
+- Protected app routes (`/dashboard`, `/coverage`, `/leads`, `/leads/[id]`, `/settings`).
+- Foundational Postgres migration and row-level security (RLS) (row-level security) policies.
+- Deployment baseline docs, env template, and health endpoint.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Deferred to Phase 2+:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- Sequential crawl unit worker and Google Places API (application programming interface) integration.
+- Enrichment/scoring pipelines and queue prioritization logic.
+- Demo builder details and model-based scoring.
 
-## Learn More
+## Tech Stack
 
-To learn more about Next.js, take a look at the following resources:
+- Next.js 16 + React 19 + TypeScript
+- Tailwind CSS (Cascading Style Sheets)
+- Supabase Auth + Postgres
+- Zod (installed for request/data validation in next phases)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Project Structure
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `src/app/(protected)` - authenticated app route group and page shells
+- `src/app/login` - login page and server actions
+- `src/app/api/health/route.ts` - health check endpoint
+- `src/lib/supabase` - Supabase client/server/middleware helpers
+- `supabase/migrations` - SQL migrations and RLS policies
+- `prd.md` - product requirements document
+- `prompt.strict-agent.md` - execution planning document
 
-## Deploy on Vercel
+## Local Setup
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Install dependencies:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+   ```bash
+   npm install
+   ```
+
+2. Copy env template and set values:
+
+   ```bash
+   cp .env.example .env.local
+   ```
+
+3. Fill required variables in `.env.local`:
+
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+4. Create at least one user in Supabase Auth (email/password).
+
+5. Start the app:
+
+   ```bash
+   npm run dev
+   ```
+
+6. Visit `http://localhost:3000` and sign in.
+
+## Database and RLS
+
+- Phase 1 migration file:
+  - `supabase/migrations/202602190001_phase1_foundations.sql`
+- Includes:
+  - foundational tables (`searches`, `leads`, `crawl_runs`, `crawl_units`, `settings`, `audit_logs`, etc.)
+  - enum types
+  - indexes for key query paths
+  - RLS policies for user-owned tables
+
+Apply migration using your Supabase workflow (local DB or hosted SQL editor).
+
+## Private Deployment Baseline
+
+Recommended baseline for private always-on usage:
+
+- Host Next.js in a private deployment environment.
+- Store secrets in platform secret manager (never client-exposed).
+- Use HTTPS-only domain access.
+- Restrict access with strong credentials and optional IP allowlist.
+
+## Monitoring and Health
+
+- Health endpoint: `GET /api/health`
+- Suggested checks:
+  - external uptime monitor ping every 1-5 minutes
+  - alert when non-200 or response timeout
+- Error monitoring baseline:
+  - capture server errors from deployment logs
+  - add error tracking service in Phase 2 as needed
+
+## Commands
+
+- `npm run dev` - run local dev server
+- `npm run lint` - run ESLint checks
+- `npm run build` - production build verification
