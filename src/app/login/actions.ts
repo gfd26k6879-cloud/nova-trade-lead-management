@@ -2,37 +2,31 @@
 
 import { redirect } from "next/navigation";
 
-import { hasSupabaseEnv } from "@/lib/supabase/config";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSession, destroySession, isAuthConfigured, verifyCredentials } from "@/lib/auth";
 
 export async function loginAction(formData: FormData) {
-  if (!hasSupabaseEnv) {
+  if (!(await isAuthConfigured())) {
     redirect("/login?error=missing_config");
   }
 
-  const email = formData.get("email");
+  const username = formData.get("username");
   const password = formData.get("password");
 
-  if (typeof email !== "string" || typeof password !== "string") {
+  if (typeof username !== "string" || typeof password !== "string") {
     redirect("/login?error=invalid_credentials");
   }
 
-  const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const valid = await verifyCredentials(username, password);
 
-  if (error) {
+  if (!valid) {
     redirect("/login?error=invalid_credentials");
   }
 
-  redirect("/dashboard");
+  await createSession();
+  redirect("/queue");
 }
 
 export async function logoutAction() {
-  if (!hasSupabaseEnv) {
-    redirect("/login?error=missing_config");
-  }
-
-  const supabase = await createSupabaseServerClient();
-  await supabase.auth.signOut();
+  await destroySession();
   redirect("/login");
 }

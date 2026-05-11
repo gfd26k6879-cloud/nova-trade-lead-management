@@ -15,7 +15,7 @@ You are an expert full-stack and product engineer. Build a production-ready lead
 ## 3) Required Technology Stack
 - Next.js 14+ App Router with TypeScript.
 - Tailwind CSS (Cascading Style Sheets) plus shadcn/ui.
-- Supabase Auth (authentication) and Postgres via `@supabase/supabase-js`.
+- Local single-user authentication (authentication) and SQLite via `better-sqlite3`.
 - Zod for validation.
 - TanStack Table for lead lists.
 - React Hook Form for forms.
@@ -54,7 +54,7 @@ Execute in phases and stop after each phase with a status report.
 
 ## 5) Functional Requirements (MVP)
 ### A) Authentication and Ownership
-- Email/password authentication through Supabase Auth.
+- Single username/password authentication through local session cookies.
 - Every user can only access their own records.
 - Enforce row-level security on all user-owned tables.
 
@@ -135,7 +135,7 @@ Execute in phases and stop after each phase with a status report.
 - `lib/googlePlaces.ts` typed client for Places API (application programming interface).
 - `lib/classifyWebsite.ts` with configurable host lists.
 - `lib/scoring.ts` with defaults and settings-driven overrides.
-- Supabase migrations including schema, indexes, and row-level security policies.
+- SQLite schema and migration layer including schema, indexes, and constraints.
 - `.env.example` with required environment variables only (no secrets).
 - `README.md` with:
   - setup steps

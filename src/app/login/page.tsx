@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 
 import { loginAction } from "./actions";
 
@@ -19,28 +18,50 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const missingConfig = params.error === "missing_config";
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-6 py-12">
-      <main className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
-        <h1 className="text-2xl font-semibold text-zinc-900">NoSite Leads</h1>
-        <p className="mt-2 text-sm text-zinc-600">Sign in to access your private workspace.</p>
+    <div className="flex min-h-screen items-center justify-center px-6 py-12">
+      <main className="glass-lg w-full max-w-sm rounded-3xl p-10">
+        <div className="mb-8">
+          <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--accent)] shadow-[0_4px_12px_var(--accent-glow)]">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5" />
+              <path d="M2 12l10 5 10-5" />
+            </svg>
+          </div>
+          <h1 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
+            NoSite Leads
+          </h1>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-tertiary)" }}>
+            Sign in to your workspace
+          </p>
+        </div>
 
-        <form action={loginAction} className="mt-8 space-y-4">
+        <form action={loginAction} className="space-y-5">
           <div>
-            <label htmlFor="email" className="mb-1 block text-sm font-medium text-zinc-700">
-              Email
+            <label
+              htmlFor="username"
+              className="mb-1.5 block text-xs font-medium"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              Username
             </label>
             <input
-              id="email"
-              name="email"
-              type="email"
+              id="username"
+              name="username"
+              type="text"
               required
-              autoComplete="email"
-              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
+              autoComplete="username"
+              placeholder="Username"
+              className="glass-input w-full"
             />
           </div>
 
           <div>
-            <label htmlFor="password" className="mb-1 block text-sm font-medium text-zinc-700">
+            <label
+              htmlFor="password"
+              className="mb-1.5 block text-xs font-medium"
+              style={{ color: "var(--text-secondary)" }}
+            >
               Password
             </label>
             <input
@@ -49,36 +70,44 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               type="password"
               required
               autoComplete="current-password"
-              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
+              className="glass-input w-full"
             />
           </div>
 
-          {hasError ? (
-            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              Invalid email or password.
-            </p>
-          ) : null}
+          {hasError && (
+            <div
+              className="rounded-xl px-3.5 py-2.5 text-sm"
+              style={{
+                background: "rgba(239, 68, 68, 0.08)",
+                border: "1px solid rgba(239, 68, 68, 0.15)",
+                color: "#dc2626",
+              }}
+            >
+              Invalid username or password.
+            </div>
+          )}
 
-          {missingConfig ? (
-            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-              Missing Supabase environment variables. Configure `.env.local` before signing in.
-            </p>
-          ) : null}
+          {missingConfig && (
+            <div
+              className="rounded-xl px-3.5 py-2.5 text-sm"
+              style={{
+                background: "rgba(245, 158, 11, 0.08)",
+                border: "1px solid rgba(245, 158, 11, 0.15)",
+                color: "#b45309",
+              }}
+            >
+              Configuration error. Please check your setup.
+            </div>
+          )}
 
-          <button
-            type="submit"
-            className="w-full rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
-          >
+          <button type="submit" className="btn-primary w-full">
             Sign in
           </button>
         </form>
 
-        <p className="mt-4 text-xs text-zinc-500">
-          This is a private single-user app. Create your user in Supabase Auth before first login.
+        <p className="mt-6 text-center text-xs" style={{ color: "var(--text-tertiary)" }}>
+          Private single-user workspace
         </p>
-        <Link href="/" className="mt-4 inline-block text-xs text-zinc-500 hover:text-zinc-700">
-          Back to app
-        </Link>
       </main>
     </div>
   );

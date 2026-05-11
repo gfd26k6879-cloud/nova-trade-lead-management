@@ -1,39 +1,77 @@
 # NoSite Leads
 
-Private single-user lead discovery workspace for website-sales side hustle operations.
+For the fastest complete system map, use `docs/ULTRA_SYSTEM_ATLAS.md`. For production deployment, use `docs/VERCEL_SUPABASE_DEPLOYMENT.md`.
 
-## Phase 1 Status
+Private single-user lead discovery and outreach CRM (Customer Relationship Management) for website-sales side hustle operations. Discovers local businesses with weak or missing websites via Google Places API (Application Programming Interface), scores and prioritizes them, and provides outreach tools to convert leads.
 
-Implemented in this milestone:
+## Architecture
 
-- Next.js App Router foundation with TypeScript and Tailwind.
-- Supabase authentication baseline (email/password).
-- Protected app routes (`/dashboard`, `/coverage`, `/leads`, `/leads/[id]`, `/settings`).
-- Foundational Postgres migration and row-level security (RLS) (row-level security) policies.
-- Deployment baseline docs, env template, and health endpoint.
+```
+Next.js App Router (TypeScript)
+??? Supabase Postgres in production, SQLite locally without DATABASE_URL
+├── Google Places API (New) — lead discovery & enrichment
+├── Server Actions — mutations (crawl, leads, settings)
+├── API Routes — crawl polling, CSV export, health check
+└── Liquid Glass UI — Tailwind CSS custom theme
+```
 
-Deferred to Phase 2+:
-
-- Sequential crawl unit worker and Google Places API (application programming interface) integration.
-- Enrichment/scoring pipelines and queue prioritization logic.
-- Demo builder details and model-based scoring.
+**Data flow:** Dashboard starts a crawl run -> sequential worker processes zip+category units -> Places API text search -> classify website -> compute score -> upsert lead -> UI displays results.
 
 ## Tech Stack
 
 - Next.js 16 + React 19 + TypeScript
-- Tailwind CSS (Cascading Style Sheets)
-- Supabase Auth + Postgres
-- Zod (installed for request/data validation in next phases)
+- Tailwind CSS with Apple Liquid Glass-inspired theme
+- Supabase Postgres via `postgres` in production
+- SQLite via `better-sqlite3` for local development and migration export
+- Zod for server action input validation
+- Vitest for unit tests
+- Sonner for toast notifications
 
 ## Project Structure
 
-- `src/app/(protected)` - authenticated app route group and page shells
-- `src/app/login` - login page and server actions
-- `src/app/api/health/route.ts` - health check endpoint
-- `src/lib/supabase` - Supabase client/server/middleware helpers
-- `supabase/migrations` - SQL migrations and RLS policies
-- `prd.md` - product requirements document
-- `prompt.strict-agent.md` - execution planning document
+```
+src/
+├── app/
+│   ├── (protected)/          # Auth-gated routes
+│   │   ├── dashboard/        # Crawl controls, stats, metrics
+│   │   ├── coverage/         # Zip-by-zip crawl progress
+│   │   ├── leads/            # Leads table + detail pages
+│   │   ├── queue/            # Now Queue — top actionable leads
+│   │   └── settings/         # Niche weights, hosts, budget
+│   ├── api/
+│   │   ├── crawl/process-next/  # Crawl worker polling endpoint
+│   │   ├── export/csv/          # CSV export endpoint
+│   │   └── health/              # Health check
+│   ├── login/                # Authentication
+│   ├── error.tsx             # Error boundary
+│   ├── not-found.tsx         # Custom 404
+│   └── layout.tsx            # Root layout + Toaster
+├── components/
+│   ├── page-shell.tsx        # Reusable page layout
+│   ├── nav-header.tsx        # Responsive navigation
+│   └── confirm-dialog.tsx    # Reusable confirmation modal
+├── lib/
+│   ├── db/
+?   ?   ??? index.ts          # SQLite/Postgres connection adapter
+│   │   ├── schema.ts         # All CREATE TABLE statements
+│   │   ├── queries.ts        # Typed data access layer
+│   │   └── seed-zips.ts      # Colorado zip code seeder
+│   ├── crawl/
+│   │   ├── worker.ts         # Sequential crawl unit processor
+│   │   └── actions.ts        # Crawl run server actions
+│   ├── leads/
+│   │   └── actions.ts        # Lead CRUD + outreach server actions
+│   ├── settings/
+│   │   └── actions.ts        # Settings server actions
+│   ├── google-places.ts      # Places API client with retry
+│   ├── classify-website.ts   # Website status classifier
+│   ├── scoring.ts            # Lead scoring with factor breakdown
+│   ├── outreach-package.ts   # Template-based outreach generator
+│   ├── auth.ts               # Local cookie-based auth
+│   └── __tests__/            # Unit tests
+└── data/
+    └── colorado-zips.json    # Static zip code dataset
+```
 
 ## Local Setup
 
@@ -43,60 +81,99 @@ Deferred to Phase 2+:
    npm install
    ```
 
-2. Copy env template and set values:
+2. Copy env template and set your Google Places API key:
 
    ```bash
    cp .env.example .env.local
    ```
 
-3. Fill required variables in `.env.local`:
+   Also set `NOSITE_ADMIN_USERNAME`, `NOSITE_ADMIN_PASSWORD`, and `NOSITE_SESSION_SECRET`.
+   The session secret should be a long random string.
 
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+3. Get a Google Places API key:
 
-4. Create at least one user in Supabase Auth (email/password).
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a project (or select existing)
+   - Enable the "Places API (New)" service
+   - Create an API key under Credentials
+   - Add it to `.env.local` as `GOOGLE_PLACES_API_KEY=your_key_here`
 
-5. Start the app:
+4. Start the app:
 
    ```bash
    npm run dev
    ```
 
-6. Visit `http://localhost:3000` and sign in.
-
-## Database and RLS
-
-- Phase 1 migration file:
-  - `supabase/migrations/202602190001_phase1_foundations.sql`
-- Includes:
-  - foundational tables (`searches`, `leads`, `crawl_runs`, `crawl_units`, `settings`, `audit_logs`, etc.)
-  - enum types
-  - indexes for key query paths
-  - RLS policies for user-owned tables
-
-Apply migration using your Supabase workflow (local DB or hosted SQL editor).
-
-## Private Deployment Baseline
-
-Recommended baseline for private always-on usage:
-
-- Host Next.js in a private deployment environment.
-- Store secrets in platform secret manager (never client-exposed).
-- Use HTTPS-only domain access.
-- Restrict access with strong credentials and optional IP allowlist.
-
-## Monitoring and Health
-
-- Health endpoint: `GET /api/health`
-- Suggested checks:
-  - external uptime monitor ping every 1-5 minutes
-  - alert when non-200 or response timeout
-- Error monitoring baseline:
-  - capture server errors from deployment logs
-  - add error tracking service in Phase 2 as needed
+5. Visit `http://localhost:3000` and sign in with the credentials from `.env.local`.
 
 ## Commands
 
-- `npm run dev` - run local dev server
-- `npm run lint` - run ESLint checks
-- `npm run build` - production build verification
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start development server |
+| `npm run build` | Production build |
+| `npm run test` | Run unit tests |
+| `npm run test:watch` | Run tests in watch mode |
+| `npm run lint` | Run ESLint |
+| `npm run test:e2e` | Run Playwright E2E tests |
+| `npm run db:export:sqlite` | Export ignored JSON files from local SQLite |
+| `npm run db:import:supabase` | Import exported JSON into Supabase Postgres |
+
+## Key Features
+
+### Discovery Engine
+- Sequential zip-code-by-zip-code coverage of Colorado
+- Google Places API Text Search with pagination
+- Deduplication by place_id
+- Resume-safe crawl runs with start/pause/resume
+
+### Website Classification
+- Categorizes businesses as `none`, `social`, `basic`, or `custom`
+- Configurable host lists for social and basic site detection
+
+### Scoring & Ranking
+- Formula: `log(1 + reviews) * rating * niche_weight * website_multiplier`
+- Explainable score factor breakdown on lead detail
+- Recompute all scores when settings change
+
+### CRM & Outreach
+- Lead status pipeline: new -> verified -> contacted -> preview_sent -> meeting_set -> closed
+- Outreach event logging with timeline
+- Now Queue with top 25 actionable leads
+- Template-based outreach package generator with copy-to-clipboard
+- Reminder dates and conversion tracking
+
+### Budget Controls
+- Max API calls per run and per day
+- Auto-pause when budget limits are reached
+- API cost estimation on dashboard
+
+### Export
+- CSV export with filter-aware query parameters
+
+## Database
+
+Local development uses SQLite at `nosite-leads.db` when `DATABASE_URL` is not set. Production uses Supabase Postgres through the `DATABASE_URL` transaction pooler connection string. The current Postgres schema is in `supabase/migrations/202605110001_full_schema.sql`.
+
+Core tables:
+
+- `zip_codes` — Colorado zip codes with city/lat/lng
+- `crawl_runs` — Run metadata and status
+- `crawl_units` — Individual zip+category processing units
+- `leads` — Discovered businesses with scores
+- `outreach_events` — Contact history per lead
+- `settings` — Configuration (niche weights, hosts, budget)
+- `audit_logs` — Key action history
+- `place_cache` — Raw API response cache
+
+## Known Limitations
+
+- Single-user only (environment-configured credentials)
+- Crawl processing requires browser tab to be open (client-side polling)
+- No automated outreach sending (copy-to-clipboard only)
+- Colorado zip codes only by default (expandable via data file)
+- Single-admin auth remains the v1 production model
+
+## API Compliance
+
+This application uses only official Google Places API (New) endpoints. No scraping of Google Search or Google Maps pages. No review text is stored or displayed.

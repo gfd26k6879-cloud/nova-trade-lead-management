@@ -1,20 +1,12 @@
 import { redirect } from "next/navigation";
 
-import { hasSupabaseEnv } from "@/lib/supabase/config";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSession } from "@/lib/auth";
 
 export default async function HomePage() {
-  if (!hasSupabaseEnv) {
-    redirect("/login?error=missing_config");
-  }
+  const session = await getSession();
 
-  const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (user) {
-    redirect("/dashboard");
+  if (session) {
+    redirect("/queue");
   }
 
   redirect("/login");

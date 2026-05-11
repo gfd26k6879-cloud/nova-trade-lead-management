@@ -50,7 +50,7 @@ Primary outcomes:
 - Validate flow with a clickable prototype (or static screen flow) before implementation starts.
 
 ### Phase 1 - Foundations
-- Next.js app scaffold, Supabase auth, schema migrations, row-level security (RLS) policies (row-level security).
+- Next.js app scaffold, local auth, SQLite schema migrations, and baseline access control.
 - Simple UI shells:
   - Dashboard
   - Coverage
