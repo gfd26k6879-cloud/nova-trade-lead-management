@@ -13,22 +13,39 @@ type PageShellProps = {
 
 export function PageShell({ title, description, stats = [], children }: PageShellProps) {
   return (
-    <section className="space-y-6">
-      <header className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
-        <h2 className="text-2xl font-semibold text-zinc-900">{title}</h2>
-        <p className="mt-2 max-w-3xl text-sm text-zinc-600">{description}</p>
+    <section className="space-y-5">
+      <header className="glass-heavy rounded-2xl p-6">
+        <h2 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
+          {title}
+        </h2>
+        <p className="mt-1.5 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+          {description}
+        </p>
 
-        {stats.length > 0 ? (
-          <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {stats.length > 0 && (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {stats.map((stat) => (
-              <article key={stat.label} className="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{stat.label}</p>
-                <p className="mt-2 text-2xl font-semibold text-zinc-900">{stat.value}</p>
-                {stat.hint ? <p className="mt-1 text-xs text-zinc-500">{stat.hint}</p> : null}
+              <article
+                key={stat.label}
+                className="rounded-xl p-4"
+                style={{
+                  background: "rgba(255, 255, 255, 0.4)",
+                  border: "1px solid rgba(255, 255, 255, 0.5)",
+                }}
+              >
+                <p className="section-label">{stat.label}</p>
+                <p className="mt-1.5 text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>
+                  {stat.value}
+                </p>
+                {stat.hint && (
+                  <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                    {stat.hint}
+                  </p>
+                )}
               </article>
             ))}
           </div>
-        ) : null}
+        )}
       </header>
 
       {children}

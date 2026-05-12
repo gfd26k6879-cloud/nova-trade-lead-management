@@ -1,49 +1,59 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { ensureDbReady, getDemoByLeadId, getLatestAiVerification, getLeadById, getOutreachEvents, getScoreBandThresholds, getSettings } from "@/lib/db/queries";
+import { computeScoreWithBreakdown } from "@/lib/scoring";
+import { computeDensityByAddress } from "@/lib/competitive-density";
+import type { WebsiteStatus } from "@/lib/classify-website";
+import { LeadDetailClient } from "./lead-detail-client";
 
-import { PageShell } from "@/components/page-shell";
+interface Props {
+  params: Promise<{ id: string }>;
+}
 
-type LeadDetailProps = {
-  params: Promise<{
-    id: string;
-  }>;
-};
-
-export default async function LeadDetailPage({ params }: LeadDetailProps) {
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params;
+  await ensureDbReady();
+  const lead = await getLeadById(id);
+  return { title: `${lead?.name ?? "Lead"} | NoSite Leads` };
+}
 
-  if (!id) {
+export default async function LeadDetailPage({ params }: Props) {
+  const { id } = await params;
+  await ensureDbReady();
+  const lead = await getLeadById(id);
+
+  if (!lead) {
     notFound();
   }
 
+  const events = await getOutreachEvents(id);
+  const demo = await getDemoByLeadId(id);
+  const latestAiVerification = await getLatestAiVerification(id);
+  const density = await computeDensityByAddress(lead.address, lead.primary_type);
+  const scoreThresholds = await getScoreBandThresholds();
+
+  const settings = await getSettings();
+  const breakdown = computeScoreWithBreakdown(
+    {
+      reviewCount: lead.review_count, rating: lead.rating,
+      categories: lead.categories, websiteStatus: lead.website_status as WebsiteStatus,
+      photoCount: lead.photo_count, hasOpeningHours: lead.has_opening_hours,
+      businessStatus: lead.business_status,
+      websiteHealth: lead.website_health as Record<string, unknown> | null,
+      competitiveDensity: density.count,
+    },
+    Object.keys(settings.niche_weights).length > 0 ? settings.niche_weights : undefined,
+  );
+
   return (
-    <PageShell
-      title={`Lead Detail: ${id}`}
-      description="Phase 1 lead detail shell with workflow placeholders for notes, status, and outreach timeline."
-    >
-      <section className="grid gap-4 lg:grid-cols-3">
-        <article className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm lg:col-span-2">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Business Profile</h3>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-md border border-zinc-200 p-3 text-sm text-zinc-600">Name: -</div>
-            <div className="rounded-md border border-zinc-200 p-3 text-sm text-zinc-600">Phone: -</div>
-            <div className="rounded-md border border-zinc-200 p-3 text-sm text-zinc-600">Address: -</div>
-            <div className="rounded-md border border-zinc-200 p-3 text-sm text-zinc-600">Score: -</div>
-          </div>
-        </article>
-
-        <article className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Status</h3>
-          <select className="mt-4 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-700" disabled>
-            <option>new</option>
-          </select>
-          <p className="mt-3 text-xs text-zinc-500">Editable status and reminder support arrive with Phase 3.</p>
-        </article>
-      </section>
-
-      <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Outreach Timeline</h3>
-        <p className="mt-4 text-sm text-zinc-600">No outreach events yet.</p>
-      </section>
-    </PageShell>
+    <LeadDetailClient
+      lead={lead}
+      initialEvents={events}
+      initialDemo={demo}
+      initialAiVerification={latestAiVerification}
+      scoreBreakdown={breakdown}
+      density={density}
+      scoreThresholds={scoreThresholds}
+    />
   );
 }
