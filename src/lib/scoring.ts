@@ -194,6 +194,8 @@ export function computeWinProbability(input: WinProbabilityInput): number {
     aiStatus === "weak_site_found" &&
     (viabilityStatus === "broken" || viabilityStatus === "parked" || viabilityStatus === "placeholder");
 
+  if (hasUsableAiWebsite) return 0;
+
   let websiteGap = 0;
   if (input.websiteStatus === "none") websiteGap = 26;
   else if (input.websiteStatus === "social") websiteGap = 21;

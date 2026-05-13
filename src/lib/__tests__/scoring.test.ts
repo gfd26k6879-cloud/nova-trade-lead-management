@@ -70,7 +70,7 @@ describe("computeWinProbability", () => {
       aiVerification: { status: "site_found", confidence: 0.9, foundWebsiteUrl: "https://example.com", websiteViabilityStatus: "usable" },
     });
     expect(noSite).toBeGreaterThan(siteFound);
-    expect(siteFound).toBeLessThan(50);
+    expect(siteFound).toBe(0);
   });
 
   it("keeps win probability high when AI finds a broken candidate domain", async () => {

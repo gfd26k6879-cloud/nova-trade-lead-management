@@ -15,6 +15,7 @@ vi.mock("@/lib/db/index", () => {
 import {
   clearLeadExclusion,
   getAllLeadsForRecompute,
+  getLeads,
   getNowQueue,
   getQualifiedLeadCount,
   getScoreBandThresholds,
@@ -107,5 +108,27 @@ describe("lead exclusion query behavior", () => {
     await clearLeadExclusion(id);
     expect((await getNowQueue(10)).map((lead) => lead.id)).toContain(id);
     expect((await getAllLeadsForRecompute()).map((lead) => lead.id)).toContain(id);
+  });
+
+  it("omits AI-confirmed usable websites from no-website opportunity views", async () => {
+    const usableSiteId = insertLead(testDb, 200, { score: 25, status: "new", websiteStatus: "none" });
+    const opportunityId = insertLead(testDb, 201, { score: 12, status: "new", websiteStatus: "none" });
+
+    testDb.prepare(
+      `UPDATE leads
+       SET ai_verification_status = 'site_found',
+           ai_website_viability_status = 'usable',
+           ai_found_website_url = 'https://example.com',
+           win_probability_score = 0
+       WHERE id = ?`
+    ).run(usableSiteId);
+
+    expect(await getQualifiedLeadCount(5)).toBe(1);
+    expect((await getNowQueue(10)).map((lead) => lead.id)).not.toContain(usableSiteId);
+    expect((await getNowQueue(10)).map((lead) => lead.id)).toContain(opportunityId);
+
+    const noWebsiteLeads = await getLeads({ websiteStatus: "none", pageSize: 10 });
+    expect(noWebsiteLeads.leads.map((lead) => lead.id)).not.toContain(usableSiteId);
+    expect(noWebsiteLeads.leads.map((lead) => lead.id)).toContain(opportunityId);
   });
 });

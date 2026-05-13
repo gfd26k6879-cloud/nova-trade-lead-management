@@ -1332,9 +1332,15 @@ export async function leadExists(placeId: string): Promise<boolean>{
 
 const LEAD_ALLOWED_SORT = ["score", "rating", "review_count", "name", "created_at"];
 const SCORE_ELIGIBLE_CONDITION = "COALESCE(is_excluded, 0) = 0";
+const NO_WEBSITE_OPPORTUNITY_STATUSES = new Set(["none", "social", "basic"]);
 const EXCLUDED_STATUS_FILTER = "excluded";
 export const API_ENDPOINT_TEXT_SEARCH = "places.searchText";
 export const API_ENDPOINT_PLACE_DETAILS = "places.placeDetails";
+
+function noUsableAiWebsiteCondition(alias?: string): string {
+  const prefix = alias ? `${alias}.` : "";
+  return `NOT (${prefix}ai_verification_status = 'site_found' AND ${prefix}ai_website_viability_status = 'usable' AND COALESCE(${prefix}ai_found_website_url, '') != '')`;
+}
 
 function startOfToday(): string {
   return new Date().toISOString().slice(0, 10);
@@ -1369,6 +1375,9 @@ function buildLeadFilterWhere(filters: LeadFilters): { where: string; params: un
   if (filters.websiteStatus) {
     conditions.push("website_status = ?");
     params.push(filters.websiteStatus);
+    if (NO_WEBSITE_OPPORTUNITY_STATUSES.has(filters.websiteStatus)) {
+      conditions.push(noUsableAiWebsiteCondition());
+    }
   }
   if (filters.enrichment) {
     conditions.push("enrichment_status = ?");
@@ -1542,6 +1551,7 @@ export async function getQualifiedLeadCount(scoreThreshold = 5.0): Promise<numbe
      FROM leads
       WHERE score >= ?
         AND website_status IN ('none', 'social', 'basic')
+        AND ${noUsableAiWebsiteCondition()}
         AND qualification_status IN ('qualified', 'needs_verification')
         AND ${SCORE_ELIGIBLE_CONDITION}`
   ).get(scoreThreshold) as { count: number };
@@ -1555,6 +1565,7 @@ export async function getScoreBandThresholds(): Promise<ScoreBandThresholds>{
      FROM leads
      WHERE score > 0
        AND website_status IN ('none', 'social', 'basic')
+       AND ${noUsableAiWebsiteCondition()}
        AND qualification_status IN ('qualified', 'needs_verification')
        AND ${SCORE_ELIGIBLE_CONDITION}
      ORDER BY score ASC`
@@ -1869,6 +1880,7 @@ export async function getAiVerificationCandidates(limit: number, businessType?: 
   const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
   const conditions = [
     "l.website_status IN ('none', 'social', 'basic')",
+    noUsableAiWebsiteCondition("l"),
     "l.qualification_status IN ('qualified', 'needs_verification')",
     "l.status IN ('new', 'verified', 'contacted')",
     "l.score > 0",
@@ -3115,6 +3127,7 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
       SELECT id
       FROM leads
       WHERE website_status IN ('none', 'social', 'basic')
+        AND ${noUsableAiWebsiteCondition()}
         AND qualification_status IN ('qualified', 'needs_verification')
         AND status IN ('new', 'verified', 'contacted')
         AND score > 0
@@ -3170,7 +3183,7 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
     FROM ranked
     ORDER BY
       has_urgent_reminder DESC,
-      (score * 0.6 + contactability * 0.2 + freshness * 0.2) DESC
+      (win_probability_score * 0.65 + score * 0.25 + contactability * 5 + freshness * 5) DESC
     LIMIT ?
   `).all(candidateLimit, today, limit) as Array<Record<string, unknown>>;
 
@@ -3334,7 +3347,7 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     db,
     "leads l",
     leadWindow,
-    "COALESCE(l.is_excluded, 0) = 0 AND l.website_status IN ('none','social','basic') AND l.qualification_status IN ('qualified','needs_verification') AND l.status IN ('new','verified','contacted') AND l.score > 0",
+    `COALESCE(l.is_excluded, 0) = 0 AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")} AND l.qualification_status IN ('qualified','needs_verification') AND l.status IN ('new','verified','contacted') AND l.score > 0`,
   );
   const excludedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 1");
   const demosCreated = await countRows(db, "demos d", demoWindow);
