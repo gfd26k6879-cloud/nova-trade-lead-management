@@ -31,6 +31,17 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "leads", column: "estimated_deal_value", type: "REAL NOT NULL DEFAULT 0" },
   { table: "leads", column: "business_type", type: "TEXT" },
   { table: "leads", column: "win_probability_score", type: "REAL NOT NULL DEFAULT 0" },
+  { table: "leads", column: "lead_quality_score", type: "REAL NOT NULL DEFAULT 0" },
+  { table: "leads", column: "quality_bucket", type: "TEXT NOT NULL DEFAULT 'needs_ai_verify'" },
+  { table: "leads", column: "easy_build_score", type: "REAL NOT NULL DEFAULT 0" },
+  { table: "leads", column: "cash_speed_score", type: "REAL NOT NULL DEFAULT 0" },
+  { table: "leads", column: "need_score", type: "REAL NOT NULL DEFAULT 0" },
+  { table: "leads", column: "quality_reason", type: "TEXT" },
+  { table: "leads", column: "recommended_offer", type: "TEXT NOT NULL DEFAULT 'starter_site'" },
+  { table: "leads", column: "next_best_action", type: "TEXT" },
+  { table: "leads", column: "phone_verification_status", type: "TEXT NOT NULL DEFAULT 'unknown'" },
+  { table: "leads", column: "last_quality_scored_at", type: "TEXT" },
+  { table: "leads", column: "quality_checked_by_user_id", type: "TEXT" },
   { table: "leads", column: "ai_verification_status", type: "TEXT NOT NULL DEFAULT 'not_checked'" },
   { table: "leads", column: "ai_confidence", type: "REAL NOT NULL DEFAULT 0" },
   { table: "leads", column: "ai_found_website_url", type: "TEXT" },
@@ -144,6 +155,17 @@ CREATE TABLE IF NOT EXISTS leads (
   estimated_deal_value REAL NOT NULL DEFAULT 0,
   business_type TEXT DEFAULT 'local_services',
   win_probability_score REAL NOT NULL DEFAULT 0,
+  lead_quality_score REAL NOT NULL DEFAULT 0,
+  quality_bucket TEXT NOT NULL DEFAULT 'needs_ai_verify',
+  easy_build_score REAL NOT NULL DEFAULT 0,
+  cash_speed_score REAL NOT NULL DEFAULT 0,
+  need_score REAL NOT NULL DEFAULT 0,
+  quality_reason TEXT,
+  recommended_offer TEXT NOT NULL DEFAULT 'starter_site',
+  next_best_action TEXT,
+  phone_verification_status TEXT NOT NULL DEFAULT 'unknown',
+  last_quality_scored_at TEXT,
+  quality_checked_by_user_id TEXT,
   ai_verification_status TEXT NOT NULL DEFAULT 'not_checked' CHECK(ai_verification_status IN ('not_checked','site_found','no_site_found','weak_site_found','uncertain','mismatch','error')),
   ai_confidence REAL NOT NULL DEFAULT 0,
   ai_found_website_url TEXT,
@@ -366,6 +388,9 @@ CREATE INDEX IF NOT EXISTS idx_leads_qualification_score ON leads(qualification_
 CREATE INDEX IF NOT EXISTS idx_leads_selling_niche_score ON leads(selling_niche, score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_business_type_score ON leads(business_type, score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_win_probability ON leads(win_probability_score DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_quality_bucket_score ON leads(quality_bucket, lead_quality_score DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_quality_offer ON leads(recommended_offer, lead_quality_score DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_phone_quality ON leads(phone_verification_status, lead_quality_score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_ai_status_checked ON leads(ai_verification_status, ai_checked_at DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_assigned_to_user ON leads(assigned_to_user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_users_role_status ON app_users(role, status);

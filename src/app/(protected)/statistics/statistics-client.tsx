@@ -98,6 +98,25 @@ export function StatisticsClient({ summary }: { summary: StatisticsSummary }) {
         <MetricCard label="Cost / AI Verified" value={formatNullableCurrency(summary.ai.costPerVerification)} />
       </section>
 
+      <section className="grid gap-4 lg:grid-cols-5">
+        <MetricCard label="Ready to Call" value={summary.quality.readyToCall} />
+        <MetricCard label="Broken Site Opportunities" value={summary.quality.brokenSiteOpportunities} />
+        <MetricCard label="Needs AI Verify" value={summary.quality.needsAiVerify} />
+        <MetricCard label="No-Site Rate" value={formatPercent(summary.quality.aiVerifiedNoSiteRate)} />
+        <MetricCard label="Usable Site Found Rate" value={formatPercent(summary.quality.usableSiteFoundRate)} />
+        <MetricCard label="Broken Site Rate" value={formatPercent(summary.quality.brokenSiteRate)} />
+        <MetricCard label="Contacted to Reply" value={formatPercent(summary.quality.contactedToReplyRate)} />
+        <MetricCard label="Reply to Meeting" value={formatPercent(summary.quality.replyToMeetingRate)} />
+        <MetricCard label="Meeting to Close" value={formatPercent(summary.quality.meetingToCloseRate)} />
+        <MetricCard label="Needs Manual Review" value={summary.quality.needsManualReview} />
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <QualityValuePanel title="Pipeline by Quality Bucket" rows={summary.quality.pipelineByBucket} valueLabel="Pipeline" />
+        <QualityValuePanel title="Top Niches Ready to Call" rows={summary.quality.topReadyByType} valueLabel="Pipeline" />
+        <QualityValuePanel title="Top Niches by Fast-Money Value" rows={summary.quality.topValueByType} valueLabel="Pipeline" />
+      </section>
+
       <section className="glass rounded-2xl p-6">
         <div className="mb-4 flex items-center justify-between gap-3">
           <h3 className="section-label">Business Type Breakdown</h3>
@@ -246,10 +265,38 @@ function CostPanel({ title, rows }: { title: string; rows: Array<{ key: string; 
   );
 }
 
+function QualityValuePanel({ title, rows, valueLabel }: { title: string; rows: Array<{ key: string; label: string; count: number; value: number }>; valueLabel: string }) {
+  const max = Math.max(...rows.map((row) => row.value), 1);
+  return (
+    <section className="glass rounded-2xl p-5">
+      <h3 className="section-label">{title}</h3>
+      <div className="mt-3 space-y-3">
+        {rows.length === 0 ? (
+          <p className="text-sm" style={{ color: "var(--text-tertiary)" }}>No quality data in range</p>
+        ) : rows.map((row) => (
+          <div key={row.key}>
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span style={{ color: "var(--text-secondary)" }}>{row.label}</span>
+              <span className="font-medium" style={{ color: "var(--text-primary)" }}>{row.count} / {formatCurrency(row.value)}</span>
+            </div>
+            <div className="mt-1 h-1.5 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }} aria-label={valueLabel}>
+              <div className="h-full rounded-full" style={{ width: `${Math.max(4, (row.value / max) * 100)}%`, background: "var(--accent)" }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function formatCurrency(value: number): string {
   return `$${Math.round(value).toLocaleString()}`;
 }
 
 function formatNullableCurrency(value: number | null): string {
   return value == null ? "N/A" : `$${value.toFixed(2)}`;
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(1)}%`;
 }

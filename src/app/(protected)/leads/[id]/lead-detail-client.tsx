@@ -25,6 +25,8 @@ import {
   addLeadNoteAction,
   claimLeadAction,
   unclaimLeadAction,
+  markLeadQualityBucketAction,
+  updateLeadPhoneVerificationStatusAction,
 } from "@/lib/leads/actions";
 import type { AppRole } from "@/lib/permissions";
 
@@ -53,6 +55,15 @@ interface Lead {
   selling_niche: string | null;
   business_type: string;
   win_probability_score: number;
+  lead_quality_score: number;
+  quality_bucket: string;
+  easy_build_score: number;
+  cash_speed_score: number;
+  need_score: number;
+  quality_reason: string | null;
+  recommended_offer: string;
+  next_best_action: string | null;
+  phone_verification_status: string;
   ai_verification_status: string;
   ai_confidence: number;
   ai_found_website_url: string | null;
@@ -215,6 +226,8 @@ export function LeadDetailClient({
   const [leadNoteBody, setLeadNoteBody] = useState("");
   const [noteLoading, setNoteLoading] = useState(false);
   const [assignedToUserId, setAssignedToUserId] = useState(lead.assigned_to_user_id);
+  const [qualityBucket, setQualityBucket] = useState(lead.quality_bucket);
+  const [phoneVerificationStatus, setPhoneVerificationStatus] = useState(lead.phone_verification_status);
 
   // Log event form
   const [eventChannel, setEventChannel] = useState("call");
@@ -445,6 +458,32 @@ export function LeadDetailClient({
     flash(assignedToUserId === currentUser.userId ? "Lead unclaimed" : "Lead claimed");
   };
 
+  const handlePhoneVerificationStatus = async (nextStatus: string) => {
+    const previous = phoneVerificationStatus;
+    setPhoneVerificationStatus(nextStatus);
+    const result = await updateLeadPhoneVerificationStatusAction(lead.id, nextStatus);
+    if ("error" in result) {
+      setPhoneVerificationStatus(previous);
+      flash(result.error ?? "Unable to update phone status");
+      return;
+    }
+    flash("Phone status updated");
+    router.refresh();
+  };
+
+  const handleQualityBucket = async (nextBucket: string) => {
+    const previous = qualityBucket;
+    setQualityBucket(nextBucket);
+    const result = await markLeadQualityBucketAction(lead.id, nextBucket);
+    if ("error" in result) {
+      setQualityBucket(previous);
+      flash(result.error ?? "Unable to update quality bucket");
+      return;
+    }
+    flash("Quality bucket updated");
+    router.refresh();
+  };
+
   const foundAiWebsite = aiVerification?.found_website_url ?? lead.ai_found_website_url;
   const currentViability = aiVerification?.website_viability_status ?? lead.ai_website_viability_status;
   const currentHealth = aiVerification?.website_health_json ?? lead.ai_website_health;
@@ -462,6 +501,7 @@ export function LeadDetailClient({
         { label: "Rating", value: lead.rating?.toFixed(1) ?? "—" },
         { label: "Reviews", value: String(lead.review_count ?? 0) },
         { label: "Website", value: lead.website_status },
+        { label: "Quality", value: `${Math.round(lead.lead_quality_score)}%` },
         { label: "Win Prob.", value: `${Math.round(lead.win_probability_score)}%` },
         { label: "Qualification", value: lead.qualification_status.replace(/_/g, " ") },
       ]}
@@ -509,6 +549,9 @@ export function LeadDetailClient({
             <ProfileField label="Categories" value={lead.categories.join(", ") || "—"} />
             <ProfileField label="Business Type" value={getBusinessTypeLabel(lead.business_type)} />
             <ProfileField label="Win Probability" value={`${Math.round(lead.win_probability_score)}%`} />
+            <ProfileField label="Quality Score" value={`${Math.round(lead.lead_quality_score)}%`} />
+            <ProfileField label="Quality Bucket" value={formatLabel(qualityBucket)} />
+            <ProfileField label="Recommended Offer" value={formatLabel(lead.recommended_offer)} />
             <ProfileField label="Selling Niche" value={lead.selling_niche?.replace(/_/g, " ")} />
             <ProfileField label="Estimated Deal" value={lead.estimated_deal_value ? `$${lead.estimated_deal_value.toFixed(0)}` : "N/A"} />
             <ProfileField label="Contactability" value={`${Math.round(lead.contactability_score * 100)}%`} />
@@ -516,6 +559,74 @@ export function LeadDetailClient({
             <ProfileField label="Price Level" value={lead.price_level} />
             <ProfileField label="Website" value={lead.website_uri ?? "None"} link={lead.website_uri ?? undefined} />
             <ProfileField label="Google Maps" value={lead.maps_uri ? "Open in Maps" : "—"} link={lead.maps_uri ?? undefined} />
+          </div>
+        </article>
+
+        {/* Quality decision */}
+        <article className="glass rounded-2xl p-6 lg:col-span-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="section-label">Quality Decision</h3>
+              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                Website-sales decisioning for whether this is worth a call today.
+              </p>
+            </div>
+            <Link href={`/quality?search=${encodeURIComponent(lead.name ?? "")}`} className="btn-glass text-xs">
+              Open in Quality
+            </Link>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <QualityMetric label="Bucket" value={formatLabel(qualityBucket)} />
+            <QualityMetric label="Quality Score" value={`${Math.round(lead.lead_quality_score)}%`} />
+            <QualityMetric label="Need" value={`${Math.round(lead.need_score)}%`} />
+            <QualityMetric label="Easy Build" value={`${Math.round(lead.easy_build_score)}%`} />
+            <QualityMetric label="Cash Speed" value={`${Math.round(lead.cash_speed_score)}%`} />
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-3">
+            <div className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Why this is good or bad</span>
+              <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--text-primary)" }}>
+                {lead.quality_reason ?? "No quality reason has been calculated yet."}
+              </p>
+            </div>
+            <div className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Next best action</span>
+              <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--text-primary)" }}>
+                {lead.next_best_action ?? "Run AI verification or manually review the website evidence."}
+              </p>
+            </div>
+            <div className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Recommended package</span>
+              <p className="mt-2 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+                {formatLabel(lead.recommended_offer)}
+              </p>
+              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                Pitch a simple one-time build first. Keep the offer easy to understand and fast to deliver.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button type="button" className="btn-glass text-xs" onClick={() => handlePhoneVerificationStatus("works")}>
+              Phone Works
+            </button>
+            <button type="button" className="btn-glass text-xs" onClick={() => handlePhoneVerificationStatus("bad")}>
+              Phone Bad
+            </button>
+            <button type="button" className="btn-glass text-xs" onClick={() => handleQualityBucket("ready_to_call")}>
+              Mark Ready to Call
+            </button>
+            <button type="button" className="btn-glass text-xs" onClick={() => handleQualityBucket("broken_site_opportunity")}>
+              Mark Broken-Site Opportunity
+            </button>
+            <button type="button" className="btn-glass text-xs" onClick={() => handleQualityBucket("needs_manual_review")}>
+              Mark Manual Review
+            </button>
+            <span className="rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+              Phone: {formatLabel(phoneVerificationStatus)}
+            </span>
           </div>
         </article>
 
@@ -978,6 +1089,19 @@ function ProfileField({ label, value, link, action }: {
       </div>
     </div>
   );
+}
+
+function QualityMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
+      <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
+    </div>
+  );
+}
+
+function formatLabel(value: string | null | undefined): string {
+  return value ? value.replace(/_/g, " ") : "N/A";
 }
 
 function TimestampRow({ label, value }: { label: string; value: string | null | undefined }) {

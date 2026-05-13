@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classifyBusinessType } from "@/lib/business-types";
-import { backfillLeadBusinessTypes } from "@/lib/db/index";
+import { backfillLeadBusinessTypes, type DbClient } from "@/lib/db/index";
 import { createTestDb } from "./test-helpers";
 
 describe("business type classifier", () => {
@@ -28,7 +28,7 @@ describe("business type classifier", () => {
          VALUES (?, ?, ?, ?, ?)`
       ).run("lead-3", "place-3", "dentist", JSON.stringify(["health"]), "legal");
 
-      await backfillLeadBusinessTypes(db);
+      await backfillLeadBusinessTypes(db as unknown as DbClient);
 
       const rows = db.prepare("SELECT id, business_type FROM leads ORDER BY id").all() as Array<{ id: string; business_type: string }>;
       expect(rows).toEqual([

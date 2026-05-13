@@ -31,10 +31,14 @@ import {
   logAiUsageEvent,
   getAiBudgetStatus,
   getAiVerificationCandidates,
+  getQualityAiVerificationCandidates,
   getAiWebsiteViabilityRepairLeads,
   applyAiFoundWebsite,
   markLeadBrokenSiteOpportunity,
   markLeadManualReview,
+  recomputeAllLeadQualityScores,
+  setLeadQualityBucket,
+  updateLeadPhoneVerificationStatus,
   getConfiguredOpenAiApiKey,
   createAuditLog,
   getSettings,
@@ -46,6 +50,7 @@ import {
   type AiLeadVerification,
 } from "@/lib/db/queries";
 import { requirePermission } from "@/lib/auth";
+import type { PhoneVerificationStatus, QualityBucket } from "@/lib/lead-quality";
 import { generateOutreachPackage } from "@/lib/outreach-package";
 import { computeScoreWithBreakdown, computeWinProbability } from "@/lib/scoring";
 import type { WebsiteStatus } from "@/lib/classify-website";
@@ -62,10 +67,20 @@ const channelSchema = z.enum(["call", "text", "email", "walkin", "other"]);
 const exclusionReasonSchema = z.string().trim().min(5).max(500);
 const aiApplySchema = z.enum(["update_website", "exclude_has_website", "mark_broken_site_opportunity", "mark_manual_review"]);
 const leadNoteSchema = z.string().trim().min(1).max(4000);
+const phoneVerificationStatusSchema = z.enum(["unknown", "works", "bad", "no_phone"]);
+const qualityBucketSchema = z.enum(["ready_to_call", "needs_ai_verify", "needs_manual_review", "broken_site_opportunity", "not_a_fit"]);
+const qualityAiBatchSchema = z.object({
+  limit: z.number().int().min(1).max(100).optional(),
+  businessType: z.string().trim().min(1).max(80).optional(),
+  denverOnly: z.boolean().optional(),
+  ids: z.array(z.string().uuid()).max(100).optional(),
+});
 
 function revalidateLeadViews(): void {
   revalidatePath("/leads");
   revalidatePath("/queue");
+  revalidatePath("/quality");
+  revalidatePath("/statistics");
   revalidatePath("/dashboard");
 }
 
@@ -324,6 +339,48 @@ export async function recomputeAllScoresAction(): Promise<{ count: number }> {
   return { count: updates.length };
 }
 
+export async function recomputeLeadQualityScoresAction(): Promise<{ count: number }> {
+  await requirePermission("scores:recompute");
+  await ensureDbReady();
+  const count = await recomputeAllLeadQualityScores();
+  await createAuditLog("lead_quality_scores_recomputed", "leads", undefined, { count });
+  revalidateLeadViews();
+  return { count };
+}
+
+export async function updateLeadPhoneVerificationStatusAction(id: string, status: string) {
+  const parsed = phoneVerificationStatusSchema.safeParse(status);
+  if (!parsed.success) return { error: "Invalid phone verification status" };
+  const session = await requirePermission("lead:update");
+  await ensureDbReady();
+  const lead = await queryLeadById(id);
+  if (!lead) return { error: "Lead not found" };
+  const changes = await updateLeadPhoneVerificationStatus(id, parsed.data as PhoneVerificationStatus, session.userId);
+  if (changes === 0) return { error: "Lead was not updated. Refresh and try again." };
+  await createAuditLog("lead_phone_verification_updated", "lead", id, { status: parsed.data });
+  revalidateLeadViews();
+  revalidatePath(`/leads/${id}`);
+  return { success: true };
+}
+
+export async function markLeadQualityBucketAction(id: string, bucket: string) {
+  const parsed = qualityBucketSchema.safeParse(bucket);
+  if (!parsed.success) return { error: "Invalid quality bucket" };
+  if (parsed.data === "not_a_fit") {
+    return { error: "Use admin exclusion for not-a-fit leads so the reason is audited." };
+  }
+  const session = await requirePermission("lead:update");
+  await ensureDbReady();
+  const lead = await queryLeadById(id);
+  if (!lead) return { error: "Lead not found" };
+  const changes = await setLeadQualityBucket(id, parsed.data as QualityBucket, session.userId);
+  if (changes === 0) return { error: "Lead was not updated. Refresh and try again." };
+  await createAuditLog("lead_quality_bucket_updated", "lead", id, { bucket: parsed.data });
+  revalidateLeadViews();
+  revalidatePath(`/leads/${id}`);
+  return { success: true };
+}
+
 export async function refreshStaleUnitsAction(runId: string, olderThanDays: number) {
   await requirePermission("crawl:manage");
   await ensureDbReady();
@@ -390,6 +447,59 @@ export async function runAiVerificationBatchAction(input: { limit?: number; busi
   });
   revalidateLeadViews();
   revalidatePath("/statistics");
+  return {
+    success: true,
+    processed: results.length,
+    verified: results.filter((row) => row.success && !row.cached).length,
+    cached: results.filter((row) => row.cached).length,
+    errors: results.filter((row) => row.error).length,
+    results,
+  };
+}
+
+export async function runQualityAiVerificationBatchAction(input: {
+  limit?: number;
+  businessType?: string;
+  denverOnly?: boolean;
+  ids?: string[];
+} = {}) {
+  await requirePermission("ai:verify");
+  await ensureDbReady();
+  const parsed = qualityAiBatchSchema.safeParse(input);
+  if (!parsed.success) return { error: "Invalid quality AI batch request." };
+
+  const settings = await getSettings();
+  if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
+
+  const requestedLimit = Math.max(1, Math.floor(parsed.data.limit ?? parsed.data.ids?.length ?? 10));
+  const safeLimit = Math.min(requestedLimit, settings.ai_batch_limit, parsed.data.ids?.length ?? requestedLimit);
+  const leads = await getQualityAiVerificationCandidates({
+    limit: safeLimit,
+    businessType: parsed.data.businessType,
+    denverOnly: parsed.data.denverOnly,
+    ids: parsed.data.ids,
+  });
+  const results: Array<{ leadId: string; success: boolean; cached?: boolean; error?: string }> = [];
+
+  for (const lead of leads) {
+    const result = await performAiVerification(lead, false, settings);
+    results.push({
+      leadId: lead.id,
+      success: !("error" in result),
+      cached: "cached" in result ? result.cached : false,
+      error: "error" in result ? result.error : undefined,
+    });
+    if ("error" in result && result.error?.includes("budget")) break;
+  }
+
+  await createAuditLog("quality_ai_batch_verification", "leads", undefined, {
+    requestedLimit,
+    processed: results.length,
+    businessType: parsed.data.businessType ?? null,
+    denverOnly: parsed.data.denverOnly ?? false,
+    selectedCount: parsed.data.ids?.length ?? 0,
+  });
+  revalidateLeadViews();
   return {
     success: true,
     processed: results.length,
