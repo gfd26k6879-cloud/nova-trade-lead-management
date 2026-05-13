@@ -72,6 +72,16 @@ interface Lead {
   ai_checked_at: string | null;
   ai_website_viability_status: string | null;
   ai_website_health: Record<string, unknown> | null;
+  ai_queue_status: string;
+  raw_opportunity_score: number;
+  verification_score: number;
+  sales_priority_score: number;
+  pitch_outcome: string | null;
+  objection_reason: string | null;
+  decision_maker_reached: boolean;
+  quoted_amount: number;
+  close_value: number;
+  demo_sent_at: string | null;
   qualification_status: string;
   disqualification_reason: string | null;
   website_verified_at: string | null;
@@ -491,6 +501,20 @@ export function LeadDetailClient({
   const hasUsableAiWebsite = (aiVerification?.status ?? lead.ai_verification_status) === "site_found" && currentViability === "usable";
   const hasBrokenSiteOpportunity = currentViability === "broken" || currentViability === "parked" || currentViability === "placeholder";
   const assignedLabel = assignedToUserId === currentUser.userId ? "Assigned to you" : assignedToUserId ? "Assigned" : "Unassigned";
+  const websiteFinding = websiteFindingLabel(aiVerification?.status ?? lead.ai_verification_status, currentViability);
+  const demoHref = demo ? `/demo/${demo.slug}` : null;
+
+  const copyDemoPitch = () => {
+    if (!demoHref) return;
+    const demoUrl = `${window.location.origin}${demoHref}`;
+    copyToClipboard([
+      `${lead.name ?? "This business"} looks like a verified website opportunity.`,
+      `Finding: ${websiteFinding}.`,
+      `Offer: ${formatLabel(lead.recommended_offer)}.`,
+      `Demo: ${demoUrl}`,
+      lead.next_best_action ? `Next action: ${lead.next_best_action}` : null,
+    ].filter(Boolean).join("\n"));
+  };
 
   return (
     <PageShell
@@ -537,6 +561,36 @@ export function LeadDetailClient({
           )}
         </div>
       </div>
+
+      <section className="glass rounded-2xl p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="section-label">Call Sheet</h3>
+            <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+              Verification evidence, offer, demo, and next action for the pitch.
+            </p>
+          </div>
+          {demoHref && (
+            <button type="button" className="btn-glass text-xs" onClick={copyDemoPitch}>
+              Copy Demo Link + Pitch
+            </button>
+          )}
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <CallSheetField label="Website finding" value={websiteFinding} />
+          <CallSheetField label="Confidence" value={`${Math.round((aiVerification?.confidence ?? lead.ai_confidence) * 100)}%`} />
+          <CallSheetField label="Phone" value={`${lead.phone ?? "No phone"} (${formatLabel(phoneVerificationStatus)})`} />
+          <CallSheetField label="Offer" value={formatLabel(lead.recommended_offer)} />
+          <CallSheetField label="Pitch angle" value={lead.quality_reason ?? "Use the verified website gap and local review volume."} />
+          <CallSheetField label="Next action" value={lead.next_best_action ?? "Call and qualify owner interest."} />
+          <CallSheetField label="Last contact" value={lead.last_contacted_at ? new Date(lead.last_contacted_at).toLocaleDateString() : "Not contacted"} />
+          <CallSheetField label="Follow-up" value={lead.reminder_date ? new Date(lead.reminder_date).toLocaleDateString() : "No reminder"} />
+          <CallSheetField label="Demo" value={demoHref ?? "No demo yet"} href={demoHref ?? undefined} />
+          <CallSheetField label="AI queue" value={formatLabel(lead.ai_queue_status)} />
+          <CallSheetField label="Sales priority" value={`${Math.round(lead.sales_priority_score)}%`} />
+          <CallSheetField label="Verification score" value={`${Math.round(lead.verification_score)}%`} />
+        </div>
+      </section>
 
       <section className="grid gap-4 lg:grid-cols-3">
         {/* Business profile */}
@@ -1098,6 +1152,27 @@ function QualityMetric({ label, value }: { label: string; value: string }) {
       <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
     </div>
   );
+}
+
+function CallSheetField({ label, value, href }: { label: string; value: string; href?: string }) {
+  return (
+    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
+      {href ? (
+        <Link href={href} target="_blank" className="link-accent mt-1 block truncate text-sm">{value}</Link>
+      ) : (
+        <p className="mt-1 line-clamp-2 text-sm" style={{ color: "var(--text-primary)" }}>{value}</p>
+      )}
+    </div>
+  );
+}
+
+function websiteFindingLabel(status: string, viability: string | null | undefined): string {
+  if (status === "no_site_found" || viability === "directory_only") return "Verified no usable website";
+  if (status === "weak_site_found") return `Weak site: ${viability ?? "unknown"}`;
+  if (status === "site_found" && viability === "usable") return "Usable existing website";
+  if (status === "uncertain" || status === "mismatch") return "Needs manual review";
+  return formatLabel(status);
 }
 
 function formatLabel(value: string | null | undefined): string {

@@ -25,11 +25,6 @@ import {
   updateLeadVerification as dbUpdateVerification,
   getLatestAiVerification,
   getAiVerificationById,
-  createAiLeadVerification,
-  updateLeadAiVerificationSummary,
-  markLeadAiError,
-  logAiUsageEvent,
-  getAiBudgetStatus,
   getAiVerificationCandidates,
   getQualityAiVerificationCandidates,
   getAiWebsiteViabilityRepairLeads,
@@ -39,28 +34,24 @@ import {
   recomputeAllLeadQualityScores,
   setLeadQualityBucket,
   updateLeadPhoneVerificationStatus,
-  getConfiguredOpenAiApiKey,
+  markLeadAiVerified,
   createAuditLog,
   getSettings,
   refreshStaleUnits as dbRefreshStale,
   updateCrawlRunStatus,
   type LeadFilters,
-  type Lead,
-  type Settings,
-  type AiLeadVerification,
 } from "@/lib/db/queries";
 import { requirePermission } from "@/lib/auth";
 import type { PhoneVerificationStatus, QualityBucket } from "@/lib/lead-quality";
 import { generateOutreachPackage } from "@/lib/outreach-package";
-import { computeScoreWithBreakdown, computeWinProbability } from "@/lib/scoring";
+import { computeScoreWithBreakdown } from "@/lib/scoring";
 import type { WebsiteStatus } from "@/lib/classify-website";
-import { getAiCostReservationUsd, getConfiguredOpenAIModel, OPENAI_LEAD_VERIFICATION_MODEL } from "@/lib/ai/config";
-import { callOpenAILeadVerifier, isAiVerificationFresh, type AiVerificationResult } from "@/lib/ai/lead-verification";
 import {
-  assessWebsiteViability,
-  normalizeAiVerificationForWebsiteSales,
-  type WebsiteViabilityStatus,
-} from "@/lib/ai/website-viability";
+  computeLeadWinProbability,
+  isWeakWebsiteOpportunity,
+  performAiVerification,
+  repairLeadAiWebsiteViability,
+} from "@/lib/ai/verification-worker";
 
 const statusSchema = z.enum(["new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost"]);
 const channelSchema = z.enum(["call", "text", "email", "walkin", "other"]);
@@ -412,6 +403,9 @@ export async function runAiVerificationAction(leadId: string, options: { force?:
   if (!lead) return { error: "Lead not found" };
 
   const result = await performAiVerification(lead, options.force ?? false);
+  if ("verification" in result && result.verification?.input_hash) {
+    await markLeadAiVerified(leadId, result.verification.input_hash);
+  }
   revalidateLeadViews();
   revalidatePath(`/leads/${leadId}`);
   revalidatePath("/statistics");
@@ -431,6 +425,9 @@ export async function runAiVerificationBatchAction(input: { limit?: number; busi
 
   for (const lead of leads) {
     const result = await performAiVerification(lead, false, settings);
+    if ("verification" in result && result.verification?.input_hash) {
+      await markLeadAiVerified(lead.id, result.verification.input_hash);
+    }
     results.push({
       leadId: lead.id,
       success: !("error" in result),
@@ -483,6 +480,9 @@ export async function runQualityAiVerificationBatchAction(input: {
 
   for (const lead of leads) {
     const result = await performAiVerification(lead, false, settings);
+    if ("verification" in result && result.verification?.input_hash) {
+      await markLeadAiVerified(lead.id, result.verification.input_hash);
+    }
     results.push({
       leadId: lead.id,
       success: !("error" in result),
@@ -613,204 +613,6 @@ export async function repairAiWebsiteViabilityBatchAction(input: { limit?: numbe
     errors: results.filter((row) => row.error).length,
     results,
   };
-}
-
-async function performAiVerification(lead: Lead, force: boolean, settingsArg?: Settings) {
-  const settings = settingsArg ?? await getSettings();
-  if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
-
-  const model = getConfiguredOpenAIModel();
-  if (model !== OPENAI_LEAD_VERIFICATION_MODEL) return { error: "AI model guardrail rejected the configured model." };
-
-  const latest = await getLatestAiVerification(lead.id);
-  const cachedNeedsViability = latest?.found_website_url && latest.website_viability_status == null;
-  if (!force && latest && latest.error == null && !cachedNeedsViability && isAiVerificationFresh(latest.created_at, settings.ai_cache_ttl_days)) {
-    await logAiUsageEvent({
-      lead_id: lead.id,
-      verification_id: latest.id,
-      model,
-      was_cached: true,
-      estimated_cost: 0,
-      metadata: { cacheHit: true },
-    });
-    return { success: true, cached: true, verification: latest };
-  }
-
-  const reservedCost = getAiCostReservationUsd();
-  const budget = await getAiBudgetStatus(settings, reservedCost);
-  if (!budget.allowed) return { error: budget.reason ?? "AI budget guardrail blocked this request." };
-
-  try {
-    const ai = await callOpenAILeadVerifier(lead, await getConfiguredOpenAiApiKey());
-    const websiteViability = ai.result.foundWebsiteUrl
-      ? await assessWebsiteViability(lead, ai.result.foundWebsiteUrl)
-      : null;
-    const normalized = normalizeAiVerificationForWebsiteSales(lead, ai.result, websiteViability);
-    const normalizedResult = normalized.result;
-    const normalizedViability = normalized.websiteViability;
-    const winProbabilityScore = computeLeadWinProbability(lead, normalizedResult, normalizedViability?.status ?? null);
-
-    const verification = await createAiLeadVerification({
-      lead_id: lead.id,
-      model,
-      status: normalizedResult.status,
-      confidence: normalizedResult.confidence,
-      found_website_url: normalizedResult.foundWebsiteUrl,
-      found_email: normalizedResult.foundEmail,
-      found_phone: normalizedResult.foundPhone,
-      social_profiles: normalizedResult.socialProfiles,
-      sources: normalizedResult.sources,
-      recommendation: normalizedResult.recommendation,
-      reason: normalizedResult.reason,
-      summary: normalizedResult.summary,
-      website_viability_status: normalizedViability?.status ?? null,
-      website_health_json: normalizedViability?.health ?? null,
-      website_viability_reason: normalizedViability?.reason ?? null,
-      raw_json: {
-        openai: ai.raw,
-        identityResearchResult: ai.result,
-        websiteViability: normalizedViability,
-      },
-      input_hash: ai.inputHash,
-      usage_input_tokens: ai.inputTokens,
-      usage_output_tokens: ai.outputTokens,
-      estimated_cost: ai.estimatedCost,
-    });
-
-    await logAiUsageEvent({
-      lead_id: lead.id,
-      verification_id: verification.id,
-      model,
-      input_tokens: ai.inputTokens,
-      output_tokens: ai.outputTokens,
-      estimated_cost: ai.estimatedCost,
-      metadata: {
-        status: normalizedResult.status,
-        originalStatus: ai.result.status,
-        recommendation: normalizedResult.recommendation,
-        websiteViability: normalizedViability?.status ?? null,
-      },
-    });
-    await updateLeadAiVerificationSummary(lead.id, verification, winProbabilityScore);
-    await createAuditLog("ai_lead_verified", "lead", lead.id, { verificationId: verification.id, status: verification.status, websiteViability: verification.website_viability_status });
-    return { success: true, cached: false, verification };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "AI verification failed.";
-    const verification = await createAiLeadVerification({
-      lead_id: lead.id,
-      model,
-      status: "error",
-      recommendation: "manual_review",
-      reason: message,
-      summary: message,
-      error: message,
-    });
-    await logAiUsageEvent({
-      lead_id: lead.id,
-      verification_id: verification.id,
-      model,
-      success: false,
-      estimated_cost: 0,
-      metadata: { error: message },
-    });
-    await markLeadAiError(lead.id, message);
-    await createAuditLog("ai_lead_verification_failed", "lead", lead.id, { verificationId: verification.id, error: message });
-    return { error: message, verification };
-  }
-}
-
-async function repairLeadAiWebsiteViability(lead: Lead, latest: AiLeadVerification) {
-  if (!latest.found_website_url) return { error: "AI verification has no website URL to re-check." };
-  try {
-    const websiteViability = await assessWebsiteViability(lead, latest.found_website_url);
-    const identityResult = aiResultFromVerification(latest);
-    const normalized = normalizeAiVerificationForWebsiteSales(lead, identityResult, websiteViability);
-    const normalizedResult = normalized.result;
-    const normalizedViability = normalized.websiteViability;
-    const winProbabilityScore = computeLeadWinProbability(lead, normalizedResult, normalizedViability?.status ?? null);
-    const verification = await createAiLeadVerification({
-      lead_id: lead.id,
-      model: latest.model,
-      status: normalizedResult.status,
-      confidence: normalizedResult.confidence,
-      found_website_url: normalizedResult.foundWebsiteUrl,
-      found_email: normalizedResult.foundEmail,
-      found_phone: normalizedResult.foundPhone,
-      social_profiles: normalizedResult.socialProfiles,
-      sources: normalizedResult.sources,
-      recommendation: normalizedResult.recommendation,
-      reason: normalizedResult.reason,
-      summary: normalizedResult.summary,
-      website_viability_status: normalizedViability?.status ?? null,
-      website_health_json: normalizedViability?.health ?? null,
-      website_viability_reason: normalizedViability?.reason ?? null,
-      raw_json: {
-        repairFromVerificationId: latest.id,
-        previousRaw: latest.raw_json,
-        identityResearchResult: identityResult,
-        websiteViability: normalizedViability,
-      },
-      input_hash: latest.input_hash,
-      estimated_cost: 0,
-    });
-    await updateLeadAiVerificationSummary(lead.id, verification, winProbabilityScore);
-    await createAuditLog("ai_website_viability_repaired", "lead", lead.id, {
-      fromVerificationId: latest.id,
-      verificationId: verification.id,
-      status: verification.status,
-      websiteViability: verification.website_viability_status,
-    });
-    return { success: true, verification };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Website viability repair failed.";
-    await createAuditLog("ai_website_viability_repair_failed", "lead", lead.id, { verificationId: latest.id, error: message });
-    return { error: message };
-  }
-}
-
-function aiResultFromVerification(verification: AiLeadVerification): AiVerificationResult {
-  return {
-    status: verification.status === "error" || verification.status === "not_checked" ? "uncertain" : verification.status,
-    confidence: verification.confidence,
-    foundWebsiteUrl: verification.found_website_url,
-    foundEmail: verification.found_email,
-    foundPhone: verification.found_phone,
-    socialProfiles: verification.social_profiles,
-    sources: verification.sources,
-    recommendation: verification.recommendation,
-    reason: verification.reason,
-    summary: verification.summary,
-  };
-}
-
-function computeLeadWinProbability(
-  lead: Lead,
-  aiResult: Pick<AiVerificationResult, "status" | "confidence" | "foundWebsiteUrl">,
-  websiteViabilityStatus: WebsiteViabilityStatus | null,
-): number {
-  return computeWinProbability({
-    score: lead.score,
-    websiteStatus: lead.website_status as WebsiteStatus,
-    qualificationStatus: lead.qualification_status,
-    isExcluded: lead.is_excluded,
-    businessStatus: lead.business_status,
-    contactabilityScore: lead.contactability_score,
-    estimatedDealValue: lead.estimated_deal_value,
-    firstContactedAt: lead.first_contacted_at,
-    firstReplyAt: lead.first_reply_at,
-    meetingBookedAt: lead.meeting_booked_at,
-    status: lead.status,
-    aiVerification: {
-      status: aiResult.status,
-      confidence: aiResult.confidence,
-      foundWebsiteUrl: aiResult.foundWebsiteUrl,
-      websiteViabilityStatus,
-    },
-  });
-}
-
-function isWeakWebsiteOpportunity(status: WebsiteViabilityStatus | null): boolean {
-  return status === "broken" || status === "parked" || status === "placeholder";
 }
 
 const VERIFICATION_KEYS = new Set(["phone_works", "no_real_website", "address_verified", "business_active", "ready_for_outreach"]);

@@ -38,6 +38,11 @@ interface Settings {
   ai_batch_limit: number;
   ai_cache_ttl_days: number;
   ai_manual_apply_required: boolean;
+  ai_auto_verify_enabled: boolean;
+  ai_verify_after_discovery: boolean;
+  ai_reverify_after_enrichment: boolean;
+  ai_verification_concurrency: number;
+  ai_max_attempts: number;
   openai_api_key_configured: boolean;
   openai_api_key_source: "ui" | "env" | "none";
   google_places_api_key_configured: boolean;
@@ -309,6 +314,8 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
           <NumberField label="Monthly AI Budget ($)" value={settings.ai_monthly_budget_usd} onChange={(v) => update("ai_monthly_budget_usd", v)} step={1} />
           <NumberField label="AI Batch Limit" value={settings.ai_batch_limit} onChange={(v) => update("ai_batch_limit", v)} />
           <NumberField label="AI Result Cache (days)" value={settings.ai_cache_ttl_days} onChange={(v) => update("ai_cache_ttl_days", v)} />
+          <NumberField label="AI Concurrency" value={settings.ai_verification_concurrency} onChange={(v) => update("ai_verification_concurrency", v)} />
+          <NumberField label="AI Max Attempts" value={settings.ai_max_attempts} onChange={(v) => update("ai_max_attempts", v)} />
         </div>
         <div className="mt-4 flex flex-col gap-3">
           <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
@@ -319,6 +326,33 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
               className="rounded"
             />
             Enable AI lead verification
+          </label>
+          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
+            <input
+              type="checkbox"
+              checked={settings.ai_auto_verify_enabled}
+              onChange={(e) => update("ai_auto_verify_enabled", e.target.checked)}
+              className="rounded"
+            />
+            Auto-verify eligible leads
+          </label>
+          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
+            <input
+              type="checkbox"
+              checked={settings.ai_verify_after_discovery}
+              onChange={(e) => update("ai_verify_after_discovery", e.target.checked)}
+              className="rounded"
+            />
+            Queue AI verification after discovery
+          </label>
+          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
+            <input
+              type="checkbox"
+              checked={settings.ai_reverify_after_enrichment}
+              onChange={(e) => update("ai_reverify_after_enrichment", e.target.checked)}
+              className="rounded"
+            />
+            Reverify when enrichment changes identity or website evidence
           </label>
           <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
             <input

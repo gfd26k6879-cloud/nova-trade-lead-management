@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { loginAction } from "./actions";
 
@@ -9,6 +10,7 @@ export const metadata: Metadata = {
 type LoginPageProps = {
   searchParams: Promise<{
     error?: string;
+    reset?: string;
   }>;
 };
 
@@ -16,6 +18,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const params = await searchParams;
   const hasError = params.error === "invalid_credentials";
   const missingConfig = params.error === "missing_config";
+  const invalidRecoveryLink = params.error === "invalid_recovery_link";
+  const resetSuccess = params.reset === "success";
 
   return (
     <div className="flex min-h-screen items-center justify-center px-6 py-12">
@@ -57,13 +61,18 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           </div>
 
           <div>
-            <label
-              htmlFor="password"
-              className="mb-1.5 block text-xs font-medium"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              Password
-            </label>
+            <div className="mb-1.5 flex items-center justify-between gap-3">
+              <label
+                htmlFor="password"
+                className="block text-xs font-medium"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                Password
+              </label>
+              <Link href="/forgot-password" className="text-xs font-medium" style={{ color: "var(--accent)" }}>
+                Forgot?
+              </Link>
+            </div>
             <input
               id="password"
               name="password"
@@ -97,6 +106,32 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               }}
             >
               Configuration error. Please check your setup.
+            </div>
+          )}
+
+          {invalidRecoveryLink && (
+            <div
+              className="rounded-xl px-3.5 py-2.5 text-sm"
+              style={{
+                background: "rgba(239, 68, 68, 0.08)",
+                border: "1px solid rgba(239, 68, 68, 0.15)",
+                color: "#dc2626",
+              }}
+            >
+              The recovery link is missing required information. Request a fresh password reset.
+            </div>
+          )}
+
+          {resetSuccess && (
+            <div
+              className="rounded-xl px-3.5 py-2.5 text-sm"
+              style={{
+                background: "rgba(22, 163, 74, 0.08)",
+                border: "1px solid rgba(22, 163, 74, 0.16)",
+                color: "#15803d",
+              }}
+            >
+              Password updated. Sign in with your new password.
             </div>
           )}
 

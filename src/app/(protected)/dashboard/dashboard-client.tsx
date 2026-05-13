@@ -30,6 +30,15 @@ interface ConversionMetrics {
   medianHoursToContact: number | null;
 }
 
+interface AiQueueStats {
+  notChecked: number;
+  queued: number;
+  running: number;
+  verified: number;
+  error: number;
+  total: number;
+}
+
 interface DashboardStats {
   runStatus: string;
   runId: string | null;
@@ -58,6 +67,7 @@ interface DashboardStats {
   zipCodesCompleted: number;
   countiesSelected: number;
   countiesCompleted: number;
+  aiQueueStats: AiQueueStats;
 }
 
 export function DashboardClient({ initialStats }: { initialStats: DashboardStats }) {
@@ -71,6 +81,9 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
   const [isEnriching, setIsEnriching] = useState(false);
   const [enrichProgress, setEnrichProgress] = useState<string | null>(null);
   const enrichRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [isAiVerifying, setIsAiVerifying] = useState(false);
+  const [aiProgress, setAiProgress] = useState<string | null>(null);
+  const aiRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refreshStats = useCallback(async () => {
     try {
@@ -202,6 +215,40 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
     setEnrichProgress(null);
   };
 
+  const pollAiVerification = useCallback(async () => {
+    try {
+      const res = await fetch("/api/ai/verify-next", { method: "POST" });
+      const data = await res.json();
+
+      if (data.status === "verified") {
+        setAiProgress(`${data.leadName}${data.cached ? " (cached)" : ""}`);
+        toast.info(`AI verified: ${data.leadName}`);
+      } else if (data.status === "budget_limit") {
+        toast.warning(data.error || "AI verification paused by budget guardrail");
+        setIsAiVerifying(false);
+      } else if (data.status === "idle" || data.status === "disabled") {
+        setIsAiVerifying(false);
+      } else if (data.status === "error") {
+        toast.error(`AI verification error: ${data.error}`);
+      }
+      await refreshStats();
+    } catch { /* ignore */ }
+  }, [refreshStats]);
+
+  useEffect(() => {
+    if (isAiVerifying) {
+      aiRef.current = setInterval(pollAiVerification, 2500);
+      return () => { if (aiRef.current) clearInterval(aiRef.current); };
+    } else {
+      if (aiRef.current) clearInterval(aiRef.current);
+    }
+  }, [isAiVerifying, pollAiVerification]);
+
+  const handleAiVerify = async () => {
+    setIsAiVerifying(true);
+    setAiProgress(null);
+  };
+
   const toggleCategory = (cat: string) => {
     setSelectedCategories((prev) =>
       prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
@@ -225,6 +272,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
         { label: "Leads Today", value: String(stats.leadsToday) },
         { label: "Today's Focus", value: String(stats.todayFocus) },
         { label: "Needs Follow-up", value: String(stats.needsFollowUp) },
+        { label: "AI Queued", value: String(stats.aiQueueStats.queued) },
         { label: "Failed Units", value: String(stats.failedUnits) },
       ]}
     >
@@ -435,6 +483,32 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
           )}
         </section>
       )}
+
+      <section className="glass rounded-2xl p-6">
+        <h3 className="section-label">AI Verification Queue</h3>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <MetricCard label="Queued" value={String(stats.aiQueueStats.queued)} />
+          <MetricCard label="Running" value={String(stats.aiQueueStats.running)} />
+          <MetricCard label="Verified" value={String(stats.aiQueueStats.verified)} />
+          <MetricCard label="Errors" value={String(stats.aiQueueStats.error)} />
+          <MetricCard label="Not Checked" value={String(stats.aiQueueStats.notChecked)} />
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button type="button" className="btn-primary text-sm" onClick={handleAiVerify} disabled={loading || isAiVerifying || stats.aiQueueStats.queued === 0}>
+            {isAiVerifying ? "Verifying..." : "Process AI Queue"}
+          </button>
+          {aiProgress && (
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
+              Last: {aiProgress}
+            </span>
+          )}
+        </div>
+        {isAiVerifying && (
+          <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
+            Processing AI verification jobs... polling every 2.5 seconds.
+          </p>
+        )}
+      </section>
 
       {/* Quick actions */}
       <section className="glass rounded-2xl p-6">

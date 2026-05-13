@@ -99,7 +99,7 @@ describe("AI verification queries", () => {
     expect(lead.ai_confidence).toBe(0.91);
     expect(lead.ai_website_viability_status).toBe("usable");
     expect(JSON.parse(lead.ai_website_health as string).statusCode).toBe(200);
-    expect(lead.win_probability_score).toBe(12);
+    expect(lead.win_probability_score).toBe(0);
   });
 
   it("blocks budget preflight when reserved cost exceeds daily budget", async () => {

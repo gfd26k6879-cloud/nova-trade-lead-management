@@ -43,6 +43,27 @@ export function generateOutreachPackage(lead: Lead): OutreachPackage {
 }
 
 function getWebsiteIssue(lead: Lead): string {
+  const aiStatus = lead.ai_verification_status;
+  const viability = lead.ai_website_viability_status;
+  const confidence = Math.round((lead.ai_confidence ?? 0) * 100);
+
+  if (aiStatus === "no_site_found" || viability === "directory_only") {
+    return `I checked the usual places and could not find a real website for ${lead.name ?? "your business"}${confidence > 0 ? ` (${confidence}% confidence)` : ""}. That means people who search for you may be ending up on maps or directory listings instead of a page you control.`;
+  }
+
+  if (aiStatus === "weak_site_found" && (viability === "broken" || viability === "parked" || viability === "placeholder")) {
+    const issue = viability === "broken"
+      ? "appears to be broken"
+      : viability === "parked"
+        ? "looks like a parked or expired domain"
+        : "looks like a placeholder page";
+    return `I found a possible website for ${lead.name ?? "your business"}, but it ${issue}. That is the kind of thing that can quietly cost calls from people who were already interested.`;
+  }
+
+  if (aiStatus === "uncertain" || aiStatus === "mismatch") {
+    return "I found mixed online signals and could not confidently identify an official website. That usually means customers may also be landing on directories or unrelated pages instead of a clear business site.";
+  }
+
   if (lead.website_health) {
     const health = lead.website_health;
     if (typeof health.statusCode === "number" && health.statusCode >= 400) {

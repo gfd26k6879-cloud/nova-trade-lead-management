@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildLeadVerificationRequest, parseAiVerificationResponse } from "@/lib/ai/lead-verification";
+import { buildLeadVerificationRequest, createLeadVerificationInputHash, parseAiVerificationResponse } from "@/lib/ai/lead-verification";
 import type { Lead } from "@/lib/db/queries";
 
 function makeLead(): Lead {
@@ -49,6 +49,20 @@ function makeLead(): Lead {
     ai_checked_at: null,
     ai_website_viability_status: null,
     ai_website_health: null,
+    ai_queue_status: "not_checked",
+    ai_attempt_count: 0,
+    ai_last_error: null,
+    ai_next_retry_at: null,
+    ai_input_hash: null,
+    raw_opportunity_score: 0,
+    verification_score: 0,
+    sales_priority_score: 0,
+    pitch_outcome: null,
+    objection_reason: null,
+    decision_maker_reached: false,
+    quoted_amount: 0,
+    close_value: 0,
+    demo_sent_at: null,
     assigned_to_user_id: null,
     qualification_status: "needs_verification",
     disqualification_reason: null,
@@ -112,5 +126,14 @@ describe("AI lead verification request", () => {
       summary: "No official website was found in the checked sources.",
     }));
     expect(parsed.status).toBe("no_site_found");
+  });
+
+  it("changes the input hash when identity-critical fields change", () => {
+    const original = makeLead();
+    const renamed = { ...original, name: "Gateway Park Dental Studio" };
+    const moved = { ...original, address: "999 Market St, Denver, CO", maps_uri: "https://maps.google.com/new" };
+
+    expect(createLeadVerificationInputHash(renamed)).not.toBe(createLeadVerificationInputHash(original));
+    expect(createLeadVerificationInputHash(moved)).not.toBe(createLeadVerificationInputHash(original));
   });
 });

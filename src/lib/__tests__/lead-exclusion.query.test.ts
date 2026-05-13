@@ -20,6 +20,7 @@ import {
   getQualifiedLeadCount,
   getScoreBandThresholds,
   setLeadExclusion,
+  updateLeadQualityScores,
 } from "@/lib/db/queries";
 
 function insertLead(
@@ -106,6 +107,19 @@ describe("lead exclusion query behavior", () => {
     expect((await getAllLeadsForRecompute()).map((lead) => lead.id)).not.toContain(id);
 
     await clearLeadExclusion(id);
+    expect((await getNowQueue(10)).map((lead) => lead.id)).not.toContain(id);
+
+    testDb.prepare(
+      `UPDATE leads
+       SET phone = '303-555-0100',
+           contactability_score = 1,
+           estimated_deal_value = 3500,
+           ai_verification_status = 'no_site_found',
+           ai_website_viability_status = 'directory_only',
+           ai_queue_status = 'verified'
+       WHERE id = ?`
+    ).run(id);
+    await updateLeadQualityScores(id);
     expect((await getNowQueue(10)).map((lead) => lead.id)).toContain(id);
     expect((await getAllLeadsForRecompute()).map((lead) => lead.id)).toContain(id);
   });
@@ -122,6 +136,18 @@ describe("lead exclusion query behavior", () => {
            win_probability_score = 0
        WHERE id = ?`
     ).run(usableSiteId);
+    testDb.prepare(
+      `UPDATE leads
+       SET phone = '303-555-0100',
+           contactability_score = 1,
+           estimated_deal_value = 3500,
+           ai_verification_status = 'no_site_found',
+           ai_website_viability_status = 'directory_only',
+           ai_queue_status = 'verified'
+       WHERE id = ?`
+    ).run(opportunityId);
+    await updateLeadQualityScores(usableSiteId);
+    await updateLeadQualityScores(opportunityId);
 
     expect(await getQualifiedLeadCount(5)).toBe(1);
     expect((await getNowQueue(10)).map((lead) => lead.id)).not.toContain(usableSiteId);

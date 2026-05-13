@@ -20,7 +20,9 @@ import {
   recordPlaceObservation,
   upsertPlaceMaster,
   createAuditLog,
+  type Lead,
 } from "@/lib/db/queries";
+import { enqueueAiVerificationForLead } from "@/lib/ai/verification-worker";
 import type { WebsiteStatus } from "@/lib/classify-website";
 import type { GooglePlacesSku } from "@/lib/google-pricing";
 
@@ -143,6 +145,15 @@ export async function enrichNextLead(): Promise<EnrichResult> {
 
     const categories = details?.types ?? lead.categories;
     const websiteUri = details?.websiteUri ?? lead.website_uri;
+    const identityChanged = details ? hasMaterialIdentityChange(lead, {
+      name: details.displayName?.text ?? null,
+      address: details.formattedAddress ?? null,
+      phone: details.nationalPhoneNumber ?? null,
+      categories,
+      websiteUri,
+      mapsUri: details.googleMapsUri ?? null,
+      businessStatus: details.businessStatus ?? null,
+    }) : false;
     const websiteStatus = classifyWebsite(
       websiteUri,
       settings.social_hosts.length > 0 ? settings.social_hosts : undefined,
@@ -221,6 +232,17 @@ export async function enrichNextLead(): Promise<EnrichResult> {
       last_enriched_at: new Date().toISOString(),
     });
 
+    if (identityChanged && settings.ai_enabled && settings.ai_auto_verify_enabled && settings.ai_reverify_after_enrichment) {
+      try {
+        await enqueueAiVerificationForLead(lead.id, "place_details_enrichment", { settings });
+      } catch (error) {
+        await createAuditLog("ai_verification_enqueue_failed", "lead", lead.id, {
+          reason: "place_details_enrichment",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     const remaining = (await getUnenrichedLeads(1)).length;
 
     return {
@@ -239,4 +261,37 @@ export async function enrichNextLead(): Promise<EnrichResult> {
       error: errorMessage,
     };
   }
+}
+
+function hasMaterialIdentityChange(
+  lead: Lead,
+  next: {
+    name: string | null;
+    address: string | null;
+    phone: string | null;
+    categories: string[];
+    websiteUri: string | null;
+    mapsUri: string | null;
+    businessStatus: string | null;
+  },
+): boolean {
+  return normalized(next.name) !== normalized(lead.name) ||
+    normalized(next.address) !== normalized(lead.address) ||
+    normalizedPhone(next.phone) !== normalizedPhone(lead.phone) ||
+    normalized(next.websiteUri) !== normalized(lead.website_uri) ||
+    normalized(next.mapsUri) !== normalized(lead.maps_uri) ||
+    normalized(next.businessStatus) !== normalized(lead.business_status) ||
+    normalizedCategories(next.categories) !== normalizedCategories(lead.categories);
+}
+
+function normalized(value: string | null): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function normalizedPhone(value: string | null): string {
+  return (value ?? "").replace(/\D/g, "");
+}
+
+function normalizedCategories(values: string[]): string {
+  return Array.from(new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))).sort().join("|");
 }

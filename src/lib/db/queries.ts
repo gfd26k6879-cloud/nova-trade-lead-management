@@ -1,6 +1,7 @@
 import { getDb, generateId, nowISO, type DbClient } from "./index";
 import { seedZipCodes } from "./seed-zips";
 import { computeScoreBandThresholds, type ScoreBandThresholds } from "@/lib/score-bands";
+import { computeWinProbability } from "@/lib/scoring";
 import {
   GOOGLE_PLACES_SKU_PRICING,
   estimateMarginalSkuCost,
@@ -69,6 +70,20 @@ export interface Lead {
   ai_checked_at: string | null;
   ai_website_viability_status: WebsiteViabilityStatus | null;
   ai_website_health: WebsiteHealthSnapshot | null;
+  ai_queue_status: AiQueueStatus;
+  ai_attempt_count: number;
+  ai_last_error: string | null;
+  ai_next_retry_at: string | null;
+  ai_input_hash: string | null;
+  raw_opportunity_score: number;
+  verification_score: number;
+  sales_priority_score: number;
+  pitch_outcome: string | null;
+  objection_reason: string | null;
+  decision_maker_reached: boolean;
+  quoted_amount: number;
+  close_value: number;
+  demo_sent_at: string | null;
   assigned_to_user_id: string | null;
   qualification_status: QualificationStatus;
   disqualification_reason: string | null;
@@ -126,6 +141,10 @@ export interface KanbanLead {
   ai_checked_at: string | null;
   ai_website_viability_status: WebsiteViabilityStatus | null;
   ai_website_health: WebsiteHealthSnapshot | null;
+  ai_queue_status: AiQueueStatus;
+  raw_opportunity_score: number;
+  verification_score: number;
+  sales_priority_score: number;
   qualification_status: QualificationStatus;
 }
 
@@ -162,9 +181,14 @@ export interface QueueLead {
   ai_recommendation: AiRecommendation | null;
   ai_checked_at: string | null;
   ai_website_viability_status: WebsiteViabilityStatus | null;
+  ai_queue_status: AiQueueStatus;
   qualification_status: QualificationStatus;
   contactability_score: number;
   estimated_deal_value: number;
+  raw_opportunity_score: number;
+  verification_score: number;
+  sales_priority_score: number;
+  demo_slug: string | null;
 }
 
 export interface OutreachEvent {
@@ -279,6 +303,11 @@ export interface Settings {
   ai_batch_limit: number;
   ai_cache_ttl_days: number;
   ai_manual_apply_required: boolean;
+  ai_auto_verify_enabled: boolean;
+  ai_verify_after_discovery: boolean;
+  ai_reverify_after_enrichment: boolean;
+  ai_verification_concurrency: number;
+  ai_max_attempts: number;
   openai_api_key_configured: boolean;
   openai_api_key_source: "ui" | "env" | "none";
   google_places_api_key_configured: boolean;
@@ -440,6 +469,17 @@ export interface LeadFilters {
   sortDir?: "asc" | "desc";
   page?: number;
   pageSize?: number;
+}
+
+export type AiQueueStatus = "not_checked" | "queued" | "running" | "verified" | "error";
+
+export interface AiQueueStats {
+  notChecked: number;
+  queued: number;
+  running: number;
+  verified: number;
+  error: number;
+  total: number;
 }
 
 export interface QualityLead extends QueueLead {
@@ -704,6 +744,11 @@ export async function getSettings(): Promise<Settings>{
     ai_batch_limit: (row.ai_batch_limit as number) ?? 25,
     ai_cache_ttl_days: (row.ai_cache_ttl_days as number) ?? 30,
     ai_manual_apply_required: ((row.ai_manual_apply_required as number) ?? 1) === 1,
+    ai_auto_verify_enabled: ((row.ai_auto_verify_enabled as number) ?? 1) === 1,
+    ai_verify_after_discovery: ((row.ai_verify_after_discovery as number) ?? 1) === 1,
+    ai_reverify_after_enrichment: ((row.ai_reverify_after_enrichment as number) ?? 1) === 1,
+    ai_verification_concurrency: Math.max(1, Math.min(5, Math.floor((row.ai_verification_concurrency as number) ?? 1))),
+    ai_max_attempts: Math.max(1, Math.min(10, Math.floor((row.ai_max_attempts as number) ?? 3))),
     openai_api_key_configured: !!row.openai_api_key_encrypted || !!process.env.OPENAI_API_KEY,
     openai_api_key_source: row.openai_api_key_encrypted ? "ui" : process.env.OPENAI_API_KEY ? "env" : "none",
     google_places_api_key_configured: !!row.google_places_api_key_encrypted || !!process.env.GOOGLE_PLACES_API_KEY,
@@ -807,6 +852,26 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
   if (settings.ai_manual_apply_required !== undefined) {
     updates.push("ai_manual_apply_required = ?");
     values.push(1);
+  }
+  if (settings.ai_auto_verify_enabled !== undefined) {
+    updates.push("ai_auto_verify_enabled = ?");
+    values.push(settings.ai_auto_verify_enabled ? 1 : 0);
+  }
+  if (settings.ai_verify_after_discovery !== undefined) {
+    updates.push("ai_verify_after_discovery = ?");
+    values.push(settings.ai_verify_after_discovery ? 1 : 0);
+  }
+  if (settings.ai_reverify_after_enrichment !== undefined) {
+    updates.push("ai_reverify_after_enrichment = ?");
+    values.push(settings.ai_reverify_after_enrichment ? 1 : 0);
+  }
+  if (settings.ai_verification_concurrency !== undefined) {
+    updates.push("ai_verification_concurrency = ?");
+    values.push(Math.max(1, Math.min(5, Math.floor(settings.ai_verification_concurrency))));
+  }
+  if (settings.ai_max_attempts !== undefined) {
+    updates.push("ai_max_attempts = ?");
+    values.push(Math.max(1, Math.min(10, Math.floor(settings.ai_max_attempts))));
   }
   if (
     "openai_api_key_configured" in settings ||
@@ -1423,7 +1488,18 @@ export async function leadExists(placeId: string): Promise<boolean>{
   return row !== undefined;
 }
 
-const LEAD_ALLOWED_SORT = ["score", "lead_quality_score", "win_probability_score", "rating", "review_count", "name", "created_at"];
+const LEAD_ALLOWED_SORT = [
+  "score",
+  "lead_quality_score",
+  "win_probability_score",
+  "raw_opportunity_score",
+  "verification_score",
+  "sales_priority_score",
+  "rating",
+  "review_count",
+  "name",
+  "created_at",
+];
 const SCORE_ELIGIBLE_CONDITION = "COALESCE(is_excluded, 0) = 0";
 const NO_WEBSITE_OPPORTUNITY_STATUSES = new Set(["none", "social", "basic"]);
 const EXCLUDED_STATUS_FILTER = "excluded";
@@ -1606,7 +1682,8 @@ export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads
       lead_quality_score, quality_bucket, easy_build_score, cash_speed_score, need_score,
       quality_reason, recommended_offer, next_best_action, phone_verification_status,
       ai_verification_status, ai_confidence, ai_found_website_url, ai_recommendation, ai_summary, ai_checked_at,
-      ai_website_viability_status, ai_website_health, qualification_status
+      ai_website_viability_status, ai_website_health, ai_queue_status,
+      raw_opportunity_score, verification_score, sales_priority_score, qualification_status
      FROM leads ${where}
      ORDER BY ${safeSortBy} ${safeSortDir}
      LIMIT ? OFFSET ?`
@@ -1647,6 +1724,10 @@ export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads
     ai_checked_at: (row.ai_checked_at as string | null) ?? null,
     ai_website_viability_status: (row.ai_website_viability_status as WebsiteViabilityStatus | null) ?? null,
     ai_website_health: safeParseJson<WebsiteHealthSnapshot | null>(row.ai_website_health as string | null, null),
+    ai_queue_status: normalizeAiQueueStatus(row.ai_queue_status),
+    raw_opportunity_score: Number(row.raw_opportunity_score ?? row.score ?? 0),
+    verification_score: Number(row.verification_score ?? 0),
+    sales_priority_score: Number(row.sales_priority_score ?? row.lead_quality_score ?? row.score ?? 0),
     qualification_status: ((row.qualification_status as QualificationStatus | null) ?? "needs_verification"),
   }));
 
@@ -1917,6 +1998,7 @@ export async function updateLeadAiVerificationSummary(
     nowISO(),
     leadId,
   );
+  await updateLeadQualityScores(leadId);
 }
 
 export async function markLeadAiError(leadId: string, message: string): Promise<void>{
@@ -2002,6 +2084,125 @@ export async function getAiBudgetStatus(settings: Settings, reservedCost: number
   };
 }
 
+export async function markLeadAiQueued(leadId: string, inputHash: string, resetAttempts = false): Promise<number> {
+  const db = await getDb();
+  const result = await db.prepare(
+    `UPDATE leads SET
+      ai_queue_status = 'queued',
+      ai_attempt_count = CASE WHEN ? = 1 THEN 0 ELSE ai_attempt_count END,
+      ai_last_error = NULL,
+      ai_next_retry_at = NULL,
+      ai_input_hash = ?,
+      updated_at = ?
+     WHERE id = ?`
+  ).run(resetAttempts ? 1 : 0, inputHash, nowISO(), leadId);
+  return result.changes;
+}
+
+export async function markLeadAiRunning(leadId: string, inputHash: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.prepare(
+    `UPDATE leads SET
+      ai_queue_status = 'running',
+      ai_attempt_count = ai_attempt_count + 1,
+      ai_last_error = NULL,
+      ai_input_hash = ?,
+      updated_at = ?
+     WHERE id = ?
+       AND ai_queue_status IN ('queued','running')`
+  ).run(inputHash, nowISO(), leadId);
+  return result.changes;
+}
+
+export async function markLeadAiVerified(leadId: string, inputHash: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.prepare(
+    `UPDATE leads SET
+      ai_queue_status = 'verified',
+      ai_last_error = NULL,
+      ai_next_retry_at = NULL,
+      ai_input_hash = ?,
+      updated_at = ?
+     WHERE id = ?`
+  ).run(inputHash, nowISO(), leadId);
+  await updateLeadQualityScores(leadId);
+  return result.changes;
+}
+
+export async function markLeadAiQueueError(leadId: string, message: string, maxAttempts: number): Promise<void> {
+  const db = await getDb();
+  const row = await db.prepare("SELECT ai_attempt_count FROM leads WHERE id = ?").get(leadId) as { ai_attempt_count: number } | undefined;
+  const attempts = Math.max(0, Number(row?.ai_attempt_count ?? 0));
+  const safeMaxAttempts = Math.max(1, Math.floor(maxAttempts));
+  const retryable = attempts < safeMaxAttempts;
+  const retryDelayMinutes = Math.min(60, Math.max(5, 5 * 2 ** Math.max(attempts - 1, 0)));
+  const nextRetry = retryable
+    ? new Date(Date.now() + retryDelayMinutes * 60 * 1000).toISOString()
+    : null;
+
+  await db.prepare(
+    `UPDATE leads SET
+      ai_queue_status = ?,
+      ai_last_error = ?,
+      ai_next_retry_at = ?,
+      updated_at = ?
+     WHERE id = ?`
+  ).run(retryable ? "queued" : "error", message.slice(0, 1000), nextRetry, nowISO(), leadId);
+  await updateLeadQualityScores(leadId);
+}
+
+export async function getNextAiVerificationJob(maxAttempts = 3): Promise<Lead | null> {
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE leads SET
+      ai_queue_status = 'queued',
+      ai_next_retry_at = NULL,
+      updated_at = ?
+     WHERE ai_queue_status = 'running'
+       AND updated_at < datetime('now', '-5 minutes')`
+  ).run(nowISO());
+
+  const row = await db.prepare(
+    `SELECT *
+     FROM leads
+     WHERE ai_queue_status = 'queued'
+       AND (ai_next_retry_at IS NULL OR ai_next_retry_at <= ?)
+       AND ai_attempt_count < ?
+       AND COALESCE(is_excluded, 0) = 0
+       AND status NOT IN ('closed_won','closed_lost')
+       AND COALESCE(business_status, '') NOT IN ('CLOSED_PERMANENTLY','CLOSED_TEMPORARILY')
+     ORDER BY
+       sales_priority_score DESC,
+       raw_opportunity_score DESC,
+       score DESC,
+       updated_at ASC
+     LIMIT 1`
+  ).get(nowISO(), Math.max(1, Math.floor(maxAttempts))) as Record<string, unknown> | undefined;
+
+  return row ? parseLeadRow(row) : null;
+}
+
+export async function getAiQueueStats(): Promise<AiQueueStats> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT COALESCE(ai_queue_status, 'not_checked') as status, COUNT(*) as count
+     FROM leads
+     GROUP BY COALESCE(ai_queue_status, 'not_checked')`
+  ).all() as Array<{ status: string; count: number }>;
+  const stats: AiQueueStats = { notChecked: 0, queued: 0, running: 0, verified: 0, error: 0, total: 0 };
+  for (const row of rows) {
+    const count = Number(row.count) || 0;
+    stats.total += count;
+    const status = normalizeAiQueueStatus(row.status);
+    if (status === "not_checked") stats.notChecked += count;
+    else if (status === "queued") stats.queued += count;
+    else if (status === "running") stats.running += count;
+    else if (status === "verified") stats.verified += count;
+    else if (status === "error") stats.error += count;
+  }
+  return stats;
+}
+
 export async function getAiVerificationCandidates(limit: number, businessType?: BusinessType | string | null): Promise<Lead[]>{
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
@@ -2082,8 +2283,21 @@ export async function updateLeadQualityScores(leadId: string, actorUserId?: stri
     aiWebsiteViabilityStatus: lead.ai_website_viability_status,
     phoneVerificationStatus: normalizedPhoneStatus,
   });
+  const winProbabilityScore = computeLeadWinProbability(lead);
+  const rawOpportunityScore = computeRawOpportunityScore(lead);
+  const verificationScore = computeVerificationScore(lead);
+  const salesPriorityScore = computeSalesPriorityScore({
+    lead,
+    qualityBucket: quality.qualityBucket,
+    leadQualityScore: quality.leadQualityScore,
+    winProbabilityScore,
+    rawOpportunityScore,
+    verificationScore,
+    phoneVerificationStatus: normalizedPhoneStatus,
+  });
   await db.prepare(
     `UPDATE leads SET
+      win_probability_score = ?,
       lead_quality_score = ?,
       quality_bucket = ?,
       easy_build_score = ?,
@@ -2093,11 +2307,15 @@ export async function updateLeadQualityScores(leadId: string, actorUserId?: stri
       recommended_offer = ?,
       next_best_action = ?,
       phone_verification_status = ?,
+      raw_opportunity_score = ?,
+      verification_score = ?,
+      sales_priority_score = ?,
       last_quality_scored_at = ?,
       quality_checked_by_user_id = COALESCE(?, quality_checked_by_user_id),
       updated_at = ?
      WHERE id = ?`
   ).run(
+    winProbabilityScore,
     quality.leadQualityScore,
     quality.qualityBucket,
     quality.easyBuildScore,
@@ -2107,11 +2325,131 @@ export async function updateLeadQualityScores(leadId: string, actorUserId?: stri
     quality.recommendedOffer,
     quality.nextBestAction,
     normalizedPhoneStatus,
+    rawOpportunityScore,
+    verificationScore,
+    salesPriorityScore,
     nowISO(),
     actorUserId ?? null,
     nowISO(),
     leadId,
   );
+}
+
+function computeLeadWinProbability(lead: Lead): number {
+  return computeWinProbability({
+    score: lead.score,
+    websiteStatus: lead.website_status as WebsiteStatus,
+    qualificationStatus: lead.qualification_status,
+    isExcluded: lead.is_excluded,
+    businessStatus: lead.business_status,
+    contactabilityScore: lead.contactability_score,
+    estimatedDealValue: lead.estimated_deal_value,
+    firstContactedAt: lead.first_contacted_at,
+    firstReplyAt: lead.first_reply_at,
+    meetingBookedAt: lead.meeting_booked_at,
+    status: lead.status,
+    aiVerification: {
+      status: lead.ai_verification_status,
+      confidence: lead.ai_confidence,
+      foundWebsiteUrl: lead.ai_found_website_url,
+      websiteViabilityStatus: lead.ai_website_viability_status,
+    },
+  });
+}
+
+function computeRawOpportunityScore(lead: Lead): number {
+  if (lead.is_excluded || lead.status === "closed_lost" || lead.business_status === "CLOSED_PERMANENTLY" || lead.business_status === "CLOSED_TEMPORARILY") {
+    return 0;
+  }
+  return clampPercentage(Math.min(Math.max(lead.score, 0) / 35, 1) * 100);
+}
+
+function computeVerificationScore(lead: Lead): number {
+  const confidence = Math.max(clamp01(lead.ai_confidence), 0.5);
+  const viability = lead.ai_website_viability_status;
+  const hasUsableAiWebsite = lead.ai_verification_status === "site_found" && viability === "usable" && Boolean(lead.ai_found_website_url);
+
+  if (lead.is_excluded || lead.website_status === "custom" || hasUsableAiWebsite) return 0;
+  if (lead.ai_verification_status === "no_site_found" || viability === "directory_only") {
+    return clampPercentage(Math.max(55, confidence * 100));
+  }
+  if (lead.ai_verification_status === "weak_site_found" && isWeakWebsiteViability(viability)) {
+    return clampPercentage(Math.max(60, confidence * 92));
+  }
+  if (lead.ai_verification_status === "weak_site_found") {
+    return clampPercentage(Math.max(40, confidence * 70));
+  }
+  if (lead.ai_verification_status === "uncertain" || lead.ai_verification_status === "mismatch") return 25;
+  if (lead.ai_verification_status === "error") return 15;
+  if (lead.ai_verification_status === "site_found") return 10;
+  return 5;
+}
+
+function computeSalesPriorityScore(input: {
+  lead: Lead;
+  qualityBucket: QualityBucket;
+  leadQualityScore: number;
+  winProbabilityScore: number;
+  rawOpportunityScore: number;
+  verificationScore: number;
+  phoneVerificationStatus: PhoneVerificationStatus;
+}): number {
+  const { lead, qualityBucket, leadQualityScore, winProbabilityScore, rawOpportunityScore, verificationScore, phoneVerificationStatus } = input;
+  if (lead.is_excluded || qualityBucket === "not_a_fit" || lead.status === "closed_lost") return 0;
+
+  const contactability = phoneVerificationStatus === "works"
+    ? 100
+    : phoneVerificationStatus === "unknown" && lead.phone?.trim()
+      ? 78
+      : phoneVerificationStatus === "bad"
+        ? 8
+        : 16;
+  const dealValue = clampPercentage(Math.min(Math.max(lead.estimated_deal_value / 6000, 0), 1) * 100);
+  const freshness = computeSalesFreshnessScore(lead);
+  const engagement = lead.meeting_booked_at
+    ? 100
+    : lead.first_reply_at
+      ? 82
+      : lead.first_contacted_at
+        ? 48
+        : 72;
+  const bucketBoost = qualityBucket === "broken_site_opportunity"
+    ? 8
+    : qualityBucket === "ready_to_call"
+      ? 6
+      : qualityBucket === "needs_manual_review"
+        ? -12
+        : qualityBucket === "needs_ai_verify"
+          ? -24
+          : 0;
+
+  return clampPercentage(
+    leadQualityScore * 0.36 +
+    winProbabilityScore * 0.24 +
+    rawOpportunityScore * 0.12 +
+    verificationScore * 0.14 +
+    contactability * 0.07 +
+    dealValue * 0.04 +
+    freshness * 0.02 +
+    engagement * 0.01 +
+    bucketBoost,
+  );
+}
+
+function computeSalesFreshnessScore(lead: Lead): number {
+  const lastTouch = lead.last_contacted_at ?? lead.first_contacted_at ?? lead.discovered_at;
+  const parsed = Date.parse(lastTouch);
+  if (Number.isNaN(parsed)) return 45;
+  const ageDays = (Date.now() - parsed) / (24 * 60 * 60 * 1000);
+  if (ageDays <= 2) return 95;
+  if (ageDays <= 7) return 80;
+  if (ageDays <= 21) return 62;
+  if (ageDays <= 60) return 42;
+  return 24;
+}
+
+function isWeakWebsiteViability(status: WebsiteViabilityStatus | null): boolean {
+  return status === "broken" || status === "parked" || status === "placeholder";
 }
 
 export async function recomputeAllLeadQualityScores(limit = 100000): Promise<number>{
@@ -2319,6 +2657,7 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
       return {
         ...lead,
         city: extractCity(lead.address),
+        demo_slug: null,
       } as QualityLead;
     }),
   };
@@ -2392,6 +2731,22 @@ function parseLeadRow(row: Record<string, unknown>): Lead {
     ai_recommendation: (row.ai_recommendation as AiRecommendation | null) ?? null,
     ai_summary: (row.ai_summary as string | null) ?? null,
     ai_checked_at: (row.ai_checked_at as string | null) ?? null,
+    ai_website_viability_status: (row.ai_website_viability_status as WebsiteViabilityStatus | null) ?? null,
+    ai_website_health: safeParseJson<WebsiteHealthSnapshot | null>(row.ai_website_health, null),
+    ai_queue_status: normalizeAiQueueStatus(row.ai_queue_status),
+    ai_attempt_count: Number(row.ai_attempt_count ?? 0),
+    ai_last_error: (row.ai_last_error as string | null) ?? null,
+    ai_next_retry_at: (row.ai_next_retry_at as string | null) ?? null,
+    ai_input_hash: (row.ai_input_hash as string | null) ?? null,
+    raw_opportunity_score: Number(row.raw_opportunity_score ?? row.score ?? 0),
+    verification_score: Number(row.verification_score ?? 0),
+    sales_priority_score: Number(row.sales_priority_score ?? row.lead_quality_score ?? row.score ?? 0),
+    pitch_outcome: (row.pitch_outcome as string | null) ?? null,
+    objection_reason: (row.objection_reason as string | null) ?? null,
+    decision_maker_reached: toBoolean(row.decision_maker_reached),
+    quoted_amount: Number(row.quoted_amount ?? 0),
+    close_value: Number(row.close_value ?? 0),
+    demo_sent_at: (row.demo_sent_at as string | null) ?? null,
     assigned_to_user_id: (row.assigned_to_user_id as string | null) ?? null,
     qualification_status: ((row.qualification_status as QualificationStatus | null) ?? "needs_verification"),
     disqualification_reason: (row.disqualification_reason as string | null) ?? null,
@@ -2477,6 +2832,7 @@ export async function getDashboardStats(): Promise<{
   zipCodesCompleted: number;
   countiesSelected: number;
   countiesCompleted: number;
+  aiQueueStats: AiQueueStats;
 }> {
   const db = await getDb();
   const activeRun = await getActiveCrawlRun();
@@ -2512,6 +2868,7 @@ export async function getDashboardStats(): Promise<{
     zipCodesCompleted: geographyProgress.zipCodesCompleted,
     countiesSelected: geographyProgress.countiesSelected,
     countiesCompleted: geographyProgress.countiesCompleted,
+    aiQueueStats: await getAiQueueStats(),
   };
 }
 
@@ -3051,6 +3408,16 @@ function safeParseJson<T>(value: unknown, fallback: T): T {
   }
 }
 
+function normalizeAiQueueStatus(value: unknown): AiQueueStatus {
+  return value === "queued" || value === "running" || value === "verified" || value === "error"
+    ? value
+    : "not_checked";
+}
+
+function toBoolean(value: unknown): boolean {
+  return value === true || value === 1 || value === "1";
+}
+
 async function getAiUsageCostSince(startDate: string): Promise<number> {
   const db = await getDb();
   const row = await db.prepare(
@@ -3391,6 +3758,26 @@ function servicesForNiche(niche: string | null): string[] {
   return services[niche ?? ""] ?? ["Services", "Appointments", "Free estimate"];
 }
 
+function ctaForNiche(niche: string | null, hasPhone: boolean): { primaryCta: string; secondaryCta: string } {
+  const bookingNiches = new Set(["dental", "medical_spa", "veterinary", "beauty", "fitness"]);
+  const estimateNiches = new Set(["hvac", "home_services", "auto_services", "financial_services"]);
+  if (!hasPhone && bookingNiches.has(niche ?? "")) return { primaryCta: "Book an Appointment", secondaryCta: "Get Directions" };
+  if (!hasPhone && estimateNiches.has(niche ?? "")) return { primaryCta: "Request an Estimate", secondaryCta: "Get Directions" };
+  if (bookingNiches.has(niche ?? "")) return { primaryCta: "Call to Book", secondaryCta: "Get Directions" };
+  if (estimateNiches.has(niche ?? "")) return { primaryCta: "Call for an Estimate", secondaryCta: "Get Directions" };
+  return { primaryCta: hasPhone ? "Call Now" : "Get Directions", secondaryCta: "Get Directions" };
+}
+
+function demoHeadlineForLead(lead: Lead): string {
+  if (lead.recommended_offer === "broken_site_rescue") {
+    return `A working, mobile-ready site for ${lead.name ?? "your business"}`;
+  }
+  if (lead.recommended_offer === "booking_ready_site") {
+    return `A booking-ready website for ${lead.name ?? "your business"}`;
+  }
+  return `A cleaner, faster website for ${lead.name ?? "your business"}`;
+}
+
 function parseDemoRow(row: Record<string, unknown>): Demo {
   return {
     id: row.id as string,
@@ -3420,12 +3807,13 @@ export async function createDemoForLead(leadId: string): Promise<Demo | null>{
 
   const slug = `${slugify(lead.name ?? "business")}-${generateId().slice(0, 8)}`;
   const now = nowISO();
+  const cta = ctaForNiche(lead.selling_niche, Boolean(lead.phone?.trim()));
   const config = {
-    headline: `A cleaner, faster website for ${lead.name ?? "your business"}`,
+    headline: demoHeadlineForLead(lead),
     subheadline: "Built to help local customers call, book, and trust you faster.",
     services: servicesForNiche(lead.selling_niche),
-    primaryCta: "Call Now",
-    secondaryCta: "Request an Appointment",
+    primaryCta: cta.primaryCta,
+    secondaryCta: cta.secondaryCta,
   };
 
   await db.prepare(
@@ -3544,10 +3932,15 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
         AND ${noUsableAiWebsiteCondition()}
         AND qualification_status IN ('qualified', 'needs_verification')
         AND status IN ('new', 'verified', 'contacted')
-        AND quality_bucket != 'not_a_fit'
+        AND quality_bucket IN ('ready_to_call','broken_site_opportunity')
+        AND (
+          ai_queue_status = 'verified'
+          OR ai_verification_status IN ('no_site_found','weak_site_found')
+          OR ai_website_viability_status IN ('directory_only','broken','parked','placeholder')
+        )
         AND score > 0
         AND ${SCORE_ELIGIBLE_CONDITION}
-      ORDER BY lead_quality_score DESC, score DESC
+      ORDER BY sales_priority_score DESC, lead_quality_score DESC, score DESC
       LIMIT ?
     ),
     ranked AS (
@@ -3584,9 +3977,20 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
         l.ai_recommendation,
         l.ai_checked_at,
         l.ai_website_viability_status,
+        l.ai_queue_status,
         l.qualification_status,
         l.contactability_score,
         l.estimated_deal_value,
+        l.raw_opportunity_score,
+        l.verification_score,
+        l.sales_priority_score,
+        (
+          SELECT d.slug
+          FROM demos d
+          WHERE d.lead_id = l.id AND d.is_published = 1
+          ORDER BY d.created_at DESC
+          LIMIT 1
+        ) as demo_slug,
         CASE WHEN l.reminder_date IS NOT NULL AND l.reminder_date <= ? THEN 1 ELSE 0 END as has_urgent_reminder,
         CASE
           WHEN l.contactability_score > 0 THEN l.contactability_score
@@ -3607,7 +4011,10 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
     FROM ranked
     ORDER BY
       has_urgent_reminder DESC,
-      (lead_quality_score * 0.7 + win_probability_score * 0.2 + contactability * 5 + freshness * 5) DESC
+      sales_priority_score DESC,
+      lead_quality_score DESC,
+      win_probability_score DESC,
+      score DESC
     LIMIT ?
   `).all(candidateLimit, today, limit) as Array<Record<string, unknown>>;
 
@@ -3644,9 +4051,14 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
     ai_recommendation: (row.ai_recommendation as AiRecommendation | null) ?? null,
     ai_checked_at: (row.ai_checked_at as string | null) ?? null,
     ai_website_viability_status: (row.ai_website_viability_status as WebsiteViabilityStatus | null) ?? null,
+    ai_queue_status: normalizeAiQueueStatus(row.ai_queue_status),
     qualification_status: ((row.qualification_status as QualificationStatus | null) ?? "needs_verification"),
     contactability_score: (row.contactability_score as number | null) ?? 0,
     estimated_deal_value: (row.estimated_deal_value as number | null) ?? 0,
+    raw_opportunity_score: Number(row.raw_opportunity_score ?? row.score ?? 0),
+    verification_score: Number(row.verification_score ?? 0),
+    sales_priority_score: Number(row.sales_priority_score ?? row.lead_quality_score ?? row.score ?? 0),
+    demo_slug: (row.demo_slug as string | null) ?? null,
   }));
 }
 

@@ -23,12 +23,24 @@ interface Lead {
   reminder_date: string | null;
   status: string;
   win_probability_score: number;
+  lead_quality_score: number;
+  quality_bucket: string;
+  recommended_offer: string;
+  next_best_action: string | null;
+  phone_verification_status: string;
   ai_verification_status: string;
   ai_confidence: number;
   ai_found_website_url: string | null;
   ai_recommendation: string | null;
   ai_checked_at: string | null;
   ai_website_viability_status: string | null;
+  ai_queue_status: string;
+  contactability_score: number;
+  estimated_deal_value: number;
+  raw_opportunity_score: number;
+  verification_score: number;
+  sales_priority_score: number;
+  demo_slug: string | null;
 }
 
 interface OutreachPackage {
@@ -57,6 +69,16 @@ const aiBadgeStyle = (status: string): React.CSSProperties => {
   const c = colors[status] ?? { bg: "rgba(0,0,0,0.05)", color: "var(--text-secondary)" };
   return { background: c.bg, color: c.color, padding: "2px 8px", borderRadius: "6px", fontSize: "0.7rem", fontWeight: 600 };
 };
+
+function websiteFindingLabel(lead: Lead): string {
+  if (lead.ai_verification_status === "no_site_found" || lead.ai_website_viability_status === "directory_only") {
+    return "Verified no usable website";
+  }
+  if (lead.ai_verification_status === "weak_site_found") {
+    return `Weak site: ${lead.ai_website_viability_status ?? "unknown"}`;
+  }
+  return lead.ai_verification_status.replace(/_/g, " ");
+}
 
 export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: Lead[]; scoreThresholds: ScoreBandThresholds }) {
   const router = useRouter();
@@ -107,6 +129,20 @@ export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: L
       setCopied(`msg-${leadId}`);
       setTimeout(() => setCopied(null), 2000);
     }
+  };
+
+  const copyDemoPitch = (lead: Lead) => {
+    if (!lead.demo_slug) return;
+    const demoUrl = `${window.location.origin}/demo/${lead.demo_slug}`;
+    const pitch = [
+      `${lead.name ?? "This business"} looks like a verified website opportunity.`,
+      `Finding: ${websiteFindingLabel(lead)}.`,
+      `Demo: ${demoUrl}`,
+      lead.next_best_action ? `Next action: ${lead.next_best_action}` : null,
+    ].filter(Boolean).join("\n");
+    navigator.clipboard.writeText(pitch);
+    setCopied(`demo-${lead.id}`);
+    setTimeout(() => setCopied(null), 2000);
   };
 
   const markContacted = async (lead: Lead) => {
@@ -210,6 +246,7 @@ export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: L
                       <span>{lead.categories[0]?.replace(/_/g, " ") ?? "—"}</span>
                       {lead.rating && <span>{lead.rating.toFixed(1)} ({lead.review_count})</span>}
                       <span>Win {Math.round(lead.win_probability_score)}%</span>
+                      <span>Priority {Math.round(lead.sales_priority_score)}%</span>
                       {lead.ai_found_website_url && lead.ai_website_viability_status === "usable" && <span>AI usable site</span>}
                       {lead.ai_found_website_url && ["broken", "parked", "placeholder"].includes(lead.ai_website_viability_status ?? "") && <span>AI weak site opportunity</span>}
                       {lead.last_contacted_at && (
@@ -238,6 +275,34 @@ export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: L
                   </div>
                 </div>
 
+                <div className="mt-4 rounded-xl p-4 text-xs" style={{ background: "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="section-label">Call Sheet</span>
+                    {lead.demo_slug && (
+                      <button type="button" className="btn-glass text-xs" onClick={() => copyDemoPitch(lead)}>
+                        {copied === `demo-${lead.id}` ? "Copied!" : "Copy Demo Pitch"}
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <CallSheetItem label="Website finding" value={websiteFindingLabel(lead)} />
+                    <CallSheetItem label="Evidence" value={`${Math.round((lead.ai_confidence ?? 0) * 100)}% confidence${lead.ai_checked_at ? `, ${new Date(lead.ai_checked_at).toLocaleDateString()}` : ""}`} />
+                    <CallSheetItem label="Phone" value={`${lead.phone ?? "No phone"} (${lead.phone_verification_status.replace(/_/g, " ")})`} />
+                    <CallSheetItem label="Offer" value={lead.recommended_offer.replace(/_/g, " ")} />
+                    <CallSheetItem label="Next action" value={lead.next_best_action ?? "Call and qualify owner interest."} />
+                    <CallSheetItem label="Last contact" value={lead.last_contacted_at ? new Date(lead.last_contacted_at).toLocaleDateString() : "Not contacted"} />
+                    <CallSheetItem label="Follow-up" value={lead.reminder_date ? new Date(lead.reminder_date).toLocaleDateString() : "No reminder"} />
+                    <CallSheetItem label="Demo" value={lead.demo_slug ? `/demo/${lead.demo_slug}` : "No demo yet"} href={lead.demo_slug ? `/demo/${lead.demo_slug}` : undefined} />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <ScoreChip label="Raw" value={lead.raw_opportunity_score} />
+                    <ScoreChip label="Verify" value={lead.verification_score} />
+                    <ScoreChip label="Quality" value={lead.lead_quality_score} />
+                    <ScoreChip label="Sales" value={lead.sales_priority_score} />
+                    <ScoreChip label="Deal" value={lead.estimated_deal_value} money />
+                  </div>
+                </div>
+
                 {expandedId === lead.id && packages[lead.id] && (
                   <div className="mt-4">
                     <div className="flex items-center justify-between mb-2">
@@ -258,5 +323,26 @@ export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: L
         </section>
       )}
     </PageShell>
+  );
+}
+
+function CallSheetItem({ label, value, href }: { label: string; value: string; href?: string }) {
+  return (
+    <div>
+      <p className="font-medium" style={{ color: "var(--text-tertiary)" }}>{label}</p>
+      {href ? (
+        <Link href={href} target="_blank" className="link-accent break-all">{value}</Link>
+      ) : (
+        <p className="mt-0.5" style={{ color: "var(--text-primary)" }}>{value}</p>
+      )}
+    </div>
+  );
+}
+
+function ScoreChip({ label, value, money = false }: { label: string; value: number; money?: boolean }) {
+  return (
+    <span className="rounded-md px-2 py-1" style={{ background: "rgba(255,255,255,0.45)", color: "var(--text-secondary)" }}>
+      {label}: {money ? `$${Math.round(value).toLocaleString()}` : `${Math.round(value)}%`}
+    </span>
   );
 }

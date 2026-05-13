@@ -31,6 +31,7 @@ export default async function DemoPage({ params }: Props) {
   };
   const services = Array.isArray(config.services) ? config.services : ["Services", "Appointments", "Free estimate"];
   const telHref = lead.phone ? `tel:${lead.phone.replace(/[^\d+]/g, "")}` : undefined;
+  const primaryHref = telHref ?? lead.maps_uri ?? undefined;
 
   return (
     <main className="min-h-screen bg-[#f8fafc] text-[#111827]">
@@ -57,14 +58,16 @@ export default async function DemoPage({ params }: Props) {
               {config.subheadline ?? "A modern local-service page built to help customers call, book, and trust the business faster."}
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
-              {telHref && (
-                <a href={telHref} className="rounded-lg bg-slate-950 px-5 py-3 text-sm font-semibold text-white">
+              {primaryHref && (
+                <a href={primaryHref} className="rounded-lg bg-slate-950 px-5 py-3 text-sm font-semibold text-white">
                   {config.primaryCta ?? "Call Now"}
                 </a>
               )}
-              <a href={`mailto:hello@example.com?subject=${encodeURIComponent(`Website inquiry for ${lead.name ?? "your business"}`)}`} className="rounded-lg bg-white px-5 py-3 text-sm font-semibold text-slate-900 ring-1 ring-slate-200">
-                {config.secondaryCta ?? "Request an Appointment"}
-              </a>
+              {lead.maps_uri && (
+                <a href={lead.maps_uri} target="_blank" rel="noopener noreferrer" className="rounded-lg bg-white px-5 py-3 text-sm font-semibold text-slate-900 ring-1 ring-slate-200">
+                  {config.secondaryCta ?? "Get Directions"}
+                </a>
+              )}
             </div>
           </div>
 

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
+import { AuthHashRecovery } from "@/components/auth-hash-recovery";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -27,6 +28,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <div className="mesh-bg" aria-hidden="true" />
+        <AuthHashRecovery />
         {children}
         <Toaster position="bottom-right" richColors closeButton />
       </body>

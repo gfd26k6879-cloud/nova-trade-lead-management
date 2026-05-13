@@ -64,6 +64,22 @@ describe("crawl worker integration", () => {
     expect(row.name).toBe("Test Business");
   });
 
+  it("queues AI verification after discovery when enabled", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestUnit(testDb, { runId, zip: "80202", category: "dentist" });
+    testDb.prepare("UPDATE settings SET ai_enabled = 1, ai_auto_verify_enabled = 1, ai_verify_after_discovery = 1").run();
+
+    const place = makePlaceResult({ id: "places/ai-queued" });
+    mockTextSearch.mockResolvedValueOnce(mockTextSearchResponse([place]));
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("processed");
+    const row = testDb.prepare("SELECT ai_queue_status, ai_input_hash FROM leads WHERE place_id = 'ai-queued'").get() as Record<string, unknown>;
+    expect(row.ai_queue_status).toBe("queued");
+    expect(row.ai_input_hash).toBeTruthy();
+  });
+
   it("resumes from saved page token", async () => {
     const runId = seedTestRun(testDb);
     seedTestUnit(testDb, { runId, nextPageToken: "saved-token-123" });

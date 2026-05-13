@@ -27,6 +27,7 @@ import {
   recordPlaceObservation,
   upsertPlaceMaster,
 } from "@/lib/db/queries";
+import { enqueueAiVerificationForLead } from "@/lib/ai/verification-worker";
 import type { GooglePlacesSku } from "@/lib/google-pricing";
 
 const SKIP_BUSINESS_STATUSES = new Set(["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"]);
@@ -181,9 +182,9 @@ export async function processNextUnit(): Promise<ProcessResult> {
           continue;
         }
 
-        if (await leadExists(placeId)) {
+        const existed = await leadExists(placeId);
+        if (existed) {
           leadsSkipped++;
-          continue;
         }
 
         const websiteStatus = classifyWebsite(
@@ -215,7 +216,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
           Object.keys(settings.niche_weights).length > 0 ? settings.niche_weights : undefined,
         );
 
-        await upsertLead({
+        const leadId = await upsertLead({
           place_id: placeId,
           name: place.displayName?.text ?? null,
           address: place.formattedAddress ?? null,
@@ -235,7 +236,17 @@ export async function processNextUnit(): Promise<ProcessResult> {
           lng: place.location?.longitude ?? null,
           score,
         });
-        leadsFound++;
+        if (settings.ai_enabled && settings.ai_auto_verify_enabled && settings.ai_verify_after_discovery) {
+          try {
+            await enqueueAiVerificationForLead(leadId, "places_discovery", { settings });
+          } catch (error) {
+            await createAuditLog("ai_verification_enqueue_failed", "lead", leadId, {
+              reason: "places_discovery",
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        if (!existed) leadsFound++;
       }
 
       pageToken = result.nextPageToken;
