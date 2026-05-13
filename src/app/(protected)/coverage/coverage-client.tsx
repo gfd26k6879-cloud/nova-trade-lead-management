@@ -1,9 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { PageShell } from "@/components/page-shell";
-import { retryFailedUnitsAction, getFailedUnitErrorsAction } from "@/lib/crawl/actions";
+import {
+  getFailedUnitErrorsAction,
+  pauseCrawlRunAction,
+  resumeCrawlRunAction,
+  retryFailedUnitsAction,
+} from "@/lib/crawl/actions";
 import { refreshStaleUnitsAction } from "@/lib/leads/actions";
 
 interface ZipProgress {
@@ -43,12 +50,49 @@ interface FailedUnit {
   last_error: string | null;
 }
 
+interface CrawlRunSummary {
+  id: string;
+  status: string;
+  started_at: string | null;
+  created_at: string;
+  ended_at: string | null;
+  categories: string[];
+  discovered_count: number;
+  api_calls_used: number;
+  last_error: string | null;
+}
+
+interface CrawlProgress {
+  total: number;
+  done: number;
+  failed: number;
+  pending: number;
+  running: number;
+}
+
+interface CrawlUnitPreview {
+  id: string;
+  status: string;
+  zip: string;
+  city: string | null;
+  county: string | null;
+  category: string;
+  attempt_count: number;
+  discovered_count: number;
+  started_at: string | null;
+  finished_at: string | null;
+  last_error: string | null;
+  next_page_token: string | null;
+  created_at: string;
+}
+
 interface Props {
   coverage: ZipProgress[];
   countyCoverage: CountyCoverage[];
   stateCoverage: StateCoverage[];
-  runId: string | null;
-  runStatus: string | null;
+  run: CrawlRunSummary | null;
+  progress: CrawlProgress | null;
+  unitPreview: CrawlUnitPreview[];
 }
 
 interface RollupRow {
@@ -118,7 +162,8 @@ function aggregateCountyRollups(rows: ZipProgress[]): RollupRow[] {
   });
 }
 
-export function CoverageClient({ coverage, countyCoverage, stateCoverage, runId, runStatus }: Props) {
+export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, progress, unitPreview }: Props) {
+  const router = useRouter();
   const [filter, setFilter] = useState("");
   const [incompleteOnly, setIncompleteOnly] = useState(false);
   const [failedOnly, setFailedOnly] = useState(false);
@@ -128,6 +173,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, runId,
   const [errors, setErrors] = useState<FailedUnit[]>([]);
   const [showErrors, setShowErrors] = useState(false);
   const [refreshDays, setRefreshDays] = useState(7);
+  const [busy, setBusy] = useState<"pause" | "resume" | "retry" | "refresh" | null>(null);
 
   const filtered = useMemo(() => {
     const filterValue = filter.trim().toLowerCase();
@@ -149,6 +195,10 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, runId,
   const totalAll = coverage.reduce((s, z) => s + z.total, 0);
   const totalFailed = coverage.reduce((s, z) => s + z.failed, 0);
   const pct = totalAll > 0 ? Math.round((totalDone / totalAll) * 100) : 0;
+  const runPct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : pct;
+  const runStatus = run?.status ?? null;
+  const isRunning = runStatus === "running";
+  const isPaused = runStatus === "paused";
 
   const hasCustomFilter = filter.trim().length > 0 || incompleteOnly || failedOnly || selectedCounty !== "all";
 
@@ -208,12 +258,39 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, runId,
   };
 
   const handleRetry = async () => {
+    setBusy("retry");
     const result = await retryFailedUnitsAction();
     if ("error" in result) {
       toast.error(result.error ?? "Error");
     } else {
       toast.success(`${result.retriedCount} units queued for retry`);
     }
+    router.refresh();
+    setBusy(null);
+  };
+
+  const handlePause = async () => {
+    setBusy("pause");
+    const result = await pauseCrawlRunAction();
+    if ("error" in result) {
+      toast.error(result.error ?? "Unable to pause run");
+    } else {
+      toast.info("Discovery paused");
+    }
+    router.refresh();
+    setBusy(null);
+  };
+
+  const handleResume = async () => {
+    setBusy("resume");
+    const result = await resumeCrawlRunAction();
+    if ("error" in result) {
+      toast.error(result.error ?? "Unable to resume run");
+    } else {
+      toast.success("Discovery resumed");
+    }
+    router.refresh();
+    setBusy(null);
   };
 
   const handleShowErrors = async () => {
@@ -227,26 +304,148 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, runId,
   };
 
   const handleRefreshStale = async () => {
-    if (!runId) return;
-    const result = await refreshStaleUnitsAction(runId, refreshDays);
+    if (!run?.id) return;
+    setBusy("refresh");
+    const result = await refreshStaleUnitsAction(run.id, refreshDays);
     if ("error" in result) {
       toast.error(result.error ?? "Error");
     } else {
       toast.success(`${result.count} stale units reset for re-crawl`);
     }
+    router.refresh();
+    setBusy(null);
   };
 
   return (
     <PageShell
-      title="Coverage"
-      description="Track zip-by-zip crawl progress and retries."
+      title="Run Monitor"
+      description="See exactly what discovery is doing in the background: ZIP/category work units, progress, failures, and pause/resume controls."
       stats={[
-        { label: "Zips with Units", value: String(coverage.length) },
-        { label: "Units Done", value: `${totalDone} / ${totalAll}` },
-        { label: "Completion", value: `${pct}%` },
-        { label: "Failed", value: String(totalFailed) },
+        { label: "Run Status", value: formatRunStatus(runStatus) },
+        { label: "Units Done", value: `${progress?.done ?? totalDone} / ${progress?.total ?? totalAll}` },
+        { label: "Remaining", value: String((progress?.pending ?? 0) + (progress?.running ?? 0)) },
+        { label: "Failed", value: String(progress?.failed ?? totalFailed) },
       ]}
     >
+      <section className="glass rounded-2xl p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h3 className="section-label">Discovery Control</h3>
+            <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+              A work unit is one Google Places search for one ZIP code and one business category. Running and pending units below are the backend discovery queue.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-glass text-xs" onClick={() => router.refresh()}>
+              Refresh
+            </button>
+            <Link href="/dashboard" className="btn-primary text-xs">
+              Start New Discovery
+            </Link>
+          </div>
+        </div>
+
+        {run ? (
+          <>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <Metric label="Status" value={formatRunStatus(run.status)} tone={run.status} />
+              <Metric label="Completion" value={`${runPct}%`} />
+              <Metric label="Discovered" value={String(run.discovered_count)} />
+              <Metric label="API Calls" value={String(run.api_calls_used)} />
+              <Metric label="Categories" value={String(run.categories.length)} />
+            </div>
+
+            <div className="mt-4 h-2.5 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }}>
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${runPct}%`, background: runPct === 100 ? "#16a34a" : "var(--accent)" }}
+              />
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              {isRunning && (
+                <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handlePause}>
+                  {busy === "pause" ? "Pausing..." : "Pause Discovery"}
+                </button>
+              )}
+              {isPaused && (
+                <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={handleResume}>
+                  {busy === "resume" ? "Resuming..." : "Resume Discovery"}
+                </button>
+              )}
+              {(progress?.failed ?? totalFailed) > 0 && (
+                <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handleRetry}>
+                  {busy === "retry" ? "Retrying..." : `Retry Failed (${progress?.failed ?? totalFailed})`}
+                </button>
+              )}
+              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
+                Started {formatDateTime(run.started_at ?? run.created_at)}
+              </span>
+            </div>
+
+            {run.last_error && (
+              <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", color: "#dc2626" }}>
+                {run.last_error}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="mt-5 rounded-xl p-5 text-sm" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>
+            No discovery run exists yet. Open Discover, choose counties/ZIP codes and categories, then start a run.
+          </div>
+        )}
+      </section>
+
+      <section className="glass rounded-2xl p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="section-label">Backend Work Queue</h3>
+            <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+              Showing active and next queued work first. This is what the worker will process.
+            </p>
+          </div>
+          <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
+            {unitPreview.length} units shown
+          </span>
+        </div>
+        {unitPreview.length === 0 ? (
+          <EmptyPanel label={run ? "No units found for this run." : "Start a discovery run to create work units."} />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="glass-table min-w-[860px]">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>ZIP</th>
+                  <th>Market</th>
+                  <th>Category</th>
+                  <th>Attempts</th>
+                  <th>Leads</th>
+                  <th>Last Activity</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unitPreview.map((unit) => (
+                  <tr key={unit.id}>
+                    <td><StatusPill status={unit.status} /></td>
+                    <td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{unit.zip}</td>
+                    <td>{[unit.city, unit.county].filter(Boolean).join(", ") || "Unknown"}</td>
+                    <td>{unit.category.replace(/_/g, " ")}</td>
+                    <td>{unit.attempt_count}</td>
+                    <td>{unit.discovered_count}</td>
+                    <td>{formatDateTime(unit.started_at ?? unit.finished_at ?? unit.created_at)}</td>
+                    <td className="max-w-72 truncate" title={unit.last_error ?? undefined}>
+                      {unit.last_error ?? (unit.next_page_token ? "More pages queued" : "")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       <section className="glass rounded-2xl p-6">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <input
@@ -295,7 +494,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, runId,
                 </button>
               </>
             )}
-            {runId && totalDone > 0 && (
+            {run?.id && totalDone > 0 && (
               <div className="flex items-center gap-1.5">
                 <input
                   type="number"
@@ -305,8 +504,8 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, runId,
                   onChange={(e) => setRefreshDays(Number(e.target.value))}
                   aria-label="Days threshold"
                 />
-                <button type="button" className="btn-glass text-xs" onClick={handleRefreshStale}>
-                  Refresh Stale
+                <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={handleRefreshStale}>
+                  {busy === "refresh" ? "Refreshing..." : "Refresh Stale"}
                 </button>
               </div>
             )}
@@ -332,7 +531,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, runId,
             style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-tertiary)" }}
           >
             {coverage.length === 0
-              ? `No crawl data yet.${!runId ? " Start a run from the Dashboard." : ""}${runStatus ? ` Current run status: ${runStatus}.` : ""}`
+              ? `No crawl coverage yet.${!run ? " Start a discovery from Discover." : ""}${runStatus ? ` Current run status: ${formatRunStatus(runStatus)}.` : ""}`
               : "No matching records for the selected filters."}
           </div>
         ) : (
@@ -452,4 +651,48 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, runId,
       </section>
     </PageShell>
   );
+}
+
+function Metric({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
+      <p className="mt-0.5 text-lg font-semibold capitalize" style={{ color: tone === "paused" ? "#b45309" : tone === "running" ? "#15803d" : "var(--text-primary)" }}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: string }) {
+  const color = status === "running" ? "#15803d" : status === "pending" ? "var(--accent)" : status === "failed" ? "#dc2626" : status === "done" ? "#64748b" : "#b45309";
+  return (
+    <span className="inline-flex rounded-full px-2.5 py-1 text-xs font-medium capitalize" style={{ background: "rgba(255,255,255,0.55)", border: "1px solid rgba(255,255,255,0.65)", color }}>
+      {status.replace(/_/g, " ")}
+    </span>
+  );
+}
+
+function EmptyPanel({ label }: { label: string }) {
+  return (
+    <div className="rounded-xl p-5 text-center text-sm" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-tertiary)" }}>
+      {label}
+    </div>
+  );
+}
+
+function formatRunStatus(status: string | null): string {
+  if (!status) return "No Run";
+  if (status === "running") return "Running";
+  if (status === "paused") return "Paused";
+  if (status === "done") return "Done";
+  if (status === "error") return "Error";
+  return status.replace(/_/g, " ");
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) return "Not started";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }

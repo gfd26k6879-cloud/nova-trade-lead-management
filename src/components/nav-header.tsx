@@ -5,8 +5,8 @@ import Link from "next/link";
 import type { AppRole } from "@/lib/permissions";
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard", adminOnly: true },
-  { href: "/coverage", label: "Coverage", adminOnly: true },
+  { href: "/dashboard", label: "Discover", adminOnly: true },
+  { href: "/coverage", label: "Run Monitor", adminOnly: true },
   { href: "/quality", label: "Quality", adminOnly: false },
   { href: "/leads", label: "Leads", adminOnly: false },
   { href: "/queue", label: "Queue", adminOnly: false },

@@ -263,8 +263,8 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
 
   return (
     <PageShell
-      title="Dashboard"
-      description="Monitor run health, lead throughput, and daily focus."
+      title="Discover"
+      description="Choose the market and business categories to search, start or pause discovery, and watch the backend queue from the run monitor."
       stats={[
         { label: "Run Status", value: isRunning ? "Running" : isPaused ? "Paused" : "Idle" },
         { label: "Total Leads", value: String(stats.leadsTotal) },
@@ -276,6 +276,41 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
         { label: "Failed Units", value: String(stats.failedUnits) },
       ]}
     >
+      <section className="glass rounded-2xl p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h3 className="section-label">Discovery Workflow</h3>
+            <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+              Start here when you want new businesses. Pick counties, ZIP codes, and categories below, then open Run Monitor to see the exact ZIP/category units being processed.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {isIdle && (
+              <a href="#run-controls" className="btn-primary text-sm">
+                Choose ZIPs & Start
+              </a>
+            )}
+            {isRunning && (
+              <button type="button" className="btn-glass text-sm" onClick={() => setConfirmAction({
+                title: "Pause Discovery",
+                message: "This will stop processing new ZIP/category units. You can resume the run later.",
+                action: handlePause,
+              })} disabled={loading}>
+                Pause Discovery
+              </button>
+            )}
+            {isPaused && (
+              <button type="button" className="btn-primary text-sm" onClick={handleResume} disabled={loading}>
+                Resume Discovery
+              </button>
+            )}
+            <Link href="/coverage" className="btn-glass text-sm">
+              Open Run Monitor
+            </Link>
+          </div>
+        </div>
+      </section>
+
       {/* Progress bar */}
       {progress && progress.total > 0 && (
         <section className="glass rounded-2xl p-6">
@@ -335,8 +370,8 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
       )}
 
       {/* Run controls */}
-      <section className="glass rounded-2xl p-6">
-        <h3 className="section-label">Run Controls</h3>
+      <section id="run-controls" className="glass rounded-2xl p-6 scroll-mt-24">
+        <h3 className="section-label">Start or Pause Discovery</h3>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
           {isIdle && (
@@ -347,7 +382,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
                 onClick={handleStart}
                 disabled={loading || selectedCategories.length === 0 || locationScope.zipCodes.length === 0}
               >
-                Start Run
+                Start Discovery
               </button>
               <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
                 {selectedCategories.length === CATEGORY_OPTIONS.length
@@ -371,16 +406,16 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
           )}
           {isRunning && (
             <button type="button" className="btn-glass" onClick={() => setConfirmAction({
-              title: "Pause Crawl Run",
-              message: "This will pause the current crawl run. You can resume it later.",
+              title: "Pause Discovery",
+              message: "This will stop processing new ZIP/category units. You can resume the run later.",
               action: handlePause,
             })} disabled={loading}>
-              Pause
+              Pause Discovery
             </button>
           )}
           {isPaused && (
             <button type="button" className="btn-primary" onClick={handleResume} disabled={loading}>
-              Resume
+              Resume Discovery
             </button>
           )}
           {stats.failedUnits > 0 && (
@@ -454,7 +489,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
 
         {isProcessing && (
           <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            Processing units... polling every 3 seconds.
+            Discovery is processing ZIP/category units... polling every 3 seconds.
           </p>
         )}
       </section>
@@ -514,6 +549,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
       <section className="glass rounded-2xl p-6">
         <h3 className="section-label">Quick Actions</h3>
         <div className="mt-3 flex flex-wrap gap-3">
+          <Link href="/coverage" className="btn-primary text-sm">Open Run Monitor</Link>
           <Link href="/queue" className="btn-primary text-sm">Open Now Queue</Link>
           <Link href="/leads" className="btn-glass text-sm">Browse Leads</Link>
         </div>

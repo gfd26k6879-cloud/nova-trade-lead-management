@@ -269,6 +269,22 @@ export interface CrawlUnit {
   lng: number | null;
 }
 
+export interface CrawlUnitPreview {
+  id: string;
+  status: string;
+  zip: string;
+  city: string | null;
+  county: string | null;
+  category: string;
+  attempt_count: number;
+  discovered_count: number;
+  started_at: string | null;
+  finished_at: string | null;
+  last_error: string | null;
+  next_page_token: string | null;
+  created_at: string;
+}
+
 export interface ZipCode {
   zip: string;
   city: string;
@@ -1231,6 +1247,49 @@ export async function getCrawlProgress(runId: string): Promise<{ total: number; 
     else if (row.status === "pending" || row.status === "retry_wait") counts.pending += count;
   }
   return counts;
+}
+
+export async function getCrawlUnitPreview(runId: string, limit = 80): Promise<CrawlUnitPreview[]> {
+  const db = await getDb();
+  const boundedLimit = Math.max(1, Math.min(Math.floor(limit), 200));
+  const rows = await db.prepare(
+    `SELECT
+       cu.id,
+       cu.status,
+       cu.zip,
+       z.city,
+       z.county,
+       cu.category,
+       cu.attempt_count,
+       cu.discovered_count,
+       cu.started_at,
+       cu.finished_at,
+       cu.last_error,
+       cu.next_page_token,
+       cu.created_at
+     FROM crawl_units cu
+     LEFT JOIN zip_codes z ON cu.zip = z.zip
+     WHERE cu.crawl_run_id = ?
+     ORDER BY
+       CASE cu.status
+         WHEN 'running' THEN 0
+         WHEN 'pending' THEN 1
+         WHEN 'retry_wait' THEN 2
+         WHEN 'failed' THEN 3
+         WHEN 'done' THEN 4
+         ELSE 5
+       END,
+       COALESCE(cu.started_at, cu.finished_at, cu.created_at) DESC,
+       cu.zip ASC,
+       cu.category ASC
+     LIMIT ?`
+  ).all(runId, boundedLimit) as CrawlUnitPreview[];
+
+  return rows.map((row) => ({
+    ...row,
+    attempt_count: Number(row.attempt_count) || 0,
+    discovered_count: Number(row.discovered_count) || 0,
+  }));
 }
 
 export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
