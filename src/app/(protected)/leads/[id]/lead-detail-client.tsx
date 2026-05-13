@@ -27,6 +27,8 @@ import {
   unclaimLeadAction,
   markLeadQualityBucketAction,
   updateLeadPhoneVerificationStatusAction,
+  queueLeadAiArtifactAction,
+  queueLeadPitchPackAction,
 } from "@/lib/leads/actions";
 import type { AppRole } from "@/lib/permissions";
 
@@ -164,6 +166,25 @@ interface LeadNote {
   deleted_at: string | null;
 }
 
+interface LeadAiArtifact {
+  id: string;
+  lead_id: string;
+  artifact_type: "business_detail" | "competitive_report";
+  status: "queued" | "running" | "complete" | "error";
+  model: string;
+  input_hash: string;
+  prompt_version: string;
+  content_json: Record<string, unknown>;
+  sources_json: Array<{ url: string; title: string | null; evidence: string }>;
+  confidence: number;
+  usage_input_tokens: number;
+  usage_output_tokens: number;
+  estimated_cost: number;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 const STATUS_OPTIONS = ["new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost"];
 const CHANNEL_OPTIONS = ["call", "text", "email", "walkin", "other"];
 type AiApplyAction = "update_website" | "exclude_has_website" | "mark_broken_site_opportunity" | "mark_manual_review";
@@ -198,6 +219,7 @@ export function LeadDetailClient({
   initialLeadNotes,
   initialDemo,
   initialAiVerification,
+  initialAiArtifacts,
   scoreBreakdown,
   density,
   scoreThresholds,
@@ -208,6 +230,7 @@ export function LeadDetailClient({
   initialLeadNotes: LeadNote[];
   initialDemo: Demo | null;
   initialAiVerification: AiVerification | null;
+  initialAiArtifacts: LeadAiArtifact[];
   scoreBreakdown?: ScoreBreakdown;
   density?: DensityResult;
   scoreThresholds: ScoreBandThresholds;
@@ -232,6 +255,7 @@ export function LeadDetailClient({
   const [aiVerification, setAiVerification] = useState<AiVerification | null>(initialAiVerification);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiApplying, setAiApplying] = useState<string | null>(null);
+  const [artifactLoading, setArtifactLoading] = useState<string | null>(null);
   const [leadNotes, setLeadNotes] = useState<LeadNote[]>(initialLeadNotes);
   const [leadNoteBody, setLeadNoteBody] = useState("");
   const [noteLoading, setNoteLoading] = useState(false);
@@ -395,6 +419,60 @@ export function LeadDetailClient({
     }
   };
 
+  const handleQueueArtifact = async (artifactType: "business_detail" | "competitive_report", force = false) => {
+    setArtifactLoading(artifactType);
+    try {
+      const result = await queueLeadAiArtifactAction(lead.id, artifactType, { force });
+      if ("error" in result) {
+        flash(result.error ?? "Unable to queue lead intelligence");
+        return;
+      }
+      flash(result.status === "queued" && result.skippedExisting ? "Lead intelligence already queued or ready" : "Lead intelligence queued");
+      await processArtifactQueue(artifactType);
+    } finally {
+      setArtifactLoading(null);
+    }
+  };
+
+  const handleGeneratePitchPack = async (force = false) => {
+    setArtifactLoading("pitch_pack");
+    try {
+      const result = await queueLeadPitchPackAction(lead.id, { force });
+      const hasError = "error" in result.businessDetail || "error" in result.competitiveReport;
+      if (hasError) {
+        flash("One or more pitch pack artifacts could not be queued");
+        return;
+      }
+      flash("Pitch pack queued");
+      await processArtifactQueue("pitch_pack");
+    } finally {
+      setArtifactLoading(null);
+    }
+  };
+
+  const processArtifactQueue = async (artifactType: string) => {
+    for (let i = 0; i < 8; i++) {
+      const response = await fetch("/api/ai/artifacts/process-next", { method: "POST" });
+      const result = await response.json();
+      if (result.status === "complete") {
+        flash(`${formatArtifactType(result.artifactType)} ready`);
+        router.refresh();
+        if (artifactType !== "pitch_pack" && result.leadId === lead.id && result.artifactType === artifactType) {
+          break;
+        }
+        continue;
+      } else if (result.status === "idle") {
+        router.refresh();
+        break;
+      } else if (result.status === "budget_limit" || result.status === "error") {
+        flash(result.error ?? "Lead intelligence generation failed");
+        router.refresh();
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    }
+  };
+
   const handleRepairAiViability = async () => {
     setAiLoading(true);
     try {
@@ -503,6 +581,10 @@ export function LeadDetailClient({
   const assignedLabel = assignedToUserId === currentUser.userId ? "Assigned to you" : assignedToUserId ? "Assigned" : "Unassigned";
   const websiteFinding = websiteFindingLabel(aiVerification?.status ?? lead.ai_verification_status, currentViability);
   const demoHref = demo ? `/demo/${demo.slug}` : null;
+  const businessDetailArtifact = latestCompleteArtifact(initialAiArtifacts, "business_detail");
+  const businessDetailJob = latestArtifact(initialAiArtifacts, "business_detail");
+  const competitiveReportArtifact = latestCompleteArtifact(initialAiArtifacts, "competitive_report");
+  const competitiveReportJob = latestArtifact(initialAiArtifacts, "competitive_report");
 
   const copyDemoPitch = () => {
     if (!demoHref) return;
@@ -817,6 +899,66 @@ export function LeadDetailClient({
               </button>
             </div>
           )}
+        </article>
+
+        {/* Lead intelligence */}
+        <article className="glass rounded-2xl p-6 lg:col-span-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="section-label">Lead Intelligence</h3>
+              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                Manual gpt-5.4-mini briefs for website generation and the sales pitch.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn-primary text-xs"
+              disabled={artifactLoading !== null}
+              onClick={() => handleGeneratePitchPack(false)}
+            >
+              {artifactLoading === "pitch_pack" ? "Generating..." : "Generate Pitch Pack"}
+            </button>
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <ArtifactPanel
+              title="Business Detail"
+              description="Website build brief and copy-ready prompt."
+              artifact={businessDetailArtifact}
+              latestJob={businessDetailJob}
+              loading={artifactLoading === "business_detail" || artifactLoading === "pitch_pack"}
+              generateLabel="Generate Brief"
+              regenerateLabel="Regenerate Brief"
+              onGenerate={() => handleQueueArtifact("business_detail", false)}
+              onRegenerate={() => handleQueueArtifact("business_detail", true)}
+              onCopy={() => copyToClipboard(String(businessDetailArtifact?.content_json.website_generation_prompt ?? ""))}
+            >
+              {businessDetailArtifact ? (
+                <BusinessDetailView artifact={businessDetailArtifact} />
+              ) : (
+                <EmptyArtifactState label={artifactStateLabel(businessDetailJob)} />
+              )}
+            </ArtifactPanel>
+
+            <ArtifactPanel
+              title="Competitive Report"
+              description="Competitor snapshot, upside estimate, and pitch points."
+              artifact={competitiveReportArtifact}
+              latestJob={competitiveReportJob}
+              loading={artifactLoading === "competitive_report" || artifactLoading === "pitch_pack"}
+              generateLabel="Generate Report"
+              regenerateLabel="Regenerate Report"
+              onGenerate={() => handleQueueArtifact("competitive_report", false)}
+              onRegenerate={() => handleQueueArtifact("competitive_report", true)}
+              onCopy={() => copyToClipboard(buildPitchBriefText(competitiveReportArtifact))}
+            >
+              {competitiveReportArtifact ? (
+                <CompetitiveReportView artifact={competitiveReportArtifact} />
+              ) : (
+                <EmptyArtifactState label={artifactStateLabel(competitiveReportJob)} />
+              )}
+            </ArtifactPanel>
+          </div>
         </article>
 
         {/* Status, reminder, and quick actions */}
@@ -1167,6 +1309,130 @@ function CallSheetField({ label, value, href }: { label: string; value: string; 
   );
 }
 
+function ArtifactPanel({
+  title,
+  description,
+  artifact,
+  latestJob,
+  loading,
+  generateLabel,
+  regenerateLabel,
+  onGenerate,
+  onRegenerate,
+  onCopy,
+  children,
+}: {
+  title: string;
+  description: string;
+  artifact: LeadAiArtifact | null;
+  latestJob: LeadAiArtifact | null;
+  loading: boolean;
+  generateLabel: string;
+  regenerateLabel: string;
+  onGenerate: () => void;
+  onRegenerate: () => void;
+  onCopy: () => void;
+  children: React.ReactNode;
+}) {
+  const isReady = !!artifact;
+  return (
+    <section className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{title}</h4>
+          <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>{description}</p>
+          <span className="mt-2 inline-flex rounded-md px-2 py-1 text-xs font-medium" style={artifactBadgeStyle(latestJob, isReady)}>
+            {artifactStateLabel(latestJob, isReady)}
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn-glass text-xs" disabled={loading} onClick={isReady ? onRegenerate : onGenerate}>
+            {loading ? "Generating..." : isReady ? regenerateLabel : generateLabel}
+          </button>
+          <button type="button" className="btn-glass text-xs" disabled={!isReady || loading} onClick={onCopy}>
+            Copy
+          </button>
+        </div>
+      </div>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function BusinessDetailView({ artifact }: { artifact: LeadAiArtifact }) {
+  const content = artifact.content_json;
+  const services = stringArray(content.services);
+  const trustSignals = stringArray(content.trust_signals);
+  const sections = arrayOfRecords(content.content_sections);
+  return (
+    <div className="space-y-4 text-sm" style={{ color: "var(--text-primary)" }}>
+      <p className="leading-relaxed">{String(content.business_summary ?? "No summary generated.")}</p>
+      <ArtifactList title="Services" items={services} />
+      <ArtifactList title="Trust Signals" items={trustSignals} />
+      {sections.length > 0 && (
+        <div>
+          <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Website Sections</span>
+          <div className="mt-2 space-y-2">
+            {sections.slice(0, 5).map((section, index) => (
+              <div key={`${String(section.title)}-${index}`} className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.35)" }}>
+                <p className="font-medium">{String(section.title ?? "Section")}</p>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>{String(section.goal ?? "")}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div>
+        <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Website Prompt</span>
+        <p className="mt-1 line-clamp-6 whitespace-pre-wrap rounded-lg px-3 py-2 text-xs leading-relaxed" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+          {String(content.website_generation_prompt ?? "No prompt generated.")}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function CompetitiveReportView({ artifact }: { artifact: LeadAiArtifact }) {
+  const content = artifact.content_json;
+  const revenue = toRecord(content.monthly_revenue_upside_range);
+  return (
+    <div className="space-y-4 text-sm" style={{ color: "var(--text-primary)" }}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <QualityMetric label="Similar Businesses" value={String(content.competitor_count ?? 0)} />
+        <QualityMetric label="Monthly Upside" value={`${formatCurrencyNumber(revenue.low)}-${formatCurrencyNumber(revenue.high)}`} />
+      </div>
+      <p className="leading-relaxed">{String(content.opportunity_angle ?? "No opportunity angle generated.")}</p>
+      <ArtifactList title="Pitch Bullets" items={stringArray(content.pitch_bullets)} />
+      <ArtifactList title="Objection Handling" items={stringArray(content.objection_handling)} />
+      <ArtifactList title="Assumptions" items={stringArray(content.assumptions)} />
+    </div>
+  );
+}
+
+function EmptyArtifactState({ label }: { label: string }) {
+  return (
+    <div className="rounded-xl px-4 py-6 text-center text-sm" style={{ background: "rgba(255,255,255,0.28)", color: "var(--text-tertiary)" }}>
+      {label}
+    </div>
+  );
+}
+
+function ArtifactList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div>
+      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{title}</span>
+      <ul className="mt-1 space-y-1">
+        {items.slice(0, 8).map((item) => (
+          <li key={item} className="text-xs leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+            {item}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function websiteFindingLabel(status: string, viability: string | null | undefined): string {
   if (status === "no_site_found" || viability === "directory_only") return "Verified no usable website";
   if (status === "weak_site_found") return `Weak site: ${viability ?? "unknown"}`;
@@ -1177,6 +1443,69 @@ function websiteFindingLabel(status: string, viability: string | null | undefine
 
 function formatLabel(value: string | null | undefined): string {
   return value ? value.replace(/_/g, " ") : "N/A";
+}
+
+function latestArtifact(artifacts: LeadAiArtifact[], artifactType: LeadAiArtifact["artifact_type"]): LeadAiArtifact | null {
+  return artifacts.find((artifact) => artifact.artifact_type === artifactType) ?? null;
+}
+
+function latestCompleteArtifact(artifacts: LeadAiArtifact[], artifactType: LeadAiArtifact["artifact_type"]): LeadAiArtifact | null {
+  return artifacts.find((artifact) => artifact.artifact_type === artifactType && artifact.status === "complete") ?? null;
+}
+
+function artifactStateLabel(artifact: LeadAiArtifact | null, hasComplete = false): string {
+  if (artifact?.status === "queued" || artifact?.status === "running") return "Generating";
+  if (hasComplete || artifact?.status === "complete") return "Ready";
+  if (artifact?.status === "error") return "Error";
+  return "Missing";
+}
+
+function artifactBadgeStyle(artifact: LeadAiArtifact | null, hasComplete: boolean): React.CSSProperties {
+  const label = artifactStateLabel(artifact, hasComplete);
+  if (label === "Ready") return { background: "rgba(34,197,94,0.1)", color: "#16a34a" };
+  if (label === "Generating") return { background: "rgba(99,102,241,0.1)", color: "#6366f1" };
+  if (label === "Error") return { background: "rgba(239,68,68,0.1)", color: "#dc2626" };
+  return { background: "rgba(107,114,128,0.1)", color: "#4b5563" };
+}
+
+function buildPitchBriefText(artifact: LeadAiArtifact | null): string {
+  if (!artifact) return "";
+  const content = artifact.content_json;
+  const revenue = toRecord(content.monthly_revenue_upside_range);
+  return [
+    `Opportunity: ${String(content.opportunity_angle ?? "")}`,
+    `Conservative monthly upside: ${formatCurrencyNumber(revenue.low)}-${formatCurrencyNumber(revenue.high)}`,
+    "Pitch bullets:",
+    ...stringArray(content.pitch_bullets).map((item) => `- ${item}`),
+    "Objection handling:",
+    ...stringArray(content.objection_handling).map((item) => `- ${item}`),
+  ].join("\n");
+}
+
+function formatArtifactType(value: string | null | undefined): string {
+  if (value === "business_detail") return "Business detail";
+  if (value === "competitive_report") return "Competitive report";
+  return "Lead intelligence";
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+}
+
+function arrayOfRecords(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item))
+    : [];
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function formatCurrencyNumber(value: unknown): string {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric)) return "$0";
+  return `$${Math.round(numeric).toLocaleString()}`;
 }
 
 function TimestampRow({ label, value }: { label: string; value: string | null | undefined }) {

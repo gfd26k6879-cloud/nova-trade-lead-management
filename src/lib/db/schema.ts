@@ -82,6 +82,7 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "ai_lead_verifications", column: "website_viability_status", type: "TEXT" },
   { table: "ai_lead_verifications", column: "website_health_json", type: "TEXT" },
   { table: "ai_lead_verifications", column: "website_viability_reason", type: "TEXT" },
+  { table: "lead_ai_artifacts", column: "updated_at", type: "TEXT" },
   { table: "audit_logs", column: "actor_user_id", type: "TEXT" },
   { table: "audit_logs", column: "actor_email", type: "TEXT" },
   { table: "audit_logs", column: "actor_role", type: "TEXT" },
@@ -401,6 +402,25 @@ CREATE TABLE IF NOT EXISTS ai_usage_events (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS lead_ai_artifacts (
+  id TEXT PRIMARY KEY,
+  lead_id TEXT NOT NULL REFERENCES leads(id),
+  artifact_type TEXT NOT NULL CHECK(artifact_type IN ('business_detail','competitive_report')),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','complete','error')),
+  model TEXT NOT NULL DEFAULT 'gpt-5.4-mini',
+  input_hash TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  content_json TEXT NOT NULL DEFAULT '{}',
+  sources_json TEXT NOT NULL DEFAULT '[]',
+  confidence REAL NOT NULL DEFAULT 0,
+  usage_input_tokens INTEGER NOT NULL DEFAULT 0,
+  usage_output_tokens INTEGER NOT NULL DEFAULT 0,
+  estimated_cost REAL NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
   action TEXT NOT NULL,
@@ -452,6 +472,8 @@ CREATE INDEX IF NOT EXISTS idx_ai_verifications_lead_created ON ai_lead_verifica
 CREATE INDEX IF NOT EXISTS idx_ai_verifications_status_created ON ai_lead_verifications(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage_events(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_model_created ON ai_usage_events(model, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_lead_type_created ON lead_ai_artifacts(lead_id, artifact_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_status_created ON lead_ai_artifacts(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_outreach_events_lead ON outreach_events(lead_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_user_id, created_at DESC);

@@ -20,6 +20,7 @@ import {
   markLeadAiRunning,
   markLeadAiVerified,
 } from "@/lib/db/queries";
+import { queueMissingAiVerifications } from "@/lib/ai/verification-worker";
 
 function insertLead(id = "lead-1") {
   testDb.prepare(
@@ -75,5 +76,23 @@ describe("AI queue queries", () => {
     row = testDb.prepare("SELECT ai_queue_status, ai_last_error FROM leads WHERE id = 'lead-1'").get() as Record<string, unknown>;
     expect(row.ai_queue_status).toBe("error");
     expect(row.ai_last_error).toBe("permanent failure");
+  });
+
+  it("backfills missing and stale AI verification while skipping closed leads", async () => {
+    testDb.prepare("UPDATE settings SET ai_enabled = 1 WHERE id = 1").run();
+    await markLeadAiQueued("lead-1", "stale-hash", true);
+    await markLeadAiVerified("lead-1", "stale-hash");
+
+    insertLead("lead-2");
+    testDb.prepare("UPDATE leads SET status = 'closed_lost' WHERE id = 'lead-2'").run();
+    insertLead("lead-3");
+
+    const result = await queueMissingAiVerifications();
+    expect("error" in result).toBe(false);
+
+    const rows = testDb.prepare("SELECT id, ai_queue_status FROM leads ORDER BY id").all() as Array<Record<string, unknown>>;
+    expect(rows.find((row) => row.id === "lead-1")?.ai_queue_status).toBe("queued");
+    expect(rows.find((row) => row.id === "lead-2")?.ai_queue_status).toBe("not_checked");
+    expect(rows.find((row) => row.id === "lead-3")?.ai_queue_status).toBe("queued");
   });
 });

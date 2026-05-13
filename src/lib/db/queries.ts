@@ -189,6 +189,8 @@ export interface QueueLead {
   verification_score: number;
   sales_priority_score: number;
   demo_slug: string | null;
+  business_detail_status: LeadAiArtifactStatus | null;
+  competitive_report_status: LeadAiArtifactStatus | null;
 }
 
 export interface OutreachEvent {
@@ -505,6 +507,48 @@ export interface AiQueueStats {
   verified: number;
   error: number;
   total: number;
+}
+
+export type LeadAiArtifactType = "business_detail" | "competitive_report";
+export type LeadAiArtifactStatus = "queued" | "running" | "complete" | "error";
+
+export interface LeadAiArtifact {
+  id: string;
+  lead_id: string;
+  artifact_type: LeadAiArtifactType;
+  status: LeadAiArtifactStatus;
+  model: string;
+  input_hash: string;
+  prompt_version: string;
+  content_json: Record<string, unknown>;
+  sources_json: AiVerificationSource[];
+  confidence: number;
+  usage_input_tokens: number;
+  usage_output_tokens: number;
+  estimated_cost: number;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LeadAiArtifactInput {
+  lead_id: string;
+  artifact_type: LeadAiArtifactType;
+  model: string;
+  input_hash: string;
+  prompt_version: string;
+  content_json?: Record<string, unknown>;
+  sources_json?: AiVerificationSource[];
+  confidence?: number;
+  usage_input_tokens?: number;
+  usage_output_tokens?: number;
+  estimated_cost?: number;
+  error?: string | null;
+}
+
+export interface LeadAiArtifactBadges {
+  business_detail_status: LeadAiArtifactStatus | null;
+  competitive_report_status: LeadAiArtifactStatus | null;
 }
 
 export interface QualityLead extends QueueLead {
@@ -2150,6 +2194,149 @@ export async function logAiUsageEvent(input: AiUsageEventInput): Promise<void>{
   );
 }
 
+// ─── Lead AI Artifacts ───
+
+export async function getLeadAiArtifacts(leadId: string): Promise<LeadAiArtifact[]> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT *
+     FROM lead_ai_artifacts
+     WHERE lead_id = ?
+     ORDER BY created_at DESC`
+  ).all(leadId) as Array<Record<string, unknown>>;
+  return rows.map(parseLeadAiArtifactRow);
+}
+
+export async function getLatestLeadAiArtifact(
+  leadId: string,
+  artifactType: LeadAiArtifactType,
+): Promise<LeadAiArtifact | null> {
+  const db = await getDb();
+  const row = await db.prepare(
+    `SELECT *
+     FROM lead_ai_artifacts
+     WHERE lead_id = ? AND artifact_type = ?
+     ORDER BY created_at DESC
+     LIMIT 1`
+  ).get(leadId, artifactType) as Record<string, unknown> | undefined;
+  return row ? parseLeadAiArtifactRow(row) : null;
+}
+
+export async function createLeadAiArtifactJob(input: LeadAiArtifactInput): Promise<LeadAiArtifact> {
+  const db = await getDb();
+  const id = generateId();
+  const now = nowISO();
+  await db.prepare(
+    `INSERT INTO lead_ai_artifacts (
+      id, lead_id, artifact_type, status, model, input_hash, prompt_version,
+      content_json, sources_json, confidence, usage_input_tokens, usage_output_tokens,
+      estimated_cost, error, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    input.lead_id,
+    input.artifact_type,
+    "queued",
+    assertAllowedOpenAIModel(input.model),
+    input.input_hash,
+    input.prompt_version,
+    JSON.stringify(input.content_json ?? {}),
+    JSON.stringify(input.sources_json ?? []),
+    clamp01(input.confidence ?? 0),
+    Math.max(0, Math.floor(input.usage_input_tokens ?? 0)),
+    Math.max(0, Math.floor(input.usage_output_tokens ?? 0)),
+    roundCurrency(input.estimated_cost ?? 0),
+    input.error ?? null,
+    now,
+    now,
+  );
+  const artifact = await getLeadAiArtifactById(id);
+  if (!artifact) throw new Error("Unable to load created lead AI artifact.");
+  return artifact;
+}
+
+export async function getLeadAiArtifactById(id: string): Promise<LeadAiArtifact | null> {
+  const db = await getDb();
+  const row = await db.prepare("SELECT * FROM lead_ai_artifacts WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  return row ? parseLeadAiArtifactRow(row) : null;
+}
+
+export async function getNextLeadAiArtifactJob(): Promise<LeadAiArtifact | null> {
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE lead_ai_artifacts
+     SET status = 'queued', updated_at = ?
+     WHERE status = 'running'
+       AND updated_at < datetime('now', '-5 minutes')`
+  ).run(nowISO());
+
+  const row = await db.prepare(
+    `SELECT *
+     FROM lead_ai_artifacts
+     WHERE status = 'queued'
+     ORDER BY created_at ASC
+     LIMIT 1`
+  ).get() as Record<string, unknown> | undefined;
+  return row ? parseLeadAiArtifactRow(row) : null;
+}
+
+export async function markLeadAiArtifactRunning(id: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.prepare(
+    `UPDATE lead_ai_artifacts
+     SET status = 'running', error = NULL, updated_at = ?
+     WHERE id = ? AND status = 'queued'`
+  ).run(nowISO(), id);
+  return result.changes;
+}
+
+export async function markLeadAiArtifactComplete(
+  id: string,
+  input: {
+    content_json: Record<string, unknown>;
+    sources_json: AiVerificationSource[];
+    confidence: number;
+    usage_input_tokens: number;
+    usage_output_tokens: number;
+    estimated_cost: number;
+  },
+): Promise<void> {
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE lead_ai_artifacts
+     SET status = 'complete',
+         content_json = ?,
+         sources_json = ?,
+         confidence = ?,
+         usage_input_tokens = ?,
+         usage_output_tokens = ?,
+         estimated_cost = ?,
+         error = NULL,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(
+    JSON.stringify(input.content_json),
+    JSON.stringify(input.sources_json),
+    clamp01(input.confidence),
+    Math.max(0, Math.floor(input.usage_input_tokens)),
+    Math.max(0, Math.floor(input.usage_output_tokens)),
+    roundCurrency(input.estimated_cost),
+    nowISO(),
+    id,
+  );
+}
+
+export async function markLeadAiArtifactError(id: string, message: string): Promise<void> {
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE lead_ai_artifacts
+     SET status = 'error',
+         error = ?,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(message.slice(0, 1000), nowISO(), id);
+}
+
 export async function getAiBudgetStatus(settings: Settings, reservedCost: number): Promise<AiBudgetStatus>{
   const dailyCost = await getAiUsageCostSince(startOfToday());
   const monthlyCost = await getAiUsageCostSince(startOfCurrentMonth());
@@ -2288,6 +2475,21 @@ export async function getNextAiVerificationJob(maxAttempts = 3): Promise<Lead | 
   ).get(nowISO(), Math.max(1, Math.floor(maxAttempts))) as Record<string, unknown> | undefined;
 
   return row ? parseLeadRow(row) : null;
+}
+
+export async function getAiVerificationBackfillCandidates(limit = 10000): Promise<Lead[]> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT *
+     FROM leads
+     WHERE ai_queue_status NOT IN ('queued','running')
+       AND COALESCE(is_excluded, 0) = 0
+       AND status NOT IN ('closed_won','closed_lost')
+       AND COALESCE(business_status, '') NOT IN ('CLOSED_PERMANENTLY','CLOSED_TEMPORARILY')
+     ORDER BY sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at ASC
+     LIMIT ?`
+  ).all(Math.max(1, Math.floor(limit))) as Array<Record<string, unknown>>;
+  return rows.map(parseLeadRow);
 }
 
 export async function getAiQueueStats(): Promise<AiQueueStats> {
@@ -2741,7 +2943,21 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
   const offset = (page - 1) * pageSize;
   const countRow = await db.prepare(`SELECT COUNT(*) as count FROM leads l ${where}`).get(...params) as { count: number };
   const rows = await db.prepare(
-    `SELECT l.*
+    `SELECT l.*,
+       (
+         SELECT a.status
+         FROM lead_ai_artifacts a
+         WHERE a.lead_id = l.id AND a.artifact_type = 'business_detail'
+         ORDER BY a.created_at DESC
+         LIMIT 1
+       ) as business_detail_status,
+       (
+         SELECT a.status
+         FROM lead_ai_artifacts a
+         WHERE a.lead_id = l.id AND a.artifact_type = 'competitive_report'
+         ORDER BY a.created_at DESC
+         LIMIT 1
+       ) as competitive_report_status
      FROM leads l ${where}
      ORDER BY
        CASE l.quality_bucket
@@ -2766,6 +2982,8 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
         ...lead,
         city: extractCity(lead.address),
         demo_slug: null,
+        business_detail_status: normalizeNullableLeadAiArtifactStatus(row.business_detail_status),
+        competitive_report_status: normalizeNullableLeadAiArtifactStatus(row.competitive_report_status),
       } as QualityLead;
     }),
   };
@@ -3401,6 +3619,41 @@ function parseAiLeadVerificationRow(row: Record<string, unknown>): AiLeadVerific
     error: (row.error as string | null) ?? null,
     created_at: row.created_at as string,
   };
+}
+
+function parseLeadAiArtifactRow(row: Record<string, unknown>): LeadAiArtifact {
+  return {
+    id: row.id as string,
+    lead_id: row.lead_id as string,
+    artifact_type: normalizeLeadAiArtifactType(row.artifact_type),
+    status: normalizeLeadAiArtifactStatus(row.status),
+    model: assertAllowedOpenAIModel(row.model as string),
+    input_hash: String(row.input_hash ?? ""),
+    prompt_version: String(row.prompt_version ?? ""),
+    content_json: safeParseJson<Record<string, unknown>>(row.content_json, {}),
+    sources_json: safeParseJson<AiVerificationSource[]>(row.sources_json, []),
+    confidence: Number(row.confidence ?? 0),
+    usage_input_tokens: Number(row.usage_input_tokens ?? 0),
+    usage_output_tokens: Number(row.usage_output_tokens ?? 0),
+    estimated_cost: Number(row.estimated_cost ?? 0),
+    error: (row.error as string | null) ?? null,
+    created_at: row.created_at as string,
+    updated_at: (row.updated_at as string | null) ?? (row.created_at as string),
+  };
+}
+
+function normalizeLeadAiArtifactType(value: unknown): LeadAiArtifactType {
+  return value === "competitive_report" ? "competitive_report" : "business_detail";
+}
+
+function normalizeLeadAiArtifactStatus(value: unknown): LeadAiArtifactStatus {
+  if (value === "running" || value === "complete" || value === "error") return value;
+  return "queued";
+}
+
+function normalizeNullableLeadAiArtifactStatus(value: unknown): LeadAiArtifactStatus | null {
+  if (value == null || value === "") return null;
+  return normalizeLeadAiArtifactStatus(value);
 }
 
 export async function batchUpdateScores(updates: Array<{ id: string; score: number }>): Promise<void>{
@@ -4145,6 +4398,20 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
         l.verification_score,
         l.sales_priority_score,
         (
+          SELECT a.status
+          FROM lead_ai_artifacts a
+          WHERE a.lead_id = l.id AND a.artifact_type = 'business_detail'
+          ORDER BY a.created_at DESC
+          LIMIT 1
+        ) as business_detail_status,
+        (
+          SELECT a.status
+          FROM lead_ai_artifacts a
+          WHERE a.lead_id = l.id AND a.artifact_type = 'competitive_report'
+          ORDER BY a.created_at DESC
+          LIMIT 1
+        ) as competitive_report_status,
+        (
           SELECT d.slug
           FROM demos d
           WHERE d.lead_id = l.id AND d.is_published = 1
@@ -4219,6 +4486,8 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
     verification_score: Number(row.verification_score ?? 0),
     sales_priority_score: Number(row.sales_priority_score ?? row.lead_quality_score ?? row.score ?? 0),
     demo_slug: (row.demo_slug as string | null) ?? null,
+    business_detail_status: normalizeNullableLeadAiArtifactStatus(row.business_detail_status),
+    competitive_report_status: normalizeNullableLeadAiArtifactStatus(row.competitive_report_status),
   }));
 }
 

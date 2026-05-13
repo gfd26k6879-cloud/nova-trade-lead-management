@@ -64,6 +64,7 @@ ALTER TABLE IF EXISTS place_observations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS api_usage_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS ai_lead_verifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS ai_usage_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS lead_ai_artifacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS audit_logs ENABLE ROW LEVEL SECURITY;
 
 REVOKE ALL ON TABLE
@@ -82,6 +83,7 @@ REVOKE ALL ON TABLE
   api_usage_events,
   ai_lead_verifications,
   ai_usage_events,
+  lead_ai_artifacts,
   audit_logs
 FROM anon, authenticated;
 

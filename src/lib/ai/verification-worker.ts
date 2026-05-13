@@ -2,6 +2,7 @@ import {
   createAuditLog,
   createAiLeadVerification,
   getAiBudgetStatus,
+  getAiVerificationBackfillCandidates,
   getAiQueueStats,
   getConfiguredOpenAiApiKey,
   getLatestAiVerification,
@@ -40,6 +41,13 @@ export type AiVerificationWorkerResult =
   | { status: "disabled"; reason: string }
   | { status: "budget_limit"; leadId?: string; error: string }
   | { status: "error"; leadId?: string; error: string };
+
+export interface AiVerificationBackfillResult {
+  scanned: number;
+  queued: number;
+  skippedFresh: number;
+  skippedIneligible: number;
+}
 
 export async function enqueueAiVerificationForLead(
   leadId: string,
@@ -114,6 +122,53 @@ export async function processNextAiVerificationJob(): Promise<AiVerificationWork
     leadName: lead.name ?? "Unknown lead",
     cached: result.cached,
   };
+}
+
+export async function queueMissingAiVerifications(limit = 10000): Promise<AiVerificationBackfillResult | { error: string }> {
+  const settings = await getSettings();
+  if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
+
+  const leads = await getAiVerificationBackfillCandidates(limit);
+  let queued = 0;
+  let skippedFresh = 0;
+  let skippedIneligible = 0;
+
+  for (const lead of leads) {
+    if (!isLeadEligibleForAiVerification(lead)) {
+      skippedIneligible++;
+      continue;
+    }
+    if (lead.ai_queue_status === "queued" || lead.ai_queue_status === "running") {
+      skippedFresh++;
+      continue;
+    }
+
+    const inputHash = createLeadVerificationInputHash(lead);
+    const hasFreshLeadSummary =
+      lead.ai_queue_status === "verified" &&
+      lead.ai_input_hash === inputHash &&
+      lead.ai_verification_status !== "not_checked" &&
+      lead.ai_verification_status !== "error";
+
+    if (hasFreshLeadSummary) {
+      skippedFresh++;
+      continue;
+    }
+
+    await markLeadAiQueued(lead.id, inputHash, lead.ai_input_hash !== inputHash || lead.ai_queue_status === "error");
+    queued++;
+  }
+
+  if (queued > 0) {
+    await createAuditLog("ai_verification_backfill_queued", "leads", undefined, {
+      scanned: leads.length,
+      queued,
+      skippedFresh,
+      skippedIneligible,
+    });
+  }
+
+  return { scanned: leads.length, queued, skippedFresh, skippedIneligible };
 }
 
 export async function performAiVerification(lead: Lead, force: boolean, settingsArg?: Settings) {

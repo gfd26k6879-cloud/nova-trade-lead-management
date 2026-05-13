@@ -14,6 +14,7 @@ import {
   retryFailedUnitsAction,
   getDashboardStatsAction,
 } from "@/lib/crawl/actions";
+import { queueMissingAiVerificationsAction } from "@/lib/leads/actions";
 
 const CATEGORY_OPTIONS = [
   "dentist", "lawyer", "hvac", "plumber", "electrician", "roofing",
@@ -89,6 +90,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
   const enrichRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [isAiVerifying, setIsAiVerifying] = useState(false);
   const [aiProgress, setAiProgress] = useState<string | null>(null);
+  const [aiBackfillLoading, setAiBackfillLoading] = useState(false);
   const aiRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refreshStats = useCallback(async () => {
@@ -266,6 +268,18 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
   const handleAiVerify = async () => {
     setIsAiVerifying(true);
     setAiProgress(null);
+  };
+
+  const handleQueueMissingAi = async () => {
+    setAiBackfillLoading(true);
+    const result = await queueMissingAiVerificationsAction();
+    if ("error" in result) {
+      toast.error(result.error);
+    } else {
+      toast.success(`Queued ${result.queued} missing AI verifications. ${result.skippedFresh} already fresh.`);
+      await refreshStats();
+    }
+    setAiBackfillLoading(false);
   };
 
   const toggleCategory = (cat: string) => {
@@ -579,6 +593,9 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <button type="button" className="btn-primary text-sm" onClick={handleAiVerify} disabled={loading || isAiVerifying || stats.aiQueueStats.queued === 0}>
             {isAiVerifying ? "Verifying..." : "Process AI Queue"}
+          </button>
+          <button type="button" className="btn-glass text-sm" onClick={handleQueueMissingAi} disabled={loading || aiBackfillLoading || stats.aiQueueStats.notChecked === 0}>
+            {aiBackfillLoading ? "Queueing..." : "Queue Missing AI Verifications"}
           </button>
           {aiProgress && (
             <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>

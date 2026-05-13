@@ -41,6 +41,8 @@ interface Lead {
   verification_score: number;
   sales_priority_score: number;
   demo_slug: string | null;
+  business_detail_status: string | null;
+  competitive_report_status: string | null;
 }
 
 interface OutreachPackage {
@@ -230,6 +232,8 @@ export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: L
                       <span style={aiBadgeStyle(lead.ai_verification_status)}>
                         AI {lead.ai_verification_status.replace(/_/g, " ")}
                       </span>
+                      <ArtifactBadge type="brief" status={lead.business_detail_status} />
+                      <ArtifactBadge type="report" status={lead.competitive_report_status} />
                       {isUrgent && (
                         <span style={{ background: "rgba(239,68,68,0.1)", color: "#dc2626", padding: "2px 8px", borderRadius: "6px", fontSize: "0.7rem", fontWeight: 600 }}>
                           follow up
@@ -345,4 +349,26 @@ function ScoreChip({ label, value, money = false }: { label: string; value: numb
       {label}: {money ? `$${Math.round(value).toLocaleString()}` : `${Math.round(value)}%`}
     </span>
   );
+}
+
+function ArtifactBadge({ type, status }: { type: "brief" | "report"; status: string | null }) {
+  const label = artifactBadgeLabel(type, status);
+  const color = status === "complete"
+    ? { bg: "rgba(34,197,94,0.1)", color: "#16a34a" }
+    : status === "queued" || status === "running"
+      ? { bg: "rgba(99,102,241,0.1)", color: "#6366f1" }
+      : status === "error"
+        ? { bg: "rgba(239,68,68,0.1)", color: "#dc2626" }
+        : { bg: "rgba(107,114,128,0.1)", color: "#4b5563" };
+  return (
+    <span style={{ background: color.bg, color: color.color, padding: "2px 8px", borderRadius: "6px", fontSize: "0.7rem", fontWeight: 600 }}>
+      {label}
+    </span>
+  );
+}
+
+function artifactBadgeLabel(type: "brief" | "report", status: string | null): string {
+  if (status === "complete") return type === "brief" ? "Brief ready" : "Report ready";
+  if (status === "queued" || status === "running") return "Generating";
+  return "Missing";
 }

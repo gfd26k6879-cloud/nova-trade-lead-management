@@ -281,6 +281,10 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
                       <div className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
                         {bucketLabel(lead.quality_bucket)}
                       </div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        <ArtifactBadge type="brief" status={lead.business_detail_status} />
+                        <ArtifactBadge type="report" status={lead.competitive_report_status} />
+                      </div>
                     </td>
                     <td>{getBusinessTypeLabel(lead.business_type)}</td>
                     <td>
@@ -383,6 +387,24 @@ function websiteFindingStyle(lead: QualityLead): React.CSSProperties {
 
 function badge(color: string, background: string): React.CSSProperties {
   return { color, background, padding: "2px 8px", borderRadius: "6px", fontSize: "0.75rem", fontWeight: 600 };
+}
+
+function ArtifactBadge({ type, status }: { type: "brief" | "report"; status: string | null }) {
+  const label = artifactBadgeLabel(type, status);
+  const style = status === "complete"
+    ? badge("#16a34a", "rgba(34,197,94,0.1)")
+    : status === "queued" || status === "running"
+      ? badge("#6366f1", "rgba(99,102,241,0.1)")
+      : status === "error"
+        ? badge("#dc2626", "rgba(239,68,68,0.1)")
+        : badge("#4b5563", "rgba(107,114,128,0.1)");
+  return <span style={{ ...style, fontSize: "0.68rem" }}>{label}</span>;
+}
+
+function artifactBadgeLabel(type: "brief" | "report", status: string | null): string {
+  if (status === "complete") return type === "brief" ? "Brief ready" : "Report ready";
+  if (status === "queued" || status === "running") return "Generating";
+  return "Missing";
 }
 
 function formatCurrency(value: number): string {

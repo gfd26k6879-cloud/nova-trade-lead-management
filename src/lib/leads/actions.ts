@@ -50,8 +50,11 @@ import {
   computeLeadWinProbability,
   isWeakWebsiteOpportunity,
   performAiVerification,
+  queueMissingAiVerifications,
   repairLeadAiWebsiteViability,
 } from "@/lib/ai/verification-worker";
+import { queueLeadAiArtifact, queueLeadPitchPack } from "@/lib/ai/artifact-worker";
+import type { LeadAiArtifactType } from "@/lib/db/queries";
 
 const statusSchema = z.enum(["new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost"]);
 const channelSchema = z.enum(["call", "text", "email", "walkin", "other"]);
@@ -60,6 +63,7 @@ const aiApplySchema = z.enum(["update_website", "exclude_has_website", "mark_bro
 const leadNoteSchema = z.string().trim().min(1).max(4000);
 const phoneVerificationStatusSchema = z.enum(["unknown", "works", "bad", "no_phone"]);
 const qualityBucketSchema = z.enum(["ready_to_call", "needs_ai_verify", "needs_manual_review", "broken_site_opportunity", "not_a_fit"]);
+const leadAiArtifactTypeSchema = z.enum(["business_detail", "competitive_report"]);
 const qualityAiBatchSchema = z.object({
   limit: z.number().int().min(1).max(100).optional(),
   businessType: z.string().trim().min(1).max(80).optional(),
@@ -409,6 +413,38 @@ export async function runAiVerificationAction(leadId: string, options: { force?:
   revalidateLeadViews();
   revalidatePath(`/leads/${leadId}`);
   revalidatePath("/statistics");
+  return result;
+}
+
+export async function queueMissingAiVerificationsAction() {
+  await requirePermission("ai:verify");
+  await ensureDbReady();
+  const result = await queueMissingAiVerifications();
+  revalidateLeadViews();
+  return result;
+}
+
+export async function queueLeadAiArtifactAction(
+  leadId: string,
+  artifactType: LeadAiArtifactType,
+  options: { force?: boolean } = {},
+) {
+  await requirePermission("ai:verify");
+  await ensureDbReady();
+  const parsed = leadAiArtifactTypeSchema.safeParse(artifactType);
+  if (!parsed.success) return { error: "Invalid artifact type." };
+  const result = await queueLeadAiArtifact(leadId, parsed.data, options);
+  revalidateLeadViews();
+  revalidatePath(`/leads/${leadId}`);
+  return result;
+}
+
+export async function queueLeadPitchPackAction(leadId: string, options: { force?: boolean } = {}) {
+  await requirePermission("ai:verify");
+  await ensureDbReady();
+  const result = await queueLeadPitchPack(leadId, options);
+  revalidateLeadViews();
+  revalidatePath(`/leads/${leadId}`);
   return result;
 }
 

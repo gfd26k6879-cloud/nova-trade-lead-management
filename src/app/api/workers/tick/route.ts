@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processNextAiVerificationJob } from "@/lib/ai/verification-worker";
+import { processNextLeadArtifactJob } from "@/lib/ai/artifact-worker";
 import { enrichNextLead } from "@/lib/crawl/enrichment";
 import { processNextUnit } from "@/lib/crawl/worker";
 import { ensureDbReady, recomputeAllLeadQualityScores } from "@/lib/db/queries";
@@ -13,9 +14,10 @@ export async function POST(request: NextRequest) {
     const crawl = await processNextUnit();
     const enrichment = await enrichNextLead();
     const aiVerification = await processNextAiVerificationJob();
+    const leadArtifact = await processNextLeadArtifactJob();
     const recomputedScores = await recomputeAllLeadQualityScores(25);
 
-    return NextResponse.json({ status: "ok", crawl, enrichment, aiVerification, recomputedScores });
+    return NextResponse.json({ status: "ok", crawl, enrichment, aiVerification, leadArtifact, recomputedScores });
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       return NextResponse.json({ status: "error", error: err.message }, { status: err.status });
