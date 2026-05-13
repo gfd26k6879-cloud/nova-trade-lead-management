@@ -133,6 +133,45 @@ describe("crawl worker integration", () => {
     expect(run.status).toBe("paused");
   });
 
+  it("pauses before exceeding the monthly Text Search free tier", async () => {
+    const runId = seedTestRun(testDb);
+    testDb.prepare("UPDATE settings SET max_calls_per_day = 2000, max_calls_per_run = 2000").run();
+    seedTestUnit(testDb, { runId });
+    const now = new Date().toISOString();
+    const insert = testDb.prepare(
+      `INSERT INTO api_usage_events (id, endpoint, sku, success, was_cached, billable_units, created_at)
+       VALUES (?, 'places.searchText', 'places_text_search_enterprise', 1, 0, 1, ?)`,
+    );
+
+    for (let i = 0; i < 1000; i++) {
+      insert.run(`usage-${i}`, now);
+    }
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("budget_limit");
+    expect(result.error).toContain("free-tier cap reached");
+    expect(mockTextSearch).not.toHaveBeenCalled();
+
+    const run = testDb.prepare("SELECT status FROM crawl_runs WHERE id = ?").get(runId) as { status: string };
+    expect(run.status).toBe("paused");
+  });
+
+  it("prioritizes Denver county pending units before lower sorted zips", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestZip(testDb, "80123", "Littleton", 39.61, -105.09, "Jefferson");
+    seedTestUnit(testDb, { id: "jefferson-unit", runId, zip: "80123", category: "dentist" });
+    seedTestUnit(testDb, { id: "denver-unit", runId, zip: "80202", category: "dentist" });
+
+    const place = makePlaceResult({ id: "places/denver-first" });
+    mockTextSearch.mockResolvedValueOnce(mockTextSearchResponse([place]));
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("processed");
+    expect(result.zip).toBe("80202");
+  });
+
   it("handles textSearch errors gracefully", async () => {
     const runId = seedTestRun(testDb);
     seedTestUnit(testDb, { runId });

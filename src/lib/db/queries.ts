@@ -1,7 +1,11 @@
 import { getDb, generateId, nowISO, type DbClient } from "./index";
 import { seedZipCodes } from "./seed-zips";
 import { computeScoreBandThresholds, type ScoreBandThresholds } from "@/lib/score-bands";
-import { estimateMarginalSkuCost, type GooglePlacesSku } from "@/lib/google-pricing";
+import {
+  GOOGLE_PLACES_SKU_PRICING,
+  estimateMarginalSkuCost,
+  type GooglePlacesSku,
+} from "@/lib/google-pricing";
 import { qualifyLead, type QualificationStatus } from "@/lib/qualification";
 import { BUSINESS_TYPE_OPTIONS, classifyBusinessType, type BusinessType } from "@/lib/business-types";
 import type { WebsiteStatus } from "@/lib/classify-website";
@@ -993,7 +997,16 @@ export async function getNextPendingUnit(runId: string): Promise<CrawlUnit | nul
      FROM crawl_units cu
      LEFT JOIN zip_codes z ON cu.zip = z.zip
      WHERE cu.crawl_run_id = ? AND cu.status = 'pending'
-     ORDER BY cu.zip ASC, cu.category ASC, cu.created_at ASC LIMIT 1`
+     ORDER BY
+       CASE
+         WHEN z.county = 'Denver' THEN 0
+         WHEN z.city = 'Denver' THEN 1
+         ELSE 2
+       END,
+       cu.zip ASC,
+       cu.category ASC,
+       cu.created_at ASC
+     LIMIT 1`
   ).get(runId) as CrawlUnit | undefined;
 
   return row ?? null;
@@ -2023,13 +2036,14 @@ export async function getTodayApiCalls(): Promise<number>{
        AND COALESCE(was_cached, 0) = 0
        AND created_at >= ?`
   ).get(today) as { total: number };
-  if ((usageRow.total ?? 0) > 0) {
-    return usageRow.total ?? 0;
+  const usageTotal = Number(usageRow.total) || 0;
+  if (usageTotal > 0) {
+    return usageTotal;
   }
   const legacyRow = await db.prepare(
     "SELECT COALESCE(SUM(api_calls_used), 0) as total FROM crawl_runs WHERE created_at >= ?"
   ).get(today) as { total: number };
-  return legacyRow.total ?? 0;
+  return Number(legacyRow.total) || 0;
 }
 
 export async function getRunApiCalls(runId: string): Promise<number>{
@@ -2041,13 +2055,14 @@ export async function getRunApiCalls(runId: string): Promise<number>{
        AND success = 1
        AND COALESCE(was_cached, 0) = 0`
   ).get(runId) as { total: number } | undefined;
-  if (usageRow && usageRow.total > 0) {
-    return usageRow.total;
+  const usageTotal = Number(usageRow?.total) || 0;
+  if (usageTotal > 0) {
+    return usageTotal;
   }
   const row = await db.prepare(
     "SELECT api_calls_used FROM crawl_runs WHERE id = ?"
   ).get(runId) as { api_calls_used: number } | undefined;
-  return row?.api_calls_used ?? 0;
+  return Number(row?.api_calls_used) || 0;
 }
 
 export async function getRunApiUsageSummary(runId: string): Promise<ApiUsageSummary>{
@@ -2078,14 +2093,18 @@ export async function getRunApiUsageSummary(runId: string): Promise<ApiUsageSumm
   let atmosphereCalls = 0;
   let atmosphereCost = 0;
   for (const row of rows) {
+    const calls = Number(row.calls) || 0;
+    const cost = Number(row.cost) || 0;
+    const rowAtmosphereCalls = Number(row.atmosphere_calls) || 0;
+    const rowAtmosphereCost = Number(row.atmosphere_cost) || 0;
     if (row.endpoint === API_ENDPOINT_TEXT_SEARCH) {
-      discoveryCalls += row.calls;
-      discoveryCost += row.cost;
+      discoveryCalls += calls;
+      discoveryCost += cost;
     } else if (row.endpoint === API_ENDPOINT_PLACE_DETAILS) {
-      enrichmentCalls += row.calls;
-      enrichmentCost += row.cost;
-      atmosphereCalls += row.atmosphere_calls;
-      atmosphereCost += row.atmosphere_cost;
+      enrichmentCalls += calls;
+      enrichmentCost += cost;
+      atmosphereCalls += rowAtmosphereCalls;
+      atmosphereCost += rowAtmosphereCost;
     }
   }
 
@@ -2132,14 +2151,18 @@ export async function getMonthlyApiUsageSummary(): Promise<ApiUsageSummary>{
   let atmosphereCalls = 0;
   let atmosphereCost = 0;
   for (const row of rows) {
+    const calls = Number(row.calls) || 0;
+    const cost = Number(row.cost) || 0;
+    const rowAtmosphereCalls = Number(row.atmosphere_calls) || 0;
+    const rowAtmosphereCost = Number(row.atmosphere_cost) || 0;
     if (row.endpoint === API_ENDPOINT_TEXT_SEARCH) {
-      discoveryCalls += row.calls;
-      discoveryCost += row.cost;
+      discoveryCalls += calls;
+      discoveryCost += cost;
     } else if (row.endpoint === API_ENDPOINT_PLACE_DETAILS) {
-      enrichmentCalls += row.calls;
-      enrichmentCost += row.cost;
-      atmosphereCalls += row.atmosphere_calls;
-      atmosphereCost += row.atmosphere_cost;
+      enrichmentCalls += calls;
+      enrichmentCost += cost;
+      atmosphereCalls += rowAtmosphereCalls;
+      atmosphereCost += rowAtmosphereCost;
     }
   }
 
@@ -2193,7 +2216,7 @@ export async function getRunEnrichmentCalls(runId: string): Promise<number>{
   return row.total ?? 0;
 }
 
-async function getMonthlyBillableEventsForSku(sku: GooglePlacesSku): Promise<number> {
+export async function getMonthlyBillableEventsForSku(sku: GooglePlacesSku): Promise<number> {
   const db = await getDb();
   const monthStart = startOfCurrentMonth();
   const row = await db.prepare(
@@ -2204,7 +2227,24 @@ async function getMonthlyBillableEventsForSku(sku: GooglePlacesSku): Promise<num
        AND COALESCE(was_cached, 0) = 0
        AND created_at >= ?`
   ).get(sku, monthStart) as { total: number };
-  return row.total ?? 0;
+  return Number(row.total) || 0;
+}
+
+export async function getMonthlyFreeTierStatus(
+  sku: GooglePlacesSku,
+  units = 1,
+): Promise<{ sku: GooglePlacesSku; current: number; requested: number; freeCap: number; wouldExceed: boolean }> {
+  const requested = Math.max(0, Math.floor(units));
+  const current = await getMonthlyBillableEventsForSku(sku);
+  const freeCap = GOOGLE_PLACES_SKU_PRICING[sku].freeCap;
+
+  return {
+    sku,
+    current,
+    requested,
+    freeCap,
+    wouldExceed: freeCap > 0 && current + requested > freeCap,
+  };
 }
 
 export async function logApiUsageEvent(input: ApiUsageEventInput): Promise<{

@@ -103,7 +103,7 @@ describe("Places API retry behavior", () => {
   });
 
   it("sends correct headers and body for text search", async () => {
-    const { textSearch } = await importFresh();
+    const { TEXT_SEARCH_FIELD_MASK, textSearch } = await importFresh();
 
     globalThis.fetch = vi.fn(async () => {
       return new Response(JSON.stringify({ places: [] }), {
@@ -119,9 +119,13 @@ describe("Places API retry behavior", () => {
     expect(url).toContain("places:searchText");
     expect(opts.method).toBe("POST");
     expect(opts.headers["X-Goog-Api-Key"]).toBe("test-api-key-123");
+    expect(opts.headers["X-Goog-FieldMask"]).toBe(TEXT_SEARCH_FIELD_MASK);
+    expect(TEXT_SEARCH_FIELD_MASK).toContain("places.websiteUri");
+    expect(TEXT_SEARCH_FIELD_MASK).toContain("places.nationalPhoneNumber");
 
     const body = JSON.parse(opts.body);
     expect(body.textQuery).toBe("plumber near Boulder");
+    expect(body.pageSize).toBe(20);
   });
 
   it("includes locationBias when provided", async () => {

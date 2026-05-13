@@ -8,11 +8,16 @@ export const TEXT_SEARCH_FIELD_MASK = [
   "places.displayName",
   "places.formattedAddress",
   "places.googleMapsUri",
+  "places.nationalPhoneNumber",
+  "places.websiteUri",
   "places.rating",
   "places.userRatingCount",
   "places.types",
   "places.businessStatus",
   "places.primaryType",
+  "places.priceLevel",
+  "places.regularOpeningHours",
+  "places.photos",
   "places.location",
 ].join(",");
 
@@ -151,7 +156,7 @@ export async function textSearch(
 
   if (rateLimitMs > 0) await sleep(rateLimitMs);
 
-  const body: Record<string, unknown> = { textQuery };
+  const body: Record<string, unknown> = { textQuery, pageSize: 20 };
   if (pageToken) body.pageToken = pageToken;
   if (locationBias && !pageToken) {
     body.locationBias = {
@@ -185,7 +190,7 @@ export async function getPlaceDetails(
   options: GetPlaceDetailsOptions = {},
 ): Promise<PlaceDetailsResult> {
   const apiKey = await getApiKey();
-  const includeAtmosphere = options.includeAtmosphere ?? true;
+  const includeAtmosphere = options.includeAtmosphere ?? false;
   const cacheTtlDays = options.cacheTtlDays ?? 30;
   const fieldMask = includeAtmosphere ? DETAILS_STAGE_B_FIELD_MASK : DETAILS_STAGE_A_FIELD_MASK;
   const sku: GooglePlacesSku = includeAtmosphere
