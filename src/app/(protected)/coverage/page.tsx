@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { requirePermission } from "@/lib/auth";
 import {
   ensureDbReady,
   getCoverageByZip,
@@ -11,6 +12,7 @@ import { CoverageClient } from "./coverage-client";
 export const metadata: Metadata = { title: "Coverage | NoSite Leads" };
 
 export default async function CoveragePage() {
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   const run = await getLatestCrawlRun();
   const coverage = run ? await getCoverageByZip(run.id) : [];

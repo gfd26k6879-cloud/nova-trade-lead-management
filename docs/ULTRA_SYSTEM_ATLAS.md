@@ -148,16 +148,21 @@ Also tracked per lead:
 
 ## 10) Auth, config, and runtime facts
 
-- Login model: single environment-configured credential in `src/lib/auth.ts`
-  - `NOSITE_ADMIN_USERNAME`
-  - `NOSITE_ADMIN_PASSWORD`
-  - `NOSITE_SESSION_SECRET`
-- Required environment variable:
-  - `GOOGLE_PLACES_API_KEY` in `.env.local`
-- Session:
-  - cookie `nosite_session`, 7-day expiry
+- Login model: Supabase Auth email/password sessions in `src/lib/auth.ts`
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `NOSITE_BOOTSTRAP_ADMIN_EMAIL`
+- Required API/config variables:
+  - `DATABASE_URL`
+  - `GOOGLE_PLACES_API_KEY`
+  - `OPENAI_API_KEY`
+  - `NOSITE_ENCRYPTION_SECRET`
+- Authorization:
+  - App roles live in `app_users`: `admin` and `researcher`
+  - Researchers cannot crawl, export, edit settings, or manage users
 - Storage:
-  - SQLite file `nosite-leads.db` in repository root
+  - Supabase Postgres in production; SQLite fallback remains for local DB tests
 
 ## 11) Test and operation quick commands
 

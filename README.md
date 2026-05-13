@@ -81,14 +81,16 @@ src/
    npm install
    ```
 
-2. Copy env template and set your Google Places API key:
+2. Copy env template and set Supabase Auth plus API keys:
 
    ```bash
    cp .env.example .env.local
    ```
 
-   Also set `NOSITE_ADMIN_USERNAME`, `NOSITE_ADMIN_PASSWORD`, and `NOSITE_SESSION_SECRET`.
-   The session secret should be a long random string.
+   Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`,
+   `SUPABASE_SERVICE_ROLE_KEY`, `NOSITE_BOOTSTRAP_ADMIN_EMAIL`, and
+   `NOSITE_ENCRYPTION_SECRET`. Create the bootstrap admin email/password in
+   Supabase Auth before logging in.
 
 3. Get a Google Places API key:
 

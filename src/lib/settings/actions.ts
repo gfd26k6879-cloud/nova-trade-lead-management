@@ -12,7 +12,7 @@ import {
   createAuditLog,
   type Settings,
 } from "@/lib/db/queries";
-import { requireSession } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { z } from "zod";
 
 const openAiApiKeySchema = z.string().trim().min(20).max(500).refine((value) => !/\s/.test(value), {
@@ -24,13 +24,13 @@ const googlePlacesApiKeySchema = z.string().trim().min(20).max(500).refine((valu
 });
 
 export async function getSettingsAction(): Promise<Settings> {
-  await requireSession();
+  await requirePermission("settings:manage");
   await ensureDbReady();
   return querySettings();
 }
 
 export async function updateSettingsAction(settings: Partial<Settings>) {
-  await requireSession();
+  await requirePermission("settings:manage");
   await ensureDbReady();
   await dbUpdateSettings(settings);
   await createAuditLog("settings_updated", "settings", "1");
@@ -38,7 +38,7 @@ export async function updateSettingsAction(settings: Partial<Settings>) {
 }
 
 export async function updateOpenAiApiKeyAction(apiKey: string) {
-  await requireSession();
+  await requirePermission("settings:manage");
   await ensureDbReady();
   const parsed = openAiApiKeySchema.safeParse(apiKey);
   if (!parsed.success) {
@@ -50,7 +50,7 @@ export async function updateOpenAiApiKeyAction(apiKey: string) {
 }
 
 export async function clearOpenAiApiKeyAction() {
-  await requireSession();
+  await requirePermission("settings:manage");
   await ensureDbReady();
   await clearStoredOpenAiApiKey();
   await createAuditLog("openai_api_key_cleared", "settings", "1");
@@ -58,7 +58,7 @@ export async function clearOpenAiApiKeyAction() {
 }
 
 export async function updateGooglePlacesApiKeyAction(apiKey: string) {
-  await requireSession();
+  await requirePermission("settings:manage");
   await ensureDbReady();
   const parsed = googlePlacesApiKeySchema.safeParse(apiKey);
   if (!parsed.success) {
@@ -70,7 +70,7 @@ export async function updateGooglePlacesApiKeyAction(apiKey: string) {
 }
 
 export async function clearGooglePlacesApiKeyAction() {
-  await requireSession();
+  await requirePermission("settings:manage");
   await ensureDbReady();
   await clearStoredGooglePlacesApiKey();
   await createAuditLog("google_places_api_key_cleared", "settings", "1");
@@ -78,7 +78,7 @@ export async function clearGooglePlacesApiKeyAction() {
 }
 
 export async function backfillCanonicalPlacesAction(limit = 10000) {
-  await requireSession();
+  await requirePermission("settings:manage");
   await ensureDbReady();
   const safeLimit = Math.max(1, Math.min(limit, 50000));
   const count = await backfillPlacesMasterFromLeads(safeLimit);

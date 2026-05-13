@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { requirePermission } from "@/lib/auth";
 import { ensureDbReady, getStatisticsSummary } from "@/lib/db/queries";
 import { StatisticsClient } from "./statistics-client";
 
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export default async function StatisticsPage({ searchParams }: Props) {
+  await requirePermission("view:workspace");
   await ensureDbReady();
   const params = await searchParams;
   const summary = await getStatisticsSummary({

@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, PASSWORD, USERNAME, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, EMAIL, PASSWORD, skipIfMissingAuth } from "./auth-fixtures";
 
 test("Leads Kanban/Table view and Excluded column fixes", async ({ page }) => {
   skipIfMissingAuth();
@@ -11,7 +11,7 @@ test("Leads Kanban/Table view and Excluded column fixes", async ({ page }) => {
 
   try {
     await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle", timeout: 30000 });
-    await page.getByLabel("Username").fill(USERNAME);
+    await page.getByLabel("Email").fill(EMAIL);
     await page.getByLabel("Password").fill(PASSWORD);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL(/\/queue/, { timeout: 10000 });

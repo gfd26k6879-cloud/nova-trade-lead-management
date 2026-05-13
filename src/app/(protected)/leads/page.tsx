@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { requirePermission } from "@/lib/auth";
 import { ensureDbReady, getBusinessTypeCounts, getKanbanLeads, getLeads, getScoreBandThresholds } from "@/lib/db/queries";
 import { LeadsClient } from "./leads-client";
 import { KanbanClient } from "./kanban-client";
@@ -25,6 +26,7 @@ interface Props {
 }
 
 export default async function LeadsPage({ searchParams }: Props) {
+  const session = await requirePermission("view:workspace");
   await ensureDbReady();
   const params = await searchParams;
 
@@ -58,6 +60,8 @@ export default async function LeadsPage({ searchParams }: Props) {
         displayLimit={KANBAN_PAGE_SIZE}
         scoreThresholds={scoreThresholds}
         businessTypeCounts={businessTypeCounts}
+        canExport={session.role === "admin"}
+        canClose={session.role === "admin"}
       />
     );
   }
@@ -71,6 +75,8 @@ export default async function LeadsPage({ searchParams }: Props) {
       filters={filters}
       scoreThresholds={scoreThresholds}
       businessTypeCounts={businessTypeCounts}
+      canExport={session.role === "admin"}
+      canClose={session.role === "admin"}
     />
   );
 }

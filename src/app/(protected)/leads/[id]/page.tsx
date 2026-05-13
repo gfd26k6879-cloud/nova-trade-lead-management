@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { ensureDbReady, getDemoByLeadId, getLatestAiVerification, getLeadById, getOutreachEvents, getScoreBandThresholds, getSettings } from "@/lib/db/queries";
+import { requirePermission } from "@/lib/auth";
+import { ensureDbReady, getDemoByLeadId, getLatestAiVerification, getLeadById, getLeadNotes, getOutreachEvents, getScoreBandThresholds, getSettings } from "@/lib/db/queries";
 import { computeScoreWithBreakdown } from "@/lib/scoring";
 import { computeDensityByAddress } from "@/lib/competitive-density";
 import type { WebsiteStatus } from "@/lib/classify-website";
@@ -18,6 +19,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 export default async function LeadDetailPage({ params }: Props) {
+  const session = await requirePermission("view:workspace");
   const { id } = await params;
   await ensureDbReady();
   const lead = await getLeadById(id);
@@ -27,6 +29,7 @@ export default async function LeadDetailPage({ params }: Props) {
   }
 
   const events = await getOutreachEvents(id);
+  const leadNotes = await getLeadNotes(id);
   const demo = await getDemoByLeadId(id);
   const latestAiVerification = await getLatestAiVerification(id);
   const density = await computeDensityByAddress(lead.address, lead.primary_type);
@@ -49,11 +52,13 @@ export default async function LeadDetailPage({ params }: Props) {
     <LeadDetailClient
       lead={lead}
       initialEvents={events}
+      initialLeadNotes={leadNotes}
       initialDemo={demo}
       initialAiVerification={latestAiVerification}
       scoreBreakdown={breakdown}
       density={density}
       scoreThresholds={scoreThresholds}
+      currentUser={{ userId: session.userId, email: session.email, role: session.role }}
     />
   );
 }

@@ -78,6 +78,8 @@ interface Props {
   displayLimit: number;
   scoreThresholds: ScoreBandThresholds;
   businessTypeCounts: Array<{ id: string; label: string; total: number; active: number }>;
+  canExport: boolean;
+  canClose: boolean;
 }
 
 const COLUMN_SCROLL_HEIGHT = 460;
@@ -107,7 +109,7 @@ function groupLeadsByStatus(leads: Lead[]): Record<string, Lead[]> {
   return grouped;
 }
 
-export function KanbanClient({ leads, total, displayLimit, scoreThresholds, businessTypeCounts }: Props) {
+export function KanbanClient({ leads, total, displayLimit, scoreThresholds, businessTypeCounts, canExport, canClose }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const groupedFromServer = useMemo(() => groupLeadsByStatus(leads), [leads]);
@@ -176,6 +178,10 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
     const overId = String(over.id);
     if (!STATUS_COLUMN_KEYS.has(overId)) return;
     const newStatus = overId;
+    if (!canClose && (newStatus === "closed_won" || newStatus === "closed_lost" || newStatus === "excluded")) {
+      toast.error("Only admins can close or exclude leads");
+      return;
+    }
 
     const lead = leadById.get(leadId);
     if (!lead) return;
@@ -283,13 +289,15 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
             </option>
           ))}
         </select>
-        <a
-          href={`/api/export/csv?${searchParams.toString()}`}
-          className="btn-glass text-xs ml-auto"
-          download
-        >
-          Export CSV
-        </a>
+        {canExport && (
+          <a
+            href={`/api/export/csv?${searchParams.toString()}`}
+            className="btn-glass text-xs ml-auto"
+            download
+          >
+            Export CSV
+          </a>
+        )}
       </div>
 
       <div className="mb-4">

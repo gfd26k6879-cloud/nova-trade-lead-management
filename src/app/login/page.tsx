@@ -39,19 +39,19 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         <form action={loginAction} className="space-y-5">
           <div>
             <label
-              htmlFor="username"
+              htmlFor="email"
               className="mb-1.5 block text-xs font-medium"
               style={{ color: "var(--text-secondary)" }}
             >
-              Username
+              Email
             </label>
             <input
-              id="username"
-              name="username"
-              type="text"
+              id="email"
+              name="email"
+              type="email"
               required
-              autoComplete="username"
-              placeholder="Username"
+              autoComplete="email"
+              placeholder="you@example.com"
               className="glass-input w-full"
             />
           </div>
@@ -83,7 +83,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 color: "#dc2626",
               }}
             >
-              Invalid username or password.
+              Invalid email or password.
             </div>
           )}
 
@@ -106,7 +106,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         </form>
 
         <p className="mt-6 text-center text-xs" style={{ color: "var(--text-tertiary)" }}>
-          Private single-user workspace
+          Private team workspace
         </p>
       </main>
     </div>

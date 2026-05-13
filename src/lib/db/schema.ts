@@ -39,6 +39,7 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "leads", column: "ai_checked_at", type: "TEXT" },
   { table: "leads", column: "ai_website_viability_status", type: "TEXT" },
   { table: "leads", column: "ai_website_health", type: "TEXT" },
+  { table: "leads", column: "assigned_to_user_id", type: "TEXT" },
   { table: "settings", column: "ai_enabled", type: "INTEGER NOT NULL DEFAULT 0" },
   { table: "settings", column: "ai_model", type: "TEXT NOT NULL DEFAULT 'gpt-5.4-mini'" },
   { table: "settings", column: "ai_daily_budget_usd", type: "REAL NOT NULL DEFAULT 2.0" },
@@ -51,6 +52,9 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "ai_lead_verifications", column: "website_viability_status", type: "TEXT" },
   { table: "ai_lead_verifications", column: "website_health_json", type: "TEXT" },
   { table: "ai_lead_verifications", column: "website_viability_reason", type: "TEXT" },
+  { table: "audit_logs", column: "actor_user_id", type: "TEXT" },
+  { table: "audit_logs", column: "actor_email", type: "TEXT" },
+  { table: "audit_logs", column: "actor_role", type: "TEXT" },
 ];
 
 export const SCHEMA_SQL = `
@@ -95,6 +99,19 @@ CREATE TABLE IF NOT EXISTS crawl_units (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS app_users (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL UNIQUE,
+  display_name TEXT,
+  role TEXT NOT NULL DEFAULT 'researcher' CHECK(role IN ('admin','researcher')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')),
+  created_by TEXT,
+  last_seen_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS leads (
   id TEXT PRIMARY KEY,
   place_id TEXT NOT NULL UNIQUE,
@@ -135,6 +152,7 @@ CREATE TABLE IF NOT EXISTS leads (
   ai_checked_at TEXT,
   ai_website_viability_status TEXT,
   ai_website_health TEXT,
+  assigned_to_user_id TEXT,
   notes TEXT,
   reminder_date TEXT,
   enrichment_status TEXT NOT NULL DEFAULT 'pending' CHECK(enrichment_status IN ('pending','enriched','skipped')),
@@ -201,6 +219,16 @@ CREATE TABLE IF NOT EXISTS settings (
   google_places_api_key_encrypted TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS lead_notes (
+  id TEXT PRIMARY KEY,
+  lead_id TEXT NOT NULL REFERENCES leads(id),
+  author_user_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS place_cache (
@@ -318,6 +346,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   action TEXT NOT NULL,
   entity_type TEXT,
   entity_id TEXT,
+  actor_user_id TEXT,
+  actor_email TEXT,
+  actor_role TEXT,
   metadata TEXT DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -336,6 +367,9 @@ CREATE INDEX IF NOT EXISTS idx_leads_selling_niche_score ON leads(selling_niche,
 CREATE INDEX IF NOT EXISTS idx_leads_business_type_score ON leads(business_type, score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_win_probability ON leads(win_probability_score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_ai_status_checked ON leads(ai_verification_status, ai_checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_assigned_to_user ON leads(assigned_to_user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_users_role_status ON app_users(role, status);
+CREATE INDEX IF NOT EXISTS idx_lead_notes_lead_created ON lead_notes(lead_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_crawl_units_status_zip ON crawl_units(status, zip);
 CREATE INDEX IF NOT EXISTS idx_crawl_units_run ON crawl_units(crawl_run_id);
 CREATE INDEX IF NOT EXISTS idx_zip_codes_state_county_zip ON zip_codes(state, county, zip);
@@ -354,6 +388,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage_events(created_at DE
 CREATE INDEX IF NOT EXISTS idx_ai_usage_model_created ON ai_usage_events(model, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_outreach_events_lead ON outreach_events(lead_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_user_id, created_at DESC);
 
 INSERT OR IGNORE INTO settings (id) VALUES (1);
 `;

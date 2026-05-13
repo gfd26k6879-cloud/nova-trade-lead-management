@@ -2,18 +2,21 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import type { AppRole } from "@/lib/permissions";
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/coverage", label: "Coverage" },
-  { href: "/leads", label: "Leads" },
-  { href: "/queue", label: "Queue" },
-  { href: "/statistics", label: "Statistics" },
-  { href: "/settings", label: "Settings" },
+  { href: "/dashboard", label: "Dashboard", adminOnly: true },
+  { href: "/coverage", label: "Coverage", adminOnly: true },
+  { href: "/leads", label: "Leads", adminOnly: false },
+  { href: "/queue", label: "Queue", adminOnly: false },
+  { href: "/statistics", label: "Statistics", adminOnly: false },
+  { href: "/settings", label: "Settings", adminOnly: true },
+  { href: "/users", label: "Users", adminOnly: true },
 ];
 
-export function NavHeader({ email, logoutAction }: { email: string; logoutAction: () => Promise<void> }) {
+export function NavHeader({ email, role, logoutAction }: { email: string; role: AppRole; logoutAction: () => Promise<void> }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const visibleItems = navItems.filter((item) => !item.adminOnly || role === "admin");
 
   return (
     <header
@@ -46,14 +49,14 @@ export function NavHeader({ email, logoutAction }: { email: string; logoutAction
               NoSite Leads
             </h1>
             <p className="text-[0.6875rem] leading-tight" style={{ color: "var(--text-tertiary)" }}>
-              {email}
+              {email} - {role}
             </p>
           </div>
         </div>
 
         {/* Desktop nav */}
         <nav className="hidden items-center gap-1 md:flex">
-          {navItems.map((item) => (
+          {visibleItems.map((item) => (
             <Link key={item.href} href={item.href} className="nav-link">
               {item.label}
             </Link>
@@ -99,7 +102,7 @@ export function NavHeader({ email, logoutAction }: { email: string; logoutAction
           style={{ borderColor: "rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.55)" }}
         >
           <nav className="flex flex-col gap-1">
-            {navItems.map((item) => (
+            {visibleItems.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}

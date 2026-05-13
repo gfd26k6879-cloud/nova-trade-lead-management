@@ -13,6 +13,7 @@ import { OPENAI_LEAD_VERIFICATION_MODEL, assertAllowedOpenAIModel } from "@/lib/
 import type { AiRecommendation, AiVerificationSource, AiVerificationStatus } from "@/lib/ai/lead-verification";
 import type { WebsiteHealthSnapshot, WebsiteViabilityStatus } from "@/lib/ai/website-viability";
 import { decryptSecret, encryptSecret } from "@/lib/secret-crypto";
+import { getAuditActor } from "@/lib/audit-context";
 
 // ─── Types ───
 
@@ -51,6 +52,7 @@ export interface Lead {
   ai_checked_at: string | null;
   ai_website_viability_status: WebsiteViabilityStatus | null;
   ai_website_health: WebsiteHealthSnapshot | null;
+  assigned_to_user_id: string | null;
   qualification_status: QualificationStatus;
   disqualification_reason: string | null;
   website_verified_at: string | null;
@@ -136,6 +138,17 @@ export interface OutreachEvent {
   channel: string;
   note: string | null;
   created_at: string;
+}
+
+export interface LeadNote {
+  id: string;
+  lead_id: string;
+  author_user_id: string;
+  author_email: string | null;
+  body: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
 }
 
 export interface Demo {
@@ -1600,6 +1613,49 @@ export async function updateLeadNotes(id: string, notes: string): Promise<void>{
   await db.prepare("UPDATE leads SET notes = ?, updated_at = ? WHERE id = ?").run(notes, nowISO(), id);
 }
 
+export async function createLeadNote(leadId: string, authorUserId: string, body: string): Promise<LeadNote> {
+  const db = await getDb();
+  const id = generateId();
+  const now = nowISO();
+  await db.prepare(
+    `INSERT INTO lead_notes (id, lead_id, author_user_id, body, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, leadId, authorUserId, body, now, now);
+
+  const note = await getLeadNoteById(id);
+  if (!note) throw new Error("Unable to create lead note");
+  return note;
+}
+
+export async function getLeadNotes(leadId: string): Promise<LeadNote[]> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT ln.*, au.email as author_email
+     FROM lead_notes ln
+     LEFT JOIN app_users au ON au.user_id = ln.author_user_id
+     WHERE ln.lead_id = ? AND ln.deleted_at IS NULL
+     ORDER BY ln.created_at DESC`
+  ).all<Record<string, unknown>>(leadId);
+  return rows.map(parseLeadNoteRow);
+}
+
+export async function assignLeadToUser(leadId: string, userId: string | null): Promise<void> {
+  const db = await getDb();
+  await db.prepare("UPDATE leads SET assigned_to_user_id = ?, updated_at = ? WHERE id = ?")
+    .run(userId, nowISO(), leadId);
+}
+
+async function getLeadNoteById(id: string): Promise<LeadNote | null> {
+  const db = await getDb();
+  const row = await db.prepare(
+    `SELECT ln.*, au.email as author_email
+     FROM lead_notes ln
+     LEFT JOIN app_users au ON au.user_id = ln.author_user_id
+     WHERE ln.id = ?`
+  ).get<Record<string, unknown>>(id);
+  return row ? parseLeadNoteRow(row) : null;
+}
+
 export async function setLeadExclusion(id: string, reason: string): Promise<number>{
   const db = await getDb();
   const now = nowISO();
@@ -1922,6 +1978,7 @@ function parseLeadRow(row: Record<string, unknown>): Lead {
     ai_recommendation: (row.ai_recommendation as AiRecommendation | null) ?? null,
     ai_summary: (row.ai_summary as string | null) ?? null,
     ai_checked_at: (row.ai_checked_at as string | null) ?? null,
+    assigned_to_user_id: (row.assigned_to_user_id as string | null) ?? null,
     qualification_status: ((row.qualification_status as QualificationStatus | null) ?? "needs_verification"),
     disqualification_reason: (row.disqualification_reason as string | null) ?? null,
     website_verified_at: (row.website_verified_at as string | null) ?? null,
@@ -1932,6 +1989,19 @@ function parseLeadRow(row: Record<string, unknown>): Lead {
     enrichment_status: (row.enrichment_status as string) ?? "pending",
     verification: safeParseJson<Record<string, boolean>>(row.verification, {}),
   } as unknown as Lead;
+}
+
+function parseLeadNoteRow(row: Record<string, unknown>): LeadNote {
+  return {
+    id: String(row.id),
+    lead_id: String(row.lead_id),
+    author_user_id: String(row.author_user_id),
+    author_email: row.author_email ? String(row.author_email) : null,
+    body: String(row.body ?? ""),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+    deleted_at: row.deleted_at ? String(row.deleted_at) : null,
+  };
 }
 
 // ─── Dashboard Stats ───
@@ -2311,9 +2381,22 @@ export async function setRunLastError(runId: string, error: string): Promise<voi
 
 export async function createAuditLog(action: string, entityType?: string, entityId?: string, metadata?: Record<string, unknown>): Promise<void>{
   const db = await getDb();
+  const actor = getAuditActor();
   await db.prepare(
-    "INSERT INTO audit_logs (id, action, entity_type, entity_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(generateId(), action, entityType ?? null, entityId ?? null, JSON.stringify(metadata ?? {}), nowISO());
+    `INSERT INTO audit_logs (
+      id, action, entity_type, entity_id, actor_user_id, actor_email, actor_role, metadata, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    generateId(),
+    action,
+    entityType ?? null,
+    entityId ?? null,
+    actor?.userId ?? null,
+    actor?.email ?? null,
+    actor?.role ?? null,
+    JSON.stringify(metadata ?? {}),
+    nowISO(),
+  );
 }
 
 // ─── Bulk Lead Operations ───

@@ -27,7 +27,7 @@ import {
   getZipCodesByCounty,
   getZipCoverageStatus,
 } from "@/lib/db/queries";
-import { requireSession } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 
 const startPlannerSchema = z.object({
   state: z.string().trim().min(2).max(2).transform((value) => value.toUpperCase()),
@@ -46,7 +46,7 @@ function normalizeDistinct(values: string[]): string[] {
 type StartCrawlPayload = string[] | z.infer<typeof startPlannerSchema>;
 
 export async function startCrawlRunAction(payload: StartCrawlPayload) {
-  await requireSession();
+  await requirePermission("crawl:manage");
   await ensureDbReady();
 
   const existing = await getActiveCrawlRun();
@@ -138,13 +138,13 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
 }
 
 export async function getPlannerStatesAction() {
-  await requireSession();
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   return getStatesWithCounts();
 }
 
 export async function getPlannerCountiesAction(state: string) {
-  await requireSession();
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   const parsed = plannerStateSchema.safeParse(state);
   if (!parsed.success) return [];
@@ -152,7 +152,7 @@ export async function getPlannerCountiesAction(state: string) {
 }
 
 export async function getPlannerZipCodesAction(state: string, county: string, categories: string[] = []) {
-  await requireSession();
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   const parsedState = plannerStateSchema.safeParse(state);
   const parsedCounty = plannerCountySchema.safeParse(county);
@@ -167,7 +167,7 @@ export async function getPlannerZipCodesAction(state: string, county: string, ca
 }
 
 export async function pauseCrawlRunAction() {
-  await requireSession();
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   const run = await getActiveCrawlRun();
   if (!run) return { error: "No active run to pause." };
@@ -177,7 +177,7 @@ export async function pauseCrawlRunAction() {
 }
 
 export async function resumeCrawlRunAction() {
-  await requireSession();
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   const latest = await getLatestCrawlRun();
   if (!latest || latest.status !== "paused") return { error: "No paused run to resume." };
@@ -187,7 +187,7 @@ export async function resumeCrawlRunAction() {
 }
 
 export async function retryFailedUnitsAction() {
-  await requireSession();
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   const run = (await getActiveCrawlRun()) ?? (await getLatestCrawlRun());
   if (!run) return { error: "No run found." };
@@ -199,7 +199,7 @@ export async function retryFailedUnitsAction() {
 }
 
 export async function getDashboardStatsAction() {
-  await requireSession();
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   const base = await getDashboardStats();
   const todayFocus = await getTodayFocusCount();
@@ -267,7 +267,7 @@ export async function getDashboardStatsAction() {
 }
 
 export async function getFailedUnitErrorsAction() {
-  await requireSession();
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   const run = (await getActiveCrawlRun()) ?? (await getLatestCrawlRun());
   if (!run) return [];
@@ -275,7 +275,7 @@ export async function getFailedUnitErrorsAction() {
 }
 
 export async function getCrawlProgressAction() {
-  await requireSession();
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   const run = (await getActiveCrawlRun()) ?? (await getLatestCrawlRun());
   if (!run) return null;

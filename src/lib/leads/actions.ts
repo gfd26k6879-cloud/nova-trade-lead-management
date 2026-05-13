@@ -9,6 +9,9 @@ import {
   updateLeadStatus as dbUpdateStatus,
   updateLeadNotes as dbUpdateNotes,
   updateLeadReminder as dbUpdateReminder,
+  createLeadNote as dbCreateLeadNote,
+  getLeadNotes as dbGetLeadNotes,
+  assignLeadToUser as dbAssignLeadToUser,
   setLeadExclusion as dbSetLeadExclusion,
   clearLeadExclusion as dbClearLeadExclusion,
   updateLeadTimestamp,
@@ -42,7 +45,7 @@ import {
   type Settings,
   type AiLeadVerification,
 } from "@/lib/db/queries";
-import { requireSession } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { generateOutreachPackage } from "@/lib/outreach-package";
 import { computeScoreWithBreakdown, computeWinProbability } from "@/lib/scoring";
 import type { WebsiteStatus } from "@/lib/classify-website";
@@ -58,6 +61,7 @@ const statusSchema = z.enum(["new", "verified", "contacted", "preview_sent", "me
 const channelSchema = z.enum(["call", "text", "email", "walkin", "other"]);
 const exclusionReasonSchema = z.string().trim().min(5).max(500);
 const aiApplySchema = z.enum(["update_website", "exclude_has_website", "mark_broken_site_opportunity", "mark_manual_review"]);
+const leadNoteSchema = z.string().trim().min(1).max(4000);
 
 function revalidateLeadViews(): void {
   revalidatePath("/leads");
@@ -66,22 +70,22 @@ function revalidateLeadViews(): void {
 }
 
 export async function getLeadsAction(filters: LeadFilters = {}) {
-  await requireSession();
+  await requirePermission("view:workspace");
   await ensureDbReady();
   return queryLeads(filters);
 }
 
 export async function getLeadByIdAction(id: string) {
-  await requireSession();
+  await requirePermission("view:workspace");
   await ensureDbReady();
   return queryLeadById(id);
 }
 
 export async function updateLeadStatusAction(id: string, status: string) {
-  await requireSession();
-  await ensureDbReady();
   const parsed = statusSchema.safeParse(status);
   if (!parsed.success) return { error: "Invalid status value" };
+  await requirePermission(parsed.data === "closed_won" || parsed.data === "closed_lost" ? "lead:close" : "lead:update");
+  await ensureDbReady();
   await dbUpdateStatus(id, parsed.data);
   await createAuditLog("lead_status_change", "lead", id, { status: parsed.data });
   revalidateLeadViews();
@@ -89,15 +93,73 @@ export async function updateLeadStatusAction(id: string, status: string) {
 }
 
 export async function updateLeadNotesAction(id: string, notes: string) {
-  await requireSession();
+  await requirePermission("lead:update");
   await ensureDbReady();
   await dbUpdateNotes(id, notes);
   revalidatePath(`/leads/${id}`);
   return { success: true };
 }
 
+export async function addLeadNoteAction(id: string, body: string) {
+  const session = await requirePermission("lead:update");
+  await ensureDbReady();
+  const lead = await queryLeadById(id);
+  if (!lead) return { error: "Lead not found" };
+  const parsed = leadNoteSchema.safeParse(body);
+  if (!parsed.success) return { error: "Note must be between 1 and 4000 characters." };
+  const note = await dbCreateLeadNote(id, session.userId, parsed.data);
+  await createAuditLog("lead_note_created", "lead", id, { noteId: note.id });
+  revalidatePath(`/leads/${id}`);
+  return { success: true, note };
+}
+
+export async function getLeadNotesAction(id: string) {
+  await requirePermission("view:workspace");
+  await ensureDbReady();
+  return dbGetLeadNotes(id);
+}
+
+export async function claimLeadAction(id: string) {
+  const session = await requirePermission("lead:assign");
+  await ensureDbReady();
+  const lead = await queryLeadById(id);
+  if (!lead) return { error: "Lead not found" };
+  await dbAssignLeadToUser(id, session.userId);
+  await createAuditLog("lead_claimed", "lead", id);
+  revalidateLeadViews();
+  revalidatePath(`/leads/${id}`);
+  return { success: true };
+}
+
+export async function unclaimLeadAction(id: string) {
+  const session = await requirePermission("lead:assign");
+  await ensureDbReady();
+  const lead = await queryLeadById(id);
+  if (!lead) return { error: "Lead not found" };
+  if (lead.assigned_to_user_id && lead.assigned_to_user_id !== session.userId && session.role !== "admin") {
+    return { error: "Only the assigned researcher or an admin can unclaim this lead." };
+  }
+  await dbAssignLeadToUser(id, null);
+  await createAuditLog("lead_unclaimed", "lead", id);
+  revalidateLeadViews();
+  revalidatePath(`/leads/${id}`);
+  return { success: true };
+}
+
+export async function assignLeadAction(id: string, userId: string | null) {
+  await requirePermission("lead:admin_assign");
+  await ensureDbReady();
+  const lead = await queryLeadById(id);
+  if (!lead) return { error: "Lead not found" };
+  await dbAssignLeadToUser(id, userId);
+  await createAuditLog("lead_assigned", "lead", id, { assignedTo: userId });
+  revalidateLeadViews();
+  revalidatePath(`/leads/${id}`);
+  return { success: true };
+}
+
 export async function updateLeadReminderAction(id: string, date: string | null) {
-  await requireSession();
+  await requirePermission("lead:update");
   await ensureDbReady();
   await dbUpdateReminder(id, date);
   revalidateLeadViews();
@@ -106,7 +168,7 @@ export async function updateLeadReminderAction(id: string, date: string | null) 
 }
 
 export async function excludeLeadAction(id: string, reason: string) {
-  await requireSession();
+  await requirePermission("lead:exclude");
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
@@ -125,7 +187,7 @@ export async function excludeLeadAction(id: string, reason: string) {
 }
 
 export async function restoreExcludedLeadAction(id: string) {
-  await requireSession();
+  await requirePermission("lead:exclude");
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
@@ -139,7 +201,7 @@ export async function restoreExcludedLeadAction(id: string) {
 }
 
 export async function logOutreachEventAction(leadId: string, channel: string, note: string) {
-  await requireSession();
+  await requirePermission("outreach:create");
   await ensureDbReady();
   const parsed = channelSchema.safeParse(channel);
   if (!parsed.success) return { error: "Invalid channel" };
@@ -153,13 +215,13 @@ export async function logOutreachEventAction(leadId: string, channel: string, no
 }
 
 export async function getOutreachEventsAction(leadId: string) {
-  await requireSession();
+  await requirePermission("view:workspace");
   await ensureDbReady();
   return dbGetOutreachEvents(leadId);
 }
 
 export async function markLeadRepliedAction(id: string) {
-  await requireSession();
+  await requirePermission("outreach:create");
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
@@ -171,7 +233,7 @@ export async function markLeadRepliedAction(id: string) {
 }
 
 export async function markMeetingBookedAction(id: string) {
-  await requireSession();
+  await requirePermission("outreach:create");
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
@@ -186,7 +248,7 @@ export async function markMeetingBookedAction(id: string) {
 }
 
 export async function generateOutreachPackageAction(leadId: string) {
-  await requireSession();
+  await requirePermission("view:workspace");
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
   if (!lead) return { error: "Lead not found" };
@@ -194,7 +256,7 @@ export async function generateOutreachPackageAction(leadId: string) {
 }
 
 export async function createDemoForLeadAction(leadId: string) {
-  await requireSession();
+  await requirePermission("demo:create");
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
   if (!lead) return { error: "Lead not found" };
@@ -206,13 +268,13 @@ export async function createDemoForLeadAction(leadId: string) {
 }
 
 export async function getDemoByLeadIdAction(leadId: string) {
-  await requireSession();
+  await requirePermission("view:workspace");
   await ensureDbReady();
   return dbGetDemoByLeadId(leadId);
 }
 
 export async function getScoreBreakdownAction(leadId: string) {
-  await requireSession();
+  await requirePermission("view:workspace");
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
   if (!lead) return null;
@@ -231,7 +293,7 @@ export async function getScoreBreakdownAction(leadId: string) {
 }
 
 export async function recomputeAllScoresAction(): Promise<{ count: number }> {
-  await requireSession();
+  await requirePermission("scores:recompute");
   await ensureDbReady();
   const settings = await getSettings();
   const leads = await getAllLeadsForRecompute();
@@ -263,7 +325,7 @@ export async function recomputeAllScoresAction(): Promise<{ count: number }> {
 }
 
 export async function refreshStaleUnitsAction(runId: string, olderThanDays: number) {
-  await requireSession();
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   if (olderThanDays < 1) return { error: "Days must be at least 1" };
   const count = await dbRefreshStale(runId, olderThanDays);
@@ -275,10 +337,10 @@ export async function refreshStaleUnitsAction(runId: string, olderThanDays: numb
 }
 
 export async function bulkUpdateLeadStatusAction(ids: string[], status: string) {
-  await requireSession();
-  await ensureDbReady();
   const parsed = statusSchema.safeParse(status);
   if (!parsed.success) return { error: "Invalid status" };
+  await requirePermission(parsed.data === "closed_won" || parsed.data === "closed_lost" ? "lead:close" : "lead:update");
+  await ensureDbReady();
   if (ids.length === 0) return { error: "No leads selected" };
   const count = await dbBulkUpdateStatus(ids, parsed.data);
   await createAuditLog("bulk_status_update", "leads", undefined, { status: parsed.data, count });
@@ -287,7 +349,7 @@ export async function bulkUpdateLeadStatusAction(ids: string[], status: string) 
 }
 
 export async function runAiVerificationAction(leadId: string, options: { force?: boolean } = {}) {
-  await requireSession();
+  await requirePermission("ai:verify");
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
   if (!lead) return { error: "Lead not found" };
@@ -300,7 +362,7 @@ export async function runAiVerificationAction(leadId: string, options: { force?:
 }
 
 export async function runAiVerificationBatchAction(input: { limit?: number; businessType?: string } = {}) {
-  await requireSession();
+  await requirePermission("ai:verify");
   await ensureDbReady();
   const settings = await getSettings();
   if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
@@ -339,10 +401,14 @@ export async function runAiVerificationBatchAction(input: { limit?: number; busi
 }
 
 export async function applyAiRecommendationAction(verificationId: string, action: string) {
-  await requireSession();
-  await ensureDbReady();
   const parsedAction = aiApplySchema.safeParse(action);
   if (!parsedAction.success) return { error: "Invalid AI recommendation action" };
+  await requirePermission(
+    parsedAction.data === "update_website" || parsedAction.data === "exclude_has_website"
+      ? "lead:apply_ai_usable_website"
+      : "lead:apply_ai_opportunity",
+  );
+  await ensureDbReady();
 
   const verification = await getAiVerificationById(verificationId);
   if (!verification) return { error: "AI verification not found" };
@@ -395,7 +461,7 @@ export async function applyAiRecommendationAction(verificationId: string, action
 }
 
 export async function repairLeadAiWebsiteViabilityAction(leadId: string) {
-  await requireSession();
+  await requirePermission("ai:verify");
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
   if (!lead) return { error: "Lead not found" };
@@ -411,7 +477,7 @@ export async function repairLeadAiWebsiteViabilityAction(leadId: string) {
 }
 
 export async function repairAiWebsiteViabilityBatchAction(input: { limit?: number } = {}) {
-  await requireSession();
+  await requirePermission("ai:verify");
   await ensureDbReady();
   const leads = await getAiWebsiteViabilityRepairLeads(input.limit ?? 50);
   const results: Array<{ leadId: string; success: boolean; error?: string }> = [];
@@ -640,7 +706,7 @@ function isWeakWebsiteOpportunity(status: WebsiteViabilityStatus | null): boolea
 const VERIFICATION_KEYS = new Set(["phone_works", "no_real_website", "address_verified", "business_active", "ready_for_outreach"]);
 
 export async function updateLeadVerificationAction(id: string, key: string, value: boolean) {
-  await requireSession();
+  await requirePermission("lead:update");
   await ensureDbReady();
   if (!VERIFICATION_KEYS.has(key)) return { error: "Invalid verification key" };
   const lead = await queryLeadById(id);

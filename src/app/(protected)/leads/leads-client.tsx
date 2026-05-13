@@ -46,6 +46,8 @@ interface Props {
   };
   scoreThresholds: ScoreBandThresholds;
   businessTypeCounts: Array<{ id: string; label: string; total: number; active: number }>;
+  canExport: boolean;
+  canClose: boolean;
 }
 
 const STATUS_FILTER_OPTIONS = ["", "new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost", "excluded"];
@@ -84,7 +86,7 @@ const CATEGORY_OPTIONS = [
   "restaurant","gym","landscaper","veterinarian","accountant","lawyer",
 ];
 
-export function LeadsClient({ leads, total, filters, scoreThresholds, businessTypeCounts }: Props) {
+export function LeadsClient({ leads, total, filters, scoreThresholds, businessTypeCounts, canExport, canClose }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [search, setSearch] = useState(filters.search ?? "");
@@ -181,13 +183,15 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
             Kanban View
           </button>
 
-          <a
-            href={`/api/export/csv?${searchParams.toString()}`}
-            className="btn-glass text-xs ml-auto"
-            download
-          >
-            Export CSV
-          </a>
+          {canExport && (
+            <a
+              href={`/api/export/csv?${searchParams.toString()}`}
+              className="btn-glass text-xs ml-auto"
+              download
+            >
+              Export CSV
+            </a>
+          )}
           <select
             className="glass-select"
             aria-label="Business type"
@@ -302,7 +306,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
             style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.15)" }}>
             <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>{selected.size} selected</span>
             <select className="glass-select text-xs" value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)}>
-              {BULK_STATUS_OPTIONS.map((s) => (
+            {BULK_STATUS_OPTIONS.filter((s) => canClose || (s !== "closed_won" && s !== "closed_lost")).map((s) => (
                 <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
               ))}
             </select>

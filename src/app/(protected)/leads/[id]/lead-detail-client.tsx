@@ -22,7 +22,11 @@ import {
   runAiVerificationAction,
   applyAiRecommendationAction,
   repairLeadAiWebsiteViabilityAction,
+  addLeadNoteAction,
+  claimLeadAction,
+  unclaimLeadAction,
 } from "@/lib/leads/actions";
+import type { AppRole } from "@/lib/permissions";
 
 interface Lead {
   id: string;
@@ -76,6 +80,7 @@ interface Lead {
   first_reply_at: string | null;
   meeting_booked_at: string | null;
   last_contacted_at: string | null;
+  assigned_to_user_id: string | null;
 }
 
 interface DensityResult {
@@ -127,6 +132,17 @@ interface AiVerification {
   created_at: string;
 }
 
+interface LeadNote {
+  id: string;
+  lead_id: string;
+  author_user_id: string;
+  author_email: string | null;
+  body: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
 const STATUS_OPTIONS = ["new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost"];
 const CHANNEL_OPTIONS = ["call", "text", "email", "walkin", "other"];
 type AiApplyAction = "update_website" | "exclude_has_website" | "mark_broken_site_opportunity" | "mark_manual_review";
@@ -158,19 +174,23 @@ interface ScoreBreakdown {
 export function LeadDetailClient({
   lead,
   initialEvents,
+  initialLeadNotes,
   initialDemo,
   initialAiVerification,
   scoreBreakdown,
   density,
   scoreThresholds,
+  currentUser,
 }: {
   lead: Lead;
   initialEvents: OutreachEvent[];
+  initialLeadNotes: LeadNote[];
   initialDemo: Demo | null;
   initialAiVerification: AiVerification | null;
   scoreBreakdown?: ScoreBreakdown;
   density?: DensityResult;
   scoreThresholds: ScoreBandThresholds;
+  currentUser: { userId: string; email: string; role: AppRole };
 }) {
   const router = useRouter();
   const scoreBand = resolveScoreBand(lead.score, scoreThresholds);
@@ -191,6 +211,10 @@ export function LeadDetailClient({
   const [aiVerification, setAiVerification] = useState<AiVerification | null>(initialAiVerification);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiApplying, setAiApplying] = useState<string | null>(null);
+  const [leadNotes, setLeadNotes] = useState<LeadNote[]>(initialLeadNotes);
+  const [leadNoteBody, setLeadNoteBody] = useState("");
+  const [noteLoading, setNoteLoading] = useState(false);
+  const [assignedToUserId, setAssignedToUserId] = useState(lead.assigned_to_user_id);
 
   // Log event form
   const [eventChannel, setEventChannel] = useState("call");
@@ -203,6 +227,7 @@ export function LeadDetailClient({
   const [showPkg, setShowPkg] = useState(false);
 
   const [verification, setVerification] = useState<Record<string, boolean>>(lead.verification ?? {});
+  const isAdmin = currentUser.role === "admin";
 
   const flash = (msg: string) => {
     setSaveMsg(msg);
@@ -210,6 +235,10 @@ export function LeadDetailClient({
   };
 
   const handleStatusChange = async (s: string) => {
+    if (!isAdmin && (s === "closed_won" || s === "closed_lost")) {
+      flash("Only admins can close leads");
+      return;
+    }
     setStatus(s);
     await updateLeadStatusAction(lead.id, s);
     flash("Status updated");
@@ -226,6 +255,10 @@ export function LeadDetailClient({
   };
 
   const handleExcludeLead = async () => {
+    if (!isAdmin) {
+      flash("Only admins can exclude leads");
+      return;
+    }
     setExclusionLoading(true);
     try {
       const trimmedReason = exclusionReason.trim();
@@ -248,6 +281,10 @@ export function LeadDetailClient({
   };
 
   const handleRestoreLead = async () => {
+    if (!isAdmin) {
+      flash("Only admins can restore leads");
+      return;
+    }
     setExclusionLoading(true);
     try {
       const result = await restoreExcludedLeadAction(lead.id);
@@ -354,6 +391,10 @@ export function LeadDetailClient({
   };
 
   const handleApplyAi = async (action: AiApplyAction) => {
+    if (!isAdmin && (action === "update_website" || action === "exclude_has_website")) {
+      flash("Only admins can apply usable website exclusions");
+      return;
+    }
     if (!aiVerification) return;
     setAiApplying(action);
     try {
@@ -376,12 +417,41 @@ export function LeadDetailClient({
     flash("Copied to clipboard");
   };
 
+  const handleAddLeadNote = async () => {
+    setNoteLoading(true);
+    try {
+      const result = await addLeadNoteAction(lead.id, leadNoteBody);
+      if ("note" in result && result.note) {
+        setLeadNotes((current) => [result.note as LeadNote, ...current]);
+        setLeadNoteBody("");
+        flash("Note added");
+      } else if ("error" in result) {
+        flash(result.error ?? "Unable to add note");
+      }
+    } finally {
+      setNoteLoading(false);
+    }
+  };
+
+  const handleClaimToggle = async () => {
+    const result = assignedToUserId === currentUser.userId
+      ? await unclaimLeadAction(lead.id)
+      : await claimLeadAction(lead.id);
+    if ("error" in result) {
+      flash(result.error ?? "Unable to update assignment");
+      return;
+    }
+    setAssignedToUserId(assignedToUserId === currentUser.userId ? null : currentUser.userId);
+    flash(assignedToUserId === currentUser.userId ? "Lead unclaimed" : "Lead claimed");
+  };
+
   const foundAiWebsite = aiVerification?.found_website_url ?? lead.ai_found_website_url;
   const currentViability = aiVerification?.website_viability_status ?? lead.ai_website_viability_status;
   const currentHealth = aiVerification?.website_health_json ?? lead.ai_website_health;
   const currentViabilityReason = aiVerification?.website_viability_reason;
   const hasUsableAiWebsite = (aiVerification?.status ?? lead.ai_verification_status) === "site_found" && currentViability === "usable";
   const hasBrokenSiteOpportunity = currentViability === "broken" || currentViability === "parked" || currentViability === "placeholder";
+  const assignedLabel = assignedToUserId === currentUser.userId ? "Assigned to you" : assignedToUserId ? "Assigned" : "Unassigned";
 
   return (
     <PageShell
@@ -400,6 +470,15 @@ export function LeadDetailClient({
       <div className="flex items-center justify-between">
         <Link href="/leads" className="link-accent text-sm">&larr; Back to leads</Link>
         <div className="flex items-center gap-2">
+          <span
+            className="rounded-md border px-2 py-0.5 text-xs font-semibold capitalize"
+            style={{ background: "rgba(99,102,241,0.08)", borderColor: "rgba(99,102,241,0.18)", color: "#6366f1" }}
+          >
+            {currentUser.role}
+          </span>
+          <button type="button" className="btn-glass text-xs" onClick={handleClaimToggle}>
+            {assignedToUserId === currentUser.userId ? "Unclaim" : assignedLabel === "Unassigned" ? "Claim" : assignedLabel}
+          </button>
           {isExcluded && (
             <span
               className="rounded-md border px-2 py-0.5 text-xs font-semibold"
@@ -535,22 +614,26 @@ export function LeadDetailClient({
 
           {aiVerification && (
             <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="btn-glass text-xs"
-                disabled={aiApplying !== null || !aiVerification.found_website_url || !hasUsableAiWebsite}
-                onClick={() => handleApplyAi("update_website")}
-              >
-                {aiApplying === "update_website" ? "Applying..." : "Apply Usable Website"}
-              </button>
-              <button
-                type="button"
-                className="btn-glass text-xs"
-                disabled={aiApplying !== null || !hasUsableAiWebsite}
-                onClick={() => handleApplyAi("exclude_has_website")}
-              >
-                {aiApplying === "exclude_has_website" ? "Excluding..." : "Exclude as Has Website"}
-              </button>
+              {isAdmin && (
+                <>
+                  <button
+                    type="button"
+                    className="btn-glass text-xs"
+                    disabled={aiApplying !== null || !aiVerification.found_website_url || !hasUsableAiWebsite}
+                    onClick={() => handleApplyAi("update_website")}
+                  >
+                    {aiApplying === "update_website" ? "Applying..." : "Apply Usable Website"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-glass text-xs"
+                    disabled={aiApplying !== null || !hasUsableAiWebsite}
+                    onClick={() => handleApplyAi("exclude_has_website")}
+                  >
+                    {aiApplying === "exclude_has_website" ? "Excluding..." : "Exclude as Has Website"}
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 className="btn-glass text-xs"
@@ -575,7 +658,7 @@ export function LeadDetailClient({
         <article className="glass rounded-2xl p-6">
           <h3 className="section-label">Status</h3>
           <select className="glass-select mt-3 w-full" value={status} onChange={(e) => handleStatusChange(e.target.value)}>
-            {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
+            {STATUS_OPTIONS.filter((s) => isAdmin || (s !== "closed_won" && s !== "closed_lost")).map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
           </select>
 
           <h3 className="section-label mt-5">Reminder</h3>
@@ -627,6 +710,7 @@ export function LeadDetailClient({
             }}
           />
 
+          {isAdmin && (
           <div className="mt-5 space-y-2">
             <div className="flex items-center justify-between">
               <h3 className="section-label">Lead Exclusion</h3>
@@ -671,6 +755,7 @@ export function LeadDetailClient({
               </div>
             )}
           </div>
+          )}
 
           {/* Score breakdown */}
           {scoreBreakdown && (
@@ -841,6 +926,34 @@ export function LeadDetailClient({
         <h3 className="section-label">Notes</h3>
         <textarea className="glass-input mt-3 w-full" rows={4} placeholder="Add notes..." value={notes} onChange={(e) => setNotes(e.target.value)} />
         <button type="button" className="btn-primary mt-3 text-sm" onClick={handleSaveNotes}>Save Notes</button>
+      </section>
+
+      <section className="glass rounded-2xl p-6">
+        <h3 className="section-label">Team Notes</h3>
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+          <textarea
+            className="glass-input min-h-24 flex-1"
+            placeholder="Add a research note..."
+            value={leadNoteBody}
+            onChange={(event) => setLeadNoteBody(event.target.value)}
+          />
+          <button type="button" className="btn-primary self-start text-sm" disabled={noteLoading || !leadNoteBody.trim()} onClick={handleAddLeadNote}>
+            Add Note
+          </button>
+        </div>
+        <div className="mt-4 space-y-3">
+          {leadNotes.length === 0 ? (
+            <p className="text-sm" style={{ color: "var(--text-tertiary)" }}>No team notes yet.</p>
+          ) : leadNotes.map((note) => (
+            <article key={note.id} className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>{note.author_email ?? "Unknown user"}</span>
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{formatRelativeTime(note.created_at)}</span>
+              </div>
+              <p className="mt-2 whitespace-pre-wrap text-sm" style={{ color: "var(--text-secondary)" }}>{note.body}</p>
+            </article>
+          ))}
+        </div>
       </section>
     </PageShell>
   );

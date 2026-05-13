@@ -99,9 +99,11 @@ Manual steps:
 
 ```bash
 DATABASE_URL=
-NOSITE_ADMIN_USERNAME=
-NOSITE_ADMIN_PASSWORD=
-NOSITE_SESSION_SECRET=
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+NOSITE_BOOTSTRAP_ADMIN_EMAIL=
+NOSITE_ENCRYPTION_SECRET=
 GOOGLE_PLACES_API_KEY=
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.4-mini
@@ -115,11 +117,13 @@ Redeploy after any environment variable change.
 After deploy:
 
 1. Log in.
-2. Confirm lead count matches Supabase.
-3. Open `/leads`, `/queue`, `/dashboard`, `/statistics`, and `/settings`.
-4. Confirm CSV export requires login.
-5. Save or verify Google/OpenAI keys in Settings.
-6. Run one low-cost Places test after fixing the Google API key.
+2. Confirm the bootstrap admin gets an admin role.
+3. Open `/users` and create the researcher account.
+4. Confirm lead count matches Supabase.
+5. Open `/leads`, `/queue`, `/dashboard`, `/statistics`, and `/settings`.
+6. Confirm CSV export requires admin login.
+7. Save or verify Google/OpenAI keys in Settings.
+8. Run one low-cost Places test after fixing the Google API key.
 7. Run one AI verification and confirm the model remains locked to `gpt-5.4-mini`.
 
 ## 7. First Hardening Pass

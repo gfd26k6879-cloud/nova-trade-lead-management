@@ -1,23 +1,9 @@
 import "server-only";
 
-import { cookies } from "next/headers";
-import { createHmac, randomUUID, timingSafeEqual } from "crypto";
-
-const SESSION_COOKIE = "nosite_session";
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
-
-interface AuthConfig {
-  username: string;
-  password: string;
-  sessionSecret: string;
-}
-
-interface SessionPayload {
-  sub: string;
-  iat: number;
-  exp: number;
-  nonce: string;
-}
+import { ensureAppUserForAuthUser } from "@/lib/app-users";
+import { setAuditActor } from "@/lib/audit-context";
+import { hasPermission, type AppRole, type Permission } from "@/lib/permissions";
+import { createSupabaseServerClient, isSupabaseAuthConfigured } from "@/lib/supabase/server";
 
 export class UnauthorizedError extends Error {
   status = 401;
@@ -28,123 +14,96 @@ export class UnauthorizedError extends Error {
   }
 }
 
-function getAuthConfig(): AuthConfig | null {
-  const username = process.env.NOSITE_ADMIN_USERNAME;
-  const password = process.env.NOSITE_ADMIN_PASSWORD;
-  const sessionSecret = process.env.NOSITE_SESSION_SECRET;
+export class ForbiddenError extends Error {
+  status = 403;
 
-  if (!username || !password || !sessionSecret) {
-    return null;
+  constructor(message = "You do not have permission to perform this action") {
+    super(message);
+    this.name = "ForbiddenError";
   }
-
-  return { username, password, sessionSecret };
 }
+
+export interface AppSession {
+  userId: string;
+  email: string;
+  displayName: string | null;
+  role: AppRole;
+}
+
+export interface PendingAppSession {
+  userId: string;
+  email: string;
+  displayName: string | null;
+  role: AppRole | null;
+  status: "pending" | "disabled";
+}
+
+export type SessionLookupResult = AppSession | PendingAppSession;
 
 export async function isAuthConfigured(): Promise<boolean> {
-  return getAuthConfig() !== null;
+  return isSupabaseAuthConfigured();
 }
 
-function toBase64Url(value: Buffer | string): string {
-  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
-  return buffer
-    .toString("base64")
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_");
-}
+export async function getSession(options: { allowInactive?: boolean } = {}): Promise<SessionLookupResult | null> {
+  if (!isSupabaseAuthConfigured()) return null;
 
-function fromBase64Url(value: string): Buffer {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  return Buffer.from(normalized, "base64");
-}
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase.auth.getUser();
+  const user = data.user;
 
-function safeEqual(a: string, b: string): boolean {
-  const aBuffer = Buffer.from(a);
-  const bBuffer = Buffer.from(b);
-  if (aBuffer.length !== bBuffer.length) return false;
-  return timingSafeEqual(aBuffer, bBuffer);
-}
+  if (error || !user?.id || !user.email) return null;
 
-function sign(payload: string, secret: string): string {
-  return toBase64Url(createHmac("sha256", secret).update(payload).digest());
-}
+  const profile = await ensureAppUserForAuthUser(user.id, user.email);
+  if (profile.status !== "active" || !profile.role) {
+    const inactiveStatus = profile.status === "disabled" ? "disabled" : "pending";
+    return options.allowInactive
+      ? {
+          userId: profile.userId,
+          email: profile.email,
+          displayName: profile.displayName,
+          role: profile.role,
+          status: inactiveStatus,
+        }
+      : null;
+  }
 
-function createSessionToken(username: string, secret: string): string {
-  const now = Math.floor(Date.now() / 1000);
-  const payload: SessionPayload = {
-    sub: username,
-    iat: now,
-    exp: now + SESSION_TTL_SECONDS,
-    nonce: randomUUID(),
+  const session: AppSession = {
+    userId: profile.userId,
+    email: profile.email,
+    displayName: profile.displayName,
+    role: profile.role,
   };
-  const encodedPayload = toBase64Url(JSON.stringify(payload));
-  return `${encodedPayload}.${sign(encodedPayload, secret)}`;
+  setAuditActor({ userId: session.userId, email: session.email, role: session.role });
+  return session;
 }
 
-function verifySessionToken(token: string, secret: string): SessionPayload | null {
-  const [encodedPayload, signature] = token.split(".");
-  if (!encodedPayload || !signature) return null;
-
-  const expected = sign(encodedPayload, secret);
-  if (!safeEqual(signature, expected)) return null;
-
-  try {
-    const payload = JSON.parse(fromBase64Url(encodedPayload).toString("utf8")) as SessionPayload;
-    if (!payload.sub || !payload.exp || payload.exp < Math.floor(Date.now() / 1000)) {
-      return null;
-    }
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
-export async function verifyCredentials(username: string, password: string): Promise<boolean> {
-  const config = getAuthConfig();
-  if (!config) return false;
-
-  return safeEqual(username, config.username) && safeEqual(password, config.password);
-}
-
-export async function createSession(): Promise<void> {
-  const config = getAuthConfig();
-  if (!config) {
-    throw new Error("Authentication is not configured");
-  }
-
-  const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, createSessionToken(config.username, config.sessionSecret), {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: SESSION_TTL_SECONDS,
-  });
-}
-
-export async function destroySession(): Promise<void> {
-  const cookieStore = await cookies();
-  cookieStore.delete(SESSION_COOKIE);
-}
-
-export async function getSession(): Promise<{ email: string } | null> {
-  const config = getAuthConfig();
-  if (!config) return null;
-
-  const cookieStore = await cookies();
-  const token = cookieStore.get(SESSION_COOKIE)?.value;
-  if (!token) return null;
-
-  const payload = verifySessionToken(token, config.sessionSecret);
-  if (!payload || payload.sub !== config.username) return null;
-
-  return { email: payload.sub };
-}
-
-export async function requireSession(): Promise<{ email: string }> {
-  const session = await getSession();
+export async function requireSession(): Promise<AppSession> {
+  const session = await getSession({ allowInactive: true });
   if (!session) {
     throw new UnauthorizedError();
+  }
+  if ("status" in session) {
+    throw new ForbiddenError(
+      session.status === "disabled"
+        ? "Your access has been disabled"
+        : "Your account is pending workspace access",
+    );
+  }
+  return session;
+}
+
+export async function requireRole(role: AppRole): Promise<AppSession> {
+  const session = await requireSession();
+  if (session.role !== role) {
+    throw new ForbiddenError();
+  }
+  return session;
+}
+
+export async function requirePermission(permission: Permission): Promise<AppSession> {
+  const session = await requireSession();
+  if (!hasPermission(session.role, permission)) {
+    throw new ForbiddenError();
   }
   return session;
 }

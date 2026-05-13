@@ -5,12 +5,12 @@ import {
   getCanonicalPlacesForExport,
   getLeadsForExport,
 } from "@/lib/db/queries";
-import { requireSession, UnauthorizedError } from "@/lib/auth";
+import { ForbiddenError, requirePermission, UnauthorizedError } from "@/lib/auth";
 import type { QualificationStatus } from "@/lib/qualification";
 
 export async function GET(request: NextRequest) {
   try {
-    const session = await requireSession();
+    const session = await requirePermission("export:csv");
     await ensureDbReady();
     const params = request.nextUrl.searchParams;
     const dataset = params.get("dataset") ?? "leads";
@@ -126,6 +126,9 @@ export async function GET(request: NextRequest) {
     });
   } catch (err) {
     if (err instanceof UnauthorizedError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    if (err instanceof ForbiddenError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     const msg = err instanceof Error ? err.message : String(err);
