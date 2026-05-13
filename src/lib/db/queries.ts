@@ -1143,25 +1143,27 @@ function normalizeZipProgress(row: ZipProgress): ZipProgress {
 }
 
 function normalizeCountyCoverageProgress(row: CountyCoverageProgress): CountyCoverageProgress {
+  const raw = row as CountyCoverageProgress & { zipcount?: number };
   return {
     ...row,
     total: Number(row.total) || 0,
     done: Number(row.done) || 0,
     failed: Number(row.failed) || 0,
     remaining: Number(row.remaining) || 0,
-    zipCount: Number(row.zipCount) || 0,
+    zipCount: Number(row.zipCount ?? raw.zipcount) || 0,
   };
 }
 
 function normalizeStateCoverageProgress(row: StateCoverageProgress): StateCoverageProgress {
+  const raw = row as StateCoverageProgress & { countycount?: number; zipcount?: number };
   return {
     ...row,
     total: Number(row.total) || 0,
     done: Number(row.done) || 0,
     failed: Number(row.failed) || 0,
     remaining: Number(row.remaining) || 0,
-    countyCount: Number(row.countyCount) || 0,
-    zipCount: Number(row.zipCount) || 0,
+    countyCount: Number(row.countyCount ?? raw.countycount) || 0,
+    zipCount: Number(row.zipCount ?? raw.zipcount) || 0,
   };
 }
 
