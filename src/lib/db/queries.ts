@@ -1041,11 +1041,12 @@ export async function getCrawlProgress(runId: string): Promise<{ total: number; 
 
   const counts = { total: 0, done: 0, failed: 0, running: 0, pending: 0 };
   for (const row of rows) {
-    counts.total += row.count;
-    if (row.status === "done") counts.done = row.count;
-    else if (row.status === "failed") counts.failed = row.count;
-    else if (row.status === "running") counts.running = row.count;
-    else if (row.status === "pending" || row.status === "retry_wait") counts.pending += row.count;
+    const count = Number(row.count) || 0;
+    counts.total += count;
+    if (row.status === "done") counts.done = count;
+    else if (row.status === "failed") counts.failed = count;
+    else if (row.status === "running") counts.running = count;
+    else if (row.status === "pending" || row.status === "retry_wait") counts.pending += count;
   }
   return counts;
 }
@@ -1059,10 +1060,10 @@ export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
   if (runId) {
     query = `
       SELECT z.state, z.county, z.zip, z.city,
-        COUNT(cu.id) as total,
-        SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END) as done,
-        SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END) as failed,
-        SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END) as remaining
+        CAST(COUNT(cu.id) AS INTEGER) as total,
+        CAST(COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) AS INTEGER) as done,
+        CAST(COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) AS INTEGER) as failed,
+        CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining
       FROM zip_codes z
       LEFT JOIN crawl_units cu ON z.zip = cu.zip AND cu.crawl_run_id = ?
       WHERE z.is_active = 1
@@ -1073,10 +1074,10 @@ export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
   } else {
     query = `
       SELECT z.state, z.county, z.zip, z.city,
-        COUNT(cu.id) as total,
-        SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END) as done,
-        SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END) as failed,
-        SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END) as remaining
+        CAST(COUNT(cu.id) AS INTEGER) as total,
+        CAST(COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) AS INTEGER) as done,
+        CAST(COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) AS INTEGER) as failed,
+        CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining
       FROM zip_codes z
       LEFT JOIN crawl_units cu ON z.zip = cu.zip
       WHERE z.is_active = 1
@@ -1085,20 +1086,21 @@ export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
       ORDER BY z.state, z.county, z.zip`;
   }
 
-  return await db.prepare(query).all(...params) as ZipProgress[];
+  const rows = await db.prepare(query).all(...params) as ZipProgress[];
+  return rows.map(normalizeZipProgress);
 }
 
 export async function getCoverageByCounty(runId: string): Promise<CountyCoverageProgress[]>{
   const db = await getDb();
-  return await db.prepare(
+  const rows = await db.prepare(
     `SELECT
       z.state,
       z.county,
-      COUNT(cu.id) as total,
-      SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END) as done,
-      SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END) as failed,
-      SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END) as remaining,
-      COUNT(DISTINCT z.zip) as zipCount
+      CAST(COUNT(cu.id) AS INTEGER) as total,
+      CAST(COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) AS INTEGER) as done,
+      CAST(COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) AS INTEGER) as failed,
+      CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining,
+      CAST(COUNT(DISTINCT z.zip) AS INTEGER) as zipCount
      FROM zip_codes z
      LEFT JOIN crawl_units cu ON z.zip = cu.zip AND cu.crawl_run_id = ?
      WHERE z.is_active = 1
@@ -1106,19 +1108,20 @@ export async function getCoverageByCounty(runId: string): Promise<CountyCoverage
      HAVING COUNT(cu.id) > 0
      ORDER BY z.state, z.county`
   ).all(runId) as CountyCoverageProgress[];
+  return rows.map(normalizeCountyCoverageProgress);
 }
 
 export async function getCoverageByState(runId: string): Promise<StateCoverageProgress[]>{
   const db = await getDb();
-  return await db.prepare(
+  const rows = await db.prepare(
     `SELECT
       z.state,
-      COUNT(cu.id) as total,
-      SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END) as done,
-      SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END) as failed,
-      SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END) as remaining,
-      COUNT(DISTINCT z.county) as countyCount,
-      COUNT(DISTINCT z.zip) as zipCount
+      CAST(COUNT(cu.id) AS INTEGER) as total,
+      CAST(COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) AS INTEGER) as done,
+      CAST(COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) AS INTEGER) as failed,
+      CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining,
+      CAST(COUNT(DISTINCT z.county) AS INTEGER) as countyCount,
+      CAST(COUNT(DISTINCT z.zip) AS INTEGER) as zipCount
      FROM zip_codes z
      LEFT JOIN crawl_units cu ON z.zip = cu.zip AND cu.crawl_run_id = ?
      WHERE z.is_active = 1
@@ -1126,6 +1129,40 @@ export async function getCoverageByState(runId: string): Promise<StateCoveragePr
      HAVING COUNT(cu.id) > 0
      ORDER BY z.state`
   ).all(runId) as StateCoverageProgress[];
+  return rows.map(normalizeStateCoverageProgress);
+}
+
+function normalizeZipProgress(row: ZipProgress): ZipProgress {
+  return {
+    ...row,
+    total: Number(row.total) || 0,
+    done: Number(row.done) || 0,
+    failed: Number(row.failed) || 0,
+    remaining: Number(row.remaining) || 0,
+  };
+}
+
+function normalizeCountyCoverageProgress(row: CountyCoverageProgress): CountyCoverageProgress {
+  return {
+    ...row,
+    total: Number(row.total) || 0,
+    done: Number(row.done) || 0,
+    failed: Number(row.failed) || 0,
+    remaining: Number(row.remaining) || 0,
+    zipCount: Number(row.zipCount) || 0,
+  };
+}
+
+function normalizeStateCoverageProgress(row: StateCoverageProgress): StateCoverageProgress {
+  return {
+    ...row,
+    total: Number(row.total) || 0,
+    done: Number(row.done) || 0,
+    failed: Number(row.failed) || 0,
+    remaining: Number(row.remaining) || 0,
+    countyCount: Number(row.countyCount) || 0,
+    zipCount: Number(row.zipCount) || 0,
+  };
 }
 
 // ─── Leads ───
