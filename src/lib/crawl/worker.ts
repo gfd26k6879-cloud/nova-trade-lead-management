@@ -48,6 +48,7 @@ export interface ProcessResult {
     failed: number;
     pending: number;
     running: number;
+    canceled: number;
   };
 }
 

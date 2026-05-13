@@ -9,6 +9,7 @@ import {
   getCrawlProgress,
   getCrawlUnitPreview,
   getLatestCrawlRun,
+  getRunGeographyProgress,
 } from "@/lib/db/queries";
 import { CoverageClient } from "./coverage-client";
 
@@ -23,6 +24,7 @@ export default async function CoveragePage() {
   const stateCoverage = run ? await getCoverageByState(run.id) : [];
   const progress = run ? await getCrawlProgress(run.id) : null;
   const unitPreview = run ? await getCrawlUnitPreview(run.id, 80) : [];
+  const geography = run ? await getRunGeographyProgress(run.id) : null;
 
   return (
     <CoverageClient
@@ -41,6 +43,7 @@ export default async function CoveragePage() {
         last_error: run.last_error,
       } : null}
       progress={progress}
+      geography={geography}
       unitPreview={unitPreview}
     />
   );

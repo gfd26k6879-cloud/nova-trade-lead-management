@@ -9,6 +9,7 @@ import {
   getFailedUnitErrorsAction,
   pauseCrawlRunAction,
   resumeCrawlRunAction,
+  stopCrawlRunAction,
   retryFailedUnitsAction,
 } from "@/lib/crawl/actions";
 import { refreshStaleUnitsAction } from "@/lib/leads/actions";
@@ -21,6 +22,7 @@ interface ZipProgress {
   total: number;
   done: number;
   failed: number;
+  canceled: number;
   remaining: number;
 }
 
@@ -30,6 +32,7 @@ interface CountyCoverage {
   total: number;
   done: number;
   failed: number;
+  canceled: number;
   remaining: number;
   zipCount: number;
 }
@@ -39,6 +42,7 @@ interface StateCoverage {
   total: number;
   done: number;
   failed: number;
+  canceled: number;
   remaining: number;
   countyCount: number;
   zipCount: number;
@@ -68,6 +72,19 @@ interface CrawlProgress {
   failed: number;
   pending: number;
   running: number;
+  canceled: number;
+}
+
+interface GeographyProgress {
+  activeZipCount: number;
+  zipCodesSelected: number;
+  zipCodesCompleted: number;
+  zipCodesStarted: number;
+  zipCodesNotStarted: number;
+  zipCodesCanceled: number;
+  zipCodesNotSelected: number;
+  countiesSelected: number;
+  countiesCompleted: number;
 }
 
 interface CrawlUnitPreview {
@@ -92,6 +109,7 @@ interface Props {
   stateCoverage: StateCoverage[];
   run: CrawlRunSummary | null;
   progress: CrawlProgress | null;
+  geography: GeographyProgress | null;
   unitPreview: CrawlUnitPreview[];
 }
 
@@ -101,6 +119,7 @@ interface RollupRow {
   total: number;
   done: number;
   failed: number;
+  canceled: number;
   remaining: number;
   zipCount: number;
   countyCount?: number;
@@ -115,6 +134,7 @@ function aggregateStateRollups(rows: ZipProgress[]): RollupRow[] {
       total: 0,
       done: 0,
       failed: 0,
+      canceled: 0,
       remaining: 0,
       zipCount: 0,
       countyCount: 0,
@@ -122,6 +142,7 @@ function aggregateStateRollups(rows: ZipProgress[]): RollupRow[] {
     current.total += row.total;
     current.done += row.done;
     current.failed += row.failed;
+    current.canceled += row.canceled;
     current.remaining += row.remaining;
     current.zipCount += 1;
     byState.set(row.state, current);
@@ -145,12 +166,14 @@ function aggregateCountyRollups(rows: ZipProgress[]): RollupRow[] {
       total: 0,
       done: 0,
       failed: 0,
+      canceled: 0,
       remaining: 0,
       zipCount: 0,
     };
     current.total += row.total;
     current.done += row.done;
     current.failed += row.failed;
+    current.canceled += row.canceled;
     current.remaining += row.remaining;
     current.zipCount += 1;
     byCounty.set(key, current);
@@ -162,7 +185,7 @@ function aggregateCountyRollups(rows: ZipProgress[]): RollupRow[] {
   });
 }
 
-export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, progress, unitPreview }: Props) {
+export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, progress, geography, unitPreview }: Props) {
   const router = useRouter();
   const [filter, setFilter] = useState("");
   const [incompleteOnly, setIncompleteOnly] = useState(false);
@@ -173,7 +196,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
   const [errors, setErrors] = useState<FailedUnit[]>([]);
   const [showErrors, setShowErrors] = useState(false);
   const [refreshDays, setRefreshDays] = useState(7);
-  const [busy, setBusy] = useState<"pause" | "resume" | "retry" | "refresh" | null>(null);
+  const [busy, setBusy] = useState<"pause" | "resume" | "stop" | "retry" | "refresh" | null>(null);
 
   const filtered = useMemo(() => {
     const filterValue = filter.trim().toLowerCase();
@@ -194,11 +217,14 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
   const totalDone = coverage.reduce((s, z) => s + z.done, 0);
   const totalAll = coverage.reduce((s, z) => s + z.total, 0);
   const totalFailed = coverage.reduce((s, z) => s + z.failed, 0);
+  const totalCanceled = coverage.reduce((s, z) => s + z.canceled, 0);
   const pct = totalAll > 0 ? Math.round((totalDone / totalAll) * 100) : 0;
   const runPct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : pct;
   const runStatus = run?.status ?? null;
   const isRunning = runStatus === "running";
+  const isQueued = runStatus === "queued";
   const isPaused = runStatus === "paused";
+  const canStop = isRunning || isQueued || isPaused;
 
   const hasCustomFilter = filter.trim().length > 0 || incompleteOnly || failedOnly || selectedCounty !== "all";
 
@@ -210,6 +236,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
           total: row.total,
           done: row.done,
           failed: row.failed,
+          canceled: row.canceled,
           remaining: row.remaining,
           zipCount: row.zipCount,
           countyCount: row.countyCount,
@@ -228,6 +255,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
           total: row.total,
           done: row.done,
           failed: row.failed,
+          canceled: row.canceled,
           remaining: row.remaining,
           zipCount: row.zipCount,
         }))
@@ -288,6 +316,20 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
       toast.error(result.error ?? "Unable to resume run");
     } else {
       toast.success("Discovery resumed");
+    }
+    router.refresh();
+    setBusy(null);
+  };
+
+  const handleStop = async () => {
+    const confirmed = window.confirm("Stop this discovery run? Unprocessed ZIP/category units will be marked canceled. Completed leads stay saved.");
+    if (!confirmed) return;
+    setBusy("stop");
+    const result = await stopCrawlRunAction();
+    if ("error" in result) {
+      toast.error(result.error ?? "Unable to stop discovery");
+    } else {
+      toast.success(`Discovery stopped. ${result.canceledUnits} queued units canceled.`);
     }
     router.refresh();
     setBusy(null);
@@ -368,9 +410,19 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
                   {busy === "pause" ? "Pausing..." : "Pause Discovery"}
                 </button>
               )}
+              {isQueued && (
+                <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handlePause}>
+                  {busy === "pause" ? "Pausing..." : "Pause Discovery"}
+                </button>
+              )}
               {isPaused && (
                 <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={handleResume}>
                   {busy === "resume" ? "Resuming..." : "Resume Discovery"}
+                </button>
+              )}
+              {canStop && (
+                <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handleStop}>
+                  {busy === "stop" ? "Stopping..." : "Stop Discovery"}
                 </button>
               )}
               {(progress?.failed ?? totalFailed) > 0 && (
@@ -392,6 +444,31 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
         ) : (
           <div className="mt-5 rounded-xl p-5 text-sm" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>
             No discovery run exists yet. Open Discover, choose counties/ZIP codes and categories, then start a run.
+          </div>
+        )}
+      </section>
+
+      <section className="glass rounded-2xl p-6">
+        <div className="mb-4">
+          <h3 className="section-label">Run Tally</h3>
+          <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+            This separates what already ran from what has not run yet.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <Metric label="Done Units" value={String(progress?.done ?? totalDone)} />
+          <Metric label="Running Units" value={String(progress?.running ?? 0)} />
+          <Metric label="Pending Units" value={String(progress?.pending ?? 0)} />
+          <Metric label="Failed Units" value={String(progress?.failed ?? totalFailed)} />
+          <Metric label="Canceled Units" value={String(progress?.canceled ?? totalCanceled)} tone="canceled" />
+        </div>
+        {geography && (
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <Metric label="Selected ZIPs" value={String(geography.zipCodesSelected)} />
+            <Metric label="Started ZIPs" value={String(geography.zipCodesStarted)} />
+            <Metric label="Not Started ZIPs" value={String(geography.zipCodesNotStarted)} />
+            <Metric label="Completed ZIPs" value={String(geography.zipCodesCompleted)} />
+            <Metric label="Not Selected ZIPs" value={`${geography.zipCodesNotSelected} / ${geography.activeZipCount}`} />
           </div>
         )}
       </section>
@@ -605,6 +682,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
                                       <th>Total</th>
                                       <th>Done</th>
                                       <th>Failed</th>
+                                      <th>Canceled</th>
                                       <th>Remaining</th>
                                       <th>Completion</th>
                                     </tr>
@@ -619,6 +697,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
                                           <td>{row.total}</td>
                                           <td>{row.done}</td>
                                           <td style={{ color: row.failed > 0 ? "#dc2626" : undefined }}>{row.failed}</td>
+                                          <td style={{ color: row.canceled > 0 ? "#b45309" : undefined }}>{row.canceled}</td>
                                           <td>{row.remaining}</td>
                                           <td>
                                             <div className="flex items-center gap-2">
@@ -657,7 +736,7 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: s
   return (
     <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
       <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
-      <p className="mt-0.5 text-lg font-semibold capitalize" style={{ color: tone === "paused" ? "#b45309" : tone === "running" ? "#15803d" : "var(--text-primary)" }}>
+      <p className="mt-0.5 text-lg font-semibold capitalize" style={{ color: tone === "paused" || tone === "canceled" ? "#b45309" : tone === "running" ? "#15803d" : "var(--text-primary)" }}>
         {value}
       </p>
     </div>
@@ -687,6 +766,7 @@ function formatRunStatus(status: string | null): string {
   if (status === "paused") return "Paused";
   if (status === "done") return "Done";
   if (status === "error") return "Error";
+  if (status === "canceled") return "Stopped";
   return status.replace(/_/g, " ");
 }
 

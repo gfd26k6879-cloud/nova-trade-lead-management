@@ -269,6 +269,15 @@ export interface CrawlUnit {
   lng: number | null;
 }
 
+export interface CrawlProgress {
+  total: number;
+  done: number;
+  failed: number;
+  running: number;
+  pending: number;
+  canceled: number;
+}
+
 export interface CrawlUnitPreview {
   id: string;
   status: string;
@@ -535,6 +544,7 @@ export interface ZipProgress {
   total: number;
   done: number;
   failed: number;
+  canceled: number;
   remaining: number;
 }
 
@@ -567,6 +577,7 @@ export interface CountyCoverageProgress {
   total: number;
   done: number;
   failed: number;
+  canceled: number;
   remaining: number;
   zipCount: number;
 }
@@ -576,14 +587,20 @@ export interface StateCoverageProgress {
   total: number;
   done: number;
   failed: number;
+  canceled: number;
   remaining: number;
   countyCount: number;
   zipCount: number;
 }
 
 export interface GeographyProgress {
+  activeZipCount: number;
   zipCodesSelected: number;
   zipCodesCompleted: number;
+  zipCodesStarted: number;
+  zipCodesNotStarted: number;
+  zipCodesCanceled: number;
+  zipCodesNotSelected: number;
   countiesSelected: number;
   countiesCompleted: number;
 }
@@ -1093,9 +1110,32 @@ export async function getLatestCrawlRun(): Promise<CrawlRun | null>{
 export async function updateCrawlRunStatus(id: string, status: string): Promise<void>{
   const db = await getDb();
   const updates: Record<string, unknown> = { status };
-  if (status === "done" || status === "error") updates.ended_at = nowISO();
+  if (status === "done" || status === "error" || status === "canceled") updates.ended_at = nowISO();
   await db.prepare("UPDATE crawl_runs SET status = ?, ended_at = COALESCE(?, ended_at) WHERE id = ?")
     .run(status, updates.ended_at ?? null, id);
+}
+
+export async function cancelCrawlRun(runId: string, reason = "Stopped by user"): Promise<{ canceledUnits: number }> {
+  const db = await getDb();
+  const now = nowISO();
+  const result = await db.prepare(
+    `UPDATE crawl_units
+     SET status = 'canceled',
+         finished_at = ?,
+         last_error = COALESCE(last_error, ?)
+     WHERE crawl_run_id = ?
+       AND status IN ('pending','running','retry_wait')`
+  ).run(now, reason, runId);
+
+  await db.prepare(
+    `UPDATE crawl_runs
+     SET status = 'canceled',
+         ended_at = ?,
+         last_error = ?
+     WHERE id = ?`
+  ).run(now, reason, runId);
+
+  return { canceledUnits: result.changes };
 }
 
 export async function incrementCrawlRunCounters(id: string, discovered: number, errors: number, apiCalls: number): Promise<void>{
@@ -1207,14 +1247,14 @@ export async function markUnitRunning(unitId: string): Promise<void>{
 export async function markUnitDone(unitId: string, discoveredCount: number): Promise<void>{
   const db = await getDb();
   await db.prepare(
-    "UPDATE crawl_units SET status = 'done', finished_at = ?, discovered_count = ? WHERE id = ?"
+    "UPDATE crawl_units SET status = 'done', finished_at = ?, discovered_count = ? WHERE id = ? AND status <> 'canceled'"
   ).run(nowISO(), discoveredCount, unitId);
 }
 
 export async function markUnitFailed(unitId: string, error: string): Promise<void>{
   const db = await getDb();
   await db.prepare(
-    "UPDATE crawl_units SET status = 'failed', finished_at = ?, last_error = ? WHERE id = ?"
+    "UPDATE crawl_units SET status = 'failed', finished_at = ?, last_error = ? WHERE id = ? AND status <> 'canceled'"
   ).run(nowISO(), error, unitId);
 }
 
@@ -1231,19 +1271,20 @@ export async function retryFailedUnits(runId: string): Promise<number>{
   return result.changes;
 }
 
-export async function getCrawlProgress(runId: string): Promise<{ total: number; done: number; failed: number; running: number; pending: number }> {
+export async function getCrawlProgress(runId: string): Promise<CrawlProgress> {
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT status, COUNT(*) as count FROM crawl_units WHERE crawl_run_id = ? GROUP BY status`
   ).all(runId) as { status: string; count: number }[];
 
-  const counts = { total: 0, done: 0, failed: 0, running: 0, pending: 0 };
+  const counts = { total: 0, done: 0, failed: 0, running: 0, pending: 0, canceled: 0 };
   for (const row of rows) {
     const count = Number(row.count) || 0;
     counts.total += count;
     if (row.status === "done") counts.done = count;
     else if (row.status === "failed") counts.failed = count;
     else if (row.status === "running") counts.running = count;
+    else if (row.status === "canceled") counts.canceled = count;
     else if (row.status === "pending" || row.status === "retry_wait") counts.pending += count;
   }
   return counts;
@@ -1276,8 +1317,9 @@ export async function getCrawlUnitPreview(runId: string, limit = 80): Promise<Cr
          WHEN 'pending' THEN 1
          WHEN 'retry_wait' THEN 2
          WHEN 'failed' THEN 3
-         WHEN 'done' THEN 4
-         ELSE 5
+         WHEN 'canceled' THEN 4
+         WHEN 'done' THEN 5
+         ELSE 6
        END,
        COALESCE(cu.started_at, cu.finished_at, cu.created_at) DESC,
        cu.zip ASC,
@@ -1304,6 +1346,7 @@ export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
         CAST(COUNT(cu.id) AS INTEGER) as total,
         CAST(COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) AS INTEGER) as done,
         CAST(COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) AS INTEGER) as failed,
+        CAST(COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) AS INTEGER) as canceled,
         CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining
       FROM zip_codes z
       LEFT JOIN crawl_units cu ON z.zip = cu.zip AND cu.crawl_run_id = ?
@@ -1318,6 +1361,7 @@ export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
         CAST(COUNT(cu.id) AS INTEGER) as total,
         CAST(COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) AS INTEGER) as done,
         CAST(COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) AS INTEGER) as failed,
+        CAST(COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) AS INTEGER) as canceled,
         CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining
       FROM zip_codes z
       LEFT JOIN crawl_units cu ON z.zip = cu.zip
@@ -1340,6 +1384,7 @@ export async function getCoverageByCounty(runId: string): Promise<CountyCoverage
       CAST(COUNT(cu.id) AS INTEGER) as total,
       CAST(COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) AS INTEGER) as done,
       CAST(COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) AS INTEGER) as failed,
+      CAST(COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) AS INTEGER) as canceled,
       CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining,
       CAST(COUNT(DISTINCT z.zip) AS INTEGER) as zipCount
      FROM zip_codes z
@@ -1360,6 +1405,7 @@ export async function getCoverageByState(runId: string): Promise<StateCoveragePr
       CAST(COUNT(cu.id) AS INTEGER) as total,
       CAST(COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) AS INTEGER) as done,
       CAST(COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) AS INTEGER) as failed,
+      CAST(COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) AS INTEGER) as canceled,
       CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining,
       CAST(COUNT(DISTINCT z.county) AS INTEGER) as countyCount,
       CAST(COUNT(DISTINCT z.zip) AS INTEGER) as zipCount
@@ -1379,6 +1425,7 @@ function normalizeZipProgress(row: ZipProgress): ZipProgress {
     total: Number(row.total) || 0,
     done: Number(row.done) || 0,
     failed: Number(row.failed) || 0,
+    canceled: Number(row.canceled) || 0,
     remaining: Number(row.remaining) || 0,
   };
 }
@@ -1390,6 +1437,7 @@ function normalizeCountyCoverageProgress(row: CountyCoverageProgress): CountyCov
     total: Number(row.total) || 0,
     done: Number(row.done) || 0,
     failed: Number(row.failed) || 0,
+    canceled: Number(row.canceled) || 0,
     remaining: Number(row.remaining) || 0,
     zipCount: Number(row.zipCount ?? raw.zipcount) || 0,
   };
@@ -1402,6 +1450,7 @@ function normalizeStateCoverageProgress(row: StateCoverageProgress): StateCovera
     total: Number(row.total) || 0,
     done: Number(row.done) || 0,
     failed: Number(row.failed) || 0,
+    canceled: Number(row.canceled) || 0,
     remaining: Number(row.remaining) || 0,
     countyCount: Number(row.countyCount ?? raw.countycount) || 0,
     zipCount: Number(row.zipCount ?? raw.zipcount) || 0,
@@ -2844,13 +2893,22 @@ function parseLeadNoteRow(row: Record<string, unknown>): LeadNote {
 export async function getRunGeographyProgress(runId: string): Promise<GeographyProgress>{
   const db = await getDb();
   const row = await db.prepare(
-    `WITH zip_progress AS (
+    `WITH active_zips AS (
+      SELECT COUNT(*) as active_zip_count
+      FROM zip_codes
+      WHERE is_active = 1
+    ),
+    zip_progress AS (
       SELECT
         z.state,
         z.county,
         cu.zip,
         COUNT(*) as total_units,
-        SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END) as done_units
+        SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END) as done_units,
+        SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END) as failed_units,
+        SUM(CASE WHEN cu.status = 'running' THEN 1 ELSE 0 END) as running_units,
+        SUM(CASE WHEN cu.status IN ('pending','retry_wait') THEN 1 ELSE 0 END) as pending_units,
+        SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END) as canceled_units
       FROM crawl_units cu
       INNER JOIN zip_codes z ON cu.zip = z.zip
       WHERE cu.crawl_run_id = ?
@@ -2866,15 +2924,43 @@ export async function getRunGeographyProgress(runId: string): Promise<GeographyP
       GROUP BY state, county
     )
     SELECT
-      COALESCE((SELECT COUNT(*) FROM zip_progress), 0) as zipCodesSelected,
-      COALESCE((SELECT SUM(CASE WHEN done_units = total_units AND total_units > 0 THEN 1 ELSE 0 END) FROM zip_progress), 0) as zipCodesCompleted,
-      COALESCE((SELECT COUNT(*) FROM county_progress), 0) as countiesSelected,
-      COALESCE((SELECT SUM(CASE WHEN zip_completed = zip_total AND zip_total > 0 THEN 1 ELSE 0 END) FROM county_progress), 0) as countiesCompleted`
+      COALESCE((SELECT active_zip_count FROM active_zips), 0) as "activeZipCount",
+      COALESCE((SELECT COUNT(*) FROM zip_progress), 0) as "zipCodesSelected",
+      COALESCE((SELECT SUM(CASE WHEN done_units = total_units AND total_units > 0 THEN 1 ELSE 0 END) FROM zip_progress), 0) as "zipCodesCompleted",
+      COALESCE((SELECT SUM(CASE WHEN done_units > 0 OR failed_units > 0 OR running_units > 0 OR canceled_units > 0 THEN 1 ELSE 0 END) FROM zip_progress), 0) as "zipCodesStarted",
+      COALESCE((SELECT SUM(CASE WHEN done_units = 0 AND failed_units = 0 AND running_units = 0 AND canceled_units = 0 THEN 1 ELSE 0 END) FROM zip_progress), 0) as "zipCodesNotStarted",
+      COALESCE((SELECT SUM(CASE WHEN canceled_units > 0 AND done_units = 0 AND failed_units = 0 THEN 1 ELSE 0 END) FROM zip_progress), 0) as "zipCodesCanceled",
+      CASE
+        WHEN COALESCE((SELECT active_zip_count FROM active_zips), 0) - COALESCE((SELECT COUNT(*) FROM zip_progress), 0) > 0
+        THEN COALESCE((SELECT active_zip_count FROM active_zips), 0) - COALESCE((SELECT COUNT(*) FROM zip_progress), 0)
+        ELSE 0
+      END as "zipCodesNotSelected",
+      COALESCE((SELECT COUNT(*) FROM county_progress), 0) as "countiesSelected",
+      COALESCE((SELECT SUM(CASE WHEN zip_completed = zip_total AND zip_total > 0 THEN 1 ELSE 0 END) FROM county_progress), 0) as "countiesCompleted"`
   ).get(runId) as GeographyProgress | undefined;
 
-  return row ?? {
+  if (row) {
+    return {
+      activeZipCount: Number(row.activeZipCount) || 0,
+      zipCodesSelected: Number(row.zipCodesSelected) || 0,
+      zipCodesCompleted: Number(row.zipCodesCompleted) || 0,
+      zipCodesStarted: Number(row.zipCodesStarted) || 0,
+      zipCodesNotStarted: Number(row.zipCodesNotStarted) || 0,
+      zipCodesCanceled: Number(row.zipCodesCanceled) || 0,
+      zipCodesNotSelected: Number(row.zipCodesNotSelected) || 0,
+      countiesSelected: Number(row.countiesSelected) || 0,
+      countiesCompleted: Number(row.countiesCompleted) || 0,
+    };
+  }
+
+  return {
+    activeZipCount: 0,
     zipCodesSelected: 0,
     zipCodesCompleted: 0,
+    zipCodesStarted: 0,
+    zipCodesNotStarted: 0,
+    zipCodesCanceled: 0,
+    zipCodesNotSelected: 0,
     countiesSelected: 0,
     countiesCompleted: 0,
   };
@@ -2886,9 +2972,14 @@ export async function getDashboardStats(): Promise<{
   leadsTotal: number;
   leadsToday: number;
   failedUnits: number;
-  progress: { total: number; done: number; failed: number; pending: number; running: number } | null;
+  progress: CrawlProgress | null;
   zipCodesSelected: number;
   zipCodesCompleted: number;
+  zipCodesStarted: number;
+  zipCodesNotStarted: number;
+  zipCodesCanceled: number;
+  zipCodesNotSelected: number;
+  activeZipCount: number;
   countiesSelected: number;
   countiesCompleted: number;
   aiQueueStats: AiQueueStats;
@@ -2903,8 +2994,13 @@ export async function getDashboardStats(): Promise<{
   let failedUnits = 0;
   let progress = null;
   let geographyProgress: GeographyProgress = {
+    activeZipCount: 0,
     zipCodesSelected: 0,
     zipCodesCompleted: 0,
+    zipCodesStarted: 0,
+    zipCodesNotStarted: 0,
+    zipCodesCanceled: 0,
+    zipCodesNotSelected: 0,
     countiesSelected: 0,
     countiesCompleted: 0,
   };
@@ -2923,8 +3019,13 @@ export async function getDashboardStats(): Promise<{
     leadsToday,
     failedUnits,
     progress,
+    activeZipCount: geographyProgress.activeZipCount,
     zipCodesSelected: geographyProgress.zipCodesSelected,
     zipCodesCompleted: geographyProgress.zipCodesCompleted,
+    zipCodesStarted: geographyProgress.zipCodesStarted,
+    zipCodesNotStarted: geographyProgress.zipCodesNotStarted,
+    zipCodesCanceled: geographyProgress.zipCodesCanceled,
+    zipCodesNotSelected: geographyProgress.zipCodesNotSelected,
     countiesSelected: geographyProgress.countiesSelected,
     countiesCompleted: geographyProgress.countiesCompleted,
     aiQueueStats: await getAiQueueStats(),

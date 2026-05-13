@@ -13,7 +13,9 @@ vi.mock("@/lib/db/index", () => {
 });
 
 import {
+  cancelCrawlRun,
   createCrawlUnitsForSelection,
+  getCrawlProgress,
   getCoverageByCounty,
   getCoverageByState,
   getRunGeographyProgress,
@@ -83,8 +85,39 @@ describe("state county zip planner queries", () => {
     const geography = await getRunGeographyProgress(runId);
     expect(geography.zipCodesSelected).toBe(2);
     expect(geography.zipCodesCompleted).toBe(1);
+    expect(geography.zipCodesStarted).toBe(2);
+    expect(geography.zipCodesNotStarted).toBe(0);
+    expect(geography.zipCodesNotSelected).toBe(1);
     expect(geography.countiesSelected).toBe(2);
     expect(geography.countiesCompleted).toBe(1);
+  });
+
+  it("stops a run and keeps a tally of canceled units", async () => {
+    const runId = seedTestRun(testDb);
+    await createCrawlUnitsForSelection(runId, ["dentist", "plumber"], ["80202", "80123"]);
+    testDb.prepare(
+      "UPDATE crawl_units SET status = 'done' WHERE crawl_run_id = ? AND zip = '80202' AND category = 'dentist'"
+    ).run(runId);
+    testDb.prepare(
+      "UPDATE crawl_units SET status = 'running' WHERE crawl_run_id = ? AND zip = '80202' AND category = 'plumber'"
+    ).run(runId);
+
+    const result = await cancelCrawlRun(runId);
+    expect(result.canceledUnits).toBe(3);
+
+    const progress = await getCrawlProgress(runId);
+    expect(progress.done).toBe(1);
+    expect(progress.canceled).toBe(3);
+    expect(progress.pending).toBe(0);
+    expect(progress.running).toBe(0);
+
+    const run = testDb.prepare("SELECT status FROM crawl_runs WHERE id = ?").get(runId) as { status: string };
+    expect(run.status).toBe("canceled");
+
+    const geography = await getRunGeographyProgress(runId);
+    expect(geography.zipCodesSelected).toBe(2);
+    expect(geography.zipCodesStarted).toBe(2);
+    expect(geography.zipCodesCanceled).toBe(1);
   });
 
   it("returns zip coverage status against selected categories", async () => {

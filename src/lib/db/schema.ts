@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS zip_codes (
 CREATE TABLE IF NOT EXISTS crawl_runs (
   id TEXT PRIMARY KEY,
   mode TEXT NOT NULL DEFAULT 'coverage' CHECK(mode IN ('coverage','manual','refresh')),
-  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','paused','done','error')),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','paused','done','error','canceled')),
   categories TEXT NOT NULL DEFAULT '[]',
   started_at TEXT,
   ended_at TEXT,
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS crawl_units (
   zip TEXT NOT NULL,
   category TEXT NOT NULL,
   keyword TEXT,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','retry_wait','done','failed')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','retry_wait','done','failed','canceled')),
   next_page_token TEXT,
   attempt_count INTEGER NOT NULL DEFAULT 0,
   discovered_count INTEGER NOT NULL DEFAULT 0,

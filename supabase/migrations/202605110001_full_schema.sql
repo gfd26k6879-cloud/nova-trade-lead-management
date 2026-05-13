@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS zip_codes (
 CREATE TABLE IF NOT EXISTS crawl_runs (
   id text PRIMARY KEY,
   mode text NOT NULL DEFAULT 'coverage' CHECK (mode IN ('coverage','manual','refresh')),
-  status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','paused','done','error')),
+  status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','paused','done','error','canceled')),
   categories jsonb NOT NULL DEFAULT '[]'::jsonb,
   started_at timestamptz,
   ended_at timestamptz,
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS crawl_units (
   zip text NOT NULL,
   category text NOT NULL,
   keyword text,
-  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','retry_wait','done','failed')),
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','retry_wait','done','failed','canceled')),
   next_page_token text,
   attempt_count integer NOT NULL DEFAULT 0,
   discovered_count integer NOT NULL DEFAULT 0,

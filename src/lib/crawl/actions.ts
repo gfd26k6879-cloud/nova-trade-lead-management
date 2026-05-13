@@ -7,6 +7,7 @@ import {
   createCrawlUnits,
   createCrawlUnitsForSelection,
   updateCrawlRunStatus,
+  cancelCrawlRun,
   retryFailedUnits as retryFailed,
   getDashboardStats,
   getActiveCrawlRun,
@@ -176,6 +177,18 @@ export async function pauseCrawlRunAction() {
   return { success: true };
 }
 
+export async function stopCrawlRunAction() {
+  await requirePermission("crawl:manage");
+  await ensureDbReady();
+  const run = await getActiveCrawlRun();
+  if (!run) return { error: "No active discovery run to stop." };
+  const result = await cancelCrawlRun(run.id);
+  await createAuditLog("crawl_run_canceled", "crawl_run", run.id, {
+    canceledUnits: result.canceledUnits,
+  });
+  return { success: true, runId: run.id, canceledUnits: result.canceledUnits };
+}
+
 export async function resumeCrawlRunAction() {
   await requirePermission("crawl:manage");
   await ensureDbReady();
@@ -191,6 +204,7 @@ export async function retryFailedUnitsAction() {
   await ensureDbReady();
   const run = (await getActiveCrawlRun()) ?? (await getLatestCrawlRun());
   if (!run) return { error: "No run found." };
+  if (run.status === "canceled") return { error: "This run was stopped. Start a new discovery instead of retrying it." };
   const count = await retryFailed(run.id);
   if (run.status === "done" || run.status === "error") {
     await updateCrawlRunStatus(run.id, "running");

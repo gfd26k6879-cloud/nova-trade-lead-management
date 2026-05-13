@@ -10,6 +10,7 @@ import {
   startCrawlRunAction,
   pauseCrawlRunAction,
   resumeCrawlRunAction,
+  stopCrawlRunAction,
   retryFailedUnitsAction,
   getDashboardStatsAction,
 } from "@/lib/crawl/actions";
@@ -45,7 +46,7 @@ interface DashboardStats {
   leadsTotal: number;
   leadsToday: number;
   failedUnits: number;
-  progress: { total: number; done: number; failed: number; pending: number; running: number } | null;
+  progress: { total: number; done: number; failed: number; pending: number; running: number; canceled: number } | null;
   todayFocus: number;
   needsFollowUp: number;
   conversionMetrics: ConversionMetrics;
@@ -65,6 +66,11 @@ interface DashboardStats {
   costPerQualifiedLead: number | null;
   zipCodesSelected: number;
   zipCodesCompleted: number;
+  zipCodesStarted: number;
+  zipCodesNotStarted: number;
+  zipCodesCanceled: number;
+  zipCodesNotSelected: number;
+  activeZipCount: number;
   countiesSelected: number;
   countiesCompleted: number;
   aiQueueStats: AiQueueStats;
@@ -165,6 +171,19 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
     setLoading(false);
   };
 
+  const handleStop = async () => {
+    setLoading(true);
+    const result = await stopCrawlRunAction();
+    if ("error" in result) {
+      toast.error(result.error ?? "Unable to stop discovery");
+    } else {
+      setIsProcessing(false);
+      toast.success(`Discovery stopped. ${result.canceledUnits} queued units canceled.`);
+    }
+    await refreshStats();
+    setLoading(false);
+  };
+
   const handleRetry = async () => {
     setLoading(true);
     const result = await retryFailedUnitsAction();
@@ -256,8 +275,10 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
   };
 
   const isRunning = stats.runStatus === "running";
+  const isQueued = stats.runStatus === "queued";
   const isPaused = stats.runStatus === "paused";
-  const isIdle = !isRunning && !isPaused;
+  const canStop = isRunning || isQueued || isPaused;
+  const isIdle = !isRunning && !isQueued && !isPaused;
   const progress = stats.progress;
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
 
@@ -266,7 +287,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
       title="Discover"
       description="Choose the market and business categories to search, start or pause discovery, and watch the backend queue from the run monitor."
       stats={[
-        { label: "Run Status", value: isRunning ? "Running" : isPaused ? "Paused" : "Idle" },
+        { label: "Run Status", value: isRunning ? "Running" : isQueued ? "Queued" : isPaused ? "Paused" : "Idle" },
         { label: "Total Leads", value: String(stats.leadsTotal) },
         { label: "Qualified", value: String(stats.qualifiedLeadCount) },
         { label: "Leads Today", value: String(stats.leadsToday) },
@@ -304,6 +325,15 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
                 Resume Discovery
               </button>
             )}
+            {canStop && (
+              <button type="button" className="btn-glass text-sm" onClick={() => setConfirmAction({
+                title: "Stop Discovery",
+                message: "This permanently stops the current run and marks unprocessed ZIP/category units as canceled. Completed leads stay saved.",
+                action: handleStop,
+              })} disabled={loading}>
+                Stop Discovery
+              </button>
+            )}
             <Link href="/coverage" className="btn-glass text-sm">
               Open Run Monitor
             </Link>
@@ -325,10 +355,10 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
             <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{pct}%</span>
           </div>
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            <span>{progress.done} done / {progress.failed} failed / {progress.pending + progress.running} remaining of {progress.total} total</span>
+            <span>{progress.done} done / {progress.failed} failed / {progress.canceled} canceled / {progress.pending + progress.running} remaining of {progress.total} total</span>
             {stats.zipCodesSelected > 0 && (
               <span>
-                Geography: {stats.zipCodesCompleted}/{stats.zipCodesSelected} zips, {stats.countiesCompleted}/{stats.countiesSelected} counties completed
+                Geography: {stats.zipCodesCompleted}/{stats.zipCodesSelected} selected zips completed, {stats.zipCodesNotStarted} selected zips not started, {stats.zipCodesNotSelected} active zips not selected
               </span>
             )}
             {stats.apiCallsUsed > 0 && (
@@ -413,9 +443,27 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
               Pause Discovery
             </button>
           )}
+          {isQueued && (
+            <button type="button" className="btn-glass" onClick={() => setConfirmAction({
+              title: "Pause Discovery",
+              message: "This will pause the queued discovery run before more work is processed.",
+              action: handlePause,
+            })} disabled={loading}>
+              Pause Discovery
+            </button>
+          )}
           {isPaused && (
             <button type="button" className="btn-primary" onClick={handleResume} disabled={loading}>
               Resume Discovery
+            </button>
+          )}
+          {canStop && (
+            <button type="button" className="btn-glass" onClick={() => setConfirmAction({
+              title: "Stop Discovery",
+              message: "This permanently stops the current run and marks unprocessed ZIP/category units as canceled. Completed leads stay saved.",
+              action: handleStop,
+            })} disabled={loading}>
+              Stop Discovery
             </button>
           )}
           {stats.failedUnits > 0 && (
