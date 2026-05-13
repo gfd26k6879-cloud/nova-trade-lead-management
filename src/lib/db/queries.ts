@@ -2959,52 +2959,56 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
         AND ${SCORE_ELIGIBLE_CONDITION}
       ORDER BY score DESC
       LIMIT ?
+    ),
+    ranked AS (
+      SELECT
+        l.id,
+        l.name,
+        l.phone,
+        l.address,
+        l.categories,
+        l.score,
+        l.website_status,
+        l.rating,
+        l.review_count,
+        l.last_contacted_at,
+        l.reminder_date,
+        l.status,
+        l.is_excluded,
+        l.exclusion_reason,
+        l.selling_niche,
+        l.business_type,
+        l.win_probability_score,
+        l.ai_verification_status,
+        l.ai_confidence,
+        l.ai_found_website_url,
+        l.ai_recommendation,
+        l.ai_checked_at,
+        l.ai_website_viability_status,
+        l.qualification_status,
+        l.contactability_score,
+        l.estimated_deal_value,
+        CASE WHEN l.reminder_date IS NOT NULL AND l.reminder_date <= ? THEN 1 ELSE 0 END as has_urgent_reminder,
+        CASE
+          WHEN l.contactability_score > 0 THEN l.contactability_score
+          WHEN l.phone IS NOT NULL AND l.phone != '' THEN 1.0
+          ELSE 0.5
+        END as contactability,
+        CASE
+          WHEN l.last_contacted_at IS NULL THEN 1.0
+          WHEN julianday('now') - julianday(l.last_contacted_at) > 14 THEN 1.0
+          WHEN julianday('now') - julianday(l.last_contacted_at) > 7 THEN 0.8
+          WHEN julianday('now') - julianday(l.last_contacted_at) > 3 THEN 0.5
+          ELSE 0.2
+        END as freshness
+      FROM leads l
+      INNER JOIN candidates c ON c.id = l.id
     )
-    SELECT
-      l.id,
-      l.name,
-      l.phone,
-      l.address,
-      l.categories,
-      l.score,
-      l.website_status,
-      l.rating,
-      l.review_count,
-      l.last_contacted_at,
-      l.reminder_date,
-      l.status,
-      l.is_excluded,
-      l.exclusion_reason,
-      l.selling_niche,
-      l.business_type,
-      l.win_probability_score,
-      l.ai_verification_status,
-      l.ai_confidence,
-      l.ai_found_website_url,
-      l.ai_recommendation,
-      l.ai_checked_at,
-      l.ai_website_viability_status,
-      l.qualification_status,
-      l.contactability_score,
-      l.estimated_deal_value,
-      CASE WHEN l.reminder_date IS NOT NULL AND l.reminder_date <= ? THEN 1 ELSE 0 END as has_urgent_reminder,
-      CASE
-        WHEN l.contactability_score > 0 THEN l.contactability_score
-        WHEN l.phone IS NOT NULL AND l.phone != '' THEN 1.0
-        ELSE 0.5
-      END as contactability,
-      CASE
-        WHEN l.last_contacted_at IS NULL THEN 1.0
-        WHEN julianday('now') - julianday(l.last_contacted_at) > 14 THEN 1.0
-        WHEN julianday('now') - julianday(l.last_contacted_at) > 7 THEN 0.8
-        WHEN julianday('now') - julianday(l.last_contacted_at) > 3 THEN 0.5
-        ELSE 0.2
-      END as freshness
-    FROM leads l
-    INNER JOIN candidates c ON c.id = l.id
+    SELECT *
+    FROM ranked
     ORDER BY
       has_urgent_reminder DESC,
-      (l.score * 0.6 + contactability * 0.2 + freshness * 0.2) DESC
+      (score * 0.6 + contactability * 0.2 + freshness * 0.2) DESC
     LIMIT ?
   `).all(candidateLimit, today, limit) as Array<Record<string, unknown>>;
 
