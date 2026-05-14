@@ -7,6 +7,14 @@ import { ensureDbReady, recomputeAllLeadQualityScores } from "@/lib/db/queries";
 import { ForbiddenError, requirePermission, UnauthorizedError } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
+  return runWorkerTick(request);
+}
+
+export async function GET(request: NextRequest) {
+  return runWorkerTick(request);
+}
+
+async function runWorkerTick(request: NextRequest) {
   try {
     await authorizeWorkerTick(request);
     await ensureDbReady();
@@ -31,10 +39,13 @@ export async function POST(request: NextRequest) {
 }
 
 async function authorizeWorkerTick(request: NextRequest): Promise<void> {
-  const secret = process.env.WORKER_CRON_SECRET?.trim();
-  if (secret) {
+  const secrets = [
+    process.env.WORKER_CRON_SECRET?.trim(),
+    process.env.CRON_SECRET?.trim(),
+  ].filter(Boolean);
+  if (secrets.length > 0) {
     const header = request.headers.get("authorization") ?? "";
-    if (header === `Bearer ${secret}`) return;
+    if (secrets.some((secret) => header === `Bearer ${secret}`)) return;
   }
   await requirePermission("crawl:manage");
 }
