@@ -1,22 +1,11 @@
-import { NextResponse } from "next/server";
-import { ensureDbReady } from "@/lib/db/queries";
+import { NextRequest } from "next/server";
 import { enrichNextLead } from "@/lib/crawl/enrichment";
-import { ForbiddenError, requirePermission, UnauthorizedError } from "@/lib/auth";
+import { runInternalWorkerRoute } from "@/lib/internal-worker-route";
 
-export async function POST() {
-  try {
-    await requirePermission("crawl:manage");
-    await ensureDbReady();
-    const result = await enrichNextLead();
-    return NextResponse.json(result);
-  } catch (err) {
-    if (err instanceof UnauthorizedError) {
-      return NextResponse.json({ status: "error", error: err.message }, { status: err.status });
-    }
-    if (err instanceof ForbiddenError) {
-      return NextResponse.json({ status: "error", error: err.message }, { status: err.status });
-    }
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ status: "error", error: message }, { status: 500 });
-  }
+export async function POST(request: NextRequest) {
+  return runInternalWorkerRoute(request, "enrichment", "crawl:manage", enrichNextLead);
+}
+
+export async function GET(request: NextRequest) {
+  return runInternalWorkerRoute(request, "enrichment", "crawl:manage", enrichNextLead);
 }

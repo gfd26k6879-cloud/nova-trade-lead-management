@@ -39,6 +39,7 @@ export interface LeadQualityInput {
   aiConfidence?: number | null;
   aiFoundWebsiteUrl?: string | null;
   aiWebsiteViabilityStatus?: WebsiteViabilityStatus | string | null;
+  aiWebsiteFeedbackStatus?: "correct" | "incorrect" | "uncertain" | string | null;
   phoneVerificationStatus?: PhoneVerificationStatus | string | null;
 }
 
@@ -122,6 +123,7 @@ export function computeLeadQuality(input: LeadQualityInput): LeadQualityResult {
   const businessType = input.businessType ?? "local_services";
   const aiStatus = input.aiVerificationStatus ?? "not_checked";
   const viability = input.aiWebsiteViabilityStatus ?? null;
+  const feedbackStatus = input.aiWebsiteFeedbackStatus ?? null;
   const phoneStatus = normalizePhoneStatus(input.phoneVerificationStatus, input.phone);
   const hasPhone = Boolean(input.phone?.trim()) && phoneStatus !== "bad";
   const hasUsableAiWebsite = aiStatus === "site_found" && viability === "usable" && Boolean(input.aiFoundWebsiteUrl);
@@ -129,6 +131,21 @@ export function computeLeadQuality(input: LeadQualityInput): LeadQualityResult {
   const isClosed = input.businessStatus === "CLOSED_PERMANENTLY" || input.businessStatus === "CLOSED_TEMPORARILY";
   const isDisqualified = input.qualificationStatus === "disqualified" || input.qualificationStatus === "unqualified";
   const isCustomWebsite = input.websiteStatus === "custom";
+
+  if (feedbackStatus === "incorrect" || feedbackStatus === "uncertain") {
+    return {
+      leadQualityScore: feedbackStatus === "incorrect" ? 35 : 45,
+      qualityBucket: "needs_manual_review",
+      easyBuildScore: 0,
+      cashSpeedScore: 0,
+      needScore: 0,
+      qualityReason: feedbackStatus === "incorrect"
+        ? "Human review marked the AI website finding incorrect."
+        : "Human review marked the AI website finding uncertain.",
+      recommendedOffer: "not_recommended",
+      nextBestAction: "Review corrected website evidence before outreach.",
+    };
+  }
 
   if (input.isExcluded || isClosed || isDisqualified || isCustomWebsite || hasUsableAiWebsite || input.status === "closed_lost") {
     return {

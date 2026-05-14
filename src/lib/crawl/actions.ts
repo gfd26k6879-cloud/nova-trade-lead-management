@@ -27,6 +27,7 @@ import {
   getCountiesByState,
   getZipCodesByCounty,
   getZipCoverageStatus,
+  getSchedulerHealth,
 } from "@/lib/db/queries";
 import { requirePermission } from "@/lib/auth";
 
@@ -257,6 +258,7 @@ export async function getDashboardStatsAction() {
 
   const qualifiedLeadCount = await getQualifiedLeadCount(5.0);
   const costPerQualifiedLead = qualifiedLeadCount > 0 ? Math.round((estimatedCost / qualifiedLeadCount) * 100) / 100 : null;
+  const schedulerHealth = await getSchedulerHealth();
 
   return {
     ...base,
@@ -277,6 +279,7 @@ export async function getDashboardStatsAction() {
     lastError,
     qualifiedLeadCount,
     costPerQualifiedLead,
+    schedulerHealth,
   };
 }
 

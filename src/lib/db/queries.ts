@@ -84,6 +84,11 @@ export interface Lead {
   quoted_amount: number;
   close_value: number;
   demo_sent_at: string | null;
+  ai_website_feedback_status: string | null;
+  ai_corrected_website_url: string | null;
+  ai_false_positive_reason: string | null;
+  ai_reviewer_notes: string | null;
+  ai_feedback_at: string | null;
   assigned_to_user_id: string | null;
   qualification_status: QualificationStatus;
   disqualification_reason: string | null;
@@ -335,6 +340,11 @@ export interface Settings {
   ai_reverify_after_enrichment: boolean;
   ai_verification_concurrency: number;
   ai_max_attempts: number;
+  scheduler_ai_verification_enabled: boolean;
+  scheduler_crawl_enabled: boolean;
+  scheduler_enrichment_enabled: boolean;
+  scheduler_artifact_enabled: boolean;
+  scheduler_score_recompute_enabled: boolean;
   openai_api_key_configured: boolean;
   openai_api_key_source: "ui" | "env" | "none";
   google_places_api_key_configured: boolean;
@@ -498,6 +508,47 @@ export interface LeadFilters {
   pageSize?: number;
 }
 
+export type SchedulerWorkerName = "ai_verification" | "crawl" | "enrichment" | "artifact" | "score_recompute";
+export type SchedulerRunStatus = "running" | "processed" | "idle" | "disabled" | "budget_limit" | "error";
+
+export interface WorkerRun {
+  id: string;
+  worker_name: SchedulerWorkerName;
+  status: SchedulerRunStatus;
+  trigger_source: string;
+  http_status: number | null;
+  result_json: Record<string, unknown>;
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface SchedulerWorkerHealth {
+  workerName: SchedulerWorkerName;
+  label: string;
+  enabled: boolean;
+  queueDepth: number;
+  estimatedMinutesToDrain: number | null;
+  lastRun: WorkerRun | null;
+  errors24h: number;
+  warning: string | null;
+}
+
+export interface SchedulerHealth {
+  workers: SchedulerWorkerHealth[];
+  ai: {
+    dailyCost: number;
+    dailyBudget: number;
+    monthlyCost: number;
+    monthlyBudget: number;
+    budgetRemainingToday: number;
+    budgetRemainingMonth: number;
+    verifiedLeadsPerDollar: number | null;
+    readyToCallLeadsPerDollar: number | null;
+  };
+}
+
 export type AiQueueStatus = "not_checked" | "queued" | "running" | "verified" | "error";
 
 export interface AiQueueStats {
@@ -551,6 +602,13 @@ export interface LeadAiArtifactBadges {
   competitive_report_status: LeadAiArtifactStatus | null;
 }
 
+export interface LeadAiFeedbackInput {
+  status: "correct" | "incorrect" | "uncertain";
+  correctedWebsiteUrl?: string | null;
+  falsePositiveReason?: string | null;
+  reviewerNotes?: string | null;
+}
+
 export interface QualityLead extends QueueLead {
   city: string | null;
   quality_reason: string | null;
@@ -590,6 +648,9 @@ export interface ZipProgress {
   failed: number;
   canceled: number;
   remaining: number;
+  leadsFound: number;
+  apiCalls: number;
+  lastRunAt: string | null;
 }
 
 export interface PlannerStateOption {
@@ -826,6 +887,11 @@ export async function getSettings(): Promise<Settings>{
     ai_reverify_after_enrichment: ((row.ai_reverify_after_enrichment as number) ?? 1) === 1,
     ai_verification_concurrency: Math.max(1, Math.min(5, Math.floor((row.ai_verification_concurrency as number) ?? 1))),
     ai_max_attempts: Math.max(1, Math.min(10, Math.floor((row.ai_max_attempts as number) ?? 3))),
+    scheduler_ai_verification_enabled: ((row.scheduler_ai_verification_enabled as number) ?? 1) === 1,
+    scheduler_crawl_enabled: ((row.scheduler_crawl_enabled as number) ?? 1) === 1,
+    scheduler_enrichment_enabled: ((row.scheduler_enrichment_enabled as number) ?? 1) === 1,
+    scheduler_artifact_enabled: ((row.scheduler_artifact_enabled as number) ?? 1) === 1,
+    scheduler_score_recompute_enabled: ((row.scheduler_score_recompute_enabled as number) ?? 1) === 1,
     openai_api_key_configured: !!row.openai_api_key_encrypted || !!process.env.OPENAI_API_KEY,
     openai_api_key_source: row.openai_api_key_encrypted ? "ui" : process.env.OPENAI_API_KEY ? "env" : "none",
     google_places_api_key_configured: !!row.google_places_api_key_encrypted || !!process.env.GOOGLE_PLACES_API_KEY,
@@ -950,6 +1016,26 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
     updates.push("ai_max_attempts = ?");
     values.push(Math.max(1, Math.min(10, Math.floor(settings.ai_max_attempts))));
   }
+  if (settings.scheduler_ai_verification_enabled !== undefined) {
+    updates.push("scheduler_ai_verification_enabled = ?");
+    values.push(settings.scheduler_ai_verification_enabled ? 1 : 0);
+  }
+  if (settings.scheduler_crawl_enabled !== undefined) {
+    updates.push("scheduler_crawl_enabled = ?");
+    values.push(settings.scheduler_crawl_enabled ? 1 : 0);
+  }
+  if (settings.scheduler_enrichment_enabled !== undefined) {
+    updates.push("scheduler_enrichment_enabled = ?");
+    values.push(settings.scheduler_enrichment_enabled ? 1 : 0);
+  }
+  if (settings.scheduler_artifact_enabled !== undefined) {
+    updates.push("scheduler_artifact_enabled = ?");
+    values.push(settings.scheduler_artifact_enabled ? 1 : 0);
+  }
+  if (settings.scheduler_score_recompute_enabled !== undefined) {
+    updates.push("scheduler_score_recompute_enabled = ?");
+    values.push(settings.scheduler_score_recompute_enabled ? 1 : 0);
+  }
   if (
     "openai_api_key_configured" in settings ||
     "openai_api_key_source" in settings ||
@@ -965,6 +1051,174 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
   values.push(nowISO());
 
   await db.prepare(`UPDATE settings SET ${updates.join(", ")} WHERE id = 1`).run(...values);
+}
+
+export function isSchedulerWorkerEnabled(settings: Settings, workerName: SchedulerWorkerName): boolean {
+  if (workerName === "ai_verification") return settings.scheduler_ai_verification_enabled;
+  if (workerName === "crawl") return settings.scheduler_crawl_enabled;
+  if (workerName === "enrichment") return settings.scheduler_enrichment_enabled;
+  if (workerName === "artifact") return settings.scheduler_artifact_enabled;
+  return settings.scheduler_score_recompute_enabled;
+}
+
+export async function startWorkerRun(workerName: SchedulerWorkerName, triggerSource: string): Promise<WorkerRun> {
+  const db = await getDb();
+  const id = generateId();
+  const now = nowISO();
+  await db.prepare(
+    `INSERT INTO worker_runs (id, worker_name, status, trigger_source, started_at, created_at)
+     VALUES (?, ?, 'running', ?, ?, ?)`
+  ).run(id, workerName, triggerSource, now, now);
+  const run = await getWorkerRunById(id);
+  if (!run) throw new Error("Unable to create worker run.");
+  return run;
+}
+
+export async function completeWorkerRun(
+  id: string,
+  status: SchedulerRunStatus,
+  result: Record<string, unknown>,
+  httpStatus = 200,
+  error?: string | null,
+): Promise<void> {
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE worker_runs
+     SET status = ?, http_status = ?, result_json = ?, error = ?, completed_at = ?
+     WHERE id = ?`
+  ).run(status, httpStatus, JSON.stringify(result), error ?? null, nowISO(), id);
+}
+
+export async function getWorkerRunById(id: string): Promise<WorkerRun | null> {
+  const db = await getDb();
+  const row = await db.prepare("SELECT * FROM worker_runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  return row ? parseWorkerRunRow(row) : null;
+}
+
+export async function getSchedulerHealth(): Promise<SchedulerHealth> {
+  const settings = await getSettings();
+  const aiQueue = await getAiQueueStats();
+  const budget = await getAiBudgetStatus(settings, 0);
+  const db = await getDb();
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  const activeRun = await getActiveCrawlRun();
+  const crawlProgress = activeRun ? await getCrawlProgress(activeRun.id) : null;
+  const enrichmentRow = await db.prepare(
+    "SELECT COUNT(*) as count FROM leads WHERE enrichment_status = 'pending' AND score > 0 AND COALESCE(is_excluded, 0) = 0"
+  ).get() as { count: number };
+  const artifactRow = await db.prepare(
+    "SELECT COUNT(*) as count FROM lead_ai_artifacts WHERE status IN ('queued','running')"
+  ).get() as { count: number };
+  const staleScoreRow = await db.prepare(
+    `SELECT COUNT(*) as count
+     FROM leads
+     WHERE last_quality_scored_at IS NULL OR updated_at > last_quality_scored_at`
+  ).get() as { count: number };
+  const readyRow = await db.prepare(
+    "SELECT COUNT(*) as count FROM leads WHERE COALESCE(is_excluded, 0) = 0 AND quality_bucket IN ('ready_to_call','broken_site_opportunity')"
+  ).get() as { count: number };
+
+  const workers: Array<{ workerName: SchedulerWorkerName; label: string; queueDepth: number; cadenceMinutes: number }> = [
+    { workerName: "ai_verification", label: "AI verification", queueDepth: aiQueue.queued + aiQueue.running, cadenceMinutes: 1 },
+    { workerName: "crawl", label: "Discovery crawl", queueDepth: crawlProgress ? crawlProgress.pending + crawlProgress.running : 0, cadenceMinutes: 1 },
+    { workerName: "enrichment", label: "Lead enrichment", queueDepth: Number(enrichmentRow.count ?? 0), cadenceMinutes: 1 },
+    { workerName: "artifact", label: "Pitch-pack artifacts", queueDepth: Number(artifactRow.count ?? 0), cadenceMinutes: 2 },
+    { workerName: "score_recompute", label: "Score recompute", queueDepth: Number(staleScoreRow.count ?? 0), cadenceMinutes: 10 },
+  ];
+
+  const healthWorkers: SchedulerWorkerHealth[] = [];
+  for (const worker of workers) {
+    const [lastRun, errorRow] = await Promise.all([
+      getLatestWorkerRun(worker.workerName),
+      db.prepare(
+        `SELECT COUNT(*) as count
+         FROM worker_runs
+         WHERE worker_name = ? AND status IN ('error','budget_limit') AND started_at >= ?`
+      ).get(worker.workerName, since24h) as Promise<{ count: number }>,
+    ]);
+    const enabled = isSchedulerWorkerEnabled(settings, worker.workerName);
+    const warning = buildSchedulerWarning(worker.workerName, enabled, lastRun, Number(errorRow.count ?? 0), settings);
+    healthWorkers.push({
+      ...worker,
+      enabled,
+      estimatedMinutesToDrain: worker.queueDepth > 0 ? worker.queueDepth * worker.cadenceMinutes : null,
+      lastRun,
+      errors24h: Number(errorRow.count ?? 0),
+      warning,
+    });
+  }
+
+  const verifiedPerDollar = budget.monthlyCost > 0 ? roundOne(aiQueue.verified / budget.monthlyCost) : null;
+  const readyPerDollar = budget.monthlyCost > 0 ? roundOne(Number(readyRow.count ?? 0) / budget.monthlyCost) : null;
+
+  return {
+    workers: healthWorkers,
+    ai: {
+      dailyCost: budget.dailyCost,
+      dailyBudget: budget.dailyBudget,
+      monthlyCost: budget.monthlyCost,
+      monthlyBudget: budget.monthlyBudget,
+      budgetRemainingToday: roundCurrency(Math.max(0, budget.dailyBudget - budget.dailyCost)),
+      budgetRemainingMonth: roundCurrency(Math.max(0, budget.monthlyBudget - budget.monthlyCost)),
+      verifiedLeadsPerDollar: verifiedPerDollar,
+      readyToCallLeadsPerDollar: readyPerDollar,
+    },
+  };
+}
+
+async function getLatestWorkerRun(workerName: SchedulerWorkerName): Promise<WorkerRun | null> {
+  const db = await getDb();
+  const row = await db.prepare(
+    "SELECT * FROM worker_runs WHERE worker_name = ? ORDER BY started_at DESC LIMIT 1"
+  ).get(workerName) as Record<string, unknown> | undefined;
+  return row ? parseWorkerRunRow(row) : null;
+}
+
+function parseWorkerRunRow(row: Record<string, unknown>): WorkerRun {
+  return {
+    id: String(row.id),
+    worker_name: normalizeSchedulerWorkerName(row.worker_name),
+    status: normalizeSchedulerRunStatus(row.status),
+    trigger_source: String(row.trigger_source ?? "unknown"),
+    http_status: row.http_status === null || row.http_status === undefined ? null : Number(row.http_status),
+    result_json: safeParseJson<Record<string, unknown>>(row.result_json, {}),
+    error: (row.error as string | null) ?? null,
+    started_at: String(row.started_at),
+    completed_at: (row.completed_at as string | null) ?? null,
+    created_at: String(row.created_at),
+  };
+}
+
+function normalizeSchedulerWorkerName(value: unknown): SchedulerWorkerName {
+  if (value === "crawl" || value === "enrichment" || value === "artifact" || value === "score_recompute") return value;
+  return "ai_verification";
+}
+
+function normalizeSchedulerRunStatus(value: unknown): SchedulerRunStatus {
+  if (value === "processed" || value === "idle" || value === "disabled" || value === "budget_limit" || value === "error") return value;
+  return "running";
+}
+
+function buildSchedulerWarning(
+  workerName: SchedulerWorkerName,
+  enabled: boolean,
+  lastRun: WorkerRun | null,
+  errors24h: number,
+  settings: Settings,
+): string | null {
+  if (!enabled) return "Scheduler toggle is paused.";
+  if (workerName === "ai_verification" && !settings.ai_enabled) return "AI is disabled in Settings.";
+  if ((workerName === "ai_verification" || workerName === "artifact") && !settings.openai_api_key_configured) return "OpenAI API key is missing.";
+  if ((workerName === "crawl" || workerName === "enrichment") && !settings.google_places_api_key_configured) return "Google Places API key is missing.";
+  if (!lastRun) return "No worker run recorded yet.";
+  if (lastRun.status === "error" || lastRun.status === "budget_limit") return lastRun.error ?? "Last worker run failed.";
+  if (errors24h > 0) return `${errors24h} worker errors in the last 24 hours.`;
+  return null;
+}
+
+function roundOne(value: number): number {
+  return Math.round(value * 10) / 10;
 }
 
 export async function setStoredOpenAiApiKey(apiKey: string): Promise<void>{
@@ -1391,7 +1645,10 @@ export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
         CAST(COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) AS INTEGER) as done,
         CAST(COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) AS INTEGER) as failed,
         CAST(COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) AS INTEGER) as canceled,
-        CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining
+        CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining,
+        CAST(COALESCE(SUM(cu.discovered_count), 0) AS INTEGER) as leadsFound,
+        CAST(COALESCE(SUM(cu.attempt_count), 0) AS INTEGER) as apiCalls,
+        MAX(COALESCE(cu.finished_at, cu.started_at, cu.created_at)) as lastRunAt
       FROM zip_codes z
       LEFT JOIN crawl_units cu ON z.zip = cu.zip AND cu.crawl_run_id = ?
       WHERE z.is_active = 1
@@ -1406,7 +1663,10 @@ export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
         CAST(COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) AS INTEGER) as done,
         CAST(COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) AS INTEGER) as failed,
         CAST(COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) AS INTEGER) as canceled,
-        CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining
+        CAST(COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) AS INTEGER) as remaining,
+        CAST(COALESCE(SUM(cu.discovered_count), 0) AS INTEGER) as leadsFound,
+        CAST(COALESCE(SUM(cu.attempt_count), 0) AS INTEGER) as apiCalls,
+        MAX(COALESCE(cu.finished_at, cu.started_at, cu.created_at)) as lastRunAt
       FROM zip_codes z
       LEFT JOIN crawl_units cu ON z.zip = cu.zip
       WHERE z.is_active = 1
@@ -1464,6 +1724,14 @@ export async function getCoverageByState(runId: string): Promise<StateCoveragePr
 }
 
 function normalizeZipProgress(row: ZipProgress): ZipProgress {
+  const raw = row as ZipProgress & {
+    leadsfound?: number;
+    leads_found?: number;
+    apicalls?: number;
+    api_calls?: number;
+    lastrunat?: string | null;
+    last_run_at?: string | null;
+  };
   return {
     ...row,
     total: Number(row.total) || 0,
@@ -1471,6 +1739,9 @@ function normalizeZipProgress(row: ZipProgress): ZipProgress {
     failed: Number(row.failed) || 0,
     canceled: Number(row.canceled) || 0,
     remaining: Number(row.remaining) || 0,
+    leadsFound: Number(row.leadsFound ?? raw.leadsfound ?? raw.leads_found) || 0,
+    apiCalls: Number(row.apiCalls ?? raw.apicalls ?? raw.api_calls) || 0,
+    lastRunAt: row.lastRunAt ?? raw.lastrunat ?? raw.last_run_at ?? null,
   };
 }
 
@@ -2591,6 +2862,7 @@ export async function updateLeadQualityScores(leadId: string, actorUserId?: stri
     aiConfidence: lead.ai_confidence,
     aiFoundWebsiteUrl: lead.ai_found_website_url,
     aiWebsiteViabilityStatus: lead.ai_website_viability_status,
+    aiWebsiteFeedbackStatus: lead.ai_website_feedback_status,
     phoneVerificationStatus: normalizedPhoneStatus,
   });
   const winProbabilityScore = computeLeadWinProbability(lead);
@@ -2821,6 +3093,53 @@ export async function markLeadManualReview(leadId: string, reason: string): Prom
      WHERE id = ?`
   ).run(reason, nowISO(), leadId);
   await updateLeadQualityScores(leadId);
+  return result.changes;
+}
+
+export async function updateLeadAiFeedback(
+  leadId: string,
+  input: LeadAiFeedbackInput,
+  actorUserId?: string | null,
+): Promise<number> {
+  const db = await getDb();
+  const status = input.status === "correct" || input.status === "incorrect" || input.status === "uncertain"
+    ? input.status
+    : "uncertain";
+  const notes = input.reviewerNotes?.trim().slice(0, 1000) || null;
+  const correctedWebsiteUrl = input.correctedWebsiteUrl?.trim().slice(0, 500) || null;
+  const falsePositiveReason = input.falsePositiveReason?.trim().slice(0, 500) || null;
+  const now = nowISO();
+  const result = await db.prepare(
+    `UPDATE leads SET
+      ai_website_feedback_status = ?,
+      ai_corrected_website_url = ?,
+      ai_false_positive_reason = ?,
+      ai_reviewer_notes = ?,
+      ai_feedback_at = ?,
+      quality_checked_by_user_id = COALESCE(?, quality_checked_by_user_id),
+      quality_bucket = CASE
+        WHEN ? = 'incorrect' THEN 'needs_manual_review'
+        ELSE quality_bucket
+      END,
+      ai_recommendation = CASE
+        WHEN ? = 'incorrect' THEN 'manual_review'
+        ELSE ai_recommendation
+      END,
+      updated_at = ?
+     WHERE id = ?`
+  ).run(
+    status,
+    correctedWebsiteUrl,
+    falsePositiveReason,
+    notes,
+    now,
+    actorUserId ?? null,
+    status,
+    status,
+    now,
+    leadId,
+  );
+  await updateLeadQualityScores(leadId, actorUserId);
   return result.changes;
 }
 
@@ -3073,6 +3392,11 @@ function parseLeadRow(row: Record<string, unknown>): Lead {
     quoted_amount: Number(row.quoted_amount ?? 0),
     close_value: Number(row.close_value ?? 0),
     demo_sent_at: (row.demo_sent_at as string | null) ?? null,
+    ai_website_feedback_status: (row.ai_website_feedback_status as string | null) ?? null,
+    ai_corrected_website_url: (row.ai_corrected_website_url as string | null) ?? null,
+    ai_false_positive_reason: (row.ai_false_positive_reason as string | null) ?? null,
+    ai_reviewer_notes: (row.ai_reviewer_notes as string | null) ?? null,
+    ai_feedback_at: (row.ai_feedback_at as string | null) ?? null,
     assigned_to_user_id: (row.assigned_to_user_id as string | null) ?? null,
     qualification_status: ((row.qualification_status as QualificationStatus | null) ?? "needs_verification"),
     disqualification_reason: (row.disqualification_reason as string | null) ?? null,
@@ -4221,12 +4545,23 @@ export async function createDemoForLead(leadId: string): Promise<Demo | null>{
   const slug = `${slugify(lead.name ?? "business")}-${generateId().slice(0, 8)}`;
   const now = nowISO();
   const cta = ctaForNiche(lead.selling_niche, Boolean(lead.phone?.trim()));
+  const businessDetail = await getLatestLeadAiArtifact(leadId, "business_detail");
+  const detail = businessDetail?.status === "complete" ? businessDetail.content_json : {};
+  const detailServices = Array.isArray(detail.services) ? detail.services.map((item) => String(item)).filter(Boolean).slice(0, 6) : [];
+  const trustSignals = Array.isArray(detail.trust_signals) ? detail.trust_signals.map((item) => String(item)).filter(Boolean).slice(0, 6) : [];
+  const businessSummary = typeof detail.business_summary === "string" ? detail.business_summary : null;
+  const ctaStrategy = typeof detail.cta_strategy === "string" ? detail.cta_strategy : null;
   const config = {
     headline: demoHeadlineForLead(lead),
-    subheadline: "Built to help local customers call, book, and trust you faster.",
-    services: servicesForNiche(lead.selling_niche),
+    subheadline: businessSummary ?? "Built to help local customers call, book, and trust you faster.",
+    services: detailServices.length > 0 ? detailServices : servicesForNiche(lead.selling_niche),
+    trustSignals,
     primaryCta: cta.primaryCta,
     secondaryCta: cta.secondaryCta,
+    ctaStrategy,
+    phone: lead.phone,
+    mapsUri: lead.maps_uri,
+    websiteGap: lead.ai_summary ?? lead.quality_reason,
   };
 
   await db.prepare(

@@ -77,8 +77,18 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "settings", column: "ai_reverify_after_enrichment", type: "INTEGER NOT NULL DEFAULT 1" },
   { table: "settings", column: "ai_verification_concurrency", type: "INTEGER NOT NULL DEFAULT 1" },
   { table: "settings", column: "ai_max_attempts", type: "INTEGER NOT NULL DEFAULT 3" },
+  { table: "settings", column: "scheduler_ai_verification_enabled", type: "INTEGER NOT NULL DEFAULT 1" },
+  { table: "settings", column: "scheduler_crawl_enabled", type: "INTEGER NOT NULL DEFAULT 1" },
+  { table: "settings", column: "scheduler_enrichment_enabled", type: "INTEGER NOT NULL DEFAULT 1" },
+  { table: "settings", column: "scheduler_artifact_enabled", type: "INTEGER NOT NULL DEFAULT 1" },
+  { table: "settings", column: "scheduler_score_recompute_enabled", type: "INTEGER NOT NULL DEFAULT 1" },
   { table: "settings", column: "openai_api_key_encrypted", type: "TEXT" },
   { table: "settings", column: "google_places_api_key_encrypted", type: "TEXT" },
+  { table: "leads", column: "ai_website_feedback_status", type: "TEXT" },
+  { table: "leads", column: "ai_corrected_website_url", type: "TEXT" },
+  { table: "leads", column: "ai_false_positive_reason", type: "TEXT" },
+  { table: "leads", column: "ai_reviewer_notes", type: "TEXT" },
+  { table: "leads", column: "ai_feedback_at", type: "TEXT" },
   { table: "ai_lead_verifications", column: "website_viability_status", type: "TEXT" },
   { table: "ai_lead_verifications", column: "website_health_json", type: "TEXT" },
   { table: "ai_lead_verifications", column: "website_viability_reason", type: "TEXT" },
@@ -208,6 +218,11 @@ CREATE TABLE IF NOT EXISTS leads (
   quoted_amount REAL NOT NULL DEFAULT 0,
   close_value REAL NOT NULL DEFAULT 0,
   demo_sent_at TEXT,
+  ai_website_feedback_status TEXT,
+  ai_corrected_website_url TEXT,
+  ai_false_positive_reason TEXT,
+  ai_reviewer_notes TEXT,
+  ai_feedback_at TEXT,
   assigned_to_user_id TEXT,
   notes TEXT,
   reminder_date TEXT,
@@ -276,6 +291,11 @@ CREATE TABLE IF NOT EXISTS settings (
   ai_reverify_after_enrichment INTEGER NOT NULL DEFAULT 1,
   ai_verification_concurrency INTEGER NOT NULL DEFAULT 1,
   ai_max_attempts INTEGER NOT NULL DEFAULT 3,
+  scheduler_ai_verification_enabled INTEGER NOT NULL DEFAULT 1,
+  scheduler_crawl_enabled INTEGER NOT NULL DEFAULT 1,
+  scheduler_enrichment_enabled INTEGER NOT NULL DEFAULT 1,
+  scheduler_artifact_enabled INTEGER NOT NULL DEFAULT 1,
+  scheduler_score_recompute_enabled INTEGER NOT NULL DEFAULT 1,
   openai_api_key_encrypted TEXT,
   google_places_api_key_encrypted TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -421,6 +441,19 @@ CREATE TABLE IF NOT EXISTS lead_ai_artifacts (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS worker_runs (
+  id TEXT PRIMARY KEY,
+  worker_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',
+  trigger_source TEXT NOT NULL DEFAULT 'unknown',
+  http_status INTEGER,
+  result_json TEXT NOT NULL DEFAULT '{}',
+  error TEXT,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
   action TEXT NOT NULL,
@@ -474,6 +507,8 @@ CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage_events(created_at DE
 CREATE INDEX IF NOT EXISTS idx_ai_usage_model_created ON ai_usage_events(model, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_lead_type_created ON lead_ai_artifacts(lead_id, artifact_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_status_created ON lead_ai_artifacts(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_worker_runs_worker_started ON worker_runs(worker_name, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_worker_runs_status_started ON worker_runs(status, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_outreach_events_lead ON outreach_events(lead_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_user_id, created_at DESC);

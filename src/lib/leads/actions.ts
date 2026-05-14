@@ -34,6 +34,7 @@ import {
   recomputeAllLeadQualityScores,
   setLeadQualityBucket,
   updateLeadPhoneVerificationStatus,
+  updateLeadAiFeedback,
   markLeadAiVerified,
   createAuditLog,
   getSettings,
@@ -64,6 +65,12 @@ const leadNoteSchema = z.string().trim().min(1).max(4000);
 const phoneVerificationStatusSchema = z.enum(["unknown", "works", "bad", "no_phone"]);
 const qualityBucketSchema = z.enum(["ready_to_call", "needs_ai_verify", "needs_manual_review", "broken_site_opportunity", "not_a_fit"]);
 const leadAiArtifactTypeSchema = z.enum(["business_detail", "competitive_report"]);
+const aiFeedbackSchema = z.object({
+  status: z.enum(["correct", "incorrect", "uncertain"]),
+  correctedWebsiteUrl: z.string().trim().url().max(500).optional().or(z.literal("")),
+  falsePositiveReason: z.string().trim().max(500).optional(),
+  reviewerNotes: z.string().trim().max(1000).optional(),
+});
 const qualityAiBatchSchema = z.object({
   limit: z.number().int().min(1).max(100).optional(),
   businessType: z.string().trim().min(1).max(80).optional(),
@@ -446,6 +453,18 @@ export async function queueLeadPitchPackAction(leadId: string, options: { force?
   revalidateLeadViews();
   revalidatePath(`/leads/${leadId}`);
   return result;
+}
+
+export async function updateLeadAiFeedbackAction(leadId: string, input: unknown) {
+  const session = await requirePermission("ai:verify");
+  await ensureDbReady();
+  const parsed = aiFeedbackSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Invalid AI feedback." };
+  const changes = await updateLeadAiFeedback(leadId, parsed.data, session.userId);
+  await createAuditLog("lead_ai_feedback_updated", "lead", leadId, parsed.data);
+  revalidateLeadViews();
+  revalidatePath(`/leads/${leadId}`);
+  return { success: true, changes };
 }
 
 export async function runAiVerificationBatchAction(input: { limit?: number; businessType?: string } = {}) {

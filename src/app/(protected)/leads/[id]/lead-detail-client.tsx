@@ -29,6 +29,7 @@ import {
   updateLeadPhoneVerificationStatusAction,
   queueLeadAiArtifactAction,
   queueLeadPitchPackAction,
+  updateLeadAiFeedbackAction,
 } from "@/lib/leads/actions";
 import type { AppRole } from "@/lib/permissions";
 
@@ -84,6 +85,11 @@ interface Lead {
   quoted_amount: number;
   close_value: number;
   demo_sent_at: string | null;
+  ai_website_feedback_status: string | null;
+  ai_corrected_website_url: string | null;
+  ai_false_positive_reason: string | null;
+  ai_reviewer_notes: string | null;
+  ai_feedback_at: string | null;
   qualification_status: string;
   disqualification_reason: string | null;
   website_verified_at: string | null;
@@ -262,6 +268,11 @@ export function LeadDetailClient({
   const [assignedToUserId, setAssignedToUserId] = useState(lead.assigned_to_user_id);
   const [qualityBucket, setQualityBucket] = useState(lead.quality_bucket);
   const [phoneVerificationStatus, setPhoneVerificationStatus] = useState(lead.phone_verification_status);
+  const [aiFeedbackStatus, setAiFeedbackStatus] = useState(lead.ai_website_feedback_status ?? "uncertain");
+  const [aiCorrectedWebsiteUrl, setAiCorrectedWebsiteUrl] = useState(lead.ai_corrected_website_url ?? "");
+  const [aiFalsePositiveReason, setAiFalsePositiveReason] = useState(lead.ai_false_positive_reason ?? "");
+  const [aiReviewerNotes, setAiReviewerNotes] = useState(lead.ai_reviewer_notes ?? "");
+  const [aiFeedbackLoading, setAiFeedbackLoading] = useState(false);
 
   // Log event form
   const [eventChannel, setEventChannel] = useState("call");
@@ -448,6 +459,23 @@ export function LeadDetailClient({
     } finally {
       setArtifactLoading(null);
     }
+  };
+
+  const handleSaveAiFeedback = async () => {
+    setAiFeedbackLoading(true);
+    const result = await updateLeadAiFeedbackAction(lead.id, {
+      status: aiFeedbackStatus,
+      correctedWebsiteUrl: aiCorrectedWebsiteUrl,
+      falsePositiveReason: aiFalsePositiveReason,
+      reviewerNotes: aiReviewerNotes,
+    });
+    if ("error" in result) {
+      flash(result.error ?? "Unable to save AI feedback");
+    } else {
+      flash("AI feedback saved");
+      router.refresh();
+    }
+    setAiFeedbackLoading(false);
   };
 
   const processArtifactQueue = async (artifactType: string) => {
@@ -899,6 +927,51 @@ export function LeadDetailClient({
               </button>
             </div>
           )}
+
+          <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.42)" }}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h4 className="section-label">AI Accuracy Feedback</h4>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                  Mark wrong website findings here so scoring and manual review stay honest.
+                </p>
+              </div>
+              {lead.ai_feedback_at && (
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
+                  Last reviewed {new Date(lead.ai_feedback_at).toLocaleString()}
+                </span>
+              )}
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-4">
+              <label className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                Feedback
+                <select className="glass-input mt-1 w-full" value={aiFeedbackStatus} onChange={(e) => setAiFeedbackStatus(e.target.value)}>
+                  <option value="correct">Correct</option>
+                  <option value="incorrect">Incorrect</option>
+                  <option value="uncertain">Uncertain</option>
+                </select>
+              </label>
+              <label className="text-xs lg:col-span-1" style={{ color: "var(--text-secondary)" }}>
+                Correct Website URL
+                <input className="glass-input mt-1 w-full" value={aiCorrectedWebsiteUrl} onChange={(e) => setAiCorrectedWebsiteUrl(e.target.value)} placeholder="https://..." />
+              </label>
+              <label className="text-xs lg:col-span-2" style={{ color: "var(--text-secondary)" }}>
+                False Positive / Notes
+                <input className="glass-input mt-1 w-full" value={aiFalsePositiveReason} onChange={(e) => setAiFalsePositiveReason(e.target.value)} placeholder="Wrong business, directory only, parked page..." />
+              </label>
+            </div>
+            <textarea
+              className="glass-input mt-3 min-h-20 w-full"
+              value={aiReviewerNotes}
+              onChange={(e) => setAiReviewerNotes(e.target.value)}
+              placeholder="Reviewer notes for future scoring/pitch decisions"
+            />
+            <div className="mt-3 flex justify-end">
+              <button type="button" className="btn-glass text-xs" disabled={aiFeedbackLoading} onClick={handleSaveAiFeedback}>
+                {aiFeedbackLoading ? "Saving..." : "Save AI Feedback"}
+              </button>
+            </div>
+          </div>
         </article>
 
         {/* Lead intelligence */}
@@ -1344,6 +1417,14 @@ function ArtifactPanel({
           <span className="mt-2 inline-flex rounded-md px-2 py-1 text-xs font-medium" style={artifactBadgeStyle(latestJob, isReady)}>
             {artifactStateLabel(latestJob, isReady)}
           </span>
+          {artifact && (
+            <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
+              {Math.round(artifact.confidence * 100)}% confidence • {artifact.sources_json.length} sources • {new Date(artifact.created_at).toLocaleString()}
+            </p>
+          )}
+          {artifact && latestJob && latestJob.id !== artifact.id && (
+            <p className="mt-1 text-xs" style={{ color: "#b45309" }}>Regenerate recommended: newer evidence is queued or errored.</p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" className="btn-glass text-xs" disabled={loading} onClick={isReady ? onRegenerate : onGenerate}>
@@ -1388,6 +1469,7 @@ function BusinessDetailView({ artifact }: { artifact: LeadAiArtifact }) {
           {String(content.website_generation_prompt ?? "No prompt generated.")}
         </p>
       </div>
+      <ArtifactSources sources={artifact.sources_json} />
     </div>
   );
 }
@@ -1405,6 +1487,7 @@ function CompetitiveReportView({ artifact }: { artifact: LeadAiArtifact }) {
       <ArtifactList title="Pitch Bullets" items={stringArray(content.pitch_bullets)} />
       <ArtifactList title="Objection Handling" items={stringArray(content.objection_handling)} />
       <ArtifactList title="Assumptions" items={stringArray(content.assumptions)} />
+      <ArtifactSources sources={artifact.sources_json} />
     </div>
   );
 }
@@ -1429,6 +1512,30 @@ function ArtifactList({ title, items }: { title: string; items: string[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function ArtifactSources({ sources }: { sources: LeadAiArtifact["sources_json"] }) {
+  if (sources.length === 0) return null;
+  return (
+    <div>
+      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Sources</span>
+      <div className="mt-2 grid gap-2">
+        {sources.slice(0, 4).map((source) => (
+          <a
+            key={`${source.url}-${source.evidence}`}
+            href={source.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-lg px-3 py-2 text-xs hover:opacity-80"
+            style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}
+          >
+            <span className="block truncate font-medium" style={{ color: "var(--text-primary)" }}>{source.title ?? source.url}</span>
+            <span className="mt-1 block">{source.evidence}</span>
+          </a>
+        ))}
+      </div>
     </div>
   );
 }

@@ -24,6 +24,9 @@ interface ZipProgress {
   failed: number;
   canceled: number;
   remaining: number;
+  leadsFound: number;
+  apiCalls: number;
+  lastRunAt: string | null;
 }
 
 interface CountyCoverage {
@@ -190,6 +193,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
   const [filter, setFilter] = useState("");
   const [incompleteOnly, setIncompleteOnly] = useState(false);
   const [failedOnly, setFailedOnly] = useState(false);
+  const [ledgerView, setLedgerView] = useState<"all" | "not_started" | "needs_retry">("all");
   const [selectedCounty, setSelectedCounty] = useState("all");
   const [expandedStates, setExpandedStates] = useState<string[]>([]);
   const [expandedCounties, setExpandedCounties] = useState<string[]>([]);
@@ -204,6 +208,8 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
       if (selectedCounty !== "all" && z.county !== selectedCounty) return false;
       if (incompleteOnly && z.remaining === 0) return false;
       if (failedOnly && z.failed === 0) return false;
+      if (ledgerView === "not_started" && !(z.total > 0 && z.done === 0 && z.failed === 0 && z.canceled === 0)) return false;
+      if (ledgerView === "needs_retry" && z.failed === 0) return false;
       if (!filterValue) return true;
       return (
         z.zip.includes(filterValue) ||
@@ -212,7 +218,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
         z.state.toLowerCase().includes(filterValue)
       );
     });
-  }, [coverage, failedOnly, filter, incompleteOnly, selectedCounty]);
+  }, [coverage, failedOnly, filter, incompleteOnly, ledgerView, selectedCounty]);
 
   const totalDone = coverage.reduce((s, z) => s + z.done, 0);
   const totalAll = coverage.reduce((s, z) => s + z.total, 0);
@@ -226,7 +232,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
   const isPaused = runStatus === "paused";
   const canStop = isRunning || isQueued || isPaused;
 
-  const hasCustomFilter = filter.trim().length > 0 || incompleteOnly || failedOnly || selectedCounty !== "all";
+  const hasCustomFilter = filter.trim().length > 0 || incompleteOnly || failedOnly || ledgerView !== "all" || selectedCounty !== "all";
 
   const stateRows = useMemo(() => {
     if (!hasCustomFilter) {
@@ -560,6 +566,15 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
             />
             Failed only
           </label>
+          <select
+            className="glass-input text-xs"
+            value={ledgerView}
+            onChange={(event) => setLedgerView(event.target.value as typeof ledgerView)}
+          >
+            <option value="all">All ledger rows</option>
+            <option value="not_started">Not yet searched</option>
+            <option value="needs_retry">Needs retry</option>
+          </select>
           <div className="flex flex-wrap items-center gap-2">
             {totalFailed > 0 && (
               <>
@@ -684,6 +699,9 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
                                       <th>Failed</th>
                                       <th>Canceled</th>
                                       <th>Remaining</th>
+                                      <th>Leads</th>
+                                      <th>API Calls</th>
+                                      <th>Last Run</th>
                                       <th>Completion</th>
                                     </tr>
                                   </thead>
@@ -699,6 +717,9 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
                                           <td style={{ color: row.failed > 0 ? "#dc2626" : undefined }}>{row.failed}</td>
                                           <td style={{ color: row.canceled > 0 ? "#b45309" : undefined }}>{row.canceled}</td>
                                           <td>{row.remaining}</td>
+                                          <td>{row.leadsFound}</td>
+                                          <td>{row.apiCalls}</td>
+                                          <td>{formatDateTime(row.lastRunAt)}</td>
                                           <td>
                                             <div className="flex items-center gap-2">
                                               <div className="h-1.5 w-16 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }}>

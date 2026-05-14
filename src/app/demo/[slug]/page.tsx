@@ -26,10 +26,13 @@ export default async function DemoPage({ params }: Props) {
     headline?: string;
     subheadline?: string;
     services?: string[];
+    trustSignals?: string[];
     primaryCta?: string;
     secondaryCta?: string;
+    websiteGap?: string | null;
   };
   const services = Array.isArray(config.services) ? config.services : ["Services", "Appointments", "Free estimate"];
+  const trustSignals = Array.isArray(config.trustSignals) ? config.trustSignals : [];
   const telHref = lead.phone ? `tel:${lead.phone.replace(/[^\d+]/g, "")}` : undefined;
   const primaryHref = telHref ?? lead.maps_uri ?? undefined;
 
@@ -89,8 +92,25 @@ export default async function DemoPage({ params }: Props) {
                 </a>
               )}
             </div>
+            {trustSignals.length > 0 && (
+              <div className="mt-6">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Why customers trust them</h3>
+                <ul className="mt-3 space-y-2 text-sm text-slate-600">
+                  {trustSignals.slice(0, 4).map((signal) => (
+                    <li key={signal}>{signal}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </aside>
         </section>
+
+        {config.websiteGap && (
+          <section className="mb-8 rounded-xl bg-white p-5 text-sm text-slate-600 shadow-sm ring-1 ring-slate-200">
+            <p className="font-semibold text-slate-950">Website opportunity</p>
+            <p className="mt-2 leading-6">{config.websiteGap}</p>
+          </section>
+        )}
 
         <footer className="border-t border-slate-200 pt-5 text-xs text-slate-500">
           Preview concept generated for outreach. Business details are based on public listing data.

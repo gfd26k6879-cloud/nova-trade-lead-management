@@ -43,6 +43,11 @@ interface Settings {
   ai_reverify_after_enrichment: boolean;
   ai_verification_concurrency: number;
   ai_max_attempts: number;
+  scheduler_ai_verification_enabled: boolean;
+  scheduler_crawl_enabled: boolean;
+  scheduler_enrichment_enabled: boolean;
+  scheduler_artifact_enabled: boolean;
+  scheduler_score_recompute_enabled: boolean;
   openai_api_key_configured: boolean;
   openai_api_key_source: "ui" | "env" | "none";
   google_places_api_key_configured: boolean;
@@ -227,6 +232,41 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
             />
             Enable pricing-accurate cost engine v2
           </label>
+        </div>
+      </section>
+
+      {/* Scheduler */}
+      <section className="glass rounded-2xl p-6">
+        <h3 className="section-label">Scheduler</h3>
+        <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+          Supabase Cron keeps background work moving. These toggles pause app-side processing without deleting cron jobs.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <SchedulerToggle
+            label="AI Verify"
+            checked={settings.scheduler_ai_verification_enabled}
+            onChange={(checked) => update("scheduler_ai_verification_enabled", checked)}
+          />
+          <SchedulerToggle
+            label="Discovery"
+            checked={settings.scheduler_crawl_enabled}
+            onChange={(checked) => update("scheduler_crawl_enabled", checked)}
+          />
+          <SchedulerToggle
+            label="Enrichment"
+            checked={settings.scheduler_enrichment_enabled}
+            onChange={(checked) => update("scheduler_enrichment_enabled", checked)}
+          />
+          <SchedulerToggle
+            label="Pitch Packs"
+            checked={settings.scheduler_artifact_enabled}
+            onChange={(checked) => update("scheduler_artifact_enabled", checked)}
+          />
+          <SchedulerToggle
+            label="Scores"
+            checked={settings.scheduler_score_recompute_enabled}
+            onChange={(checked) => update("scheduler_score_recompute_enabled", checked)}
+          />
         </div>
       </section>
 
@@ -489,5 +529,26 @@ function TextField({ label, value }: { label: string; value: string }) {
         aria-readonly="true"
       />
     </div>
+  );
+}
+
+function SchedulerToggle({ label, checked, onChange }: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label
+      className="flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-sm"
+      style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}
+    >
+      <span>{label}</span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="rounded"
+      />
+    </label>
   );
 }

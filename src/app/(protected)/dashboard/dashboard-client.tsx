@@ -41,6 +41,40 @@ interface AiQueueStats {
   total: number;
 }
 
+interface WorkerRun {
+  status: string;
+  trigger_source: string;
+  http_status: number | null;
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+interface SchedulerWorkerHealth {
+  workerName: string;
+  label: string;
+  enabled: boolean;
+  queueDepth: number;
+  estimatedMinutesToDrain: number | null;
+  lastRun: WorkerRun | null;
+  errors24h: number;
+  warning: string | null;
+}
+
+interface SchedulerHealth {
+  workers: SchedulerWorkerHealth[];
+  ai: {
+    dailyCost: number;
+    dailyBudget: number;
+    monthlyCost: number;
+    monthlyBudget: number;
+    budgetRemainingToday: number;
+    budgetRemainingMonth: number;
+    verifiedLeadsPerDollar: number | null;
+    readyToCallLeadsPerDollar: number | null;
+  };
+}
+
 interface DashboardStats {
   runStatus: string;
   runId: string | null;
@@ -75,6 +109,7 @@ interface DashboardStats {
   countiesSelected: number;
   countiesCompleted: number;
   aiQueueStats: AiQueueStats;
+  schedulerHealth: SchedulerHealth;
 }
 
 export function DashboardClient({ initialStats }: { initialStats: DashboardStats }) {
@@ -311,6 +346,50 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
         { label: "Failed Units", value: String(stats.failedUnits) },
       ]}
     >
+      <section className="glass rounded-2xl p-6">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="section-label">Scheduler Health</h3>
+            <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+              Supabase Cron is the background engine. These cards show whether each worker is moving work or blocked.
+            </p>
+          </div>
+          <Link href="/settings" className="btn-glass text-xs">Scheduler Settings</Link>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-5">
+          {stats.schedulerHealth.workers.map((worker) => (
+            <div key={worker.workerName} className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{worker.label}</span>
+                  <p className="mt-1 text-lg font-semibold" style={{ color: worker.warning ? "#b45309" : "var(--text-primary)" }}>
+                    {worker.enabled ? formatWorkerStatus(worker.lastRun?.status) : "Paused"}
+                  </p>
+                </div>
+                <span className="rounded-md px-2 py-1 text-xs" style={{ background: worker.enabled ? "rgba(34,197,94,0.1)" : "rgba(107,114,128,0.12)", color: worker.enabled ? "#16a34a" : "#4b5563" }}>
+                  {worker.enabled ? "On" : "Off"}
+                </span>
+              </div>
+              <div className="mt-3 space-y-1 text-xs" style={{ color: "var(--text-secondary)" }}>
+                <p>Queue: {worker.queueDepth.toLocaleString()}</p>
+                <p>ETA: {formatEta(worker.estimatedMinutesToDrain)}</p>
+                <p>Last: {worker.lastRun ? new Date(worker.lastRun.started_at).toLocaleTimeString() : "Never"}</p>
+                <p>Errors 24h: {worker.errors24h}</p>
+              </div>
+              {worker.warning && (
+                <p className="mt-2 text-xs leading-relaxed" style={{ color: "#b45309" }}>{worker.warning}</p>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <SchedulerMetric label="AI Today" value={`$${stats.schedulerHealth.ai.dailyCost.toFixed(2)} / $${stats.schedulerHealth.ai.dailyBudget.toFixed(2)}`} />
+          <SchedulerMetric label="AI Month" value={`$${stats.schedulerHealth.ai.monthlyCost.toFixed(2)} / $${stats.schedulerHealth.ai.monthlyBudget.toFixed(2)}`} />
+          <SchedulerMetric label="Verified / $" value={stats.schedulerHealth.ai.verifiedLeadsPerDollar === null ? "N/A" : String(stats.schedulerHealth.ai.verifiedLeadsPerDollar)} />
+          <SchedulerMetric label="Ready / $" value={stats.schedulerHealth.ai.readyToCallLeadsPerDollar === null ? "N/A" : String(stats.schedulerHealth.ai.readyToCallLeadsPerDollar)} />
+        </div>
+      </section>
+
       <section className="glass rounded-2xl p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -687,6 +766,28 @@ function MetricCard({ label, value, sub }: { label: string; value: string; sub?:
       {sub && <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{sub}</span>}
     </div>
   );
+}
+
+function SchedulerMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
+      <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
+    </div>
+  );
+}
+
+function formatWorkerStatus(status: string | null | undefined): string {
+  if (!status) return "No runs";
+  return status.replace(/_/g, " ");
+}
+
+function formatEta(minutes: number | null): string {
+  if (minutes === null || minutes <= 0) return "N/A";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = minutes / 60;
+  if (hours < 48) return `${Math.round(hours * 10) / 10}h`;
+  return `${Math.round((hours / 24) * 10) / 10}d`;
 }
 
 function SummaryChip({ label }: { label: string }) {

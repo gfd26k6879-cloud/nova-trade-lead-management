@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
 import { ScoreBandLegend } from "@/components/score-band-legend";
-import { generateOutreachPackageAction, logOutreachEventAction, runAiVerificationBatchAction, updateLeadStatusAction } from "@/lib/leads/actions";
+import { generateOutreachPackageAction, logOutreachEventAction, queueLeadPitchPackAction, runAiVerificationBatchAction, updateLeadStatusAction } from "@/lib/leads/actions";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
 
 interface Lead {
@@ -82,7 +82,7 @@ function websiteFindingLabel(lead: Lead): string {
   return lead.ai_verification_status.replace(/_/g, " ");
 }
 
-export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: Lead[]; scoreThresholds: ScoreBandThresholds }) {
+export function QueueClient({ initialQueue, manualReviewQueue, scoreThresholds }: { initialQueue: Lead[]; manualReviewQueue: Lead[]; scoreThresholds: ScoreBandThresholds }) {
   const router = useRouter();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [packages, setPackages] = useState<Record<string, string>>({});
@@ -91,6 +91,9 @@ export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: L
   const [refreshing, setRefreshing] = useState(false);
   const [aiBatchLoading, setAiBatchLoading] = useState(false);
   const [aiBatchMsg, setAiBatchMsg] = useState<string | null>(null);
+  const [filter, setFilter] = useState<"all" | "brief_missing" | "report_missing" | "demo_missing" | "high_confidence" | "manual_review">("all");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [pitchPackLoading, setPitchPackLoading] = useState(false);
 
   useEffect(() => {
     const refresh = () => router.refresh();
@@ -166,6 +169,38 @@ export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: L
     setAiBatchLoading(false);
   };
 
+  const baseQueue = filter === "manual_review" ? manualReviewQueue : initialQueue;
+  const filteredQueue = baseQueue.filter((lead) => {
+    if (filter === "brief_missing") return lead.business_detail_status !== "complete";
+    if (filter === "report_missing") return lead.competitive_report_status !== "complete";
+    if (filter === "demo_missing") return !lead.demo_slug;
+    if (filter === "high_confidence") return lead.ai_confidence >= 0.8;
+    return true;
+  });
+
+  const selectedReadyLeads = baseQueue.filter((lead) =>
+    selectedIds.includes(lead.id) && ["ready_to_call", "broken_site_opportunity"].includes(lead.quality_bucket)
+  );
+
+  const toggleSelected = (leadId: string) => {
+    setSelectedIds((previous) =>
+      previous.includes(leadId) ? previous.filter((id) => id !== leadId) : [...previous, leadId]
+    );
+  };
+
+  const generateSelectedPitchPacks = async () => {
+    setPitchPackLoading(true);
+    let queued = 0;
+    for (const lead of selectedReadyLeads) {
+      const result = await queueLeadPitchPackAction(lead.id);
+      if (!("error" in result)) queued++;
+    }
+    setAiBatchMsg(`Queued pitch packs for ${queued} selected leads`);
+    setSelectedIds([]);
+    router.refresh();
+    setPitchPackLoading(false);
+  };
+
   const today = new Date().toISOString().slice(0, 10);
 
   return (
@@ -174,14 +209,43 @@ export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: L
       description="Top actionable leads prioritized by score, contactability, and freshness. Work through these first."
       stats={[
         { label: "Queue Size", value: String(initialQueue.length) },
+        { label: "Shown", value: String(filteredQueue.length) },
+        { label: "Selected", value: String(selectedIds.length) },
       ]}
     >
-      <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2">
+          {[
+            ["all", "All"],
+            ["brief_missing", "Brief missing"],
+            ["report_missing", "Report missing"],
+            ["demo_missing", "Demo missing"],
+            ["high_confidence", "High confidence"],
+            ["manual_review", "Needs review"],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={filter === value ? "btn-primary text-xs" : "btn-glass text-xs"}
+              onClick={() => setFilter(value as typeof filter)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         {aiBatchMsg && (
           <span className="text-xs" style={{ color: aiBatchMsg.includes("failed") || aiBatchMsg.includes("disabled") ? "#dc2626" : "#16a34a" }}>
             {aiBatchMsg}
           </span>
         )}
+        <button
+          type="button"
+          className="btn-glass text-xs"
+          disabled={pitchPackLoading || selectedReadyLeads.length === 0}
+          onClick={generateSelectedPitchPacks}
+        >
+          {pitchPackLoading ? "Queueing..." : `Generate Pitch Pack (${selectedReadyLeads.length})`}
+        </button>
         <button
           type="button"
           className="btn-glass text-xs"
@@ -208,7 +272,7 @@ export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: L
         <ScoreBandLegend thresholds={scoreThresholds} />
       </div>
 
-      {initialQueue.length === 0 ? (
+      {filteredQueue.length === 0 ? (
         <section className="glass rounded-2xl p-6">
           <div className="rounded-xl p-5 text-center text-sm"
             style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-tertiary)" }}>
@@ -217,13 +281,19 @@ export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: L
         </section>
       ) : (
         <section className="space-y-3">
-          {initialQueue.map((lead, i) => {
+          {filteredQueue.map((lead, i) => {
             const isUrgent = lead.reminder_date && lead.reminder_date <= today;
             return (
               <article key={lead.id} className="glass rounded-2xl p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(lead.id)}
+                        onChange={() => toggleSelected(lead.id)}
+                        aria-label={`Select ${lead.name ?? "lead"}`}
+                      />
                       <span className="text-xs font-medium" style={{ color: "var(--text-tertiary)" }}>#{i + 1}</span>
                       <Link href={`/leads/${lead.id}`} className="link-accent font-medium text-sm">
                         {lead.name ?? "Unknown"}
@@ -234,6 +304,7 @@ export function QueueClient({ initialQueue, scoreThresholds }: { initialQueue: L
                       </span>
                       <ArtifactBadge type="brief" status={lead.business_detail_status} />
                       <ArtifactBadge type="report" status={lead.competitive_report_status} />
+                      <DemoBadge ready={Boolean(lead.demo_slug)} />
                       {isUrgent && (
                         <span style={{ background: "rgba(239,68,68,0.1)", color: "#dc2626", padding: "2px 8px", borderRadius: "6px", fontSize: "0.7rem", fontWeight: 600 }}>
                           follow up
@@ -363,6 +434,21 @@ function ArtifactBadge({ type, status }: { type: "brief" | "report"; status: str
   return (
     <span style={{ background: color.bg, color: color.color, padding: "2px 8px", borderRadius: "6px", fontSize: "0.7rem", fontWeight: 600 }}>
       {label}
+    </span>
+  );
+}
+
+function DemoBadge({ ready }: { ready: boolean }) {
+  return (
+    <span style={{
+      background: ready ? "rgba(34,197,94,0.1)" : "rgba(107,114,128,0.1)",
+      color: ready ? "#16a34a" : "#4b5563",
+      padding: "2px 8px",
+      borderRadius: "6px",
+      fontSize: "0.7rem",
+      fontWeight: 600,
+    }}>
+      {ready ? "Demo ready" : "Demo missing"}
     </span>
   );
 }
