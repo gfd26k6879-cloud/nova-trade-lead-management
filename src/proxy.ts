@@ -8,6 +8,10 @@ export async function proxy(request: NextRequest) {
   );
   const isProtectedApi = pathname.startsWith("/api/crawl") || pathname.startsWith("/api/export");
 
+  if (isProtectedApi && hasProxyWorkerSecret(request)) {
+    return NextResponse.next({ request });
+  }
+
   if (!isProtectedPage && !isProtectedApi) {
     return NextResponse.next({ request });
   }
@@ -62,3 +66,14 @@ export const config = {
     "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };
+
+function hasProxyWorkerSecret(request: NextRequest): boolean {
+  const header = request.headers.get("authorization") ?? "";
+  const token = header.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  if (!token) return false;
+
+  const secrets = [process.env.WORKER_CRON_SECRET, process.env.CRON_SECRET]
+    .map((secret) => secret?.trim())
+    .filter((secret): secret is string => Boolean(secret));
+  return secrets.includes(token);
+}
