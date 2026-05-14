@@ -532,6 +532,15 @@ export interface SchedulerWorkerHealth {
   estimatedMinutesToDrain: number | null;
   lastRun: WorkerRun | null;
   errors24h: number;
+  processed24h: number;
+  progress: {
+    total: number;
+    pending: number;
+    running: number;
+    completed: number;
+    failed: number;
+    canceled: number;
+  };
   warning: string | null;
 }
 
@@ -1104,6 +1113,17 @@ export async function getSchedulerHealth(): Promise<SchedulerHealth> {
 
   const activeRun = await getActiveCrawlRun();
   const crawlProgress = activeRun ? await getCrawlProgress(activeRun.id) : null;
+  const enrichmentStatusRows = await db.prepare(
+    `SELECT enrichment_status as status, COUNT(*) as count
+     FROM leads
+     WHERE score > 0 AND COALESCE(is_excluded, 0) = 0
+     GROUP BY enrichment_status`
+  ).all() as Array<{ status: string; count: number }>;
+  const artifactStatusRows = await db.prepare(
+    `SELECT status, COUNT(*) as count
+     FROM lead_ai_artifacts
+     GROUP BY status`
+  ).all() as Array<{ status: string; count: number }>;
   const enrichmentRow = await db.prepare(
     "SELECT COUNT(*) as count FROM leads WHERE enrichment_status = 'pending' AND score > 0 AND COALESCE(is_excluded, 0) = 0"
   ).get() as { count: number };
@@ -1126,15 +1146,62 @@ export async function getSchedulerHealth(): Promise<SchedulerHealth> {
     { workerName: "artifact", label: "Pitch-pack artifacts", queueDepth: Number(artifactRow.count ?? 0), cadenceMinutes: 2 },
     { workerName: "score_recompute", label: "Score recompute", queueDepth: Number(staleScoreRow.count ?? 0), cadenceMinutes: 10 },
   ];
+  const progressByWorker: Record<SchedulerWorkerName, SchedulerWorkerHealth["progress"]> = {
+    ai_verification: {
+      total: aiQueue.total,
+      pending: aiQueue.queued,
+      running: aiQueue.running,
+      completed: aiQueue.verified,
+      failed: aiQueue.error,
+      canceled: 0,
+    },
+    crawl: {
+      total: crawlProgress?.total ?? 0,
+      pending: crawlProgress?.pending ?? 0,
+      running: crawlProgress?.running ?? 0,
+      completed: crawlProgress?.done ?? 0,
+      failed: crawlProgress?.failed ?? 0,
+      canceled: crawlProgress?.canceled ?? 0,
+    },
+    enrichment: {
+      total: sumStatusCounts(enrichmentStatusRows),
+      pending: getStatusCount(enrichmentStatusRows, "pending"),
+      running: 0,
+      completed: getStatusCount(enrichmentStatusRows, "enriched") + getStatusCount(enrichmentStatusRows, "skipped"),
+      failed: 0,
+      canceled: 0,
+    },
+    artifact: {
+      total: sumStatusCounts(artifactStatusRows),
+      pending: getStatusCount(artifactStatusRows, "queued"),
+      running: getStatusCount(artifactStatusRows, "running"),
+      completed: getStatusCount(artifactStatusRows, "complete"),
+      failed: getStatusCount(artifactStatusRows, "error"),
+      canceled: 0,
+    },
+    score_recompute: {
+      total: Number(staleScoreRow.count ?? 0),
+      pending: Number(staleScoreRow.count ?? 0),
+      running: 0,
+      completed: 0,
+      failed: 0,
+      canceled: 0,
+    },
+  };
 
   const healthWorkers: SchedulerWorkerHealth[] = [];
   for (const worker of workers) {
-    const [lastRun, errorRow] = await Promise.all([
+    const [lastRun, errorRow, processedRow] = await Promise.all([
       getLatestWorkerRun(worker.workerName),
       db.prepare(
         `SELECT COUNT(*) as count
          FROM worker_runs
          WHERE worker_name = ? AND status IN ('error','budget_limit') AND started_at >= ?`
+      ).get(worker.workerName, since24h) as Promise<{ count: number }>,
+      db.prepare(
+        `SELECT COUNT(*) as count
+         FROM worker_runs
+         WHERE worker_name = ? AND status = 'processed' AND started_at >= ?`
       ).get(worker.workerName, since24h) as Promise<{ count: number }>,
     ]);
     const enabled = isSchedulerWorkerEnabled(settings, worker.workerName);
@@ -1145,6 +1212,8 @@ export async function getSchedulerHealth(): Promise<SchedulerHealth> {
       estimatedMinutesToDrain: worker.queueDepth > 0 ? worker.queueDepth * worker.cadenceMinutes : null,
       lastRun,
       errors24h: Number(errorRow.count ?? 0),
+      processed24h: Number(processedRow.count ?? 0),
+      progress: progressByWorker[worker.workerName],
       warning,
     });
   }
@@ -1215,6 +1284,14 @@ function buildSchedulerWarning(
   if (lastRun.status === "error" || lastRun.status === "budget_limit") return lastRun.error ?? "Last worker run failed.";
   if (errors24h > 0) return `${errors24h} worker errors in the last 24 hours.`;
   return null;
+}
+
+function getStatusCount(rows: Array<{ status: string; count: number }>, status: string): number {
+  return Number(rows.find((row) => row.status === status)?.count ?? 0);
+}
+
+function sumStatusCounts(rows: Array<{ status: string; count: number }>): number {
+  return rows.reduce((sum, row) => sum + Number(row.count ?? 0), 0);
 }
 
 function roundOne(value: number): number {
@@ -2395,6 +2472,9 @@ export async function updateLeadAiVerificationSummary(
   winProbabilityScore: number,
 ): Promise<void>{
   const db = await getDb();
+  const foundWebsiteUrl = verification.found_website_url?.trim() || null;
+  const hasUsableWebsite = verification.status === "site_found" && verification.website_viability_status === "usable" && Boolean(foundWebsiteUrl);
+  const hasWeakWebsiteOpportunity = verification.status === "weak_site_found" && isWeakWebsiteViability(verification.website_viability_status) && Boolean(foundWebsiteUrl);
   await db.prepare(
     `UPDATE leads SET
       ai_verification_status = ?,
@@ -2405,18 +2485,47 @@ export async function updateLeadAiVerificationSummary(
       ai_checked_at = ?,
       ai_website_viability_status = ?,
       ai_website_health = ?,
+      website_uri = CASE
+        WHEN ? = 1 OR ? = 1 THEN ?
+        ELSE website_uri
+      END,
+      website_status = CASE
+        WHEN ? = 1 THEN 'custom'
+        WHEN ? = 1 AND website_status != 'custom' THEN 'basic'
+        ELSE website_status
+      END,
+      qualification_status = CASE
+        WHEN ? = 1 THEN 'disqualified'
+        ELSE qualification_status
+      END,
+      disqualification_reason = CASE
+        WHEN ? = 1 THEN 'AI found existing usable website'
+        ELSE disqualification_reason
+      END,
+      score = CASE
+        WHEN ? = 1 THEN 0
+        ELSE score
+      END,
       win_probability_score = ?,
       updated_at = ?
      WHERE id = ?`
   ).run(
     verification.status,
     clamp01(verification.confidence),
-    verification.found_website_url,
+    foundWebsiteUrl,
     verification.recommendation,
     verification.summary,
     verification.created_at,
     verification.website_viability_status,
     verification.website_health_json ? JSON.stringify(verification.website_health_json) : null,
+    hasUsableWebsite ? 1 : 0,
+    hasWeakWebsiteOpportunity ? 1 : 0,
+    foundWebsiteUrl,
+    hasUsableWebsite ? 1 : 0,
+    hasWeakWebsiteOpportunity ? 1 : 0,
+    hasUsableWebsite ? 1 : 0,
+    hasUsableWebsite ? 1 : 0,
+    hasUsableWebsite ? 1 : 0,
     clampPercentage(winProbabilityScore),
     nowISO(),
     leadId,
@@ -2691,6 +2800,11 @@ export async function markLeadAiVerified(leadId: string, inputHash: string): Pro
       updated_at = ?
      WHERE id = ?`
   ).run(inputHash, nowISO(), leadId);
+  const latest = await getLatestAiVerification(leadId);
+  if (latest && latest.error == null && latest.input_hash === inputHash) {
+    await updateLeadAiVerificationSummary(leadId, latest, 0);
+    return result.changes;
+  }
   await updateLeadQualityScores(leadId);
   return result.changes;
 }

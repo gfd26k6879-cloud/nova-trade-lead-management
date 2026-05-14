@@ -13,6 +13,7 @@ import {
   stopCrawlRunAction,
   retryFailedUnitsAction,
   getDashboardStatsAction,
+  updateSchedulerWorkerEnabledAction,
 } from "@/lib/crawl/actions";
 import { queueMissingAiVerificationsAction } from "@/lib/leads/actions";
 
@@ -45,19 +46,31 @@ interface WorkerRun {
   status: string;
   trigger_source: string;
   http_status: number | null;
+  result_json?: Record<string, unknown>;
   error: string | null;
   started_at: string;
   completed_at: string | null;
 }
 
+type SchedulerWorkerName = "ai_verification" | "crawl" | "enrichment" | "artifact" | "score_recompute";
+
 interface SchedulerWorkerHealth {
-  workerName: string;
+  workerName: SchedulerWorkerName;
   label: string;
   enabled: boolean;
   queueDepth: number;
   estimatedMinutesToDrain: number | null;
   lastRun: WorkerRun | null;
   errors24h: number;
+  processed24h: number;
+  progress: {
+    total: number;
+    pending: number;
+    running: number;
+    completed: number;
+    failed: number;
+    canceled: number;
+  };
   warning: string | null;
 }
 
@@ -126,6 +139,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
   const [isAiVerifying, setIsAiVerifying] = useState(false);
   const [aiProgress, setAiProgress] = useState<string | null>(null);
   const [aiBackfillLoading, setAiBackfillLoading] = useState(false);
+  const [workerToggleLoading, setWorkerToggleLoading] = useState<string | null>(null);
   const aiRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refreshStats = useCallback(async () => {
@@ -317,6 +331,18 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
     setAiBackfillLoading(false);
   };
 
+  const handleWorkerToggle = async (workerName: SchedulerWorkerName, enabled: boolean) => {
+    setWorkerToggleLoading(workerName);
+    const result = await updateSchedulerWorkerEnabledAction(workerName, enabled);
+    if ("error" in result) {
+      toast.error(result.error);
+    } else {
+      toast.success(`${workerLabel(workerName)} ${enabled ? "resumed" : "paused"}`);
+      await refreshStats();
+    }
+    setWorkerToggleLoading(null);
+  };
+
   const toggleCategory = (cat: string) => {
     setSelectedCategories((prev) =>
       prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
@@ -370,15 +396,40 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
                   {worker.enabled ? "On" : "Off"}
                 </span>
               </div>
+              <div className="mt-3">
+                <div className="mb-1 flex items-center justify-between text-[11px]" style={{ color: "var(--text-tertiary)" }}>
+                  <span>{worker.progress.completed.toLocaleString()} done</span>
+                  <span>{workerProgressPct(worker.progress)}%</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.08)" }}>
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{ width: `${workerProgressPct(worker.progress)}%`, background: worker.enabled ? "var(--accent)" : "#9ca3af" }}
+                  />
+                </div>
+              </div>
               <div className="mt-3 space-y-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-                <p>Queue: {worker.queueDepth.toLocaleString()}</p>
+                <p>Queue: {worker.queueDepth.toLocaleString()} pending, {worker.progress.running.toLocaleString()} running</p>
                 <p>ETA: {formatEta(worker.estimatedMinutesToDrain)}</p>
-                <p>Last: {worker.lastRun ? new Date(worker.lastRun.started_at).toLocaleTimeString() : "Never"}</p>
-                <p>Errors 24h: {worker.errors24h}</p>
+                <p>Last: {worker.lastRun ? `${new Date(worker.lastRun.started_at).toLocaleTimeString()} · ${formatWorkerResult(worker.lastRun)}` : "Never"}</p>
+                <p>24h: {worker.processed24h.toLocaleString()} processed, {worker.errors24h} errors</p>
               </div>
               {worker.warning && (
                 <p className="mt-2 text-xs leading-relaxed" style={{ color: "#b45309" }}>{worker.warning}</p>
               )}
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  className={worker.enabled ? "btn-glass text-xs" : "btn-primary text-xs"}
+                  disabled={workerToggleLoading === worker.workerName}
+                  onClick={() => handleWorkerToggle(worker.workerName, !worker.enabled)}
+                >
+                  {workerToggleLoading === worker.workerName ? "Saving..." : worker.enabled ? "Pause" : "Resume"}
+                </button>
+                {worker.workerName === "crawl" && (
+                  <Link href="/coverage" className="btn-glass text-xs">Monitor</Link>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -646,6 +697,11 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
             <button type="button" className="btn-primary text-sm" onClick={handleEnrich} disabled={loading || isEnriching}>
               {isEnriching ? "Enriching..." : "Enrich Top Leads"}
             </button>
+            {isEnriching && (
+              <button type="button" className="btn-glass text-sm" onClick={() => setIsEnriching(false)}>
+                Stop Local Polling
+              </button>
+            )}
             {enrichProgress && (
               <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
                 Last: {enrichProgress}
@@ -673,6 +729,11 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
           <button type="button" className="btn-primary text-sm" onClick={handleAiVerify} disabled={loading || isAiVerifying || stats.aiQueueStats.queued === 0}>
             {isAiVerifying ? "Verifying..." : "Process AI Queue"}
           </button>
+          {isAiVerifying && (
+            <button type="button" className="btn-glass text-sm" onClick={() => setIsAiVerifying(false)}>
+              Stop Local Polling
+            </button>
+          )}
           <button type="button" className="btn-glass text-sm" onClick={handleQueueMissingAi} disabled={loading || aiBackfillLoading || stats.aiQueueStats.notChecked === 0}>
             {aiBackfillLoading ? "Queueing..." : "Queue Missing AI Verifications"}
           </button>
@@ -788,6 +849,31 @@ function formatEta(minutes: number | null): string {
   const hours = minutes / 60;
   if (hours < 48) return `${Math.round(hours * 10) / 10}h`;
   return `${Math.round((hours / 24) * 10) / 10}d`;
+}
+
+function workerProgressPct(progress: SchedulerWorkerHealth["progress"]): number {
+  if (progress.total <= 0) return 0;
+  return Math.min(100, Math.round((progress.completed / progress.total) * 100));
+}
+
+function formatWorkerResult(run: WorkerRun): string {
+  const result = (run as WorkerRun & { result_json?: Record<string, unknown> }).result_json;
+  if (!result) return run.status.replace(/_/g, " ");
+  const leadName = typeof result.leadName === "string" ? result.leadName : null;
+  const count = typeof result.count === "number" ? result.count : null;
+  const reason = typeof result.reason === "string" ? result.reason : null;
+  if (leadName) return leadName;
+  if (count !== null) return `${count.toLocaleString()} items`;
+  if (reason) return reason;
+  return run.status.replace(/_/g, " ");
+}
+
+function workerLabel(workerName: string): string {
+  if (workerName === "ai_verification") return "AI verification";
+  if (workerName === "crawl") return "Discovery crawl";
+  if (workerName === "enrichment") return "Lead enrichment";
+  if (workerName === "artifact") return "Pitch packs";
+  return "Score recompute";
 }
 
 function SummaryChip({ label }: { label: string }) {

@@ -28,6 +28,8 @@ import {
   getZipCodesByCounty,
   getZipCoverageStatus,
   getSchedulerHealth,
+  updateSettings,
+  type SchedulerWorkerName,
 } from "@/lib/db/queries";
 import { requirePermission } from "@/lib/auth";
 
@@ -40,6 +42,7 @@ const startPlannerSchema = z.object({
 
 const plannerStateSchema = z.string().trim().min(2).max(2).transform((value) => value.toUpperCase());
 const plannerCountySchema = z.string().trim().min(1);
+const schedulerWorkerSchema = z.enum(["ai_verification", "crawl", "enrichment", "artifact", "score_recompute"]);
 
 function normalizeDistinct(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)));
@@ -213,6 +216,20 @@ export async function retryFailedUnitsAction() {
   return { retriedCount: count };
 }
 
+export async function updateSchedulerWorkerEnabledAction(workerName: SchedulerWorkerName, enabled: boolean) {
+  await requirePermission("settings:manage");
+  await ensureDbReady();
+  const parsedWorker = schedulerWorkerSchema.safeParse(workerName);
+  if (!parsedWorker.success) return { error: "Invalid scheduler worker." };
+
+  const settingKey = schedulerSettingKey(parsedWorker.data);
+  await updateSettings({ [settingKey]: enabled });
+  await createAuditLog(enabled ? "scheduler_worker_resumed" : "scheduler_worker_paused", "settings", "1", {
+    workerName: parsedWorker.data,
+  });
+  return { success: true, workerName: parsedWorker.data, enabled };
+}
+
 export async function getDashboardStatsAction() {
   await requirePermission("crawl:manage");
   await ensureDbReady();
@@ -281,6 +298,14 @@ export async function getDashboardStatsAction() {
     costPerQualifiedLead,
     schedulerHealth,
   };
+}
+
+function schedulerSettingKey(workerName: SchedulerWorkerName) {
+  if (workerName === "ai_verification") return "scheduler_ai_verification_enabled" as const;
+  if (workerName === "crawl") return "scheduler_crawl_enabled" as const;
+  if (workerName === "enrichment") return "scheduler_enrichment_enabled" as const;
+  if (workerName === "artifact") return "scheduler_artifact_enabled" as const;
+  return "scheduler_score_recompute_enabled" as const;
 }
 
 export async function getFailedUnitErrorsAction() {

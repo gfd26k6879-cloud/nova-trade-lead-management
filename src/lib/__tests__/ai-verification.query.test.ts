@@ -89,7 +89,11 @@ describe("AI verification queries", () => {
 
     await updateLeadAiVerificationSummary("lead-1", verification, 12);
     const latest = await getLatestAiVerification("lead-1");
-    const lead = testDb.prepare("SELECT ai_verification_status, ai_found_website_url, ai_confidence, ai_website_viability_status, ai_website_health, win_probability_score FROM leads WHERE id = 'lead-1'").get() as Record<string, unknown>;
+    const lead = testDb.prepare(
+      `SELECT ai_verification_status, ai_found_website_url, ai_confidence, ai_website_viability_status,
+              ai_website_health, website_uri, website_status, qualification_status, score, win_probability_score
+       FROM leads WHERE id = 'lead-1'`
+    ).get() as Record<string, unknown>;
 
     expect(latest?.status).toBe("site_found");
     expect(latest?.website_viability_status).toBe("usable");
@@ -99,7 +103,37 @@ describe("AI verification queries", () => {
     expect(lead.ai_confidence).toBe(0.91);
     expect(lead.ai_website_viability_status).toBe("usable");
     expect(JSON.parse(lead.ai_website_health as string).statusCode).toBe(200);
+    expect(lead.website_uri).toBe("https://gatewayparkdental.example");
+    expect(lead.website_status).toBe("custom");
+    expect(lead.qualification_status).toBe("disqualified");
+    expect(lead.score).toBe(0);
     expect(lead.win_probability_score).toBe(0);
+  });
+
+  it("moves AI weak website findings out of the no-website canonical bucket", async () => {
+    const verification = await createAiLeadVerification({
+      lead_id: "lead-1",
+      model: "gpt-5.4-mini",
+      status: "weak_site_found",
+      confidence: 0.84,
+      found_website_url: "https://broken-gateway.example",
+      sources: [{ url: "https://broken-gateway.example", title: "Gateway Park Dental", evidence: "Official domain is broken." }],
+      recommendation: "keep",
+      reason: "Official domain appears broken.",
+      summary: "The lead has a broken website opportunity.",
+      website_viability_status: "broken",
+      website_viability_reason: "Website fails deterministic health checks.",
+    });
+
+    await updateLeadAiVerificationSummary("lead-1", verification, 58);
+    const lead = testDb.prepare(
+      "SELECT website_uri, website_status, qualification_status, quality_bucket FROM leads WHERE id = 'lead-1'"
+    ).get() as Record<string, unknown>;
+
+    expect(lead.website_uri).toBe("https://broken-gateway.example");
+    expect(lead.website_status).toBe("basic");
+    expect(lead.qualification_status).toBe("needs_verification");
+    expect(lead.quality_bucket).toBe("broken_site_opportunity");
   });
 
   it("blocks budget preflight when reserved cost exceeds daily budget", async () => {
