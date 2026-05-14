@@ -3,6 +3,12 @@ import { type NextRequest, NextResponse } from "next/server";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  if (pathname.toLowerCase() === "/discover") {
+    const dashboardUrl = request.nextUrl.clone();
+    dashboardUrl.pathname = "/dashboard";
+    return NextResponse.redirect(dashboardUrl);
+  }
+
   const isProtectedPage = ["/dashboard", "/coverage", "/leads", "/queue", "/statistics", "/settings", "/users"].some((prefix) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`)
   );

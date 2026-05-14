@@ -855,7 +855,9 @@ export async function ensureDbReady(): Promise<void>{
     dbReadyPromise = (async () => {
       await getDb();
       await seedZipCodes();
-      await syncCanonicalAiWebsiteFindings();
+      void syncCanonicalAiWebsiteFindings().catch((err) => {
+        console.error("Failed to sync canonical AI website findings", err);
+      });
     })();
   }
   await dbReadyPromise;
