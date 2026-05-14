@@ -104,6 +104,7 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 NOSITE_BOOTSTRAP_ADMIN_EMAIL=
 NOSITE_ENCRYPTION_SECRET=
+WORKER_CRON_SECRET=
 GOOGLE_PLACES_API_KEY=
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.4-mini
@@ -112,7 +113,31 @@ OPENAI_AI_COST_RESERVATION_USD=0.05
 
 Redeploy after any environment variable change.
 
-## 6. Production Smoke Test
+## 6. Supabase Cron Scheduler
+
+Production scheduling is owned by Supabase Cron, not Vercel Cron.
+
+1. Save `WORKER_CRON_SECRET` in Supabase Vault as `worker_cron_secret`. The worker can read this from Vault through `DATABASE_URL`; keeping the same value in Vercel env is still recommended as a fast path.
+2. Save the production app URL in Supabase Vault as `worker_base_url`.
+3. Apply `supabase/migrations/20260514161714_supabase_ai_verification_cron.sql`.
+4. Confirm the job exists:
+
+```sql
+select jobid, schedule, jobname, active
+from cron.job
+where jobname = 'nosite-ai-verification-worker';
+```
+
+5. Confirm calls are succeeding:
+
+```sql
+select status_code, error_msg, created
+from net._http_response
+order by created desc
+limit 20;
+```
+
+## 7. Production Smoke Test
 
 After deploy:
 
@@ -124,9 +149,10 @@ After deploy:
 6. Confirm CSV export requires admin login.
 7. Save or verify Google/OpenAI keys in Settings.
 8. Run one low-cost Places test after fixing the Google API key.
-7. Run one AI verification and confirm the model remains locked to `gpt-5.4-mini`.
+9. Run one AI verification and confirm the model remains locked to `gpt-5.4-mini`.
+10. Confirm the Supabase cron job drains `ai_queue_status = 'queued'` over several minutes.
 
-## 7. First Hardening Pass
+## 8. First Hardening Pass
 
 Do these after the first working deployment:
 

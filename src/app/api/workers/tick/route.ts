@@ -4,7 +4,8 @@ import { processNextLeadArtifactJob } from "@/lib/ai/artifact-worker";
 import { enrichNextLead } from "@/lib/crawl/enrichment";
 import { processNextUnit } from "@/lib/crawl/worker";
 import { ensureDbReady, recomputeAllLeadQualityScores } from "@/lib/db/queries";
-import { ForbiddenError, requirePermission, UnauthorizedError } from "@/lib/auth";
+import { ForbiddenError, UnauthorizedError } from "@/lib/auth";
+import { authorizeInternalWorkerRequest } from "@/lib/internal-worker-auth";
 
 export async function POST(request: NextRequest) {
   return runWorkerTick(request);
@@ -16,7 +17,7 @@ export async function GET(request: NextRequest) {
 
 async function runWorkerTick(request: NextRequest) {
   try {
-    await authorizeWorkerTick(request);
+    await authorizeInternalWorkerRequest(request, "crawl:manage");
     await ensureDbReady();
 
     const crawl = await processNextUnit();
@@ -36,16 +37,4 @@ async function runWorkerTick(request: NextRequest) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ status: "error", error: message }, { status: 500 });
   }
-}
-
-async function authorizeWorkerTick(request: NextRequest): Promise<void> {
-  const secrets = [
-    process.env.WORKER_CRON_SECRET?.trim(),
-    process.env.CRON_SECRET?.trim(),
-  ].filter(Boolean);
-  if (secrets.length > 0) {
-    const header = request.headers.get("authorization") ?? "";
-    if (secrets.some((secret) => header === `Bearer ${secret}`)) return;
-  }
-  await requirePermission("crawl:manage");
 }

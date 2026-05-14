@@ -158,6 +158,10 @@ Also tracked per lead:
   - `GOOGLE_PLACES_API_KEY`
   - `OPENAI_API_KEY`
   - `NOSITE_ENCRYPTION_SECRET`
+  - `WORKER_CRON_SECRET`
+- Scheduler:
+  - Supabase Cron job `nosite-ai-verification-worker` calls `/api/ai/verify-next` once per minute
+  - Supabase Vault secrets: `worker_cron_secret`, `worker_base_url`
 - Authorization:
   - App roles live in `app_users`: `admin` and `researcher`
   - Researchers cannot crawl, export, edit settings, or manage users

@@ -1,11 +1,20 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { processNextAiVerificationJob } from "@/lib/ai/verification-worker";
 import { ensureDbReady } from "@/lib/db/queries";
-import { ForbiddenError, requirePermission, UnauthorizedError } from "@/lib/auth";
+import { ForbiddenError, UnauthorizedError } from "@/lib/auth";
+import { authorizeInternalWorkerRequest } from "@/lib/internal-worker-auth";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  return runAiVerificationWorker(request);
+}
+
+export async function GET(request: NextRequest) {
+  return runAiVerificationWorker(request);
+}
+
+async function runAiVerificationWorker(request: NextRequest) {
   try {
-    await requirePermission("ai:verify");
+    await authorizeInternalWorkerRequest(request, "ai:verify");
     await ensureDbReady();
     const result = await processNextAiVerificationJob();
     return NextResponse.json(result);
