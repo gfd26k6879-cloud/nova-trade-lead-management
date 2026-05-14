@@ -8,7 +8,7 @@ export async function proxy(request: NextRequest) {
   );
   const isProtectedApi = pathname.startsWith("/api/crawl") || pathname.startsWith("/api/export");
 
-  if (isProtectedApi && hasProxyWorkerSecret(request)) {
+  if (isProtectedWorkerApi(pathname) && hasBearerAuth(request)) {
     return NextResponse.next({ request });
   }
 
@@ -67,13 +67,11 @@ export const config = {
   ],
 };
 
-function hasProxyWorkerSecret(request: NextRequest): boolean {
-  const header = request.headers.get("authorization") ?? "";
-  const token = header.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  if (!token) return false;
+function isProtectedWorkerApi(pathname: string): boolean {
+  return pathname === "/api/crawl/process-next" || pathname === "/api/crawl/enrich-next";
+}
 
-  const secrets = [process.env.WORKER_CRON_SECRET, process.env.CRON_SECRET]
-    .map((secret) => secret?.trim())
-    .filter((secret): secret is string => Boolean(secret));
-  return secrets.includes(token);
+function hasBearerAuth(request: NextRequest): boolean {
+  const header = request.headers.get("authorization") ?? "";
+  return /^Bearer\s+.+$/i.test(header);
 }
