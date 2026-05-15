@@ -28,6 +28,8 @@ import {
   getZipCodesByCounty,
   getZipCoverageStatus,
   getSchedulerHealth,
+  getSchedulerOperationsSummary,
+  getSettings,
   updateSettings,
   type SchedulerWorkerName,
 } from "@/lib/db/queries";
@@ -228,6 +230,46 @@ export async function updateSchedulerWorkerEnabledAction(workerName: SchedulerWo
     workerName: parsedWorker.data,
   });
   return { success: true, workerName: parsedWorker.data, enabled };
+}
+
+export async function updateAllSchedulerWorkersEnabledAction(enabled: boolean) {
+  await requirePermission("settings:manage");
+  await ensureDbReady();
+  await updateSettings({
+    scheduler_ai_verification_enabled: enabled,
+    scheduler_crawl_enabled: enabled,
+    scheduler_enrichment_enabled: enabled,
+    scheduler_artifact_enabled: enabled,
+    scheduler_score_recompute_enabled: enabled,
+  });
+  await createAuditLog(enabled ? "scheduler_all_workers_resumed" : "scheduler_all_workers_paused", "settings", "1");
+  return { success: true, enabled };
+}
+
+export async function resumeRecommendedSchedulerWorkersAction() {
+  await requirePermission("settings:manage");
+  await ensureDbReady();
+  const settings = await getSettings();
+  const openAiReady = settings.ai_enabled && settings.openai_api_key_configured;
+  const googleReady = settings.google_places_api_key_configured;
+  await updateSettings({
+    scheduler_ai_verification_enabled: openAiReady,
+    scheduler_crawl_enabled: googleReady,
+    scheduler_enrichment_enabled: googleReady,
+    scheduler_artifact_enabled: openAiReady,
+    scheduler_score_recompute_enabled: true,
+  });
+  await createAuditLog("scheduler_recommended_workers_resumed", "settings", "1", {
+    openAiReady,
+    googleReady,
+  });
+  return { success: true, openAiReady, googleReady };
+}
+
+export async function getSchedulerOperationsAction() {
+  await requirePermission("crawl:manage");
+  await ensureDbReady();
+  return getSchedulerOperationsSummary();
 }
 
 export async function getDashboardStatsAction() {

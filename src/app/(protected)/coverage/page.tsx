@@ -13,7 +13,7 @@ import {
 } from "@/lib/db/queries";
 import { CoverageClient } from "./coverage-client";
 
-export const metadata: Metadata = { title: "Coverage | NoSite Leads" };
+export const metadata: Metadata = { title: "Discovery Monitor | NoSite Leads" };
 
 export default async function CoveragePage() {
   await requirePermission("crawl:manage");

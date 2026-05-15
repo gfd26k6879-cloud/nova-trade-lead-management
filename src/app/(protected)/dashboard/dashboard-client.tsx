@@ -13,7 +13,6 @@ import {
   stopCrawlRunAction,
   retryFailedUnitsAction,
   getDashboardStatsAction,
-  updateSchedulerWorkerEnabledAction,
 } from "@/lib/crawl/actions";
 import { queueMissingAiVerificationsAction } from "@/lib/leads/actions";
 
@@ -139,7 +138,6 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
   const [isAiVerifying, setIsAiVerifying] = useState(false);
   const [aiProgress, setAiProgress] = useState<string | null>(null);
   const [aiBackfillLoading, setAiBackfillLoading] = useState(false);
-  const [workerToggleLoading, setWorkerToggleLoading] = useState<string | null>(null);
   const aiRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refreshStats = useCallback(async () => {
@@ -331,18 +329,6 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
     setAiBackfillLoading(false);
   };
 
-  const handleWorkerToggle = async (workerName: SchedulerWorkerName, enabled: boolean) => {
-    setWorkerToggleLoading(workerName);
-    const result = await updateSchedulerWorkerEnabledAction(workerName, enabled);
-    if ("error" in result) {
-      toast.error(result.error);
-    } else {
-      toast.success(`${workerLabel(workerName)} ${enabled ? "resumed" : "paused"}`);
-      await refreshStats();
-    }
-    setWorkerToggleLoading(null);
-  };
-
   const toggleCategory = (cat: string) => {
     setSelectedCategories((prev) =>
       prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
@@ -356,6 +342,10 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
   const isIdle = !isRunning && !isQueued && !isPaused;
   const progress = stats.progress;
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+  const activeWorkerCount = stats.schedulerHealth.workers.filter((worker) => worker.enabled).length;
+  const pausedWorkerCount = stats.schedulerHealth.workers.length - activeWorkerCount;
+  const backgroundQueueDepth = stats.schedulerHealth.workers.reduce((sum, worker) => sum + worker.queueDepth, 0);
+  const workerIssueCount = stats.schedulerHealth.workers.filter((worker) => worker.enabled && worker.warning).length;
 
   return (
     <PageShell
@@ -373,71 +363,20 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
       ]}
     >
       <section className="glass rounded-2xl p-6">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h3 className="section-label">Scheduler Health</h3>
+            <h3 className="section-label">Background Work</h3>
             <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-              Supabase Cron is the background engine. These cards show whether each worker is moving work or blocked.
+              Scheduler controls, worker explanations, costs, backlog counts, and recent run history now live in the Scheduler operations center.
             </p>
           </div>
-          <Link href="/settings" className="btn-glass text-xs">Scheduler Settings</Link>
-        </div>
-        <div className="grid gap-3 lg:grid-cols-5">
-          {stats.schedulerHealth.workers.map((worker) => (
-            <div key={worker.workerName} className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{worker.label}</span>
-                  <p className="mt-1 text-lg font-semibold" style={{ color: worker.warning ? "#b45309" : "var(--text-primary)" }}>
-                    {worker.enabled ? formatWorkerStatus(worker.lastRun?.status) : "Paused"}
-                  </p>
-                </div>
-                <span className="rounded-md px-2 py-1 text-xs" style={{ background: worker.enabled ? "rgba(34,197,94,0.1)" : "rgba(107,114,128,0.12)", color: worker.enabled ? "#16a34a" : "#4b5563" }}>
-                  {worker.enabled ? "On" : "Off"}
-                </span>
-              </div>
-              <div className="mt-3">
-                <div className="mb-1 flex items-center justify-between text-[11px]" style={{ color: "var(--text-tertiary)" }}>
-                  <span>{worker.progress.completed.toLocaleString()} done</span>
-                  <span>{workerProgressPct(worker.progress)}%</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.08)" }}>
-                  <div
-                    className="h-full rounded-full transition-all duration-500"
-                    style={{ width: `${workerProgressPct(worker.progress)}%`, background: worker.enabled ? "var(--accent)" : "#9ca3af" }}
-                  />
-                </div>
-              </div>
-              <div className="mt-3 space-y-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-                <p>Queue: {worker.queueDepth.toLocaleString()} pending, {worker.progress.running.toLocaleString()} running</p>
-                <p>ETA: {formatEta(worker.estimatedMinutesToDrain)}</p>
-                <p>Last: {worker.lastRun ? `${new Date(worker.lastRun.started_at).toLocaleTimeString()} · ${formatWorkerResult(worker.lastRun)}` : "Never"}</p>
-                <p>24h: {worker.processed24h.toLocaleString()} processed, {worker.errors24h} errors</p>
-              </div>
-              {worker.warning && (
-                <p className="mt-2 text-xs leading-relaxed" style={{ color: "#b45309" }}>{worker.warning}</p>
-              )}
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  className={worker.enabled ? "btn-glass text-xs" : "btn-primary text-xs"}
-                  disabled={workerToggleLoading === worker.workerName}
-                  onClick={() => handleWorkerToggle(worker.workerName, !worker.enabled)}
-                >
-                  {workerToggleLoading === worker.workerName ? "Saving..." : worker.enabled ? "Pause" : "Resume"}
-                </button>
-                {worker.workerName === "crawl" && (
-                  <Link href="/coverage" className="btn-glass text-xs">Monitor</Link>
-                )}
-              </div>
-            </div>
-          ))}
+          <Link href="/scheduler" className="btn-primary text-sm">Open Scheduler</Link>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <SchedulerMetric label="AI Today" value={`$${stats.schedulerHealth.ai.dailyCost.toFixed(2)} / $${stats.schedulerHealth.ai.dailyBudget.toFixed(2)}`} />
-          <SchedulerMetric label="AI Month" value={`$${stats.schedulerHealth.ai.monthlyCost.toFixed(2)} / $${stats.schedulerHealth.ai.monthlyBudget.toFixed(2)}`} />
-          <SchedulerMetric label="Verified / $" value={stats.schedulerHealth.ai.verifiedLeadsPerDollar === null ? "N/A" : String(stats.schedulerHealth.ai.verifiedLeadsPerDollar)} />
-          <SchedulerMetric label="Ready / $" value={stats.schedulerHealth.ai.readyToCallLeadsPerDollar === null ? "N/A" : String(stats.schedulerHealth.ai.readyToCallLeadsPerDollar)} />
+          <MetricCard label="Workers On" value={`${activeWorkerCount} / ${stats.schedulerHealth.workers.length}`} sub={pausedWorkerCount > 0 ? `${pausedWorkerCount} paused` : "all active"} />
+          <MetricCard label="Background Queue" value={backgroundQueueDepth.toLocaleString()} sub="all worker backlogs" />
+          <MetricCard label="Worker Issues" value={String(workerIssueCount)} sub={workerIssueCount > 0 ? "needs review" : "none blocking"} />
+          <MetricCard label="AI Month" value={`$${stats.schedulerHealth.ai.monthlyCost.toFixed(2)}`} sub={`$${stats.schedulerHealth.ai.budgetRemainingMonth.toFixed(2)} remaining`} />
         </div>
       </section>
 
@@ -446,7 +385,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
           <div>
             <h3 className="section-label">Discovery Workflow</h3>
             <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-              Start here when you want new businesses. Pick counties, ZIP codes, and categories below, then open Run Monitor to see the exact ZIP/category units being processed.
+              Start here when you want new businesses. Pick counties, ZIP codes, and categories below, then open Discovery Monitor to see the exact ZIP/category units being processed.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -479,7 +418,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
               </button>
             )}
             <Link href="/coverage" className="btn-glass text-sm">
-              Open Run Monitor
+              Open Discovery Monitor
             </Link>
           </div>
         </div>
@@ -754,7 +693,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
       <section className="glass rounded-2xl p-6">
         <h3 className="section-label">Quick Actions</h3>
         <div className="mt-3 flex flex-wrap gap-3">
-          <Link href="/coverage" className="btn-primary text-sm">Open Run Monitor</Link>
+          <Link href="/coverage" className="btn-primary text-sm">Open Discovery Monitor</Link>
           <Link href="/queue" className="btn-primary text-sm">Open Now Queue</Link>
           <Link href="/leads" className="btn-glass text-sm">Browse Leads</Link>
         </div>
@@ -827,53 +766,6 @@ function MetricCard({ label, value, sub }: { label: string; value: string; sub?:
       {sub && <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{sub}</span>}
     </div>
   );
-}
-
-function SchedulerMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
-      <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
-    </div>
-  );
-}
-
-function formatWorkerStatus(status: string | null | undefined): string {
-  if (!status) return "No runs";
-  return status.replace(/_/g, " ");
-}
-
-function formatEta(minutes: number | null): string {
-  if (minutes === null || minutes <= 0) return "N/A";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = minutes / 60;
-  if (hours < 48) return `${Math.round(hours * 10) / 10}h`;
-  return `${Math.round((hours / 24) * 10) / 10}d`;
-}
-
-function workerProgressPct(progress: SchedulerWorkerHealth["progress"]): number {
-  if (progress.total <= 0) return 0;
-  return Math.min(100, Math.round((progress.completed / progress.total) * 100));
-}
-
-function formatWorkerResult(run: WorkerRun): string {
-  const result = (run as WorkerRun & { result_json?: Record<string, unknown> }).result_json;
-  if (!result) return run.status.replace(/_/g, " ");
-  const leadName = typeof result.leadName === "string" ? result.leadName : null;
-  const count = typeof result.count === "number" ? result.count : null;
-  const reason = typeof result.reason === "string" ? result.reason : null;
-  if (leadName) return leadName;
-  if (count !== null) return `${count.toLocaleString()} items`;
-  if (reason) return reason;
-  return run.status.replace(/_/g, " ");
-}
-
-function workerLabel(workerName: string): string {
-  if (workerName === "ai_verification") return "AI verification";
-  if (workerName === "crawl") return "Discovery crawl";
-  if (workerName === "enrichment") return "Lead enrichment";
-  if (workerName === "artifact") return "Pitch packs";
-  return "Score recompute";
 }
 
 function SummaryChip({ label }: { label: string }) {

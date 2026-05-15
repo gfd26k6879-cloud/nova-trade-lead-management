@@ -6,7 +6,8 @@ import type { AppRole } from "@/lib/permissions";
 
 const navItems = [
   { href: "/dashboard", label: "Discover", adminOnly: true },
-  { href: "/coverage", label: "Run Monitor", adminOnly: true },
+  { href: "/coverage", label: "Discovery Monitor", adminOnly: true },
+  { href: "/scheduler", label: "Scheduler", adminOnly: true },
   { href: "/quality", label: "Quality", adminOnly: false },
   { href: "/leads", label: "Leads", adminOnly: false },
   { href: "/queue", label: "Queue", adminOnly: false },

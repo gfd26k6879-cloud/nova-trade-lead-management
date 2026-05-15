@@ -21,6 +21,11 @@ import {
 } from "@/lib/lead-quality";
 import { decryptSecret, encryptSecret } from "@/lib/secret-crypto";
 import { getAuditActor } from "@/lib/audit-context";
+import {
+  SCHEDULER_WORKER_METADATA,
+  getSchedulerWorkerMetadata,
+  type SchedulerWorkerName,
+} from "@/lib/scheduler/worker-metadata";
 
 // ─── Types ───
 
@@ -508,7 +513,7 @@ export interface LeadFilters {
   pageSize?: number;
 }
 
-export type SchedulerWorkerName = "ai_verification" | "crawl" | "enrichment" | "artifact" | "score_recompute";
+export type { SchedulerWorkerName } from "@/lib/scheduler/worker-metadata";
 export type SchedulerRunStatus = "running" | "processed" | "idle" | "disabled" | "budget_limit" | "error";
 
 export interface WorkerRun {
@@ -553,6 +558,79 @@ export interface SchedulerHealth {
     monthlyBudget: number;
     budgetRemainingToday: number;
     budgetRemainingMonth: number;
+    verifiedLeadsPerDollar: number | null;
+    readyToCallLeadsPerDollar: number | null;
+  };
+}
+
+export interface SchedulerStatusCounts {
+  total: number;
+  missing: number;
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+}
+
+export interface SchedulerLeadBacklogSummary {
+  total: number;
+  active: number;
+  excluded: number;
+  readyToCall: number;
+  brokenSiteOpportunities: number;
+  needsAiVerify: number;
+  needsManualReview: number;
+  notFit: number;
+  usableSiteFound: number;
+  noSiteVerified: number;
+  websiteStatus: Array<{ key: string; count: number }>;
+  qualityBuckets: Array<{ key: string; count: number }>;
+}
+
+export interface SchedulerArtifactBacklogSummary {
+  businessDetail: SchedulerStatusCounts;
+  competitiveReport: SchedulerStatusCounts;
+}
+
+export interface SchedulerApiUsageWindow {
+  calls: number;
+  cost: number;
+  discoveryCalls: number;
+  discoveryCost: number;
+  enrichmentCalls: number;
+  enrichmentCost: number;
+  atmosphereCalls: number;
+  atmosphereCost: number;
+}
+
+export interface SchedulerOperationsSummary {
+  health: SchedulerHealth;
+  history: WorkerRun[];
+  activeDiscovery: {
+    runId: string | null;
+    status: string;
+    progress: CrawlProgress | null;
+    geography: GeographyProgress | null;
+    usage: SchedulerApiUsageWindow;
+    lastError: string | null;
+  };
+  backlogs: {
+    leads: SchedulerLeadBacklogSummary;
+    aiQueue: AiQueueStats;
+    enrichment: SchedulerStatusCounts;
+    artifacts: SchedulerArtifactBacklogSummary;
+    scores: SchedulerStatusCounts;
+  };
+  costs: {
+    googleToday: SchedulerApiUsageWindow;
+    googleMonth: SchedulerApiUsageWindow;
+    googleActiveRun: SchedulerApiUsageWindow;
+    aiDailyCost: number;
+    aiDailyBudget: number;
+    aiMonthlyCost: number;
+    aiMonthlyBudget: number;
+    aiBudgetRemainingToday: number;
+    aiBudgetRemainingMonth: number;
     verifiedLeadsPerDollar: number | null;
     readyToCallLeadsPerDollar: number | null;
   };
@@ -1189,13 +1267,18 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
     "SELECT COUNT(*) as count FROM leads WHERE COALESCE(is_excluded, 0) = 0 AND quality_bucket IN ('ready_to_call','broken_site_opportunity')"
   ).get() as { count: number };
 
-  const workers: Array<{ workerName: SchedulerWorkerName; label: string; queueDepth: number; cadenceMinutes: number }> = [
-    { workerName: "ai_verification", label: "AI verification", queueDepth: aiQueue.queued + aiQueue.running, cadenceMinutes: 1 },
-    { workerName: "crawl", label: "Discovery crawl", queueDepth: crawlProgress ? crawlProgress.pending + crawlProgress.running : 0, cadenceMinutes: 1 },
-    { workerName: "enrichment", label: "Lead enrichment", queueDepth: Number(enrichmentRow.count ?? 0), cadenceMinutes: 1 },
-    { workerName: "artifact", label: "Pitch-pack artifacts", queueDepth: Number(artifactRow.count ?? 0), cadenceMinutes: 2 },
-    { workerName: "score_recompute", label: "Score recompute", queueDepth: Number(staleScoreRow.count ?? 0), cadenceMinutes: 10 },
-  ];
+  const workers: Array<{ workerName: SchedulerWorkerName; label: string; queueDepth: number; cadenceMinutes: number }> =
+    SCHEDULER_WORKER_METADATA.map((worker) => ({
+      workerName: worker.workerName,
+      label: worker.label,
+      cadenceMinutes: worker.cadenceMinutes,
+      queueDepth:
+        worker.workerName === "ai_verification" ? aiQueue.queued + aiQueue.running :
+        worker.workerName === "crawl" ? (crawlProgress ? crawlProgress.pending + crawlProgress.running : 0) :
+        worker.workerName === "enrichment" ? Number(enrichmentRow.count ?? 0) :
+        worker.workerName === "artifact" ? Number(artifactRow.count ?? 0) :
+        Number(staleScoreRow.count ?? 0),
+    }));
   const progressByWorker: Record<SchedulerWorkerName, SchedulerWorkerHealth["progress"]> = {
     ai_verification: {
       total: aiQueue.total,
@@ -1287,16 +1370,10 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
 }
 
 function buildSchedulerHealthFallback(error: string): SchedulerHealth {
-  const workers: Array<{ workerName: SchedulerWorkerName; label: string }> = [
-    { workerName: "ai_verification", label: "AI verification" },
-    { workerName: "crawl", label: "Discovery crawl" },
-    { workerName: "enrichment", label: "Lead enrichment" },
-    { workerName: "artifact", label: "Pitch-pack artifacts" },
-    { workerName: "score_recompute", label: "Score recompute" },
-  ];
   return {
-    workers: workers.map((worker) => ({
-      ...worker,
+    workers: SCHEDULER_WORKER_METADATA.map((worker) => ({
+      workerName: worker.workerName,
+      label: worker.label,
       enabled: false,
       queueDepth: 0,
       estimatedMinutesToDrain: null,
@@ -1332,6 +1409,28 @@ async function getLatestWorkerRun(workerName: SchedulerWorkerName): Promise<Work
     "SELECT * FROM worker_runs WHERE worker_name = ? ORDER BY started_at DESC LIMIT 1"
   ).get(workerName) as Record<string, unknown> | undefined;
   return row ? parseWorkerRunRow(row) : null;
+}
+
+export async function getWorkerRunHistory(limit = 50, workerName?: SchedulerWorkerName): Promise<WorkerRun[]> {
+  const db = await getDb();
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+  const metadata = workerName ? getSchedulerWorkerMetadata(workerName) : null;
+  const rows = metadata
+    ? await db.prepare(
+        `SELECT *
+         FROM worker_runs
+         WHERE worker_name = ?
+         ORDER BY started_at DESC
+         LIMIT ?`
+      ).all(metadata.workerName, safeLimit) as Array<Record<string, unknown>>
+    : await db.prepare(
+        `SELECT *
+         FROM worker_runs
+         ORDER BY started_at DESC
+         LIMIT ?`
+      ).all(safeLimit) as Array<Record<string, unknown>>;
+
+  return rows.map(parseWorkerRunRow);
 }
 
 function parseWorkerRunRow(row: Record<string, unknown>): WorkerRun {
@@ -1386,6 +1485,368 @@ function sumStatusCounts(rows: Array<{ status: string; count: number }>): number
 
 function roundOne(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+export async function getSchedulerOperationsSummary(): Promise<SchedulerOperationsSummary> {
+  try {
+    return await getSchedulerOperationsSummaryInternal();
+  } catch (err) {
+    console.error("Failed to build scheduler operations summary", err);
+    const message = err instanceof Error ? err.message : "Scheduler operations are temporarily unavailable.";
+    return buildSchedulerOperationsFallback(message);
+  }
+}
+
+async function getSchedulerOperationsSummaryInternal(): Promise<SchedulerOperationsSummary> {
+  const [health, history, dashboardStats, settings] = await Promise.all([
+    getSchedulerHealth(),
+    getWorkerRunHistory(50),
+    getDashboardStats(),
+    getSettings(),
+  ]);
+  const aiBudget = await getAiBudgetStatus(settings, 0);
+  const activeRun = await getActiveCrawlRun();
+  const activeRunUsage = activeRun ? await getRunApiUsageSummary(activeRun.id) : emptyApiUsageSummary();
+  const activeRunLastError = activeRun ? await getRunLastError(activeRun.id) : null;
+  const [todayUsage, monthUsage, leadBacklog, enrichmentBacklog, artifactBacklog, scoreBacklog] = await Promise.all([
+    getApiUsageSummarySince(startOfToday()),
+    getMonthlyApiUsageSummary(),
+    getSchedulerLeadBacklogSummary(),
+    getSchedulerEnrichmentBacklogSummary(),
+    getSchedulerArtifactBacklogSummary(),
+    getSchedulerScoreBacklogSummary(),
+  ]);
+
+  return {
+    health,
+    history,
+    activeDiscovery: {
+      runId: activeRun?.id ?? null,
+      status: activeRun?.status ?? "idle",
+      progress: dashboardStats.progress,
+      geography: activeRun ? {
+        activeZipCount: dashboardStats.activeZipCount,
+        zipCodesSelected: dashboardStats.zipCodesSelected,
+        zipCodesCompleted: dashboardStats.zipCodesCompleted,
+        zipCodesStarted: dashboardStats.zipCodesStarted,
+        zipCodesNotStarted: dashboardStats.zipCodesNotStarted,
+        zipCodesCanceled: dashboardStats.zipCodesCanceled,
+        zipCodesNotSelected: dashboardStats.zipCodesNotSelected,
+        countiesSelected: dashboardStats.countiesSelected,
+        countiesCompleted: dashboardStats.countiesCompleted,
+      } : null,
+      usage: toSchedulerApiUsageWindow(activeRunUsage),
+      lastError: activeRunLastError,
+    },
+    backlogs: {
+      leads: leadBacklog,
+      aiQueue: dashboardStats.aiQueueStats,
+      enrichment: enrichmentBacklog,
+      artifacts: artifactBacklog,
+      scores: scoreBacklog,
+    },
+    costs: {
+      googleToday: toSchedulerApiUsageWindow(todayUsage),
+      googleMonth: toSchedulerApiUsageWindow(monthUsage),
+      googleActiveRun: toSchedulerApiUsageWindow(activeRunUsage),
+      aiDailyCost: aiBudget.dailyCost,
+      aiDailyBudget: aiBudget.dailyBudget,
+      aiMonthlyCost: aiBudget.monthlyCost,
+      aiMonthlyBudget: aiBudget.monthlyBudget,
+      aiBudgetRemainingToday: roundCurrency(Math.max(0, aiBudget.dailyBudget - aiBudget.dailyCost)),
+      aiBudgetRemainingMonth: roundCurrency(Math.max(0, aiBudget.monthlyBudget - aiBudget.monthlyCost)),
+      verifiedLeadsPerDollar: health.ai.verifiedLeadsPerDollar,
+      readyToCallLeadsPerDollar: health.ai.readyToCallLeadsPerDollar,
+    },
+  };
+}
+
+async function buildSchedulerOperationsFallback(error: string): Promise<SchedulerOperationsSummary> {
+  const health = await getSchedulerHealth();
+  const emptyUsage = toSchedulerApiUsageWindow(emptyApiUsageSummary());
+  const emptyCounts = emptySchedulerStatusCounts();
+  return {
+    health,
+    history: [],
+    activeDiscovery: {
+      runId: null,
+      status: "unavailable",
+      progress: null,
+      geography: null,
+      usage: emptyUsage,
+      lastError: error,
+    },
+    backlogs: {
+      leads: {
+        total: 0,
+        active: 0,
+        excluded: 0,
+        readyToCall: 0,
+        brokenSiteOpportunities: 0,
+        needsAiVerify: 0,
+        needsManualReview: 0,
+        notFit: 0,
+        usableSiteFound: 0,
+        noSiteVerified: 0,
+        websiteStatus: [],
+        qualityBuckets: [],
+      },
+      aiQueue: { notChecked: 0, queued: 0, running: 0, verified: 0, error: 0, total: 0 },
+      enrichment: emptyCounts,
+      artifacts: {
+        businessDetail: emptyCounts,
+        competitiveReport: emptyCounts,
+      },
+      scores: emptyCounts,
+    },
+    costs: {
+      googleToday: emptyUsage,
+      googleMonth: emptyUsage,
+      googleActiveRun: emptyUsage,
+      aiDailyCost: health.ai.dailyCost,
+      aiDailyBudget: health.ai.dailyBudget,
+      aiMonthlyCost: health.ai.monthlyCost,
+      aiMonthlyBudget: health.ai.monthlyBudget,
+      aiBudgetRemainingToday: health.ai.budgetRemainingToday,
+      aiBudgetRemainingMonth: health.ai.budgetRemainingMonth,
+      verifiedLeadsPerDollar: health.ai.verifiedLeadsPerDollar,
+      readyToCallLeadsPerDollar: health.ai.readyToCallLeadsPerDollar,
+    },
+  };
+}
+
+async function getSchedulerLeadBacklogSummary(): Promise<SchedulerLeadBacklogSummary> {
+  const db = await getDb();
+  const row = await db.prepare(
+    `SELECT
+       COUNT(*) as total,
+       COALESCE(SUM(CASE WHEN COALESCE(is_excluded, 0) = 0 THEN 1 ELSE 0 END), 0) as active,
+       COALESCE(SUM(CASE WHEN COALESCE(is_excluded, 0) = 1 THEN 1 ELSE 0 END), 0) as excluded,
+       COALESCE(SUM(CASE WHEN quality_bucket = 'ready_to_call' THEN 1 ELSE 0 END), 0) as ready_to_call,
+       COALESCE(SUM(CASE WHEN quality_bucket = 'broken_site_opportunity' THEN 1 ELSE 0 END), 0) as broken_site_opportunities,
+       COALESCE(SUM(CASE WHEN quality_bucket = 'needs_ai_verify' THEN 1 ELSE 0 END), 0) as needs_ai_verify,
+       COALESCE(SUM(CASE WHEN quality_bucket = 'needs_manual_review' THEN 1 ELSE 0 END), 0) as needs_manual_review,
+       COALESCE(SUM(CASE WHEN quality_bucket = 'not_a_fit' THEN 1 ELSE 0 END), 0) as not_fit,
+       COALESCE(SUM(CASE WHEN ai_verification_status = 'site_found' AND ai_website_viability_status = 'usable' THEN 1 ELSE 0 END), 0) as usable_site_found,
+       COALESCE(SUM(CASE WHEN ai_verification_status = 'no_site_found' OR ai_website_viability_status = 'directory_only' THEN 1 ELSE 0 END), 0) as no_site_verified
+     FROM leads`
+  ).get() as Record<string, number>;
+  const [websiteStatus, qualityBuckets] = await Promise.all([
+    getSchedulerBreakdown("website_status"),
+    getSchedulerBreakdown("quality_bucket"),
+  ]);
+
+  return {
+    total: Number(row.total ?? 0),
+    active: Number(row.active ?? 0),
+    excluded: Number(row.excluded ?? 0),
+    readyToCall: Number(row.ready_to_call ?? 0),
+    brokenSiteOpportunities: Number(row.broken_site_opportunities ?? 0),
+    needsAiVerify: Number(row.needs_ai_verify ?? 0),
+    needsManualReview: Number(row.needs_manual_review ?? 0),
+    notFit: Number(row.not_fit ?? 0),
+    usableSiteFound: Number(row.usable_site_found ?? 0),
+    noSiteVerified: Number(row.no_site_verified ?? 0),
+    websiteStatus,
+    qualityBuckets,
+  };
+}
+
+async function getSchedulerEnrichmentBacklogSummary(): Promise<SchedulerStatusCounts> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT enrichment_status as status, COUNT(*) as count
+     FROM leads
+     WHERE score > 0 AND COALESCE(is_excluded, 0) = 0
+     GROUP BY enrichment_status`
+  ).all() as Array<{ status: string; count: number }>;
+
+  const pending = getStatusCount(rows, "pending");
+  const completed = getStatusCount(rows, "enriched") + getStatusCount(rows, "skipped");
+  return {
+    total: sumStatusCounts(rows),
+    missing: 0,
+    pending,
+    running: 0,
+    completed,
+    failed: 0,
+  };
+}
+
+async function getSchedulerArtifactBacklogSummary(): Promise<SchedulerArtifactBacklogSummary> {
+  const [businessDetail, competitiveReport] = await Promise.all([
+    getSchedulerArtifactTypeBacklog("business_detail"),
+    getSchedulerArtifactTypeBacklog("competitive_report"),
+  ]);
+  return { businessDetail, competitiveReport };
+}
+
+async function getSchedulerArtifactTypeBacklog(type: LeadAiArtifactType): Promise<SchedulerStatusCounts> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT status, COUNT(*) as count
+     FROM lead_ai_artifacts
+     WHERE artifact_type = ?
+     GROUP BY status`
+  ).all(type) as Array<{ status: string; count: number }>;
+  const missingRow = await db.prepare(
+    `SELECT COUNT(*) as count
+     FROM leads l
+     WHERE COALESCE(l.is_excluded, 0) = 0
+       AND l.status NOT IN ('closed_won','closed_lost')
+       AND NOT EXISTS (
+         SELECT 1
+         FROM lead_ai_artifacts a
+         WHERE a.lead_id = l.id AND a.artifact_type = ?
+       )`
+  ).get(type) as { count: number };
+
+  return {
+    total: sumStatusCounts(rows) + Number(missingRow.count ?? 0),
+    missing: Number(missingRow.count ?? 0),
+    pending: getStatusCount(rows, "queued"),
+    running: getStatusCount(rows, "running"),
+    completed: getStatusCount(rows, "complete"),
+    failed: getStatusCount(rows, "error"),
+  };
+}
+
+async function getSchedulerScoreBacklogSummary(): Promise<SchedulerStatusCounts> {
+  const db = await getDb();
+  const staleRow = await db.prepare(
+    `SELECT COUNT(*) as count
+     FROM leads
+     WHERE last_quality_scored_at IS NULL OR julianday(updated_at) > julianday(last_quality_scored_at)`
+  ).get() as { count: number };
+  const freshRow = await db.prepare(
+    `SELECT COUNT(*) as count
+     FROM leads
+     WHERE last_quality_scored_at IS NOT NULL AND julianday(updated_at) <= julianday(last_quality_scored_at)`
+  ).get() as { count: number };
+
+  return {
+    total: Number(staleRow.count ?? 0) + Number(freshRow.count ?? 0),
+    missing: 0,
+    pending: Number(staleRow.count ?? 0),
+    running: 0,
+    completed: Number(freshRow.count ?? 0),
+    failed: 0,
+  };
+}
+
+async function getSchedulerBreakdown(column: "website_status" | "quality_bucket"): Promise<Array<{ key: string; count: number }>> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT COALESCE(${column}, 'unknown') as key, COUNT(*) as count
+     FROM leads
+     GROUP BY COALESCE(${column}, 'unknown')
+     ORDER BY count DESC, key ASC`
+  ).all() as Array<{ key: string; count: number }>;
+  return rows.map((row) => ({ key: String(row.key), count: Number(row.count) || 0 }));
+}
+
+async function getApiUsageSummarySince(since: string): Promise<ApiUsageSummary> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT endpoint,
+            COUNT(*) as calls,
+            COALESCE(SUM(estimated_cost), 0) as cost,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN 1 ELSE 0 END), 0) as atmosphere_calls,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN estimated_cost ELSE 0 END), 0) as atmosphere_cost
+     FROM api_usage_events
+     WHERE success = 1
+       AND COALESCE(was_cached, 0) = 0
+       AND created_at >= ?
+     GROUP BY endpoint`
+  ).all(since) as Array<{
+    endpoint: string;
+    calls: number;
+    cost: number;
+    atmosphere_calls: number;
+    atmosphere_cost: number;
+  }>;
+
+  return summarizeApiUsageRows(rows);
+}
+
+function summarizeApiUsageRows(rows: Array<{
+  endpoint: string;
+  calls: number;
+  cost: number;
+  atmosphere_calls: number;
+  atmosphere_cost: number;
+}>): ApiUsageSummary {
+  let discoveryCalls = 0;
+  let discoveryCost = 0;
+  let enrichmentCalls = 0;
+  let enrichmentCost = 0;
+  let atmosphereCalls = 0;
+  let atmosphereCost = 0;
+
+  for (const row of rows) {
+    const calls = Number(row.calls) || 0;
+    const cost = Number(row.cost) || 0;
+    const rowAtmosphereCalls = Number(row.atmosphere_calls) || 0;
+    const rowAtmosphereCost = Number(row.atmosphere_cost) || 0;
+    if (row.endpoint === API_ENDPOINT_TEXT_SEARCH) {
+      discoveryCalls += calls;
+      discoveryCost += cost;
+    } else if (row.endpoint === API_ENDPOINT_PLACE_DETAILS) {
+      enrichmentCalls += calls;
+      enrichmentCost += cost;
+      atmosphereCalls += rowAtmosphereCalls;
+      atmosphereCost += rowAtmosphereCost;
+    }
+  }
+
+  const totalCost = discoveryCost + enrichmentCost;
+  return {
+    totalCalls: discoveryCalls + enrichmentCalls,
+    totalCost: roundCurrency(totalCost),
+    discoveryCalls,
+    discoveryCost: roundCurrency(discoveryCost),
+    enrichmentCalls,
+    enrichmentCost: roundCurrency(enrichmentCost),
+    atmosphereCalls,
+    atmosphereCost: roundCurrency(atmosphereCost),
+  };
+}
+
+function emptyApiUsageSummary(): ApiUsageSummary {
+  return {
+    totalCalls: 0,
+    totalCost: 0,
+    discoveryCalls: 0,
+    discoveryCost: 0,
+    enrichmentCalls: 0,
+    enrichmentCost: 0,
+    atmosphereCalls: 0,
+    atmosphereCost: 0,
+  };
+}
+
+function emptySchedulerStatusCounts(): SchedulerStatusCounts {
+  return {
+    total: 0,
+    missing: 0,
+    pending: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+  };
+}
+
+function toSchedulerApiUsageWindow(summary: ApiUsageSummary): SchedulerApiUsageWindow {
+  return {
+    calls: summary.totalCalls,
+    cost: summary.totalCost,
+    discoveryCalls: summary.discoveryCalls,
+    discoveryCost: summary.discoveryCost,
+    enrichmentCalls: summary.enrichmentCalls,
+    enrichmentCost: summary.enrichmentCost,
+    atmosphereCalls: summary.atmosphereCalls,
+    atmosphereCost: summary.atmosphereCost,
+  };
 }
 
 export async function setStoredOpenAiApiKey(apiKey: string): Promise<void>{

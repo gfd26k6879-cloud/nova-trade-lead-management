@@ -366,7 +366,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
 
   return (
     <PageShell
-      title="Run Monitor"
+      title="Discovery Monitor"
       description="See exactly what discovery is doing in the background: ZIP/category work units, progress, failures, and pause/resume controls."
       stats={[
         { label: "Run Status", value: formatRunStatus(runStatus) },

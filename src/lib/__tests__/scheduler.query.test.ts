@@ -15,6 +15,7 @@ vi.mock("@/lib/db/index", () => {
 import {
   completeWorkerRun,
   getCoverageByZip,
+  getSchedulerOperationsSummary,
   getSchedulerHealth,
   getSettings,
   isSchedulerWorkerEnabled,
@@ -22,6 +23,7 @@ import {
   updateLeadAiFeedback,
   updateSettings,
 } from "@/lib/db/queries";
+import { SCHEDULER_WORKER_METADATA, SCHEDULER_WORKER_NAMES } from "@/lib/scheduler/worker-metadata";
 
 function insertLead(id = "lead-feedback") {
   testDb.prepare(
@@ -48,6 +50,16 @@ afterEach(() => {
 });
 
 describe("scheduler v2 query behavior", () => {
+  it("defines operations metadata for every scheduler worker", () => {
+    expect(SCHEDULER_WORKER_NAMES).toEqual(["crawl", "enrichment", "ai_verification", "artifact", "score_recompute"]);
+    for (const worker of SCHEDULER_WORKER_METADATA) {
+      expect(worker.endpoint).toMatch(/^\/api\//);
+      expect(worker.purpose.length).toBeGreaterThan(20);
+      expect(worker.externalApi.length).toBeGreaterThan(3);
+      expect(worker.cadenceMinutes).toBeGreaterThan(0);
+    }
+  });
+
   it("persists scheduler toggles and reports disabled workers", async () => {
     await updateSettings({ scheduler_artifact_enabled: false });
 
@@ -70,6 +82,18 @@ describe("scheduler v2 query behavior", () => {
     expect(worker?.lastRun?.status).toBe("processed");
     expect(worker?.lastRun?.result_json).toMatchObject({ leadId: "lead-1" });
     expect(worker?.errors24h).toBe(0);
+  });
+
+  it("builds scheduler operations summary with zero-data cost and backlog defaults", async () => {
+    const summary = await getSchedulerOperationsSummary();
+
+    expect(summary.health.workers).toHaveLength(5);
+    expect(summary.history).toHaveLength(0);
+    expect(summary.costs.googleToday.cost).toBe(0);
+    expect(summary.costs.googleMonth.calls).toBe(0);
+    expect(summary.backlogs.aiQueue.total).toBe(0);
+    expect(summary.backlogs.artifacts.businessDetail.missing).toBe(0);
+    expect(summary.backlogs.scores.pending).toBe(0);
   });
 
   it("keeps corrected AI website findings in manual review after scoring recompute", async () => {
