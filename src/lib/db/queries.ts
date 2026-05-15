@@ -1145,6 +1145,16 @@ export async function getWorkerRunById(id: string): Promise<WorkerRun | null> {
 }
 
 export async function getSchedulerHealth(): Promise<SchedulerHealth> {
+  try {
+    return await getSchedulerHealthInternal();
+  } catch (err) {
+    console.error("Failed to build scheduler health", err);
+    const message = err instanceof Error ? err.message : "Scheduler health is temporarily unavailable.";
+    return buildSchedulerHealthFallback(message);
+  }
+}
+
+async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
   const settings = await getSettings();
   const aiQueue = await getAiQueueStats();
   const budget = await getAiBudgetStatus(settings, 0);
@@ -1272,6 +1282,46 @@ export async function getSchedulerHealth(): Promise<SchedulerHealth> {
       budgetRemainingMonth: roundCurrency(Math.max(0, budget.monthlyBudget - budget.monthlyCost)),
       verifiedLeadsPerDollar: verifiedPerDollar,
       readyToCallLeadsPerDollar: readyPerDollar,
+    },
+  };
+}
+
+function buildSchedulerHealthFallback(error: string): SchedulerHealth {
+  const workers: Array<{ workerName: SchedulerWorkerName; label: string }> = [
+    { workerName: "ai_verification", label: "AI verification" },
+    { workerName: "crawl", label: "Discovery crawl" },
+    { workerName: "enrichment", label: "Lead enrichment" },
+    { workerName: "artifact", label: "Pitch-pack artifacts" },
+    { workerName: "score_recompute", label: "Score recompute" },
+  ];
+  return {
+    workers: workers.map((worker) => ({
+      ...worker,
+      enabled: false,
+      queueDepth: 0,
+      estimatedMinutesToDrain: null,
+      lastRun: null,
+      errors24h: 0,
+      processed24h: 0,
+      progress: {
+        total: 0,
+        pending: 0,
+        running: 0,
+        completed: 0,
+        failed: 0,
+        canceled: 0,
+      },
+      warning: `Scheduler health unavailable: ${error}`,
+    })),
+    ai: {
+      dailyCost: 0,
+      dailyBudget: 0,
+      monthlyCost: 0,
+      monthlyBudget: 0,
+      budgetRemainingToday: 0,
+      budgetRemainingMonth: 0,
+      verifiedLeadsPerDollar: null,
+      readyToCallLeadsPerDollar: null,
     },
   };
 }

@@ -3,10 +3,11 @@ import { type NextRequest, NextResponse } from "next/server";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (pathname.toLowerCase() === "/discover") {
-    const dashboardUrl = request.nextUrl.clone();
-    dashboardUrl.pathname = "/dashboard";
-    return NextResponse.redirect(dashboardUrl);
+  const routeAlias = getRouteAlias(pathname);
+  if (routeAlias) {
+    const aliasUrl = request.nextUrl.clone();
+    aliasUrl.pathname = routeAlias;
+    return NextResponse.redirect(aliasUrl);
   }
 
   const isProtectedPage = ["/dashboard", "/coverage", "/leads", "/queue", "/statistics", "/settings", "/users"].some((prefix) =>
@@ -80,4 +81,30 @@ function isProtectedWorkerApi(pathname: string): boolean {
 function hasBearerAuth(request: NextRequest): boolean {
   const header = request.headers.get("authorization") ?? "";
   return /^Bearer\s+.+$/i.test(header);
+}
+
+function getRouteAlias(pathname: string): string | null {
+  const normalized = safeNormalizePath(pathname);
+  const aliases: Record<string, string> = {
+    "/discover": "/dashboard",
+    "/run-monitor": "/coverage",
+    "/run monitor": "/coverage",
+    "/monitor": "/coverage",
+    "/stats": "/statistics",
+    "/statistic": "/statistics",
+  };
+  if (aliases[normalized]) return aliases[normalized];
+
+  const canonicalRoutes = ["/dashboard", "/coverage", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users"];
+  const canonical = canonicalRoutes.find((route) => route === normalized);
+  return canonical && pathname !== canonical ? canonical : null;
+}
+
+function safeNormalizePath(pathname: string): string {
+  const trimmed = pathname.replace(/\/+$/, "") || "/";
+  try {
+    return decodeURIComponent(trimmed).toLowerCase();
+  } catch {
+    return trimmed.toLowerCase();
+  }
 }
