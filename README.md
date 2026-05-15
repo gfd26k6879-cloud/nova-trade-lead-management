@@ -1,6 +1,6 @@
 # NoSite Leads
 
-For the fastest complete system map, use `docs/ULTRA_SYSTEM_ATLAS.md`. For production deployment, use `docs/VERCEL_SUPABASE_DEPLOYMENT.md`.
+For the fastest complete system map, use `docs/ULTRA_SYSTEM_ATLAS.md`. For production deployment, use `docs/VERCEL_SUPABASE_DEPLOYMENT.md`. For current Codex handoff context, use `docs/CODEX_HANDOFF.md`.
 
 **Source of truth:** GitHub and Vercel deploy from `/Users/stevmq/lead-generation`. Do not use similarly named local folders for application changes unless they have first been reconciled into this Git repo.
 
