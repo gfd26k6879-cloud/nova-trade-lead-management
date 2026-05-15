@@ -1183,7 +1183,7 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
   const staleScoreRow = await db.prepare(
     `SELECT COUNT(*) as count
      FROM leads
-     WHERE last_quality_scored_at IS NULL OR updated_at > last_quality_scored_at`
+     WHERE last_quality_scored_at IS NULL OR julianday(updated_at) > julianday(last_quality_scored_at)`
   ).get() as { count: number };
   const readyRow = await db.prepare(
     "SELECT COUNT(*) as count FROM leads WHERE COALESCE(is_excluded, 0) = 0 AND quality_bucket IN ('ready_to_call','broken_site_opportunity')"
@@ -1246,12 +1246,12 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
       db.prepare(
         `SELECT COUNT(*) as count
          FROM worker_runs
-         WHERE worker_name = ? AND status IN ('error','budget_limit') AND started_at >= ?`
+         WHERE worker_name = ? AND status IN ('error','budget_limit') AND started_at >= datetime(?)`
       ).get(worker.workerName, since24h) as Promise<{ count: number }>,
       db.prepare(
         `SELECT COUNT(*) as count
          FROM worker_runs
-         WHERE worker_name = ? AND status = 'processed' AND started_at >= ?`
+         WHERE worker_name = ? AND status = 'processed' AND started_at >= datetime(?)`
       ).get(worker.workerName, since24h) as Promise<{ count: number }>,
     ]);
     const enabled = isSchedulerWorkerEnabled(settings, worker.workerName);
@@ -1366,7 +1366,7 @@ function buildSchedulerWarning(
   errors24h: number,
   settings: Settings,
 ): string | null {
-  if (!enabled) return "Scheduler toggle is paused.";
+  if (!enabled) return "Paused in Scheduler Settings. Supabase Cron may still call this endpoint, but the worker skips work until you click Resume.";
   if (workerName === "ai_verification" && !settings.ai_enabled) return "AI is disabled in Settings.";
   if ((workerName === "ai_verification" || workerName === "artifact") && !settings.openai_api_key_configured) return "OpenAI API key is missing.";
   if ((workerName === "crawl" || workerName === "enrichment") && !settings.google_places_api_key_configured) return "Google Places API key is missing.";

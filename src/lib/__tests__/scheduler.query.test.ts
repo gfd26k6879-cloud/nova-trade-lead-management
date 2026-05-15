@@ -58,7 +58,7 @@ describe("scheduler v2 query behavior", () => {
     const health = await getSchedulerHealth();
     const artifact = health.workers.find((worker) => worker.workerName === "artifact");
     expect(artifact?.enabled).toBe(false);
-    expect(artifact?.warning).toBe("Scheduler toggle is paused.");
+    expect(artifact?.warning).toContain("Paused in Scheduler Settings");
   });
 
   it("records worker runs for operations health", async () => {
