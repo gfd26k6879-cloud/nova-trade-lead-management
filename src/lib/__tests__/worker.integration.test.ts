@@ -147,6 +147,9 @@ describe("crawl worker integration", () => {
 
     const run = testDb.prepare("SELECT status FROM crawl_runs WHERE id = ?").get(runId) as { status: string };
     expect(run.status).toBe("paused");
+    const unit = testDb.prepare("SELECT status, started_at FROM crawl_units WHERE id = 'unit-1'").get() as Record<string, unknown>;
+    expect(unit.status).toBe("pending");
+    expect(unit.started_at).toBeNull();
   });
 
   it("pauses before exceeding the monthly Text Search free tier", async () => {
@@ -171,6 +174,9 @@ describe("crawl worker integration", () => {
 
     const run = testDb.prepare("SELECT status FROM crawl_runs WHERE id = ?").get(runId) as { status: string };
     expect(run.status).toBe("paused");
+    const unit = testDb.prepare("SELECT status, started_at FROM crawl_units WHERE id = 'unit-1'").get() as Record<string, unknown>;
+    expect(unit.status).toBe("pending");
+    expect(unit.started_at).toBeNull();
   });
 
   it("prioritizes Denver county pending units before lower sorted zips", async () => {

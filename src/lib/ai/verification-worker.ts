@@ -7,13 +7,12 @@ import {
   getConfiguredOpenAiApiKey,
   getLatestAiVerification,
   getLeadById,
-  getNextAiVerificationJob,
+  leaseNextAiVerificationJob,
   getSettings,
   logAiUsageEvent,
   markLeadAiError,
   markLeadAiQueueError,
   markLeadAiQueued,
-  markLeadAiRunning,
   markLeadAiVerified,
   updateLeadAiVerificationSummary,
   type AiLeadVerification,
@@ -100,11 +99,10 @@ export async function processNextAiVerificationJob(): Promise<AiVerificationWork
     return { status: "idle", reason: "AI verification concurrency limit is already reached." };
   }
 
-  const lead = await getNextAiVerificationJob(settings.ai_max_attempts);
+  const lead = await leaseNextAiVerificationJob(settings.ai_max_attempts);
   if (!lead) return { status: "idle", reason: "No AI verification jobs are ready." };
 
   const inputHash = createLeadVerificationInputHash(lead);
-  await markLeadAiRunning(lead.id, inputHash);
 
   const result = await performAiVerification(lead, false, settings);
   if ("error" in result) {

@@ -10,7 +10,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(aliasUrl);
   }
 
-  const isProtectedPage = ["/dashboard", "/coverage", "/leads", "/queue", "/statistics", "/settings", "/users"].some((prefix) =>
+  const isProtectedPage = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users"].some((prefix) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`)
   );
   const isProtectedApi = pathname.startsWith("/api/crawl") || pathname.startsWith("/api/export");
@@ -90,12 +90,13 @@ function getRouteAlias(pathname: string): string | null {
     "/run-monitor": "/coverage",
     "/run monitor": "/coverage",
     "/monitor": "/coverage",
+    "/nosite leads": "/dashboard",
     "/stats": "/statistics",
     "/statistic": "/statistics",
   };
   if (aliases[normalized]) return aliases[normalized];
 
-  const canonicalRoutes = ["/dashboard", "/coverage", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users"];
+  const canonicalRoutes = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users"];
   const canonical = canonicalRoutes.find((route) => route === normalized);
   return canonical && pathname !== canonical ? canonical : null;
 }

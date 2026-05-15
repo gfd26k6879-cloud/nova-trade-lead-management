@@ -311,7 +311,12 @@ export function estimateConservativeMonthlyRevenueUpside(lead: Lead, snapshot: C
   const confidenceMultiplier = lead.ai_verification_status === "no_site_found" ? 1 : lead.ai_verification_status === "weak_site_found" ? 0.85 : 0.65;
   const densityMultiplier = snapshot.count >= 15 ? 1.35 : snapshot.count >= 8 ? 1.2 : snapshot.count >= 3 ? 1.05 : 0.85;
   const reviewMultiplier = (lead.review_count ?? 0) >= 100 ? 1.2 : (lead.review_count ?? 0) >= 25 ? 1.05 : 0.9;
-  const contactMultiplier = Math.max(0.7, Math.min(1.15, lead.contactability_score || (lead.phone ? 1 : 0.75)));
+  const contactabilityRaw = Number(lead.contactability_score ?? 0);
+  const normalizedContactability = contactabilityRaw > 1 ? contactabilityRaw / 100 : contactabilityRaw;
+  const contactMultiplier = Math.max(
+    0.7,
+    Math.min(1.15, normalizedContactability > 0 ? normalizedContactability : (lead.phone ? 0.9 : 0.75)),
+  );
   const lowExtraVisitors = Math.max(3, Math.round(6 * confidenceMultiplier * densityMultiplier * reviewMultiplier));
   const highExtraVisitors = Math.max(lowExtraVisitors + 2, Math.round(14 * confidenceMultiplier * densityMultiplier * reviewMultiplier));
   const low = Math.round(lowExtraVisitors * profile.low * 0.18 * contactMultiplier);

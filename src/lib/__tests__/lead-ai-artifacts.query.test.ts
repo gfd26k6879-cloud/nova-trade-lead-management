@@ -16,7 +16,9 @@ import {
   createLeadAiArtifactJob,
   getLeadAiArtifacts,
   getNextLeadAiArtifactJob,
+  leaseNextLeadAiArtifactJob,
   markLeadAiArtifactComplete,
+  markLeadAiArtifactRetry,
   markLeadAiArtifactRunning,
 } from "@/lib/db/queries";
 
@@ -77,5 +79,35 @@ describe("lead AI artifact queries", () => {
     expect(artifacts).toHaveLength(2);
     expect(artifacts.map((artifact) => artifact.id)).toContain(second.id);
     expect(artifacts.find((artifact) => artifact.id === first.id)?.status).toBe("complete");
+  });
+
+  it("atomically leases artifact jobs and schedules retries", async () => {
+    const first = await createLeadAiArtifactJob({
+      lead_id: "lead-1",
+      artifact_type: "business_detail",
+      model: "gpt-5.4-mini",
+      input_hash: "hash-1",
+      prompt_version: "lead-intelligence-v1",
+    });
+    await createLeadAiArtifactJob({
+      lead_id: "lead-1",
+      artifact_type: "competitive_report",
+      model: "gpt-5.4-mini",
+      input_hash: "hash-2",
+      prompt_version: "lead-intelligence-v1",
+    });
+
+    const leased = await leaseNextLeadAiArtifactJob(3);
+    expect(leased?.id).toBe(first.id);
+    expect(leased?.attempt_count).toBe(1);
+
+    const retry = await markLeadAiArtifactRetry(first.id, "budget exhausted", 3);
+    expect(retry.status).toBe("queued");
+    expect(retry.nextRetryAt).toBeTruthy();
+
+    const retryingRow = testDb.prepare("SELECT status, last_error, next_retry_at FROM lead_ai_artifacts WHERE id = ?").get(first.id) as Record<string, unknown>;
+    expect(retryingRow.status).toBe("queued");
+    expect(retryingRow.last_error).toBe("budget exhausted");
+    expect(retryingRow.next_retry_at).toBeTruthy();
   });
 });

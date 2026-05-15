@@ -367,7 +367,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
   return (
     <PageShell
       title="Discovery Monitor"
-      description="See exactly what discovery is doing in the background: ZIP/category work units, progress, failures, and pause/resume controls."
+      description="See exactly what the selected or latest discovery run is doing: ZIP/category work units, progress, failures, and pause/resume controls."
       stats={[
         { label: "Run Status", value: formatRunStatus(runStatus) },
         { label: "Units Done", value: `${progress?.done ?? totalDone} / ${progress?.total ?? totalAll}` },
@@ -375,6 +375,13 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
         { label: "Failed", value: String(progress?.failed ?? totalFailed) },
       ]}
     >
+      <section className="rounded-2xl px-5 py-4" style={{ background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.16)" }}>
+        <p className="text-xs font-semibold" style={{ color: "#2563eb" }}>Run-scoped ledger</p>
+        <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+          These rows describe the current or most recent discovery run, not lifetime ZIP coverage. Use the Scheduler page for background workers and costs.
+        </p>
+      </section>
+
       <section className="glass rounded-2xl p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>

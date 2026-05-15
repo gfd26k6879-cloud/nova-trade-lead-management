@@ -4,10 +4,10 @@ import { computeScore } from "@/lib/scoring";
 import { qualifyLead } from "@/lib/qualification";
 import {
   getActiveCrawlRun,
-  getNextPendingUnit,
-  markUnitRunning,
+  leaseNextCrawlUnit,
   markUnitDone,
   markUnitFailed,
+  releaseUnitForBudgetPause,
   incrementCrawlRunCounters,
   updateCrawlRunStatus,
   getCrawlProgress,
@@ -63,7 +63,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
     return { status: "paused" };
   }
 
-  const unit = await getNextPendingUnit(run.id);
+  const unit = await leaseNextCrawlUnit(run.id);
 
   if (!unit) {
     const progress = await getCrawlProgress(run.id);
@@ -78,10 +78,17 @@ export async function processNextUnit(): Promise<ProcessResult> {
 
   if (settings.stop_on_budget_limit) {
     const budget = await getDiscoveryBudgetLimit(run.id, settings);
-    if (budget) return budget;
+    if (budget) {
+      await releaseUnitForBudgetPause(unit.id, budget.error ?? "Budget limit reached.");
+      return {
+        ...budget,
+        unitId: unit.id,
+        zip: unit.zip,
+        category: unit.category,
+        progress: await getCrawlProgress(run.id),
+      };
+    }
   }
-
-  await markUnitRunning(unit.id);
 
   let leadsFound = 0;
   let leadsSkipped = 0;
@@ -106,6 +113,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
       if (settings.stop_on_budget_limit) {
         const budget = await getDiscoveryBudgetLimit(run.id, settings);
         if (budget) {
+          await releaseUnitForBudgetPause(unit.id, budget.error ?? "Budget limit reached.");
           return {
             ...budget,
             unitId: unit.id,

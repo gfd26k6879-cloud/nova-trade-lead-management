@@ -97,4 +97,21 @@ describe("lead intelligence", () => {
     expect(estimate.high).toBeGreaterThanOrEqual(estimate.low);
     expect(estimate.assumptions.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("normalizes contactability before applying revenue multiplier", () => {
+    const baseLead = {
+      business_type: "medical",
+      primary_type: "dentist",
+      categories: ["dentist"],
+      ai_verification_status: "no_site_found",
+      review_count: 120,
+      phone: "303-555-0100",
+    } as unknown as Lead;
+    const low = estimateConservativeMonthlyRevenueUpside({ ...baseLead, contactability_score: 25 } as Lead, makeContext().competitorSnapshot);
+    const medium = estimateConservativeMonthlyRevenueUpside({ ...baseLead, contactability_score: 75 } as Lead, makeContext().competitorSnapshot);
+    const high = estimateConservativeMonthlyRevenueUpside({ ...baseLead, contactability_score: 100 } as Lead, makeContext().competitorSnapshot);
+
+    expect(low.high).toBeLessThan(medium.high);
+    expect(medium.high).toBeLessThan(high.high);
+  });
 });

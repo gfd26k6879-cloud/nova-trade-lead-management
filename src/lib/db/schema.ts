@@ -93,6 +93,10 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "ai_lead_verifications", column: "website_health_json", type: "TEXT" },
   { table: "ai_lead_verifications", column: "website_viability_reason", type: "TEXT" },
   { table: "lead_ai_artifacts", column: "updated_at", type: "TEXT" },
+  { table: "lead_ai_artifacts", column: "attempt_count", type: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "lead_ai_artifacts", column: "last_error", type: "TEXT" },
+  { table: "lead_ai_artifacts", column: "next_retry_at", type: "TEXT" },
+  { table: "lead_ai_artifacts", column: "max_attempts", type: "INTEGER NOT NULL DEFAULT 3" },
   { table: "audit_logs", column: "actor_user_id", type: "TEXT" },
   { table: "audit_logs", column: "actor_email", type: "TEXT" },
   { table: "audit_logs", column: "actor_role", type: "TEXT" },
@@ -437,6 +441,10 @@ CREATE TABLE IF NOT EXISTS lead_ai_artifacts (
   usage_output_tokens INTEGER NOT NULL DEFAULT 0,
   estimated_cost REAL NOT NULL DEFAULT 0,
   error TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  next_retry_at TEXT,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

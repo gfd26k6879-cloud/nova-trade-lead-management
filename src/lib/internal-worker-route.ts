@@ -22,8 +22,8 @@ export async function runInternalWorkerRoute(
   task: () => Promise<unknown>,
 ) {
   try {
-    const auth = await authorizeInternalWorkerRequest(request, fallbackPermission);
     await ensureDbReady();
+    const auth = await authorizeInternalWorkerRequest(request, fallbackPermission);
 
     const settings = await getSettings();
     if (auth.source === "cron" && !isSchedulerWorkerEnabled(settings, workerName)) {
@@ -47,9 +47,11 @@ export async function runInternalWorkerRoute(
     }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
+      await recordWorkerRouteFailure(request, workerName, "error", err.status, buildAuthFailureMessage(request, err.message));
       return NextResponse.json({ status: "error", error: err.message }, { status: err.status });
     }
     if (err instanceof ForbiddenError) {
+      await recordWorkerRouteFailure(request, workerName, "error", err.status, err.message);
       return NextResponse.json({ status: "error", error: err.message }, { status: err.status });
     }
     const message = err instanceof Error ? err.message : String(err);
@@ -70,4 +72,26 @@ function classifyWorkerStatus(result: WorkerTaskResult): SchedulerRunStatus {
   if (result.status === "budget_limit") return "budget_limit";
   if (result.status === "error") return "error";
   return "processed";
+}
+
+async function recordWorkerRouteFailure(
+  request: NextRequest,
+  workerName: SchedulerWorkerName,
+  status: SchedulerRunStatus,
+  httpStatus: number,
+  error: string,
+): Promise<void> {
+  try {
+    const triggerSource = request.headers.get("authorization")?.trim() ? "cron" : "session";
+    const run = await startWorkerRun(workerName, triggerSource);
+    await completeWorkerRun(run.id, status, { status: "error", error, authFailure: true }, httpStatus, error);
+  } catch (recordError) {
+    console.error("Failed to record worker route failure", recordError);
+  }
+}
+
+function buildAuthFailureMessage(request: NextRequest, fallback: string): string {
+  const hasBearer = /^Bearer\s+.+/i.test(request.headers.get("authorization") ?? "");
+  if (!hasBearer) return fallback;
+  return "Worker cron authentication failed. Check WORKER_CRON_SECRET or CRON_SECRET in Vercel and the Supabase Vault worker_cron_secret value.";
 }

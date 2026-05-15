@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
-export default function DiscoverAliasPage() {
+export default function DiscoverUppercaseAliasPage() {
   redirect("/dashboard");
 }

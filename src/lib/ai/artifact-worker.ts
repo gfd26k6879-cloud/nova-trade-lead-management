@@ -5,12 +5,12 @@ import {
   getConfiguredOpenAiApiKey,
   getLatestLeadAiArtifact,
   getLeadById,
-  getNextLeadAiArtifactJob,
+  leaseNextLeadAiArtifactJob,
   getSettings,
   logAiUsageEvent,
   markLeadAiArtifactComplete,
   markLeadAiArtifactError,
-  markLeadAiArtifactRunning,
+  markLeadAiArtifactRetry,
   type LeadAiArtifact,
   type LeadAiArtifactType,
   type Settings,
@@ -30,6 +30,7 @@ export type LeadArtifactWorkerResult =
   | { status: "idle"; reason?: string }
   | { status: "disabled"; reason: string }
   | { status: "budget_limit"; artifactId?: string; leadId?: string; error: string }
+  | { status: "retrying"; artifactId: string; leadId: string; error: string; nextRetryAt: string | null }
   | { status: "error"; artifactId?: string; leadId?: string; error: string };
 
 export async function queueLeadAiArtifact(
@@ -89,10 +90,9 @@ export async function processNextLeadArtifactJob(): Promise<LeadArtifactWorkerRe
   const settings = await getSettings();
   if (!settings.ai_enabled) return { status: "disabled", reason: "AI is disabled in Settings." };
 
-  const artifact = await getNextLeadAiArtifactJob();
+  const artifact = await leaseNextLeadAiArtifactJob(3);
   if (!artifact) return { status: "idle", reason: "No lead intelligence jobs are queued." };
 
-  await markLeadAiArtifactRunning(artifact.id);
   const lead = await getLeadById(artifact.lead_id);
   if (!lead) {
     await markArtifactError(artifact, "Lead not found.");
@@ -109,7 +109,7 @@ export async function processNextLeadArtifactJob(): Promise<LeadArtifactWorkerRe
   const budget = await getAiBudgetStatus(settings, getAiCostReservationUsd() * 2);
   if (!budget.allowed) {
     const error = budget.reason ?? "AI budget guardrail blocked this request.";
-    await markArtifactError(artifact, error);
+    await markArtifactRetry(artifact, error);
     return { status: "budget_limit", artifactId: artifact.id, leadId: lead.id, error };
   }
 
@@ -146,7 +146,7 @@ export async function processNextLeadArtifactJob(): Promise<LeadArtifactWorkerRe
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Lead intelligence generation failed.";
-    await markArtifactError(artifact, message);
+    const retry = await markArtifactRetry(artifact, message);
     await logAiUsageEvent({
       lead_id: lead.id,
       model,
@@ -158,6 +158,9 @@ export async function processNextLeadArtifactJob(): Promise<LeadArtifactWorkerRe
         error: message,
       },
     });
+    if (retry.status !== "error") {
+      return { status: "retrying", artifactId: artifact.id, leadId: lead.id, error: message, nextRetryAt: retry.nextRetryAt };
+    }
     return { status: "error", artifactId: artifact.id, leadId: lead.id, error: message };
   }
 }
@@ -169,6 +172,22 @@ async function markArtifactError(artifact: LeadAiArtifact, message: string): Pro
     artifactType: artifact.artifact_type,
     error: message,
   });
+}
+
+async function markArtifactRetry(
+  artifact: LeadAiArtifact,
+  message: string,
+): Promise<{ status: "queued" | "error"; nextRetryAt: string | null }> {
+  const retry = await markLeadAiArtifactRetry(artifact.id, message, artifact.max_attempts);
+  await createAuditLog(retry.status === "error" ? "lead_ai_artifact_failed" : "lead_ai_artifact_retry_scheduled", "lead", artifact.lead_id, {
+    artifactId: artifact.id,
+    artifactType: artifact.artifact_type,
+    error: message,
+    attemptCount: retry.attemptCount,
+    maxAttempts: retry.maxAttempts,
+    nextRetryAt: retry.nextRetryAt,
+  });
+  return { status: retry.status, nextRetryAt: retry.nextRetryAt };
 }
 
 function isLeadEligibleForArtifact(lead: { is_excluded: boolean; status: string; business_status: string | null }): boolean {

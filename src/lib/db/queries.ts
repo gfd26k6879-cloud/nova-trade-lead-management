@@ -665,6 +665,10 @@ export interface LeadAiArtifact {
   usage_output_tokens: number;
   estimated_cost: number;
   error: string | null;
+  attempt_count: number;
+  last_error: string | null;
+  next_retry_at: string | null;
+  max_attempts: number;
   created_at: string;
   updated_at: string;
 }
@@ -932,50 +936,115 @@ export async function ensureDbReady(): Promise<void>{
   if (!dbReadyPromise) {
     dbReadyPromise = (async () => {
       await getDb();
+      await ensureRuntimePostgresRepairs();
       await seedZipCodes();
-      void syncCanonicalAiWebsiteFindings().catch((err) => {
-        console.error("Failed to sync canonical AI website findings", err);
-      });
     })();
   }
   await dbReadyPromise;
 }
 
-async function syncCanonicalAiWebsiteFindings(): Promise<void> {
+async function ensureRuntimePostgresRepairs(): Promise<void> {
+  if (!process.env.DATABASE_URL?.trim()) return;
   const db = await getDb();
-  const timestamp = nowISO();
-  await db.prepare(
-    `UPDATE leads SET
-       website_uri = ai_found_website_url,
-       website_status = 'custom',
-       qualification_status = 'disqualified',
-       disqualification_reason = COALESCE(disqualification_reason, 'AI found existing usable website'),
-       score = 0,
-       updated_at = ?
-     WHERE ai_verification_status = 'site_found'
+  const statements = [
+    "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS attempt_count integer NOT NULL DEFAULT 0",
+    "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS last_error text",
+    "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS next_retry_at timestamptz",
+    "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 3",
+    "CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_retry_ready ON lead_ai_artifacts(status, next_retry_at, created_at) WHERE status = 'queued'",
+    "CREATE INDEX IF NOT EXISTS idx_leads_ai_queue_ready ON leads(ai_queue_status, ai_next_retry_at, sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at) WHERE ai_queue_status = 'queued'",
+  ];
+
+  for (const statement of statements) {
+    try {
+      await db.exec(statement);
+    } catch (error) {
+      console.error("Runtime Postgres schema repair failed", error);
+      throw error;
+    }
+  }
+}
+
+export async function repairAiWebsiteFindingConsistency(limit = 500): Promise<number> {
+  const db = await getDb();
+  const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
+  const rows = await db.prepare(
+    `SELECT id
+     FROM leads
+     WHERE (
+       ai_verification_status = 'site_found'
        AND ai_website_viability_status = 'usable'
        AND COALESCE(ai_found_website_url, '') != ''
        AND (
          website_status != 'custom'
          OR COALESCE(website_uri, '') != ai_found_website_url
          OR qualification_status != 'disqualified'
-       )`
-  ).run(timestamp);
-
-  await db.prepare(
-    `UPDATE leads SET
-       website_uri = ai_found_website_url,
-       website_status = 'basic',
-       updated_at = ?
-     WHERE ai_verification_status = 'weak_site_found'
+         OR quality_bucket != 'not_a_fit'
+         OR score != 0
+         OR lead_quality_score != 0
+         OR raw_opportunity_score != 0
+         OR verification_score != 0
+         OR sales_priority_score != 0
+       )
+     ) OR (
+       ai_verification_status = 'weak_site_found'
        AND ai_website_viability_status IN ('broken', 'parked', 'placeholder')
        AND COALESCE(ai_found_website_url, '') != ''
        AND website_status != 'custom'
        AND (
          website_status != 'basic'
          OR COALESCE(website_uri, '') != ai_found_website_url
-       )`
-  ).run(timestamp);
+         OR quality_bucket = 'needs_ai_verify'
+       )
+     )
+     ORDER BY updated_at ASC
+     LIMIT ?`
+  ).all(safeLimit) as Array<{ id: string }>;
+
+  if (rows.length === 0) return 0;
+
+  const timestamp = nowISO();
+  const update = await db.prepare(
+    `UPDATE leads SET
+       website_uri = CASE
+         WHEN (ai_verification_status = 'site_found' AND ai_website_viability_status = 'usable')
+           OR (ai_verification_status = 'weak_site_found' AND ai_website_viability_status IN ('broken', 'parked', 'placeholder'))
+         THEN ai_found_website_url
+         ELSE website_uri
+       END,
+       website_status = CASE
+         WHEN ai_verification_status = 'site_found' AND ai_website_viability_status = 'usable' THEN 'custom'
+         WHEN ai_verification_status = 'weak_site_found'
+           AND ai_website_viability_status IN ('broken', 'parked', 'placeholder')
+           AND website_status != 'custom' THEN 'basic'
+         ELSE website_status
+       END,
+       qualification_status = CASE
+         WHEN ai_verification_status = 'site_found' AND ai_website_viability_status = 'usable' THEN 'disqualified'
+         ELSE qualification_status
+       END,
+       disqualification_reason = CASE
+         WHEN ai_verification_status = 'site_found' AND ai_website_viability_status = 'usable' THEN 'AI found existing usable website'
+         ELSE disqualification_reason
+       END,
+       score = CASE
+         WHEN ai_verification_status = 'site_found' AND ai_website_viability_status = 'usable' THEN 0
+         ELSE score
+       END,
+       win_probability_score = CASE
+         WHEN ai_verification_status = 'site_found' AND ai_website_viability_status = 'usable' THEN 0
+         ELSE win_probability_score
+       END,
+       updated_at = ?
+     WHERE id = ?`
+  );
+
+  for (const row of rows) {
+    await update.run(timestamp, row.id);
+    await updateLeadQualityScores(row.id);
+  }
+
+  return rows.length;
 }
 
 // ─── Settings ───
@@ -2163,6 +2232,51 @@ export async function getNextPendingUnit(runId: string): Promise<CrawlUnit | nul
   return row ?? null;
 }
 
+export async function leaseNextCrawlUnit(runId: string): Promise<CrawlUnit | null> {
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE crawl_units SET status = 'pending', started_at = NULL
+     WHERE crawl_run_id = ? AND status = 'running'
+       AND started_at < datetime('now', '-5 minutes')`
+  ).run(runId);
+
+  const leased = await db.prepare(
+    `UPDATE crawl_units
+     SET status = 'running',
+         started_at = ?,
+         attempt_count = attempt_count + 1
+     WHERE id = (
+       SELECT cu.id
+       FROM crawl_units cu
+       LEFT JOIN zip_codes z ON cu.zip = z.zip
+       WHERE cu.crawl_run_id = ? AND cu.status = 'pending'
+       ORDER BY
+         CASE
+           WHEN z.county = 'Denver' THEN 0
+           WHEN z.city = 'Denver' THEN 1
+           ELSE 2
+         END,
+         cu.zip ASC,
+         cu.category ASC,
+         cu.created_at ASC
+       LIMIT 1
+     )
+       AND status = 'pending'
+     RETURNING id`
+  ).get<{ id: string }>(nowISO(), runId);
+
+  if (!leased) return null;
+
+  const row = await db.prepare(
+    `SELECT cu.*, z.city, z.lat, z.lng
+     FROM crawl_units cu
+     LEFT JOIN zip_codes z ON cu.zip = z.zip
+     WHERE cu.id = ?`
+  ).get(leased.id) as CrawlUnit | undefined;
+
+  return row ?? null;
+}
+
 export async function markUnitRunning(unitId: string): Promise<void>{
   const db = await getDb();
   await db.prepare(
@@ -2182,6 +2296,17 @@ export async function markUnitFailed(unitId: string, error: string): Promise<voi
   await db.prepare(
     "UPDATE crawl_units SET status = 'failed', finished_at = ?, last_error = ? WHERE id = ? AND status <> 'canceled'"
   ).run(nowISO(), error, unitId);
+}
+
+export async function releaseUnitForBudgetPause(unitId: string, error: string): Promise<void> {
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE crawl_units
+     SET status = 'pending',
+         started_at = NULL,
+         last_error = ?
+     WHERE id = ? AND status = 'running'`
+  ).run(error.slice(0, 1000), unitId);
 }
 
 export async function updateUnitPageToken(unitId: string, token: string | null): Promise<void>{
@@ -3211,11 +3336,54 @@ export async function getNextLeadAiArtifactJob(): Promise<LeadAiArtifact | null>
   return row ? parseLeadAiArtifactRow(row) : null;
 }
 
+export async function leaseNextLeadAiArtifactJob(maxAttempts = 3): Promise<LeadAiArtifact | null> {
+  const db = await getDb();
+  const safeMaxAttempts = Math.max(1, Math.floor(maxAttempts));
+  await db.prepare(
+    `UPDATE lead_ai_artifacts
+     SET status = 'queued',
+         next_retry_at = NULL,
+         updated_at = ?
+     WHERE status = 'running'
+       AND updated_at < datetime('now', '-5 minutes')`
+  ).run(nowISO());
+
+  const now = nowISO();
+  const row = await db.prepare(
+    `UPDATE lead_ai_artifacts
+     SET status = 'running',
+         attempt_count = attempt_count + 1,
+         error = NULL,
+         last_error = NULL,
+         next_retry_at = NULL,
+         max_attempts = CASE WHEN max_attempts < ? THEN ? ELSE max_attempts END,
+         updated_at = ?
+     WHERE id = (
+       SELECT id
+       FROM lead_ai_artifacts
+       WHERE status = 'queued'
+         AND (next_retry_at IS NULL OR next_retry_at <= ?)
+         AND attempt_count < max_attempts
+       ORDER BY created_at ASC
+       LIMIT 1
+     )
+       AND status = 'queued'
+     RETURNING *`
+  ).get(safeMaxAttempts, safeMaxAttempts, now, now) as Record<string, unknown> | undefined;
+
+  return row ? parseLeadAiArtifactRow(row) : null;
+}
+
 export async function markLeadAiArtifactRunning(id: string): Promise<number> {
   const db = await getDb();
   const result = await db.prepare(
     `UPDATE lead_ai_artifacts
-     SET status = 'running', error = NULL, updated_at = ?
+     SET status = 'running',
+         attempt_count = attempt_count + 1,
+         error = NULL,
+         last_error = NULL,
+         next_retry_at = NULL,
+         updated_at = ?
      WHERE id = ? AND status = 'queued'`
   ).run(nowISO(), id);
   return result.changes;
@@ -3243,6 +3411,8 @@ export async function markLeadAiArtifactComplete(
          usage_output_tokens = ?,
          estimated_cost = ?,
          error = NULL,
+         last_error = NULL,
+         next_retry_at = NULL,
          updated_at = ?
      WHERE id = ?`
   ).run(
@@ -3263,9 +3433,43 @@ export async function markLeadAiArtifactError(id: string, message: string): Prom
     `UPDATE lead_ai_artifacts
      SET status = 'error',
          error = ?,
+         last_error = ?,
+         next_retry_at = NULL,
          updated_at = ?
      WHERE id = ?`
-  ).run(message.slice(0, 1000), nowISO(), id);
+  ).run(message.slice(0, 1000), message.slice(0, 1000), nowISO(), id);
+}
+
+export async function markLeadAiArtifactRetry(
+  id: string,
+  message: string,
+  maxAttempts = 3,
+): Promise<{ status: "queued" | "error"; nextRetryAt: string | null; attemptCount: number; maxAttempts: number }> {
+  const db = await getDb();
+  const row = await db.prepare(
+    "SELECT attempt_count, max_attempts FROM lead_ai_artifacts WHERE id = ?"
+  ).get<{ attempt_count: number; max_attempts: number }>(id);
+  const currentAttempts = Math.max(0, Number(row?.attempt_count ?? 0));
+  const safeMaxAttempts = Math.max(1, Math.floor(Number(row?.max_attempts ?? maxAttempts) || maxAttempts));
+  const retryable = currentAttempts < safeMaxAttempts;
+  const retryDelayMinutes = Math.min(120, Math.max(5, 5 * 2 ** Math.max(currentAttempts - 1, 0)));
+  const nextRetry = retryable
+    ? new Date(Date.now() + retryDelayMinutes * 60 * 1000).toISOString()
+    : null;
+  const status: "queued" | "error" = retryable ? "queued" : "error";
+
+  await db.prepare(
+    `UPDATE lead_ai_artifacts
+     SET status = ?,
+         error = CASE WHEN ? = 'error' THEN ? ELSE NULL END,
+         last_error = ?,
+         next_retry_at = ?,
+         max_attempts = ?,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(status, status, message.slice(0, 1000), message.slice(0, 1000), nextRetry, safeMaxAttempts, nowISO(), id);
+
+  return { status, nextRetryAt: nextRetry, attemptCount: currentAttempts, maxAttempts: safeMaxAttempts };
 }
 
 export async function getAiBudgetStatus(settings: Settings, reservedCost: number): Promise<AiBudgetStatus>{
@@ -3335,7 +3539,7 @@ export async function markLeadAiRunning(leadId: string, inputHash: string): Prom
       ai_input_hash = ?,
       updated_at = ?
      WHERE id = ?
-       AND ai_queue_status IN ('queued','running')`
+       AND ai_queue_status = 'queued'`
   ).run(inputHash, nowISO(), leadId);
   return result.changes;
 }
@@ -3409,6 +3613,49 @@ export async function getNextAiVerificationJob(maxAttempts = 3): Promise<Lead | 
        updated_at ASC
      LIMIT 1`
   ).get(nowISO(), Math.max(1, Math.floor(maxAttempts))) as Record<string, unknown> | undefined;
+
+  return row ? parseLeadRow(row) : null;
+}
+
+export async function leaseNextAiVerificationJob(maxAttempts = 3): Promise<Lead | null> {
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE leads SET
+      ai_queue_status = 'queued',
+      ai_next_retry_at = NULL,
+      updated_at = ?
+     WHERE ai_queue_status = 'running'
+       AND updated_at < datetime('now', '-5 minutes')`
+  ).run(nowISO());
+
+  const safeMaxAttempts = Math.max(1, Math.floor(maxAttempts));
+  const now = nowISO();
+  const row = await db.prepare(
+    `UPDATE leads SET
+      ai_queue_status = 'running',
+      ai_attempt_count = ai_attempt_count + 1,
+      ai_last_error = NULL,
+      ai_next_retry_at = NULL,
+      updated_at = ?
+     WHERE id = (
+       SELECT id
+       FROM leads
+       WHERE ai_queue_status = 'queued'
+         AND (ai_next_retry_at IS NULL OR ai_next_retry_at <= ?)
+         AND ai_attempt_count < ?
+         AND COALESCE(is_excluded, 0) = 0
+         AND status NOT IN ('closed_won','closed_lost')
+         AND COALESCE(business_status, '') NOT IN ('CLOSED_PERMANENTLY','CLOSED_TEMPORARILY')
+       ORDER BY
+         sales_priority_score DESC,
+         raw_opportunity_score DESC,
+         score DESC,
+         updated_at ASC
+       LIMIT 1
+     )
+       AND ai_queue_status = 'queued'
+     RETURNING *`
+  ).get(now, now, safeMaxAttempts) as Record<string, unknown> | undefined;
 
   return row ? parseLeadRow(row) : null;
 }
@@ -4626,6 +4873,10 @@ function parseLeadAiArtifactRow(row: Record<string, unknown>): LeadAiArtifact {
     usage_output_tokens: Number(row.usage_output_tokens ?? 0),
     estimated_cost: Number(row.estimated_cost ?? 0),
     error: (row.error as string | null) ?? null,
+    attempt_count: Number(row.attempt_count ?? 0),
+    last_error: (row.last_error as string | null) ?? null,
+    next_retry_at: (row.next_retry_at as string | null) ?? null,
+    max_attempts: Number(row.max_attempts ?? 3),
     created_at: row.created_at as string,
     updated_at: (row.updated_at as string | null) ?? (row.created_at as string),
   };

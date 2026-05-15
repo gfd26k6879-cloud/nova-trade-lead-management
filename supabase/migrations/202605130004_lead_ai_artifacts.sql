@@ -13,6 +13,10 @@ CREATE TABLE IF NOT EXISTS lead_ai_artifacts (
   usage_output_tokens integer NOT NULL DEFAULT 0,
   estimated_cost double precision NOT NULL DEFAULT 0,
   error text,
+  attempt_count integer NOT NULL DEFAULT 0,
+  last_error text,
+  next_retry_at timestamptz,
+  max_attempts integer NOT NULL DEFAULT 3,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );

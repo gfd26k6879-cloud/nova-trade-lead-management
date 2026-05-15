@@ -138,16 +138,20 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
   const [isAiVerifying, setIsAiVerifying] = useState(false);
   const [aiProgress, setAiProgress] = useState<string | null>(null);
   const [aiBackfillLoading, setAiBackfillLoading] = useState(false);
+  const [pollError, setPollError] = useState<string | null>(null);
   const aiRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refreshStats = useCallback(async () => {
     try {
       const s = await getDashboardStatsAction();
       setStats(s);
+      setPollError(null);
       if (s.runStatus !== "running") {
         setIsProcessing(false);
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      setPollError(error instanceof Error ? error.message : "Dashboard stats could not be refreshed.");
+    }
   }, []);
 
   const pollProcess = useCallback(async () => {
@@ -170,7 +174,10 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
       }
 
       await refreshStats();
-    } catch { /* ignore */ }
+      setPollError(null);
+    } catch (error) {
+      setPollError(error instanceof Error ? error.message : "Discovery worker polling failed.");
+    }
   }, [refreshStats]);
 
   useEffect(() => {
@@ -266,7 +273,10 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
         toast.error(`Enrichment error: ${data.error}`);
       }
       await refreshStats();
-    } catch { /* ignore */ }
+      setPollError(null);
+    } catch (error) {
+      setPollError(error instanceof Error ? error.message : "Enrichment worker polling failed.");
+    }
   }, [refreshStats]);
 
   useEffect(() => {
@@ -300,7 +310,10 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
         toast.error(`AI verification error: ${data.error}`);
       }
       await refreshStats();
-    } catch { /* ignore */ }
+      setPollError(null);
+    } catch (error) {
+      setPollError(error instanceof Error ? error.message : "AI verification polling failed.");
+    }
   }, [refreshStats]);
 
   useEffect(() => {
@@ -379,6 +392,14 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
           <MetricCard label="AI Month" value={`$${stats.schedulerHealth.ai.monthlyCost.toFixed(2)}`} sub={`$${stats.schedulerHealth.ai.budgetRemainingMonth.toFixed(2)} remaining`} />
         </div>
       </section>
+
+      {pollError && (
+        <section className="rounded-2xl px-5 py-4" style={{ background: "rgba(245, 158, 11, 0.1)", border: "1px solid rgba(245, 158, 11, 0.2)" }}>
+          <p className="text-xs font-semibold" style={{ color: "#b45309" }}>Polling needs attention</p>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{pollError}</p>
+          <Link href="/scheduler" className="link-accent mt-2 inline-block text-sm">Open Scheduler</Link>
+        </section>
+      )}
 
       <section className="glass rounded-2xl p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">

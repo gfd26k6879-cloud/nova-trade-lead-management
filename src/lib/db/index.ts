@@ -126,8 +126,9 @@ function normalizePostgresQuery(query: string): string {
     .replace(/datetime\(\?\)/g, "(?::timestamptz)")
     .replace(/INSERT OR REPLACE INTO/gi, "INSERT INTO")
     .replace(/julianday\('now'\) - julianday\(([^)]+)\)/g, "EXTRACT(EPOCH FROM (now() - $1::timestamptz)) / 86400")
-    .replace(/julianday\(([^)]+)\) - julianday\(([^)]+)\)/g, "EXTRACT(EPOCH FROM ($1::timestamptz - $2::timestamptz)) / 86400")
-    .replace(/julianday\(([^)]+)\) > julianday\(([^)]+)\)/g, "$1::timestamptz > $2::timestamptz");
+    .replace(/julianday\(([^)]+)\)\s*-\s*julianday\(([^)]+)\)/g, "EXTRACT(EPOCH FROM (($1)::timestamptz - ($2)::timestamptz)) / 86400")
+    .replace(/julianday\(([^)]+)\)\s*>\s*julianday\(([^)]+)\)/g, "($1)::timestamptz > ($2)::timestamptz")
+    .replace(/julianday\(([^)]+)\)\s*<=\s*julianday\(([^)]+)\)/g, "($1)::timestamptz <= ($2)::timestamptz");
 
   let index = 0;
   normalized = normalized.replace(/\?/g, () => `$${++index}`);

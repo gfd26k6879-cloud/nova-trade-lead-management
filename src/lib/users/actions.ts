@@ -1,9 +1,11 @@
 "use server";
 
 import { randomBytes } from "crypto";
+import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
+import { buildAuthCallbackUrl, resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
   createAppUserForAuthUser,
   listAppUsers,
@@ -64,8 +66,18 @@ export async function createUserAction(input: { email: string; displayName?: str
     email: appUser.email,
     role: appUser.role,
   });
+
+  const resetResult = await sendPasswordSetupEmail(data.user.email);
+  if (resetResult.error) {
+    await createAuditLog("app_user_password_setup_email_failed", "app_user", appUser.user_id, {
+      email: appUser.email,
+      error: resetResult.error,
+    });
+    return { error: `User was created, but the setup email failed: ${resetResult.error}` };
+  }
+
   revalidatePath("/users");
-  return { success: true, user: appUser, temporaryPassword };
+  return { success: true, user: appUser, setupEmailSent: true };
 }
 
 export async function updateUserRoleAction(userId: string, role: AppRole) {
@@ -91,20 +103,34 @@ export async function updateUserStatusAction(userId: string, status: AppUserStat
 export async function resetUserPasswordAction(userId: string) {
   await requirePermission("users:manage");
   await ensureDbReady();
-  const temporaryPassword = generateTemporaryPassword();
   const supabase = createSupabaseAdminClient();
-  const { error } = await supabase.auth.admin.updateUserById(userId, {
-    password: temporaryPassword,
-  });
+  const { data, error } = await supabase.auth.admin.getUserById(userId);
 
-  if (error) {
-    return { error: error.message };
+  if (error || !data.user?.email) {
+    return { error: error?.message ?? "Unable to load Supabase Auth user email." };
   }
 
-  await createAuditLog("app_user_password_reset", "app_user", userId);
-  return { success: true, temporaryPassword };
+  const resetResult = await sendPasswordSetupEmail(data.user.email);
+  if (resetResult.error) {
+    return { error: resetResult.error };
+  }
+
+  await createAuditLog("app_user_password_reset_email_sent", "app_user", userId);
+  return { success: true, resetEmailSent: true };
 }
 
 function generateTemporaryPassword(): string {
   return `NoSite-${randomBytes(12).toString("base64url")}-1a!`;
+}
+
+async function sendPasswordSetupEmail(email: string): Promise<{ error: string | null }> {
+  const headerStore = await headers();
+  const appUrl = resolveCanonicalAppUrl(headerStore.get("origin"));
+  if (!appUrl) return { error: "NEXT_PUBLIC_APP_URL is required to send password setup links in production." };
+
+  const supabase = createSupabaseAdminClient();
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: buildAuthCallbackUrl("/reset-password", appUrl),
+  });
+  return { error: error?.message ?? null };
 }

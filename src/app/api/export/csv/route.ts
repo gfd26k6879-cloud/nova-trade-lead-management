@@ -6,6 +6,7 @@ import {
   getLeadsForExport,
 } from "@/lib/db/queries";
 import { ForbiddenError, requirePermission, UnauthorizedError } from "@/lib/auth";
+import { csvEscape } from "@/lib/csv";
 import type { QualificationStatus } from "@/lib/qualification";
 
 export async function GET(request: NextRequest) {
@@ -134,14 +135,6 @@ export async function GET(request: NextRequest) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
-}
-
-export function csvEscape(val: string | null | undefined): string {
-  if (!val) return "";
-  if (val.includes(",") || val.includes('"') || val.includes("\n")) {
-    return `"${val.replace(/"/g, '""')}"`;
-  }
-  return val;
 }
 
 function parseStringArray(raw: unknown): string[] {

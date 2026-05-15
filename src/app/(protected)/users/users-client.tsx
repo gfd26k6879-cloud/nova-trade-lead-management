@@ -17,7 +17,7 @@ export function UsersClient({ initialUsers }: { initialUsers: AppUser[] }) {
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState<AppRole>("researcher");
-  const [temporaryPassword, setTemporaryPassword] = useState<{ email: string; password: string } | null>(null);
+  const [emailNotice, setEmailNotice] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const refreshUser = (updated: AppUser) => {
@@ -37,11 +37,11 @@ export function UsersClient({ initialUsers }: { initialUsers: AppUser[] }) {
         return;
       }
       refreshUser(result.user);
-      setTemporaryPassword({ email: result.user.email, password: result.temporaryPassword });
+      setEmailNotice(`Password setup email sent to ${result.user.email}.`);
       setEmail("");
       setDisplayName("");
       setRole("researcher");
-      toast.success("User created");
+      toast.success("User created and setup email sent");
     });
   };
 
@@ -77,8 +77,8 @@ export function UsersClient({ initialUsers }: { initialUsers: AppUser[] }) {
         toast.error(result.error);
         return;
       }
-      setTemporaryPassword({ email: user.email, password: result.temporaryPassword });
-      toast.success("Temporary password generated");
+      setEmailNotice(`Password reset email sent to ${user.email}.`);
+      toast.success("Password reset email sent");
     });
   };
 
@@ -115,14 +115,12 @@ export function UsersClient({ initialUsers }: { initialUsers: AppUser[] }) {
           </button>
         </div>
 
-        {temporaryPassword && (
+        {emailNotice && (
           <div className="mt-5 rounded-xl p-4" style={{ background: "rgba(99, 102, 241, 0.08)", border: "1px solid rgba(99, 102, 241, 0.16)" }}>
             <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
-              Temporary password for {temporaryPassword.email}
+              Email sent
             </p>
-            <code className="mt-2 block break-all rounded-lg bg-white/60 px-3 py-2 text-xs" style={{ color: "var(--text-primary)" }}>
-              {temporaryPassword.password}
-            </code>
+            <p className="mt-2 text-xs" style={{ color: "var(--text-secondary)" }}>{emailNotice}</p>
           </div>
         )}
       </section>

@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
+import { buildAuthCallbackUrl, resolveCanonicalAppUrl } from "@/lib/app-url";
 import { isAuthConfigured } from "@/lib/auth";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -25,13 +26,13 @@ export async function requestPasswordResetAction(formData: FormData) {
   }
 
   const headerStore = await headers();
-  const origin = headerStore.get("origin") ?? process.env.NEXT_PUBLIC_APP_URL?.trim();
+  const origin = resolveCanonicalAppUrl(headerStore.get("origin"));
 
   if (!origin) {
     redirect("/forgot-password?error=missing_origin");
   }
 
-  const redirectTo = `${origin}/auth/callback?next=/reset-password`;
+  const redirectTo = buildAuthCallbackUrl("/reset-password", origin);
   const supabase = await createSupabaseServerClient();
   const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
     redirectTo,

@@ -15,6 +15,7 @@ vi.mock("@/lib/db/index", () => {
 import {
   getAiQueueStats,
   getNextAiVerificationJob,
+  leaseNextAiVerificationJob,
   markLeadAiQueueError,
   markLeadAiQueued,
   markLeadAiRunning,
@@ -58,6 +59,20 @@ describe("AI queue queries", () => {
 
     await markLeadAiVerified("lead-1", "hash-1");
     expect((await getAiQueueStats()).verified).toBe(1);
+  });
+
+  it("atomically leases one AI verification job", async () => {
+    insertLead("lead-2");
+    await markLeadAiQueued("lead-1", "hash-1", true);
+    await markLeadAiQueued("lead-2", "hash-2", true);
+
+    const first = await leaseNextAiVerificationJob(3);
+    const second = await leaseNextAiVerificationJob(3);
+    const third = await leaseNextAiVerificationJob(3);
+
+    expect(new Set([first?.id, second?.id])).toEqual(new Set(["lead-1", "lead-2"]));
+    expect(third).toBeNull();
+    expect((await getAiQueueStats()).running).toBe(2);
   });
 
   it("retries until max attempts then marks queue error", async () => {

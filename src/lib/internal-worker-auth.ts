@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
-import { requirePermission } from "@/lib/auth";
+import { requirePermission, UnauthorizedError } from "@/lib/auth";
 import { getDb } from "@/lib/db/index";
 import type { Permission } from "@/lib/permissions";
 
@@ -45,8 +45,9 @@ async function hasValidVaultWorkerCronSecret(request: NextRequest): Promise<bool
     ).get<{ decrypted_secret: string | null }>("worker_cron_secret");
     const secret = row?.decrypted_secret?.trim();
     return Boolean(secret && timingSafeStringEqual(token, secret));
-  } catch {
-    return false;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new UnauthorizedError(`Supabase Vault worker_cron_secret could not be verified: ${message}`);
   }
 }
 
