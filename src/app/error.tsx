@@ -24,9 +24,14 @@ export default function Error({
         <p className="mt-2 text-sm" style={{ color: "var(--text-tertiary)" }}>
           {error.message || "An unexpected error occurred."}
         </p>
+        {error.digest && (
+          <p className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>
+            Error ID: {error.digest}
+          </p>
+        )}
         <div className="mt-6 flex items-center justify-center gap-3">
           <button type="button" className="btn-primary" onClick={reset}>Try Again</button>
-          <a href="/dashboard" className="btn-glass">Dashboard</a>
+          <a href="/queue" className="btn-glass">Queue</a>
         </div>
       </div>
     </div>

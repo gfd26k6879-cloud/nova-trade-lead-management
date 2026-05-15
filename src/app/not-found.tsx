@@ -15,7 +15,7 @@ export default function NotFound() {
           The page you&apos;re looking for doesn&apos;t exist or has been moved.
         </p>
         <div className="mt-6">
-          <Link href="/dashboard" className="btn-primary">Back to Dashboard</Link>
+          <Link href="/queue" className="btn-primary">Back to Queue</Link>
         </div>
       </div>
     </div>
