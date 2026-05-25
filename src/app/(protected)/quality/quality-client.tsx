@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
+import { HelpTip } from "@/components/help-tip";
 import { PageShell } from "@/components/page-shell";
 import {
   addLeadNoteAction,
@@ -234,6 +235,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
           <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={() => runBatch("refresh", { limit: 25, denverOnly: filters.denverOnly, businessType: filters.businessType })}>
             {busy === "refresh" ? "Refreshing..." : "Refresh Broken/Uncertain"}
           </button>
+          <HelpTip>Runs AI verification against the filtered batch; it updates AI evidence and may change recommended quality buckets.</HelpTip>
           {message && <span className="text-xs" style={{ color: "#166534" }}>{message}</span>}
         </div>
       </section>

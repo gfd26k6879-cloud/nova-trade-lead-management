@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, EMAIL, PASSWORD, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, EMAIL, PASSWORD, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
 
 test("Settings controls verification", async ({ page }) => {
   skipIfMissingAuth();
@@ -14,7 +14,7 @@ test("Settings controls verification", async ({ page }) => {
     await page.getByLabel("Password").fill(PASSWORD);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL(/\/queue/, { timeout: 10000 });
-    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await openAdminPage(page, "Settings");
     await page.waitForURL(/\/settings/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 5000 });
 

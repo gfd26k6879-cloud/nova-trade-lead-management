@@ -2,33 +2,41 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { usePathname, useSearchParams } from "next/navigation";
 import type { AppRole } from "@/lib/permissions";
 
 type NavItem = {
   href: string;
   label: string;
-  adminOnly: boolean;
+  description?: string;
   badge?: "fulfillment";
 };
 
-const navItems: NavItem[] = [
-  { href: "/queue", label: "Workbench", adminOnly: false },
-  { href: "/leads?assigned=me", label: "My Leads", adminOnly: false },
-  { href: "/team", label: "Team Board", adminOnly: false },
-  { href: "/dashboard", label: "Revenue", adminOnly: true },
-  { href: "/fulfillment", label: "Fulfillment", adminOnly: true, badge: "fulfillment" },
-  { href: "/coverage", label: "Discovery Monitor", adminOnly: true },
-  { href: "/scheduler", label: "Scheduler", adminOnly: true },
-  { href: "/quality", label: "Quality", adminOnly: true },
-  { href: "/leads", label: "All Leads", adminOnly: true },
-  { href: "/statistics", label: "Statistics", adminOnly: true },
-  { href: "/settings", label: "Settings", adminOnly: true },
-  { href: "/users", label: "Users", adminOnly: true },
+const primaryItems: NavItem[] = [
+  { href: "/queue", label: "Workbench", description: "Daily call, text, email, and follow-up queue." },
+  { href: "/leads?assigned=me", label: "My Leads", description: "Only leads owned by the current user." },
+  { href: "/team", label: "Team", description: "Team workload and recent outreach activity." },
+];
+
+const adminItems: NavItem[] = [
+  { href: "/dashboard", label: "Overview", description: "Revenue, discovery controls, and admin shortcuts." },
+  { href: "/fulfillment", label: "Fulfillment", description: "Website and quote requests from researchers.", badge: "fulfillment" },
+  { href: "/coverage", label: "Discovery", description: "Live crawl run status and ZIP/category unit health." },
+  { href: "/scheduler", label: "Scheduler", description: "Background workers, backlogs, and worker controls." },
+  { href: "/quality", label: "Quality", description: "AI verification and manual lead quality review." },
+  { href: "/leads", label: "All Leads", description: "Full lead database, filters, Kanban, and export." },
+  { href: "/statistics", label: "Statistics", description: "Lead mix, quality, and conversion reporting." },
+  { href: "/settings", label: "Settings", description: "API keys, scoring, cost, and model settings." },
+  { href: "/users", label: "Users", description: "Team roles, status, and team lead assignment." },
 ];
 
 export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: { email: string; role: AppRole; fulfillmentCount?: number; logoutAction: () => Promise<void> }) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const visibleItems = navItems.filter((item) => !item.adminOnly || role === "admin");
+  const [adminOpen, setAdminOpen] = useState(false);
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const isAdmin = role === "admin";
+  const activeAdminItem = adminItems.find((item) => isActivePath(pathname, item.href, searchParams));
 
   return (
     <header
@@ -67,12 +75,56 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
         </div>
 
         {/* Desktop nav */}
-        <nav className="hidden items-center gap-1 md:flex">
-          {visibleItems.map((item) => (
-            <Link key={item.href} href={item.href} className="nav-link">
+        <nav className="hidden items-center gap-1 md:flex" aria-label="Primary">
+          {primaryItems.map((item) => (
+            <Link key={item.href} href={item.href} className={`nav-link ${isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}>
               <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
             </Link>
           ))}
+          {isAdmin && (
+            <div className="relative">
+              <button
+                type="button"
+                className={`nav-link ${activeAdminItem ? "nav-link-active" : ""}`}
+                aria-expanded={adminOpen}
+                aria-controls="admin-nav-menu"
+                onClick={() => setAdminOpen((open) => !open)}
+              >
+                Admin{activeAdminItem ? `: ${activeAdminItem.label}` : ""}
+                {fulfillmentCount > 0 && <NavBadge count={fulfillmentCount} />}
+              </button>
+              {adminOpen && (
+                <div
+                  id="admin-nav-menu"
+                  className="absolute right-0 mt-2 w-72 rounded-xl p-2"
+                  style={{
+                    background: "rgba(255,255,255,0.96)",
+                    border: "1px solid rgba(255,255,255,0.72)",
+                    boxShadow: "0 18px 60px rgba(15,23,42,0.16)",
+                  }}
+                >
+                  {adminItems.map((item) => (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={`block rounded-lg px-3 py-2 text-sm transition ${isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}
+                      style={{ color: "var(--text-primary)" }}
+                      onClick={() => setAdminOpen(false)}
+                    >
+                      <span className="flex items-center justify-between gap-2 font-medium">
+                        <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
+                      </span>
+                      {item.description && (
+                        <span className="mt-0.5 block text-xs leading-snug" style={{ color: "var(--text-tertiary)" }}>
+                          {item.description}
+                        </span>
+                      )}
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </nav>
 
         <div className="flex items-center gap-2">
@@ -114,16 +166,31 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
           style={{ borderColor: "rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.55)" }}
         >
           <nav className="flex flex-col gap-1">
-            {visibleItems.map((item) => (
+            {primaryItems.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
-                className="nav-link block"
+                className={`nav-link w-full ${isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}
                 onClick={() => setMobileOpen(false)}
               >
                 <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
               </Link>
             ))}
+            {isAdmin && (
+              <>
+                <p className="section-label px-3 pt-3">Admin</p>
+                {adminItems.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`nav-link w-full ${isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}
+                    onClick={() => setMobileOpen(false)}
+                  >
+                    <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
+                  </Link>
+                ))}
+              </>
+            )}
           </nav>
           <form action={logoutAction} className="mt-2">
             <button type="submit" className="btn-glass text-xs w-full">Log out</button>
@@ -138,14 +205,27 @@ function NavLabel({ label, count }: { label: string; count: number }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span>{label}</span>
-      {count > 0 && (
-        <span
-          className="rounded-full px-1.5 py-0.5 text-[0.65rem] font-semibold leading-none"
-          style={{ background: "rgba(239,68,68,0.12)", color: "#dc2626" }}
-        >
-          {count > 99 ? "99+" : count}
-        </span>
-      )}
+      {count > 0 && <NavBadge count={count} />}
     </span>
   );
+}
+
+function NavBadge({ count }: { count: number }) {
+  return (
+    <span
+      className="rounded-full px-1.5 py-0.5 text-[0.65rem] font-semibold leading-none"
+      style={{ background: "rgba(239,68,68,0.12)", color: "#dc2626" }}
+    >
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+function isActivePath(pathname: string, href: string, searchParams: { get(name: string): string | null }): boolean {
+  const [path, query] = href.split("?");
+  const pathMatches = pathname === path || (path !== "/" && pathname.startsWith(`${path}/`));
+  if (!pathMatches) return false;
+  if (query?.includes("assigned=me")) return searchParams.get("assigned") === "me";
+  if (path === "/leads" && searchParams.get("assigned") === "me") return false;
+  return true;
 }

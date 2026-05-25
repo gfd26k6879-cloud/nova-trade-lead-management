@@ -5,6 +5,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { PageShell } from "@/components/page-shell";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { HelpTip } from "@/components/help-tip";
 import { LocationScopePicker, type LocationScopeValue } from "@/components/location-scope-picker";
 import {
   startCrawlRunAction,
@@ -637,6 +638,7 @@ export function DashboardClient({
               >
                 Start Discovery
               </button>
+              <HelpTip>Creates ZIP/category crawl work units for the selected geography and business types.</HelpTip>
               <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
                 {selectedCategories.length === CATEGORY_OPTIONS.length
                   ? "All categories"
@@ -776,6 +778,7 @@ export function DashboardClient({
             <button type="button" className="btn-primary text-sm" onClick={handleEnrich} disabled={loading || isEnriching}>
               {isEnriching ? "Enriching..." : "Enrich Top Leads"}
             </button>
+            <HelpTip>Runs deeper lead enrichment on the strongest existing leads.</HelpTip>
             {isEnriching && (
               <button type="button" className="btn-glass text-sm" onClick={() => setIsEnriching(false)}>
                 Stop Local Polling
@@ -808,6 +811,7 @@ export function DashboardClient({
           <button type="button" className="btn-primary text-sm" onClick={handleAiVerify} disabled={loading || isAiVerifying || stats.aiQueueStats.queued === 0}>
             {isAiVerifying ? "Verifying..." : "Process AI Queue"}
           </button>
+          <HelpTip>Processes queued AI verification jobs for leads already waiting in the queue.</HelpTip>
           {isAiVerifying && (
             <button type="button" className="btn-glass text-sm" onClick={() => setIsAiVerifying(false)}>
               Stop Local Polling
@@ -816,6 +820,7 @@ export function DashboardClient({
           <button type="button" className="btn-glass text-sm" onClick={handleQueueMissingAi} disabled={loading || aiBackfillLoading || stats.aiQueueStats.notChecked === 0}>
             {aiBackfillLoading ? "Queueing..." : "Queue Missing AI Verifications"}
           </button>
+          <HelpTip>Finds leads that have not been checked by AI yet and queues them for later processing.</HelpTip>
           {aiProgress && (
             <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
               Last: {aiProgress}

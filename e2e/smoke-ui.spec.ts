@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, EMAIL, PASSWORD, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, EMAIL, PASSWORD, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
 
 test.describe("UI Smoke Test", () => {
   skipIfMissingAuth();
@@ -22,11 +22,10 @@ test.describe("UI Smoke Test", () => {
   test("2. Protected navigation and Dashboard loads", async ({ page }) => {
   skipIfMissingAuth();
     await expect(page.getByRole("link", { name: "Workbench", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Revenue", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: /Fulfillment/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: "All Leads", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
-    await page.getByRole("link", { name: "Revenue", exact: true }).click();
+    await expect(page.getByRole("link", { name: "My Leads", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Team", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Admin/ })).toBeVisible();
+    await openAdminPage(page, "Overview");
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Revenue Dashboard", exact: true })).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Team performance", exact: true })).toBeVisible();
@@ -39,7 +38,7 @@ test.describe("UI Smoke Test", () => {
 
   test("3. Dashboard cost breakdown / monthly cost intelligence", async ({ page }) => {
   skipIfMissingAuth();
-    await page.getByRole("link", { name: "Revenue", exact: true }).click();
+    await openAdminPage(page, "Overview");
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
     await page.getByText("Expand operations", { exact: true }).click();
     const runCostText = page.getByText(/Run API:.*calls.*\$/);
@@ -76,7 +75,7 @@ test.describe("UI Smoke Test", () => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
-    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await openAdminPage(page, "Settings");
     await page.waitForURL(/\/settings/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 5000 });
 
@@ -124,7 +123,7 @@ test.describe("UI Smoke Test", () => {
 
   test("5. No permanent settings changes (revert)", async ({ page }) => {
   skipIfMissingAuth();
-    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await openAdminPage(page, "Settings");
     await page.waitForURL(/\/settings/, { timeout: 5000 });
 
     const cacheTtl = page.getByText("Cache TTL (days)").locator("..").locator("input");
@@ -139,18 +138,18 @@ test.describe("UI Smoke Test", () => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
-    await page.getByRole("link", { name: "Revenue", exact: true }).click();
+    await openAdminPage(page, "Overview");
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
-    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await openAdminPage(page, "Settings");
     await page.waitForURL(/\/settings/, { timeout: 5000 });
-    await page.getByRole("link", { name: "Revenue", exact: true }).click();
+    await openAdminPage(page, "Overview");
 
     expect(errors).toHaveLength(0);
   });
 
   test("7. Business type filter and Statistics page", async ({ page }) => {
   skipIfMissingAuth();
-    await page.getByRole("link", { name: "All Leads", exact: true }).click();
+    await openAdminPage(page, "All Leads");
     await page.waitForURL(/\/leads/, { timeout: 5000 });
 
     await page.getByLabel("Business type").selectOption("dental");
@@ -158,7 +157,7 @@ test.describe("UI Smoke Test", () => {
     await expect(page.getByLabel("Business type")).toHaveValue("dental");
     await expect(page.getByRole("link", { name: "Export CSV" })).toHaveAttribute("href", /businessType=dental/);
 
-    await page.getByRole("link", { name: "Statistics", exact: true }).click();
+    await openAdminPage(page, "Statistics");
     await page.waitForURL(/\/statistics/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Statistics", exact: true })).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Business Type Breakdown", exact: true })).toBeVisible();

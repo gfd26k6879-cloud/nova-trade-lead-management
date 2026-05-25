@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, EMAIL, PASSWORD, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, EMAIL, PASSWORD, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
 
 test.describe("Smoke pass", () => {
   skipIfMissingAuth();
@@ -48,7 +48,7 @@ test.describe("Smoke pass", () => {
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL(/\/queue/, { timeout: 10000 });
 
-    await page.getByRole("link", { name: "All Leads", exact: true }).click();
+    await openAdminPage(page, "All Leads");
     await page.waitForURL(/\/leads/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Leads", exact: true })).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole("button", { name: "Kanban View" })).toBeVisible();
@@ -131,7 +131,7 @@ test.describe("Smoke pass", () => {
 
     await page.getByRole("link", { name: "Workbench", exact: true }).click();
     await page.waitForURL(/\/queue/, { timeout: 5000 });
-    await page.getByRole("link", { name: "Revenue", exact: true }).click();
+    await openAdminPage(page, "Overview");
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Revenue Dashboard", exact: true })).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Team performance", exact: true })).toBeVisible();
@@ -150,14 +150,14 @@ test.describe("Smoke pass", () => {
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL(/\/queue/, { timeout: 10000 });
 
-    await page.getByRole("link", { name: /Fulfillment/ }).click();
+    await openAdminPage(page, "Fulfillment");
     await page.waitForURL(/\/fulfillment/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Fulfillment", exact: true })).toBeVisible({ timeout: 5000 });
     const hasWebsiteFilter = await page.getByRole("link", { name: "Website needed", exact: true }).isVisible().catch(() => false);
     const hasEmptyState = await page.getByRole("heading", { name: "No fulfillment requests", exact: true }).isVisible().catch(() => false);
     expect(hasWebsiteFilter || hasEmptyState).toBeTruthy();
 
-    await page.getByRole("link", { name: "Users", exact: true }).click();
+    await openAdminPage(page, "Users");
     await page.waitForURL(/\/users/, { timeout: 5000 });
     await expect(page.getByRole("columnheader", { name: "Team", exact: true })).toBeVisible({ timeout: 5000 });
     await expect(page.locator('select[aria-label^="Role for"]:visible').first()).toBeVisible();

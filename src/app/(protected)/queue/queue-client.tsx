@@ -3,6 +3,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { HelpTip } from "@/components/help-tip";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
 import { createAdminRequestAction } from "@/lib/admin-requests/actions";
@@ -323,20 +324,26 @@ function LeadActionCard({
 
         <div className="flex flex-wrap gap-2 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
           {!lead.assigned_to_user_id && (
-            <button type="button" className="btn-primary flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onClaim(lead.id)}>
-              {busy ? "Claiming..." : "Claim"}
-            </button>
+            <ActionWithHelp help="Assigns this lead to you so teammates know you own the next outreach step.">
+              <button type="button" className="btn-primary flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onClaim(lead.id)}>
+                {busy ? "Claiming..." : "Claim"}
+              </button>
+            </ActionWithHelp>
           )}
           {isMine && (
-            <button type="button" className="btn-glass flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onRelease(lead.id)}>
-              Release
-            </button>
+            <ActionWithHelp help="Removes your ownership and returns the lead to the unclaimed pool.">
+              <button type="button" className="btn-glass flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onRelease(lead.id)}>
+                Release
+              </button>
+            </ActionWithHelp>
           )}
           <Link href={`/leads/${lead.id}`} className="btn-glass flex-1 text-sm sm:flex-none">Open</Link>
           {isMine && (
-            <button type="button" className="btn-glass flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onOpenLogSheet(lead, "call")}>
-              Log outcome
-            </button>
+            <ActionWithHelp help="Records what happened and keeps follow-ups visible to the team.">
+              <button type="button" className="btn-glass flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onOpenLogSheet(lead, "call")}>
+                Log outcome
+              </button>
+            </ActionWithHelp>
           )}
         </div>
 
@@ -476,6 +483,7 @@ function LogOutcomeSheet({
             <div className="flex flex-wrap gap-2">
               <AdminRequestButton
                 label="Website needed"
+                help="Creates one admin fulfillment item for a website build request."
                 alreadyQueued={Boolean(lead.open_website_request_id)}
                 busy={requestBusy === "website_request"}
                 disabled={busy || Boolean(requestBusy)}
@@ -483,6 +491,7 @@ function LogOutcomeSheet({
               />
               <AdminRequestButton
                 label="Quote requested"
+                help="Creates one admin fulfillment item for a price or scope quote."
                 alreadyQueued={Boolean(lead.open_quote_request_id)}
                 busy={requestBusy === "quote_request"}
                 disabled={busy || Boolean(requestBusy)}
@@ -505,21 +514,34 @@ function LogOutcomeSheet({
 
 function AdminRequestButton({
   label,
+  help,
   alreadyQueued,
   busy,
   disabled,
   onClick,
 }: {
   label: string;
+  help: string;
   alreadyQueued: boolean;
   busy: boolean;
   disabled: boolean;
   onClick: () => void;
 }) {
   return (
-    <button type="button" className="btn-glass text-sm" disabled={disabled || alreadyQueued} onClick={onClick}>
-      {alreadyQueued ? "Already in admin queue" : busy ? "Sending..." : label}
-    </button>
+    <ActionWithHelp help={help}>
+      <button type="button" className="btn-glass text-sm" disabled={disabled || alreadyQueued} onClick={onClick}>
+        {alreadyQueued ? "Already in admin queue" : busy ? "Sending..." : label}
+      </button>
+    </ActionWithHelp>
+  );
+}
+
+function ActionWithHelp({ children, help }: { children: React.ReactNode; help: string }) {
+  return (
+    <span className="inline-flex flex-1 items-center gap-1.5 sm:flex-none">
+      {children}
+      <HelpTip>{help}</HelpTip>
+    </span>
   );
 }
 

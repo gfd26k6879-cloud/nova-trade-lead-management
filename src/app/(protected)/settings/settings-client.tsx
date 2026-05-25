@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { HelpTip } from "@/components/help-tip";
 import { PageShell } from "@/components/page-shell";
 import {
   backfillCanonicalPlacesAction,
@@ -468,6 +469,7 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
         <button type="button" className="btn-primary" onClick={handleSave}>
           Save Settings
         </button>
+        <HelpTip>Persists scoring, budget, host list, and AI settings shown on this page.</HelpTip>
         <button type="button" className="btn-glass" onClick={async () => {
           const result = await recomputeAllScoresAction();
           setSaveMsg(`Recomputed scores for ${result.count} leads`);
@@ -475,6 +477,7 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
         }}>
           Recompute All Scores
         </button>
+        <HelpTip>Re-runs lead scoring using the current settings; it does not crawl new leads.</HelpTip>
         <button type="button" className="btn-glass" onClick={async () => {
           const result = await backfillCanonicalPlacesAction();
           if (result.success) {
@@ -486,6 +489,7 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
         }}>
           Backfill Canonical Places
         </button>
+        <HelpTip>Fills missing canonical Google Place IDs from cached/place data where possible.</HelpTip>
         {saveMsg && (
           <span className="text-sm" style={{
             color: saveMsg.includes("Error") || saveMsg.includes("Invalid") ? "#991b1b" : "#166534"

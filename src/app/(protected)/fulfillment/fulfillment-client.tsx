@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import { HelpTip } from "@/components/help-tip";
 import { updateAdminRequestStatusAction } from "@/lib/admin-requests/actions";
 import type { AdminRequest, AdminRequestStatus, AdminRequestType } from "@/lib/db/queries";
 
@@ -138,16 +139,35 @@ function FulfillmentCard({
 
       <div className="mt-4 flex flex-wrap gap-2">
         {request.status === "new" && (
-          <button type="button" className="btn-glass text-sm" disabled={busy} onClick={() => onStatus(request, "seen")}>Mark seen</button>
+          <ActionWithHelp help="Acknowledges the request without starting work yet.">
+            <button type="button" className="btn-glass text-sm" disabled={busy} onClick={() => onStatus(request, "seen")}>Mark seen</button>
+          </ActionWithHelp>
         )}
-        <button type="button" className="btn-primary text-sm" disabled={busy} onClick={() => onStatus(request, "in_progress", true)}>
-          {busy ? "Opening..." : "Start design"}
-        </button>
-        <button type="button" className="btn-glass text-sm" disabled={busy} onClick={() => onStatus(request, "waiting_on_researcher")}>Ask researcher</button>
-        <button type="button" className="btn-glass text-sm" disabled={busy} onClick={() => onStatus(request, "done")}>Done</button>
-        <button type="button" className="btn-glass text-sm" disabled={busy} onClick={() => onStatus(request, "cancelled")}>Cancel</button>
+        <ActionWithHelp help="Marks the request in progress and opens the lead record.">
+          <button type="button" className="btn-primary text-sm" disabled={busy} onClick={() => onStatus(request, "in_progress", true)}>
+            {busy ? "Opening..." : "Start design"}
+          </button>
+        </ActionWithHelp>
+        <ActionWithHelp help="Moves the item into waiting status when the researcher needs to clarify details.">
+          <button type="button" className="btn-glass text-sm" disabled={busy} onClick={() => onStatus(request, "waiting_on_researcher")}>Ask researcher</button>
+        </ActionWithHelp>
+        <ActionWithHelp help="Closes the request as completed.">
+          <button type="button" className="btn-glass text-sm" disabled={busy} onClick={() => onStatus(request, "done")}>Done</button>
+        </ActionWithHelp>
+        <ActionWithHelp help="Closes the request without marking it completed.">
+          <button type="button" className="btn-glass text-sm" disabled={busy} onClick={() => onStatus(request, "cancelled")}>Cancel</button>
+        </ActionWithHelp>
       </div>
     </article>
+  );
+}
+
+function ActionWithHelp({ children, help }: { children: React.ReactNode; help: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {children}
+      <HelpTip>{help}</HelpTip>
+    </span>
   );
 }
 
