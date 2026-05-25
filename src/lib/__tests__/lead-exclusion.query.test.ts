@@ -15,6 +15,7 @@ vi.mock("@/lib/db/index", () => {
 import {
   clearLeadExclusion,
   getAllLeadsForRecompute,
+  getLeadMapPoints,
   getLeads,
   getNowQueue,
   getQualifiedLeadCount,
@@ -156,5 +157,31 @@ describe("lead exclusion query behavior", () => {
     const noWebsiteLeads = await getLeads({ websiteStatus: "none", pageSize: 10 });
     expect(noWebsiteLeads.leads.map((lead) => lead.id)).not.toContain(usableSiteId);
     expect(noWebsiteLeads.leads.map((lead) => lead.id)).toContain(opportunityId);
+  });
+
+  it("sorts mapped leads by website need before generic score when fast map ordering is requested", async () => {
+    const weakSiteId = insertLead(testDb, 300, { score: 99, status: "new", websiteStatus: "basic" });
+    const noSiteId = insertLead(testDb, 301, { score: 5, status: "new", websiteStatus: "none" });
+
+    testDb.prepare(
+      `UPDATE leads
+       SET lat = ?, lng = ?, sales_priority_score = ?, lead_quality_score = ?, raw_opportunity_score = ?, review_count = ?,
+           ai_verification_status = ?, ai_website_viability_status = ?
+       WHERE id = ?`
+    ).run(39.75, -104.99, 99, 99, 99, 100, "weak_site_found", "placeholder", weakSiteId);
+    testDb.prepare(
+      `UPDATE leads
+       SET lat = ?, lng = ?, sales_priority_score = ?, lead_quality_score = ?, raw_opportunity_score = ?, review_count = ?,
+           ai_verification_status = ?, ai_website_viability_status = ?
+       WHERE id = ?`
+    ).run(39.76, -104.98, 5, 5, 5, 5, "no_site_found", "directory_only", noSiteId);
+
+    const result = await getLeadMapPoints(
+      { sortBy: "website_need", sortDir: "desc" },
+      10,
+      { includeTotal: true, fastOrder: true },
+    );
+
+    expect(result.points.map((lead) => lead.id).slice(0, 2)).toEqual([noSiteId, weakSiteId]);
   });
 });

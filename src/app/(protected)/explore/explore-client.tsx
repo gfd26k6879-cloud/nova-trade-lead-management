@@ -13,8 +13,7 @@ import { buildGoogleMapsScriptUrl, GOOGLE_MAPS_SCRIPT_ID, hasGoogleMapsBrowserKe
 import type { AppRole } from "@/lib/permissions";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
 
-type ExplorerView = "map" | "cards" | "table";
-type MapEngine = "local" | "google";
+type ExplorerView = "cards" | "table";
 type GoogleMapsLoadState = "loading" | "ready" | "error";
 
 type GoogleLatLngLiteral = { lat: number; lng: number };
@@ -97,6 +96,7 @@ interface Props {
     page?: number;
     pageSize?: number;
     view?: string;
+    map?: string;
     geo?: string;
   };
   scoreThresholds: ScoreBandThresholds;
@@ -111,6 +111,7 @@ const QUALITY_OPTIONS = ["", "ready_to_call", "broken_site_opportunity", "needs_
 const AI_OPTIONS = ["", "not_checked", "no_site_found", "weak_site_found", "site_found", "uncertain", "mismatch"];
 const SORT_OPTIONS = [
   { value: "opportunity", label: "Best opportunity" },
+  { value: "website_need", label: "Website need" },
   { value: "sales_priority_score", label: "Sales priority" },
   { value: "lead_quality_score", label: "Lead quality" },
   { value: "estimated_deal_value", label: "Deal value" },
@@ -132,6 +133,32 @@ const GEO_PRESETS = [
   { value: "colorado_springs", label: "Colorado Springs" },
 ];
 const MAP_LIST_LIMIT = 80;
+const QUICK_FILTERS: Array<{
+  label: string;
+  description: string;
+  updates: Record<string, string | null>;
+}> = [
+  {
+    label: "All no-site leads",
+    description: "No website, any owner, sorted by website need, with map drawer open.",
+    updates: { websiteStatus: "none", assigned: "any", sortBy: "website_need", map: "open", page: null },
+  },
+  {
+    label: "Unclaimed no-site",
+    description: "No website and not claimed by anyone yet.",
+    updates: { websiteStatus: "none", assigned: "unassigned", sortBy: "website_need", map: "open", page: null },
+  },
+  {
+    label: "Broken site",
+    description: "AI/manual quality marked as broken-site opportunity.",
+    updates: { qualityBucket: "broken_site_opportunity", assigned: "any", sortBy: "website_need", map: "open", page: null },
+  },
+  {
+    label: "Needs AI review",
+    description: "Leads still waiting on AI verification.",
+    updates: { qualityBucket: "needs_ai_verify", aiVerificationStatus: "not_checked", assigned: "any", sortBy: "opportunity", map: null, page: null },
+  },
+];
 
 export function ExploreClient({
   leads,
@@ -159,25 +186,18 @@ export function ExploreClient({
   const pageSize = filters.pageSize ?? 60;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const view = normalizeView(filters.view);
+  const mapOpen = filters.map === "open";
   const selectedMapPoint = mapPoints.find((lead) => lead.id === selectedLeadId) ?? mapPoints[0] ?? null;
   const zipCoverageWithLeadCounts = useMemo(() => mergeZipCoverageWithMapPoints(zipCoverage, mapPoints), [zipCoverage, mapPoints]);
   const visibleMapList = useMemo(() => mapPoints.slice(0, MAP_LIST_LIMIT), [mapPoints]);
-  const zipCoverageSummary = useMemo(() => summarizeZipCoverage(zipCoverageWithLeadCounts), [zipCoverageWithLeadCounts]);
   const pageUnclaimed = leads.filter((lead) => !lead.assigned_to_user_id).length;
   const pageMapped = leads.filter((lead) => typeof lead.lat === "number" && typeof lead.lng === "number").length;
-  const stats = view === "map"
-    ? [
-        { label: "Matching Leads", value: String(total) },
-        { label: "Shown On Map", value: String(mapPoints.length), hint: "Uses stored coordinates" },
-        { label: "Covered ZIPs", value: `${zipCoverageSummary.scraped} / ${zipCoverageSummary.total}`, hint: "Dark ZIPs have mapped leads" },
-        { label: "Light ZIPs", value: String(zipCoverageSummary.notStarted), hint: "No mapped lead in this view" },
-      ]
-    : [
-        { label: "Matching Leads", value: String(total) },
-        { label: "Unclaimed Here", value: String(pageUnclaimed), hint: "On this page" },
-        { label: "Mapped Here", value: String(pageMapped), hint: "On this page" },
-        { label: "Page", value: `${page} / ${totalPages}` },
-      ];
+  const stats = [
+    { label: "Matching Leads", value: String(total) },
+    { label: "Unclaimed Here", value: String(pageUnclaimed), hint: "On this page" },
+    { label: "Mapped Here", value: String(pageMapped), hint: "On this page" },
+    { label: "Page", value: `${page} / ${totalPages}` },
+  ];
 
   const pushFilters = useCallback(
     (updates: Record<string, string | number | null | undefined>) => {
@@ -206,20 +226,6 @@ export function ExploreClient({
     router.refresh();
     window.setTimeout(() => setMessage(null), 3500);
     setBusyLeadId(null);
-  };
-
-  const applyMapQuadrant = (quadrant: "nw" | "ne" | "sw" | "se") => {
-    const bounds = getBounds([...mapPoints, ...zipCoverageWithLeadCounts]);
-    if (!bounds) return;
-    const midLat = (bounds.minLat + bounds.maxLat) / 2;
-    const midLng = (bounds.minLng + bounds.maxLng) / 2;
-    pushFilters({
-      geo: null,
-      minLat: quadrant.includes("n") ? midLat : bounds.minLat,
-      maxLat: quadrant.includes("n") ? bounds.maxLat : midLat,
-      minLng: quadrant.includes("w") ? bounds.minLng : midLng,
-      maxLng: quadrant.includes("w") ? midLng : bounds.maxLng,
-    });
   };
 
   const selectMapZip = useCallback((nextZip: string) => {
@@ -265,10 +271,31 @@ export function ExploreClient({
             </form>
 
             <div className="flex flex-wrap gap-2 lg:ml-auto">
-              <SegmentButton active={view === "map"} onClick={() => pushFilters({ view: "map" })}>Map</SegmentButton>
+              <SegmentButton active={mapOpen} onClick={() => pushFilters({ map: mapOpen ? null : "open" })}>
+                {mapOpen ? "Hide map" : "Show map"}
+              </SegmentButton>
               <SegmentButton active={view === "cards"} onClick={() => pushFilters({ view: "cards" })}>Cards</SegmentButton>
               <SegmentButton active={view === "table"} onClick={() => pushFilters({ view: "table" })}>Table</SegmentButton>
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.32)" }}>
+            <span className="section-label">Quick views</span>
+            {QUICK_FILTERS.map((filter) => (
+              <button
+                key={filter.label}
+                type="button"
+                className="btn-glass text-xs"
+                title={filter.description}
+                onClick={() => pushFilters(filter.updates)}
+              >
+                {filter.label}
+              </button>
+            ))}
+            <Link href="/explore" className="btn-glass text-xs">Reset all</Link>
+            <span className="inline-flex items-center gap-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+              Filters update the list and the optional map together. <HelpTip>The map drawer loads Google Maps only after you open it. No Places, Geocoding, Routes, or server map API calls are made from this view.</HelpTip>
+            </span>
           </div>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -373,7 +400,7 @@ export function ExploreClient({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <span className="section-label">Map area</span>
+            <span className="section-label">Area</span>
             {GEO_PRESETS.map((preset) => (
               <button
                 key={preset.value}
@@ -385,9 +412,8 @@ export function ExploreClient({
               </button>
             ))}
             <button type="button" className="btn-glass text-xs" onClick={() => pushFilters({ geo: null, minLat: null, maxLat: null, minLng: null, maxLng: null })}>
-              Clear map
+              Clear area
             </button>
-            <Link href="/explore" className="btn-glass text-xs">Reset all</Link>
             <span className="inline-flex items-center gap-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
               Opportunity sort <HelpTip>No-site and broken-site businesses rank ahead of weak/basic website leads, then quality and sales priority break ties.</HelpTip>
             </span>
@@ -395,8 +421,8 @@ export function ExploreClient({
         </div>
       </section>
 
-      {view === "map" ? (
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(22rem,0.7fr)]">
+      {mapOpen && (
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.65fr)]">
           <LeadMap
             points={mapPoints}
             zipCoverage={zipCoverageWithLeadCounts}
@@ -406,7 +432,6 @@ export function ExploreClient({
             selectedLeadId={selectedMapPoint?.id ?? null}
             googleMapsApiKey={googleMapsApiKey}
             onSelect={setSelectedLeadId}
-            onQuadrant={applyMapQuadrant}
             onZipSelect={selectMapZip}
           />
           <MapSidePanel
@@ -422,7 +447,9 @@ export function ExploreClient({
             onClaim={claimLead}
           />
         </section>
-      ) : view === "table" ? (
+      )}
+
+      {view === "table" ? (
         <LeadTable leads={leads} currentUserId={currentUser.userId} scoreThresholds={scoreThresholds} busyLeadId={busyLeadId} onClaim={claimLead} />
       ) : (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -443,7 +470,7 @@ export function ExploreClient({
         </section>
       )}
 
-      {view !== "map" && totalPages > 1 && (
+      {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2">
           <button type="button" className="btn-glass text-sm" disabled={page <= 1} onClick={() => pushFilters({ page: page - 1 })}>
             Previous
@@ -467,7 +494,6 @@ function LeadMap({
   selectedLeadId,
   googleMapsApiKey,
   onSelect,
-  onQuadrant,
   onZipSelect,
 }: {
   points: LeadMapPoint[];
@@ -478,71 +504,17 @@ function LeadMap({
   selectedLeadId: string | null;
   googleMapsApiKey: string | null;
   onSelect: (leadId: string) => void;
-  onQuadrant: (quadrant: "nw" | "ne" | "sw" | "se") => void;
   onZipSelect: (zip: string) => void;
 }) {
-  const [viewport, setViewport] = useState<MapViewport>(DEFAULT_MAP_VIEWPORT);
   const [showCoverage, setShowCoverage] = useState(true);
-  const [mapEngine, setMapEngine] = useState<MapEngine>("local");
   const [googleResetToken, setGoogleResetToken] = useState(0);
-  const dragRef = useRef<MapDragState | null>(null);
-  const bounds = getBounds([...points, ...zipCoverage]);
   const hasMore = totalMapped > points.length;
   const missingCoordinates = Math.max(0, total - totalMapped);
-  const markers = bounds ? getMapMarkers(points, bounds, selectedLeadId) : [];
-  const zipTiles = bounds ? zipCoverage.map((zip) => ({ zip, ...projectLead(zip, bounds) })) : [];
   const coverageSummary = summarizeZipCoverage(zipCoverage);
   const googleMapsEnabled = hasGoogleMapsBrowserKey(googleMapsApiKey);
-  const isGoogleMap = mapEngine === "google" && googleMapsEnabled;
-
-  const zoomBy = (factor: number) => {
-    setViewport((current) => normalizeMapViewport({ ...current, scale: clamp(current.scale * factor, 1, 4) }));
-  };
-
-  const beginPan = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    dragRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: viewport.x,
-      originY: viewport.y,
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const movePan = (event: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const next = normalizeMapViewport({
-      scale: viewport.scale,
-      x: drag.originX + event.clientX - drag.startX,
-      y: drag.originY + event.clientY - drag.startY,
-    });
-    setViewport(next);
-  };
-
-  const endPan = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (dragRef.current?.pointerId !== event.pointerId) return;
-    dragRef.current = null;
-    try {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    } catch {
-      // Pointer capture may already be released by the browser.
-    }
-  };
-
-  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    zoomBy(event.deltaY < 0 ? 1.12 : 0.88);
-  };
 
   const resetMap = () => {
-    if (isGoogleMap) {
-      setGoogleResetToken((value) => value + 1);
-      return;
-    }
-    setViewport(DEFAULT_MAP_VIEWPORT);
+    setGoogleResetToken((value) => value + 1);
   };
 
   return (
@@ -550,57 +522,33 @@ function LeadMap({
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <h3 className="section-label">Map view</h3>
-            <HelpTip>The default local map is free and uses stored coordinates only. Google Maps is optional and loads only after you switch to it.</HelpTip>
+            <h3 className="section-label">Map drawer</h3>
+            <HelpTip>Google Maps loads only while this drawer is open. It uses stored lead and ZIP coordinates; this view does not call Places, Geocoding, Routes, or Map Tiles APIs from the server.</HelpTip>
           </div>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            {isGoogleMap
-              ? "Pan and zoom the real map, click a marker to inspect a lead, or click a ZIP coverage circle to filter."
-              : "Drag to move, scroll to zoom, click a ZIP tile to filter, or click a lead marker to inspect it."}
+            Pan and zoom the real map, click a marker to inspect a lead, or click a ZIP coverage circle to filter the list.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "rgba(255,255,255,0.55)" }}>
-            <button
-              type="button"
-              className={`px-3 py-1.5 text-xs font-medium transition ${mapEngine === "local" || !googleMapsEnabled ? "nav-link-active" : "bg-white/35"}`}
-              onClick={() => setMapEngine("local")}
-            >
-              Local map
-            </button>
-            <button
-              type="button"
-              className={`px-3 py-1.5 text-xs font-medium transition ${isGoogleMap ? "nav-link-active" : "bg-white/35"}`}
-              disabled={!googleMapsEnabled}
-              title={googleMapsEnabled ? "Load Google Maps for pan and zoom" : "Set NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY to enable Google Maps"}
-              onClick={() => setMapEngine("google")}
-            >
-              Google map
-            </button>
-          </div>
-          <HelpTip>Google Maps uses the Maps JavaScript API only. It is not loaded on page open, and this app does not call Places, Geocoding, Routes, or Map Tiles from this view.</HelpTip>
+          <span className="rounded-lg px-3 py-1.5 text-xs font-medium" style={{ background: "rgba(255,255,255,0.58)", color: "var(--text-secondary)" }}>
+            {points.length} shown / {totalMapped} mapped
+          </span>
           <button type="button" className={`btn-glass px-3 py-1.5 text-xs ${showCoverage ? "nav-link-active" : ""}`} onClick={() => setShowCoverage((value) => !value)}>
             ZIP coverage
           </button>
           <button type="button" className="btn-glass px-3 py-1.5 text-xs" onClick={resetMap}>
             Reset view
           </button>
-          <div className="grid grid-cols-2 gap-1">
-            <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("nw")}>NW</button>
-            <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("ne")}>NE</button>
-            <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("sw")}>SW</button>
-            <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("se")}>SE</button>
-          </div>
         </div>
       </div>
 
       {!googleMapsEnabled && (
-        <div className="mb-3 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.46)", color: "var(--text-tertiary)" }}>
-          Google map is disabled for this environment. The local map is active and free.
+        <div className="rounded-xl p-6 text-sm" style={{ background: "rgba(255,255,255,0.46)", color: "var(--text-secondary)" }}>
+          Google Maps is not configured for this environment. Add the browser key in Settings or Vercel, then reopen the drawer.
         </div>
       )}
 
-      {isGoogleMap ? (
+      {googleMapsEnabled && (
         <GoogleLeadMap
           apiKey={googleMapsApiKey ?? ""}
           points={points}
@@ -611,111 +559,28 @@ function LeadMap({
           onSelect={onSelect}
           onZipSelect={onZipSelect}
         />
-      ) : (
-      <div
-        className="relative h-[32rem] overflow-hidden rounded-xl"
-        style={{
-          background:
-            "linear-gradient(135deg, rgba(219,234,254,0.95), rgba(240,253,250,0.9)), radial-gradient(circle at 12% 18%, rgba(15,118,110,0.16), transparent 30%), radial-gradient(circle at 88% 82%, rgba(59,130,246,0.12), transparent 32%)",
-          border: "1px solid rgba(255,255,255,0.58)",
-          touchAction: "none",
-          cursor: viewport.scale > 1 ? "grab" : "default",
-        }}
-        onPointerDown={beginPan}
-        onPointerMove={movePan}
-        onPointerUp={endPan}
-        onPointerCancel={endPan}
-        onWheel={handleWheel}
-      >
-        <div className="absolute left-4 top-4 z-10 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.82)", color: "var(--text-secondary)" }}>
-          {points.length} shown / {totalMapped} mapped
-        </div>
-        {hasMore && (
-          <div className="absolute right-4 top-4 z-10 max-w-64 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.82)", color: "var(--text-secondary)" }}>
-            Showing top {mapPointLimit} by current sort. Narrow filters to inspect more.
-          </div>
-        )}
-        <div className="absolute right-4 top-20 z-20 flex flex-col gap-1">
-          <button type="button" className="btn-glass h-8 w-8 px-0 text-base" onClick={() => zoomBy(1.18)} aria-label="Zoom in">+</button>
-          <button type="button" className="btn-glass h-8 w-8 px-0 text-base" onClick={() => zoomBy(0.84)} aria-label="Zoom out">-</button>
-        </div>
-        {!bounds ? (
-          <div className="flex h-full items-center justify-center px-6 text-center text-sm" style={{ color: "var(--text-tertiary)" }}>
-            {total > 0
-              ? `${missingCoordinates} matching leads do not have stored coordinates. Use list/table filters or add coordinates during data enrichment.`
-              : "No leads match the current filters."}
-          </div>
-        ) : (
-          <div
-            className="absolute inset-0"
-            style={{
-              transform: `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.scale})`,
-              transformOrigin: "50% 50%",
-            }}
-          >
-            <MapBaseLayer bounds={bounds} zipCoverage={zipCoverage} />
-            {showCoverage && zipTiles.map(({ zip, x, y }) => (
-              <button
-                key={zip.zip}
-                type="button"
-                className="absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-xl border text-[10px] font-semibold leading-tight shadow-sm transition hover:shadow-md"
-                style={{
-                  left: `${x}%`,
-                  top: `${y}%`,
-                  width: 46,
-                  height: 34,
-                  ...zipCoverageStyle(zip),
-                }}
-                title={`${zip.zip} ${zip.city}: ${zip.scrapeStatus.replace(/_/g, " ")}, ${zip.leadCount} mapped leads in this view`}
-                aria-label={`Filter to ZIP ${zip.zip}`}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={() => onZipSelect(zip.zip)}
-              >
-                <span>{zip.zip}</span>
-                <span className="text-[9px] font-medium">{zip.leadCount}</span>
-              </button>
-            ))}
-            {markers.map((marker) => {
-              const markerSize = marker.active ? 30 : marker.count > 1 ? clamp(18 + Math.log2(marker.count) * 4, 20, 38) : 18;
-              return (
-                <button
-                  key={marker.id}
-                  type="button"
-                  className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-[10px] font-semibold leading-none transition"
-                  style={{
-                    left: `${marker.x}%`,
-                    top: `${marker.y}%`,
-                    width: markerSize,
-                    height: markerSize,
-                    color: "#fff",
-                    background: marker.active ? "#4f46e5" : marker.color,
-                    border: "2px solid rgba(255,255,255,0.92)",
-                    boxShadow: marker.active ? "0 0 0 7px rgba(79,70,229,0.16), 0 8px 22px rgba(15,23,42,0.24)" : "0 5px 14px rgba(15,23,42,0.18)",
-                  }}
-                  title={marker.count > 1 ? `${marker.count} leads near ${formatPlace(marker.lead.address)}` : `${marker.lead.name ?? "Unknown business"} - ${formatLabel(marker.lead.website_status)}`}
-                  aria-label={marker.count > 1 ? `Select cluster with ${marker.count} leads` : `Select ${marker.lead.name ?? "lead"}`}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={() => onSelect(marker.lead.id)}
-                >
-                  {marker.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        <div className="absolute bottom-4 left-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.84)", color: "var(--text-secondary)" }}>
-          <LegendDot color="#f8fafc" label={`Not started ${coverageSummary.notStarted}`} />
-          <LegendDot color="#f59e0b" label={`Partial ${coverageSummary.partial}`} />
-          <LegendDot color="#0f766e" label={`Covered ${coverageSummary.complete}`} />
-          <span className="mx-1 h-4 w-px bg-slate-300/70" />
-          <LegendDot color="#dc2626" label="No site" />
-          <LegendDot color="#ea580c" label="Broken" />
-          <LegendDot color="#d97706" label="Social" />
-          <LegendDot color="#4f46e5" label="Basic" />
-          <LegendDot color="#16a34a" label="Custom" />
-        </div>
-      </div>
       )}
+      {googleMapsEnabled && points.length === 0 && (
+        <p className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.46)", color: "var(--text-tertiary)" }}>
+          {total > 0
+            ? `${missingCoordinates} matching leads do not have stored coordinates. The list below still shows matching businesses.`
+            : "No leads match the current filters."}
+        </p>
+      )}
+      {hasMore && (
+        <p className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.46)", color: "var(--text-tertiary)" }}>
+          Showing top {mapPointLimit} mapped leads by current sort. Narrow filters to inspect more on the map.
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.44)", color: "var(--text-secondary)" }}>
+        <LegendDot color="#e2e8f0" label={`Not started ${coverageSummary.notStarted}`} />
+        <LegendDot color="#f59e0b" label={`Partial ${coverageSummary.partial}`} />
+        <LegendDot color="#0f766e" label={`Covered ${coverageSummary.complete}`} />
+        <span className="mx-1 h-4 w-px bg-slate-300/70" />
+        <LegendDot color="#dc2626" label="No site" />
+        <LegendDot color="#ea580c" label="Broken" />
+        <LegendDot color="#4f46e5" label="Weak/basic" />
+      </div>
     </div>
   );
 }
@@ -917,49 +782,6 @@ function GoogleLeadMap({
   );
 }
 
-function MapBaseLayer({ bounds, zipCoverage }: { bounds: LeadMapBounds; zipCoverage: LeadMapZipCoverage[] }) {
-  const cityLabels = getCityLabels(zipCoverage, bounds);
-  return (
-    <>
-      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-        <defs>
-          <pattern id="map-grid" width="8" height="8" patternUnits="userSpaceOnUse">
-            <path d="M 8 0 L 0 0 0 8" fill="none" stroke="rgba(15,23,42,0.08)" strokeWidth="0.2" />
-          </pattern>
-        </defs>
-        <rect width="100" height="100" fill="url(#map-grid)" />
-        <path d="M 6 28 C 20 31 34 28 48 31 S 78 31 96 35" fill="none" stroke="rgba(30,64,175,0.18)" strokeWidth="1.2" />
-        <path d="M 53 4 C 47 19 50 33 49 48 S 54 76 50 96" fill="none" stroke="rgba(30,64,175,0.22)" strokeWidth="1.4" />
-        <path d="M 15 74 C 29 66 40 64 51 67 S 78 74 92 70" fill="none" stroke="rgba(15,118,110,0.16)" strokeWidth="1" />
-        <path d="M 10 10 C 17 32 13 58 22 92" fill="none" stroke="rgba(71,85,105,0.14)" strokeWidth="5" />
-        <text x="56" y="30" fill="rgba(30,64,175,0.48)" fontSize="2.7" fontWeight="700">I-70</text>
-        <text x="51" y="54" fill="rgba(30,64,175,0.48)" fontSize="2.7" fontWeight="700">I-25</text>
-        <text x="10" y="16" fill="rgba(71,85,105,0.36)" fontSize="3" fontWeight="700">Front Range</text>
-      </svg>
-      <div className="absolute inset-x-0 top-1/2 border-t border-dashed border-slate-400/35" />
-      <div className="absolute inset-y-0 left-1/2 border-l border-dashed border-slate-400/35" />
-      <span className="absolute left-1/2 top-3 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>North</span>
-      <span className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>South</span>
-      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>West</span>
-      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>East</span>
-      {cityLabels.map((label) => (
-        <span
-          key={label.city}
-          className="absolute -translate-x-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]"
-          style={{
-            left: `${label.x}%`,
-            top: `${label.y}%`,
-            background: "rgba(255,255,255,0.5)",
-            color: "rgba(15,23,42,0.46)",
-          }}
-        >
-          {label.city}
-        </span>
-      ))}
-    </>
-  );
-}
-
 function MapSidePanel({
   points,
   selectedPoint,
@@ -1090,7 +912,7 @@ function MapPointCard({
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
         <OwnerPill label={owner} mine={point.assigned_to_user_id === currentUserId} />
-        <Link href={`/leads/${point.id}`} className="btn-glass ml-auto text-sm">Open</Link>
+        <Link href={`/leads/${point.id}`} className="btn-glass ml-auto text-sm">Details</Link>
         {!point.assigned_to_user_id && (
           <button type="button" className="btn-primary text-sm" disabled={busy} onClick={() => onClaim(point.id)}>
             {busy ? "Claiming..." : "Claim"}
@@ -1151,7 +973,7 @@ function LeadCard({
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
         <OwnerPill label={owner} mine={lead.assigned_to_user_id === currentUserId} />
-        <Link href={`/leads/${lead.id}`} className="btn-glass ml-auto text-sm">Open</Link>
+        <Link href={`/leads/${lead.id}`} className="btn-glass ml-auto text-sm">Details</Link>
         {!lead.assigned_to_user_id && (
           <button type="button" className="btn-primary text-sm" disabled={busy} onClick={() => onClaim(lead.id)}>
             {busy ? "Claiming..." : "Claim"}
@@ -1213,7 +1035,7 @@ function LeadTable({
                       {busyLeadId === lead.id ? "Claiming..." : "Claim"}
                     </button>
                   ) : (
-                    <Link href={`/leads/${lead.id}`} className="btn-glass px-3 py-1.5 text-xs">Open</Link>
+                    <Link href={`/leads/${lead.id}`} className="btn-glass px-3 py-1.5 text-xs">Details</Link>
                   )}
                 </td>
               </tr>
@@ -1345,23 +1167,7 @@ function googleZipRadius(zip: LeadMapZipCoverage): number {
 }
 
 function normalizeView(value: string | undefined): ExplorerView {
-  return value === "cards" || value === "table" || value === "map" ? value : "map";
-}
-
-const DEFAULT_MAP_VIEWPORT: MapViewport = { scale: 1, x: 0, y: 0 };
-
-interface MapViewport {
-  scale: number;
-  x: number;
-  y: number;
-}
-
-interface MapDragState {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  originX: number;
-  originY: number;
+  return value === "table" ? value : "cards";
 }
 
 interface ZipCoverageSummary {
@@ -1372,27 +1178,9 @@ interface ZipCoverageSummary {
   notStarted: number;
 }
 
-interface CityLabel {
-  city: string;
-  x: number;
-  y: number;
-}
-
 type LeadCoordinate = Pick<LeadMapPoint, "lat" | "lng">;
 type LeadMarkerStatus = Pick<LeadMapPoint, "website_status" | "ai_website_viability_status" | "quality_bucket">;
 type LeadOwner = Pick<LeadMapPoint, "assigned_to_user_id" | "assigned_user_display_name" | "assigned_user_email">;
-type LeadMapBounds = NonNullable<ReturnType<typeof getBounds>>;
-
-interface LeadMapMarker {
-  id: string;
-  lead: LeadMapPoint;
-  x: number;
-  y: number;
-  count: number;
-  label: string;
-  active: boolean;
-  color: string;
-}
 
 function getBounds(points: LeadCoordinate[]) {
   if (points.length === 0) return null;
@@ -1451,146 +1239,6 @@ function extractZip(address: string | null | undefined): string | null {
   return match?.[1] ?? null;
 }
 
-function normalizeMapViewport(viewport: MapViewport): MapViewport {
-  const scale = clamp(viewport.scale, 1, 4);
-  if (scale === 1) return DEFAULT_MAP_VIEWPORT;
-  const maxOffset = (scale - 1) * 180;
-  return {
-    scale,
-    x: clamp(viewport.x, -maxOffset, maxOffset),
-    y: clamp(viewport.y, -maxOffset, maxOffset),
-  };
-}
-
-function zipCoverageStyle(zip: LeadMapZipCoverage): React.CSSProperties {
-  const leadWeight = clamp(Math.log10(zip.leadCount + 1) / 3, 0, 0.22);
-  if (zip.scrapeStatus === "complete") {
-    const alpha = clamp(0.5 + leadWeight + zip.completionRatio * 0.18, 0.5, 0.86);
-    return {
-      background: `rgba(15,118,110,${alpha})`,
-      borderColor: "rgba(15,118,110,0.72)",
-      color: "#ffffff",
-    };
-  }
-  if (zip.scrapeStatus === "partial") {
-    const alpha = clamp(0.28 + zip.completionRatio * 0.32 + leadWeight, 0.28, 0.7);
-    return {
-      background: `rgba(245,158,11,${alpha})`,
-      borderColor: "rgba(180,83,9,0.46)",
-      color: "#713f12",
-    };
-  }
-  return {
-    background: "rgba(248,250,252,0.74)",
-    borderColor: "rgba(148,163,184,0.42)",
-    color: "#475569",
-  };
-}
-
-function getCityLabels(zipCoverage: LeadMapZipCoverage[], bounds: LeadMapBounds): CityLabel[] {
-  const cities = new Map<string, { city: string; latTotal: number; lngTotal: number; count: number; leadCount: number }>();
-  for (const zip of zipCoverage) {
-    const city = zip.city.trim();
-    if (!city) continue;
-    const existing = cities.get(city) ?? { city, latTotal: 0, lngTotal: 0, count: 0, leadCount: 0 };
-    existing.latTotal += zip.lat;
-    existing.lngTotal += zip.lng;
-    existing.count += 1;
-    existing.leadCount += zip.leadCount;
-    cities.set(city, existing);
-  }
-
-  return Array.from(cities.values())
-    .sort((a, b) => b.leadCount - a.leadCount || b.count - a.count || a.city.localeCompare(b.city))
-    .slice(0, 10)
-    .map((city) => {
-      const point = projectLead({ lat: city.latTotal / city.count, lng: city.lngTotal / city.count }, bounds);
-      return { city: city.city, ...point };
-    });
-}
-
-function getMapMarkers(points: LeadMapPoint[], bounds: LeadMapBounds, selectedLeadId: string | null): LeadMapMarker[] {
-  const projected = points.map((lead, index) => ({
-    lead,
-    index,
-    ...projectLead(lead, bounds),
-  }));
-
-  if (projected.length <= 220) {
-    return projected.map(({ lead, x, y, index }) => ({
-      id: lead.id,
-      lead,
-      x,
-      y,
-      count: 1,
-      label: index < 99 ? String(index + 1) : "",
-      active: lead.id === selectedLeadId,
-      color: markerColor(lead),
-    }));
-  }
-
-  const cellSize = projected.length > 500 ? 4.5 : 4;
-  const buckets = new Map<string, {
-    leads: LeadMapPoint[];
-    xTotal: number;
-    yTotal: number;
-    bestLead: LeadMapPoint;
-    bestPriority: number;
-    active: boolean;
-  }>();
-
-  for (const point of projected) {
-    const key = `${Math.floor(point.x / cellSize)}:${Math.floor(point.y / cellSize)}`;
-    const priority = markerPriority(point.lead);
-    const existing = buckets.get(key);
-    if (!existing) {
-      buckets.set(key, {
-        leads: [point.lead],
-        xTotal: point.x,
-        yTotal: point.y,
-        bestLead: point.lead,
-        bestPriority: priority,
-        active: point.lead.id === selectedLeadId,
-      });
-      continue;
-    }
-
-    existing.leads.push(point.lead);
-    existing.xTotal += point.x;
-    existing.yTotal += point.y;
-    existing.active = existing.active || point.lead.id === selectedLeadId;
-    if (point.lead.id === selectedLeadId || priority > existing.bestPriority || (priority === existing.bestPriority && point.lead.score > existing.bestLead.score)) {
-      existing.bestLead = point.lead;
-      existing.bestPriority = priority;
-    }
-  }
-
-  return Array.from(buckets.entries()).map(([key, bucket]) => {
-    const count = bucket.leads.length;
-    const lead = bucket.active && selectedLeadId
-      ? bucket.leads.find((item) => item.id === selectedLeadId) ?? bucket.bestLead
-      : bucket.bestLead;
-    return {
-      id: key,
-      lead,
-      x: bucket.xTotal / count,
-      y: bucket.yTotal / count,
-      count,
-      label: count > 1 ? String(count) : "",
-      active: bucket.active,
-      color: clusterColor(bucket.leads),
-    };
-  });
-}
-
-function projectLead(lead: LeadCoordinate, bounds: LeadMapBounds) {
-  const lat = lead.lat;
-  const lng = lead.lng;
-  const x = ((lng - bounds.minLng) / (bounds.maxLng - bounds.minLng)) * 88 + 6;
-  const y = 94 - ((lat - bounds.minLat) / (bounds.maxLat - bounds.minLat)) * 88;
-  return { x: clamp(x, 4, 96), y: clamp(y, 4, 96) };
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -1601,18 +1249,6 @@ function markerColor(lead: LeadMarkerStatus): string {
   if (lead.website_status === "social") return "#d97706";
   if (lead.website_status === "basic") return "#4f46e5";
   return "#16a34a";
-}
-
-function markerPriority(lead: LeadMarkerStatus): number {
-  if (lead.website_status === "none") return 5;
-  if (lead.ai_website_viability_status === "broken" || lead.quality_bucket === "broken_site_opportunity") return 4;
-  if (lead.website_status === "social") return 3;
-  if (lead.website_status === "basic") return 2;
-  return 1;
-}
-
-function clusterColor(leads: LeadMarkerStatus[]): string {
-  return markerColor(leads.reduce((best, lead) => markerPriority(lead) > markerPriority(best) ? lead : best, leads[0]));
 }
 
 function ownerLabel(lead: LeadOwner, currentUserId: string): string {

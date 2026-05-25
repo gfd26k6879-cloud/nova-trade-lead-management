@@ -3224,6 +3224,7 @@ function fastLeadMapOrderBySql(filters: LeadFilters): string {
   const sortDir = filters.sortDir === "asc" ? "ASC" : "DESC";
   if (sortBy === "opportunity" || sortBy === "website_need") {
     return [
+      `${leadWebsiteNeedRankExpression("l")} ${sortDir}`,
       "l.sales_priority_score DESC",
       "l.lead_quality_score DESC",
       "l.raw_opportunity_score DESC",

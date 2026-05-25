@@ -783,7 +783,7 @@ export function LeadDetailClient({
     >
       {/* Back link and notifications */}
       <div className="flex items-center justify-between">
-        <Link href="/leads" className="link-accent text-sm">&larr; Back to leads</Link>
+        <Link href="/explore" className="link-accent text-sm">&larr; Back to Explorer</Link>
         <div className="flex items-center gap-2">
           <span
             className="rounded-md border px-2 py-0.5 text-xs font-semibold capitalize"
