@@ -279,7 +279,15 @@ function QualityValuePanel({ title, rows, valueLabel }: { title: string; rows: A
               <span style={{ color: "var(--text-secondary)" }}>{row.label}</span>
               <span className="font-medium" style={{ color: "var(--text-primary)" }}>{row.count} / {formatCurrency(row.value)}</span>
             </div>
-            <div className="mt-1 h-1.5 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }} aria-label={valueLabel}>
+            <div
+              className="mt-1 h-1.5 overflow-hidden rounded-full"
+              role="progressbar"
+              aria-label={valueLabel}
+              aria-valuemin={0}
+              aria-valuemax={Math.round(max)}
+              aria-valuenow={Math.round(row.value)}
+              style={{ background: "rgba(0,0,0,0.06)" }}
+            >
               <div className="h-full rounded-full" style={{ width: `${Math.max(4, (row.value / max) * 100)}%`, background: "var(--accent)" }} />
             </div>
           </div>

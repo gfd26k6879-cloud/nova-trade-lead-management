@@ -10,6 +10,8 @@ export type Permission =
   | "lead:assign"
   | "lead:admin_assign"
   | "outreach:create"
+  | "admin_request:create"
+  | "admin_request:manage"
   | "demo:create"
   | "ai:verify"
   | "crawl:manage"
@@ -28,6 +30,8 @@ const ADMIN_PERMISSIONS = new Set<Permission>([
   "lead:assign",
   "lead:admin_assign",
   "outreach:create",
+  "admin_request:create",
+  "admin_request:manage",
   "demo:create",
   "ai:verify",
   "crawl:manage",
@@ -40,11 +44,9 @@ const ADMIN_PERMISSIONS = new Set<Permission>([
 const RESEARCHER_PERMISSIONS = new Set<Permission>([
   "view:workspace",
   "lead:update",
-  "lead:apply_ai_opportunity",
   "lead:assign",
   "outreach:create",
-  "demo:create",
-  "ai:verify",
+  "admin_request:create",
 ]);
 
 export function hasPermission(role: AppRole, permission: Permission): boolean {

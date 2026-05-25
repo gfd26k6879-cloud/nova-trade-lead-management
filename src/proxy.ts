@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
+import { getSupabaseServerCookieOptions } from "@/lib/supabase/cookies";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -10,7 +11,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(aliasUrl);
   }
 
-  const isProtectedPage = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users"].some((prefix) =>
+  const isProtectedPage = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users", "/fulfillment", "/team"].some((prefix) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`)
   );
   const isProtectedApi = pathname.startsWith("/api/crawl") || pathname.startsWith("/api/export");
@@ -38,15 +39,19 @@ export async function proxy(request: NextRequest) {
 
   let response = NextResponse.next({ request });
   const supabase = createServerClient(url, publishableKey, {
+    cookieOptions: getSupabaseServerCookieOptions(),
     cookies: {
       getAll() {
         return request.cookies.getAll();
       },
-      setAll(cookiesToSet) {
+      setAll(cookiesToSet, headersToSet) {
         cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
         response = NextResponse.next({ request });
         cookiesToSet.forEach(({ name, value, options }) => {
           response.cookies.set(name, value, options);
+        });
+        Object.entries(headersToSet).forEach(([name, value]) => {
+          response.headers.set(name, value);
         });
       },
     },
@@ -96,7 +101,7 @@ function getRouteAlias(pathname: string): string | null {
   };
   if (aliases[normalized]) return aliases[normalized];
 
-  const canonicalRoutes = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users"];
+  const canonicalRoutes = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users", "/fulfillment", "/team"];
   const canonical = canonicalRoutes.find((route) => route === normalized);
   return canonical && pathname !== canonical ? canonical : null;
 }

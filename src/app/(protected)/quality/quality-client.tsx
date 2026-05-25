@@ -195,20 +195,20 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
             <button type="submit" className="btn-glass text-xs">Search</button>
           </form>
 
-          <select className="glass-select" value={filters.qualityBucket ?? ""} onChange={(event) => updateFilter("qualityBucket", event.target.value)}>
+          <select aria-label="Quality bucket filter" className="glass-select" value={filters.qualityBucket ?? ""} onChange={(event) => updateFilter("qualityBucket", event.target.value)}>
             {BUCKET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <select className="glass-select" value={filters.businessType ?? ""} onChange={(event) => updateFilter("businessType", event.target.value)}>
+          <select aria-label="Business type filter" className="glass-select" value={filters.businessType ?? ""} onChange={(event) => updateFilter("businessType", event.target.value)}>
             <option value="">All business types</option>
             {businessTypeCounts.map((type) => <option key={type.id} value={type.id}>{type.label} ({type.active})</option>)}
           </select>
-          <select className="glass-select" value={filters.recommendedOffer ?? ""} onChange={(event) => updateFilter("recommendedOffer", event.target.value)}>
+          <select aria-label="Recommended offer filter" className="glass-select" value={filters.recommendedOffer ?? ""} onChange={(event) => updateFilter("recommendedOffer", event.target.value)}>
             {OFFER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <select className="glass-select" value={filters.phoneVerificationStatus ?? ""} onChange={(event) => updateFilter("phoneVerificationStatus", event.target.value)}>
+          <select aria-label="Phone verification filter" className="glass-select" value={filters.phoneVerificationStatus ?? ""} onChange={(event) => updateFilter("phoneVerificationStatus", event.target.value)}>
             {PHONE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <select className="glass-select" value={filters.aiVerificationStatus ?? ""} onChange={(event) => updateFilter("aiVerificationStatus", event.target.value)}>
+          <select aria-label="AI verification filter" className="glass-select" value={filters.aiVerificationStatus ?? ""} onChange={(event) => updateFilter("aiVerificationStatus", event.target.value)}>
             {AI_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
           <label className="flex items-center gap-2 text-xs" style={{ color: "var(--text-secondary)" }}>
@@ -234,7 +234,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
           <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={() => runBatch("refresh", { limit: 25, denverOnly: filters.denverOnly, businessType: filters.businessType })}>
             {busy === "refresh" ? "Refreshing..." : "Refresh Broken/Uncertain"}
           </button>
-          {message && <span className="text-xs" style={{ color: "#16a34a" }}>{message}</span>}
+          {message && <span className="text-xs" style={{ color: "#166534" }}>{message}</span>}
         </div>
       </section>
 
@@ -379,9 +379,9 @@ function websiteFindingLabel(lead: QualityLead): string {
 
 function websiteFindingStyle(lead: QualityLead): React.CSSProperties {
   const status = lead.ai_verification_status;
-  if (status === "no_site_found") return badge("#16a34a", "rgba(34,197,94,0.12)");
-  if (status === "weak_site_found") return badge("#d97706", "rgba(245,158,11,0.13)");
-  if (status === "uncertain" || status === "mismatch") return badge("#6366f1", "rgba(99,102,241,0.12)");
+  if (status === "no_site_found") return badge("#166534", "rgba(34,197,94,0.12)");
+  if (status === "weak_site_found") return badge("#92400e", "rgba(245,158,11,0.13)");
+  if (status === "uncertain" || status === "mismatch") return badge("#4338ca", "rgba(99,102,241,0.12)");
   return badge("#4b5563", "rgba(107,114,128,0.12)");
 }
 
@@ -392,11 +392,11 @@ function badge(color: string, background: string): React.CSSProperties {
 function ArtifactBadge({ type, status }: { type: "brief" | "report"; status: string | null }) {
   const label = artifactBadgeLabel(type, status);
   const style = status === "complete"
-    ? badge("#16a34a", "rgba(34,197,94,0.1)")
+    ? badge("#166534", "rgba(34,197,94,0.1)")
     : status === "queued" || status === "running"
-      ? badge("#6366f1", "rgba(99,102,241,0.1)")
+      ? badge("#4338ca", "rgba(99,102,241,0.1)")
       : status === "error"
-        ? badge("#dc2626", "rgba(239,68,68,0.1)")
+        ? badge("#991b1b", "rgba(239,68,68,0.1)")
         : badge("#4b5563", "rgba(107,114,128,0.1)");
   return <span style={{ ...style, fontSize: "0.68rem" }}>{label}</span>;
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
+import { createAdminRequestAction } from "@/lib/admin-requests/actions";
 import { getScoreBandStyle, resolveScoreBand, type ScoreBandThresholds } from "@/lib/score-bands";
 import { getBusinessTypeLabel } from "@/lib/business-types";
 import {
@@ -32,6 +33,7 @@ import {
   updateLeadAiFeedbackAction,
 } from "@/lib/leads/actions";
 import type { AppRole } from "@/lib/permissions";
+import type { AdminRequestType } from "@/lib/db/queries";
 
 interface Lead {
   id: string;
@@ -110,6 +112,8 @@ interface Lead {
   meeting_booked_at: string | null;
   last_contacted_at: string | null;
   assigned_to_user_id: string | null;
+  assigned_user_email: string | null;
+  assigned_user_display_name: string | null;
 }
 
 interface DensityResult {
@@ -121,7 +125,30 @@ interface OutreachEvent {
   id: string;
   lead_id: string;
   channel: string;
+  actor_email: string | null;
+  contact_person_name: string | null;
+  contact_person_role: string | null;
+  decision_maker_reached: boolean;
+  outcome: string;
+  objection_reason: string | null;
+  quoted_amount: number;
+  close_value: number;
+  follow_up_at: string | null;
+  next_step: string | null;
   note: string | null;
+  created_at: string;
+}
+
+interface AdminRequest {
+  id: string;
+  request_type: AdminRequestType;
+  status: string;
+  priority: string;
+  summary: string | null;
+  contact_person_name: string | null;
+  budget_hint: string | null;
+  due_at: string | null;
+  next_step: string | null;
   created_at: string;
 }
 
@@ -193,6 +220,7 @@ interface LeadAiArtifact {
 
 const STATUS_OPTIONS = ["new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost"];
 const CHANNEL_OPTIONS = ["call", "text", "email", "walkin", "other"];
+const OUTCOME_OPTIONS = ["not_reached", "left_voicemail", "contacted", "decision_maker_reached", "demo_sent", "meeting_set", "follow_up_needed", "not_interested", "quoted", "closed_won", "closed_lost"];
 type AiApplyAction = "update_website" | "exclude_has_website" | "mark_broken_site_opportunity" | "mark_manual_review";
 
 const channelBadgeStyle = (ch: string): React.CSSProperties => {
@@ -222,6 +250,7 @@ interface ScoreBreakdown {
 export function LeadDetailClient({
   lead,
   initialEvents,
+  initialAdminRequests,
   initialLeadNotes,
   initialDemo,
   initialAiVerification,
@@ -233,6 +262,7 @@ export function LeadDetailClient({
 }: {
   lead: Lead;
   initialEvents: OutreachEvent[];
+  initialAdminRequests: AdminRequest[];
   initialLeadNotes: LeadNote[];
   initialDemo: Demo | null;
   initialAiVerification: AiVerification | null;
@@ -253,6 +283,7 @@ export function LeadDetailClient({
   const [exclusionReason, setExclusionReason] = useState(lead.exclusion_reason ?? "");
   const [exclusionLoading, setExclusionLoading] = useState(false);
   const [events, setEvents] = useState(initialEvents);
+  const [adminRequests, setAdminRequests] = useState(initialAdminRequests);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [firstReply, setFirstReply] = useState(lead.first_reply_at);
   const [meetingBooked, setMeetingBooked] = useState(lead.meeting_booked_at);
@@ -277,7 +308,17 @@ export function LeadDetailClient({
   // Log event form
   const [eventChannel, setEventChannel] = useState("call");
   const [eventNote, setEventNote] = useState("");
+  const [contactPersonName, setContactPersonName] = useState("");
+  const [contactPersonRole, setContactPersonRole] = useState("");
+  const [decisionMakerReached, setDecisionMakerReached] = useState(false);
+  const [eventOutcome, setEventOutcome] = useState("contacted");
+  const [objectionReason, setObjectionReason] = useState("");
+  const [quotedAmount, setQuotedAmount] = useState("");
+  const [closeValue, setCloseValue] = useState("");
+  const [followUpAt, setFollowUpAt] = useState("");
+  const [nextStep, setNextStep] = useState("");
   const [logging, setLogging] = useState(false);
+  const [adminRequestLoading, setAdminRequestLoading] = useState<AdminRequestType | null>(null);
 
   // Outreach package
   const [outreachPkg, setOutreachPkg] = useState<OutreachPackage | null>(null);
@@ -286,6 +327,9 @@ export function LeadDetailClient({
 
   const [verification, setVerification] = useState<Record<string, boolean>>(lead.verification ?? {});
   const isAdmin = currentUser.role === "admin";
+  const isClaimedByCurrentUser = assignedToUserId === currentUser.userId;
+  const isClaimedByOther = Boolean(assignedToUserId && !isClaimedByCurrentUser);
+  const canEditLead = isAdmin || isClaimedByCurrentUser;
 
   const flash = (msg: string) => {
     setSaveMsg(msg);
@@ -293,6 +337,10 @@ export function LeadDetailClient({
   };
 
   const handleStatusChange = async (s: string) => {
+    if (!canEditLead) {
+      flash("Claim this lead before updating it");
+      return;
+    }
     if (!isAdmin && (s === "closed_won" || s === "closed_lost")) {
       flash("Only admins can close leads");
       return;
@@ -303,11 +351,19 @@ export function LeadDetailClient({
   };
 
   const handleSaveNotes = async () => {
+    if (!canEditLead) {
+      flash("Claim this lead before saving notes");
+      return;
+    }
     await updateLeadNotesAction(lead.id, notes);
     flash("Notes saved");
   };
 
   const handleSaveReminder = async () => {
+    if (!canEditLead) {
+      flash("Claim this lead before setting follow-ups");
+      return;
+    }
     await updateLeadReminderAction(lead.id, reminder || null);
     flash("Reminder saved");
   };
@@ -363,17 +419,76 @@ export function LeadDetailClient({
   };
 
   const handleLogEvent = async () => {
+    if (!canEditLead) {
+      flash("Claim this lead before logging contact");
+      return;
+    }
     setLogging(true);
-    const result = await logOutreachEventAction(lead.id, eventChannel, eventNote);
+    const result = await logOutreachEventAction(lead.id, {
+      channel: eventChannel,
+      note: eventNote,
+      contactPersonName,
+      contactPersonRole,
+      decisionMakerReached,
+      outcome: eventOutcome,
+      objectionReason,
+      quotedAmount: quotedAmount || 0,
+      closeValue: closeValue || 0,
+      followUpAt,
+      nextStep,
+    });
     if ("event" in result && result.event) {
       setEvents((prev) => [result.event as OutreachEvent, ...prev]);
       setEventNote("");
+      setContactPersonName("");
+      setContactPersonRole("");
+      setDecisionMakerReached(false);
+      setEventOutcome("contacted");
+      setObjectionReason("");
+      setQuotedAmount("");
+      setCloseValue("");
+      setFollowUpAt("");
+      setNextStep("");
       flash("Outreach logged");
+      router.refresh();
+    } else if ("error" in result) {
+      flash(result.error ?? "Unable to log contact");
     }
     setLogging(false);
   };
 
+  const handleCreateAdminRequest = async (requestType: AdminRequestType) => {
+    if (!canEditLead) {
+      flash("Claim this lead before sending it to Steve");
+      return;
+    }
+    setAdminRequestLoading(requestType);
+    const result = await createAdminRequestAction(lead.id, {
+      requestType,
+      contactPersonName,
+      budgetHint: quotedAmount ? `$${Number(quotedAmount).toLocaleString()}` : "",
+      dueAt: followUpAt,
+      nextStep,
+      summary: buildAdminRequestSummary(requestType, contactPersonName, eventNote),
+    });
+    if ("error" in result) {
+      flash(result.error ?? "Unable to send to Steve");
+    } else {
+      setAdminRequests((current) => {
+        const exists = current.some((request) => request.id === result.request.id);
+        return exists ? current : [result.request as AdminRequest, ...current];
+      });
+      flash(result.alreadyExists ? "Already in admin queue" : "Sent to Steve");
+      router.refresh();
+    }
+    setAdminRequestLoading(null);
+  };
+
   const handleMarkReplied = async () => {
+    if (!canEditLead) {
+      flash("Claim this lead before updating it");
+      return;
+    }
     const result = await markLeadRepliedAction(lead.id);
     if ("success" in result) {
       setFirstReply(new Date().toISOString());
@@ -382,6 +497,10 @@ export function LeadDetailClient({
   };
 
   const handleMarkMeeting = async () => {
+    if (!canEditLead) {
+      flash("Claim this lead before updating it");
+      return;
+    }
     const result = await markMeetingBookedAction(lead.id);
     if ("success" in result) {
       setMeetingBooked(new Date().toISOString());
@@ -401,6 +520,10 @@ export function LeadDetailClient({
   };
 
   const handleCreateDemo = async () => {
+    if (!canEditLead) {
+      flash("Claim this lead before creating a demo");
+      return;
+    }
     setDemoLoading(true);
     const result = await createDemoForLeadAction(lead.id);
     if ("demo" in result && result.demo) {
@@ -547,6 +670,10 @@ export function LeadDetailClient({
   };
 
   const handleAddLeadNote = async () => {
+    if (!canEditLead) {
+      flash("Claim this lead before adding notes");
+      return;
+    }
     setNoteLoading(true);
     try {
       const result = await addLeadNoteAction(lead.id, leadNoteBody);
@@ -575,6 +702,10 @@ export function LeadDetailClient({
   };
 
   const handlePhoneVerificationStatus = async (nextStatus: string) => {
+    if (!canEditLead) {
+      flash("Claim this lead before updating phone status");
+      return;
+    }
     const previous = phoneVerificationStatus;
     setPhoneVerificationStatus(nextStatus);
     const result = await updateLeadPhoneVerificationStatusAction(lead.id, nextStatus);
@@ -588,6 +719,10 @@ export function LeadDetailClient({
   };
 
   const handleQualityBucket = async (nextBucket: string) => {
+    if (!canEditLead) {
+      flash("Claim this lead before updating quality");
+      return;
+    }
     const previous = qualityBucket;
     setQualityBucket(nextBucket);
     const result = await markLeadQualityBucketAction(lead.id, nextBucket);
@@ -606,7 +741,11 @@ export function LeadDetailClient({
   const currentViabilityReason = aiVerification?.website_viability_reason;
   const hasUsableAiWebsite = (aiVerification?.status ?? lead.ai_verification_status) === "site_found" && currentViability === "usable";
   const hasBrokenSiteOpportunity = currentViability === "broken" || currentViability === "parked" || currentViability === "placeholder";
-  const assignedLabel = assignedToUserId === currentUser.userId ? "Assigned to you" : assignedToUserId ? "Assigned" : "Unassigned";
+  const assignedLabel = assignedToUserId === currentUser.userId
+    ? "Assigned to you"
+    : assignedToUserId
+      ? `Assigned to ${lead.assigned_user_display_name || lead.assigned_user_email || "another researcher"}`
+      : "Unassigned";
   const websiteFinding = websiteFindingLabel(aiVerification?.status ?? lead.ai_verification_status, currentViability);
   const demoHref = demo ? `/demo/${demo.slug}` : null;
   const businessDetailArtifact = latestCompleteArtifact(initialAiArtifacts, "business_detail");
@@ -625,6 +764,8 @@ export function LeadDetailClient({
       lead.next_best_action ? `Next action: ${lead.next_best_action}` : null,
     ].filter(Boolean).join("\n"));
   };
+  const hasOpenWebsiteRequest = adminRequests.some((request) => request.request_type === "website_request" && isOpenAdminRequestStatus(request.status));
+  const hasOpenQuoteRequest = adminRequests.some((request) => request.request_type === "quote_request" && isOpenAdminRequestStatus(request.status));
 
   return (
     <PageShell
@@ -671,6 +812,58 @@ export function LeadDetailClient({
           )}
         </div>
       </div>
+
+      <section className="glass rounded-2xl p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <h3 className="section-label">Guided workflow</h3>
+            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              <WorkflowStep active={!assignedToUserId} done={Boolean(assignedToUserId)} label="Claim lead" />
+              <WorkflowStep active={Boolean(assignedToUserId) && !lead.first_contacted_at} done={Boolean(lead.first_contacted_at)} label="Prepare" />
+              <WorkflowStep active={Boolean(lead.first_contacted_at) && !firstReply} done={Boolean(firstReply)} label="Contact" />
+              <WorkflowStep active={Boolean(firstReply) && !meetingBooked} done={Boolean(meetingBooked)} label="Log outcome" />
+              <WorkflowStep active={Boolean(lead.reminder_date)} done={Boolean(lead.reminder_date)} label="Set follow-up" />
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <CallSheetField label="Owner" value={assignedLabel} />
+              <CallSheetField label="Phone" value={lead.phone ?? "No phone"} />
+              <CallSheetField label="Address" value={lead.address ?? "No address"} />
+              <CallSheetField label="Next action" value={lead.next_best_action ?? "Call and qualify owner interest."} />
+            </div>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            {!assignedToUserId && (
+              <button type="button" className="btn-primary text-sm" onClick={handleClaimToggle}>Claim</button>
+            )}
+            {isClaimedByCurrentUser && (
+              <button type="button" className="btn-glass text-sm" onClick={handleClaimToggle}>Release lead</button>
+            )}
+            {lead.phone && <a className="btn-primary text-sm" href={`tel:${lead.phone.replace(/[^\d+]/g, "")}`}>Call</a>}
+            {lead.phone && <a className="btn-glass text-sm" href={`sms:${lead.phone.replace(/[^\d+]/g, "")}`}>Text</a>}
+            <button type="button" className="btn-glass text-sm" disabled={!canEditLead} onClick={() => setEventChannel("email")}>Email</button>
+            <button type="button" className="btn-glass text-sm" disabled={!canEditLead} onClick={() => setEventChannel("walkin")}>In person</button>
+            <AdminRequestActionButton
+              label="Website needed"
+              alreadyQueued={hasOpenWebsiteRequest}
+              busy={adminRequestLoading === "website_request"}
+              disabled={!canEditLead || Boolean(adminRequestLoading)}
+              onClick={() => handleCreateAdminRequest("website_request")}
+            />
+            <AdminRequestActionButton
+              label="Quote requested"
+              alreadyQueued={hasOpenQuoteRequest}
+              busy={adminRequestLoading === "quote_request"}
+              disabled={!canEditLead || Boolean(adminRequestLoading)}
+              onClick={() => handleCreateAdminRequest("quote_request")}
+            />
+          </div>
+        </div>
+        {!canEditLead && (
+          <p className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(245,158,11,0.12)", color: "#92400e" }}>
+            {isClaimedByOther ? `This lead is already owned by ${lead.assigned_user_display_name || lead.assigned_user_email || "another researcher"}.` : "Claim this lead before changing workflow, notes, follow-ups, or contact history."}
+          </p>
+        )}
+      </section>
 
       <section className="glass rounded-2xl p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1037,32 +1230,32 @@ export function LeadDetailClient({
         {/* Status, reminder, and quick actions */}
         <article className="glass rounded-2xl p-6">
           <h3 className="section-label">Status</h3>
-          <select className="glass-select mt-3 w-full" value={status} onChange={(e) => handleStatusChange(e.target.value)}>
+          <select className="glass-select mt-3 w-full" value={status} onChange={(e) => handleStatusChange(e.target.value)} disabled={!canEditLead}>
             {STATUS_OPTIONS.filter((s) => isAdmin || (s !== "closed_won" && s !== "closed_lost")).map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
           </select>
 
           <h3 className="section-label mt-5">Reminder</h3>
           <div className="mt-2 flex gap-2">
-            <input type="date" className="glass-input flex-1 text-xs" value={reminder} onChange={(e) => setReminder(e.target.value)} />
-            <button type="button" className="btn-glass text-xs" onClick={handleSaveReminder}>Set</button>
+            <input type="date" className="glass-input flex-1 text-xs" value={reminder} onChange={(e) => setReminder(e.target.value)} disabled={!canEditLead} />
+            <button type="button" className="btn-glass text-xs" onClick={handleSaveReminder} disabled={!canEditLead}>Set</button>
           </div>
 
           {/* Quick actions */}
           <div className="mt-5 flex flex-col gap-2">
             {!firstReply && lead.first_contacted_at && (
-              <button type="button" className="btn-glass w-full text-xs" onClick={handleMarkReplied}>
+              <button type="button" className="btn-glass w-full text-xs" onClick={handleMarkReplied} disabled={!canEditLead}>
                 Mark Replied
               </button>
             )}
             {!meetingBooked && (
-              <button type="button" className="btn-glass w-full text-xs" onClick={handleMarkMeeting}>
+              <button type="button" className="btn-glass w-full text-xs" onClick={handleMarkMeeting} disabled={!canEditLead}>
                 Mark Meeting Booked
               </button>
             )}
             <button type="button" className="btn-primary w-full text-xs" onClick={handleGeneratePackage} disabled={pkgLoading}>
               {pkgLoading ? "Generating..." : "Generate Outreach"}
             </button>
-            <button type="button" className="btn-glass w-full text-xs" onClick={handleCreateDemo} disabled={demoLoading}>
+            <button type="button" className="btn-glass w-full text-xs" onClick={handleCreateDemo} disabled={demoLoading || !canEditLead}>
               {demoLoading ? "Creating..." : demo ? "Refresh Demo Link" : "Create Demo"}
             </button>
           </div>
@@ -1080,6 +1273,10 @@ export function LeadDetailClient({
           <VerificationChecklist
             verification={verification}
             onChange={async (key, value) => {
+              if (!canEditLead) {
+                flash("Claim this lead before updating verification");
+                return;
+              }
               const updated = { ...verification, [key]: value };
               setVerification(updated);
               const result = await updateLeadVerificationAction(lead.id, key, value);
@@ -1260,21 +1457,94 @@ export function LeadDetailClient({
 
       {/* Log outreach event */}
       <section className="glass rounded-2xl p-6">
-        <h3 className="section-label">Log Outreach</h3>
-        <div className="mt-3 flex flex-wrap items-end gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <label className="mb-1 block text-xs" style={{ color: "var(--text-tertiary)" }}>Channel</label>
-            <select className="glass-select" value={eventChannel} onChange={(e) => setEventChannel(e.target.value)}>
-              {CHANNEL_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <h3 className="section-label">Log outcome</h3>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              Record who you reached, what happened, and the next follow-up.
+            </p>
           </div>
-          <div className="flex-1">
-            <label className="mb-1 block text-xs" style={{ color: "var(--text-tertiary)" }}>Note</label>
-            <input type="text" className="glass-input w-full" placeholder="What happened?" value={eventNote} onChange={(e) => setEventNote(e.target.value)} />
-          </div>
-          <button type="button" className="btn-primary text-xs" onClick={handleLogEvent} disabled={logging}>
-            Log
+          <button type="button" className="btn-primary text-sm" onClick={handleLogEvent} disabled={logging || !canEditLead}>
+            {logging ? "Logging..." : "Log outcome"}
           </button>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Channel</span>
+            <select className="glass-select" value={eventChannel} onChange={(e) => setEventChannel(e.target.value)} disabled={!canEditLead}>
+              {CHANNEL_OPTIONS.map((c) => <option key={c} value={c}>{c === "walkin" ? "In person" : c}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Outcome</span>
+            <select className="glass-select" value={eventOutcome} onChange={(e) => setEventOutcome(e.target.value)} disabled={!canEditLead}>
+              {OUTCOME_OPTIONS.filter((option) => isAdmin || (option !== "closed_won" && option !== "closed_lost")).map((option) => (
+                <option key={option} value={option}>{formatLabel(option)}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Person</span>
+            <input className="glass-input" value={contactPersonName} onChange={(e) => setContactPersonName(e.target.value)} disabled={!canEditLead} placeholder="Name if known" />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Role</span>
+            <input className="glass-input" value={contactPersonRole} onChange={(e) => setContactPersonRole(e.target.value)} disabled={!canEditLead} placeholder="Owner, manager..." />
+          </label>
+          <label className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.35)" }}>
+            <input type="checkbox" checked={decisionMakerReached} onChange={(e) => setDecisionMakerReached(e.target.checked)} disabled={!canEditLead} />
+            <span className="text-sm" style={{ color: "var(--text-primary)" }}>Decision maker reached</span>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Quoted amount</span>
+            <input className="glass-input" type="number" min={0} value={quotedAmount} onChange={(e) => setQuotedAmount(e.target.value)} disabled={!canEditLead} placeholder="0" />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Close value</span>
+            <input className="glass-input" type="number" min={0} value={closeValue} onChange={(e) => setCloseValue(e.target.value)} disabled={!canEditLead} placeholder="0" />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Follow-up date</span>
+            <input className="glass-input" type="date" value={followUpAt} onChange={(e) => setFollowUpAt(e.target.value)} disabled={!canEditLead} />
+          </label>
+          <label className="flex flex-col gap-1 md:col-span-2">
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Next step</span>
+            <input className="glass-input" value={nextStep} onChange={(e) => setNextStep(e.target.value)} disabled={!canEditLead} placeholder="What should happen next?" />
+          </label>
+          <label className="flex flex-col gap-1 md:col-span-2">
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Objection</span>
+            <input className="glass-input" value={objectionReason} onChange={(e) => setObjectionReason(e.target.value)} disabled={!canEditLead} placeholder="Price, timing, not interested..." />
+          </label>
+          <label className="flex flex-col gap-1 md:col-span-2 lg:col-span-4">
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Note</span>
+            <textarea className="glass-input w-full" rows={3} value={eventNote} onChange={(e) => setEventNote(e.target.value)} disabled={!canEditLead} placeholder="What happened?" />
+          </label>
+        </div>
+        <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.16)" }}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Send to Steve</h4>
+              <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
+                Create an admin queue item when this lead needs a website or quote.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <AdminRequestActionButton
+                label="Website needed"
+                alreadyQueued={hasOpenWebsiteRequest}
+                busy={adminRequestLoading === "website_request"}
+                disabled={!canEditLead || Boolean(adminRequestLoading)}
+                onClick={() => handleCreateAdminRequest("website_request")}
+              />
+              <AdminRequestActionButton
+                label="Quote requested"
+                alreadyQueued={hasOpenQuoteRequest}
+                busy={adminRequestLoading === "quote_request"}
+                disabled={!canEditLead || Boolean(adminRequestLoading)}
+                onClick={() => handleCreateAdminRequest("quote_request")}
+              />
+            </div>
+          </div>
         </div>
       </section>
 
@@ -1288,11 +1558,27 @@ export function LeadDetailClient({
             {events.map((ev) => (
               <div key={ev.id} className="flex items-start gap-3 rounded-xl px-4 py-3"
                 style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-                <span style={channelBadgeStyle(ev.channel)}>{ev.channel}</span>
+                <span style={channelBadgeStyle(ev.channel)}>{ev.channel === "walkin" ? "in person" : ev.channel}</span>
                 <div className="flex-1">
-                  <p className="text-sm" style={{ color: "var(--text-primary)" }}>{ev.note || "No note"}</p>
+                  <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+                    {formatLabel(ev.outcome)}
+                    {ev.contact_person_name ? ` with ${ev.contact_person_name}` : ""}
+                    {ev.contact_person_role ? ` (${ev.contact_person_role})` : ""}
+                  </p>
+                  <p className="mt-1 text-sm" style={{ color: "var(--text-primary)" }}>{ev.note || "No note"}</p>
+                  {(ev.next_step || ev.follow_up_at || ev.objection_reason || ev.quoted_amount > 0 || ev.close_value > 0) && (
+                    <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
+                      {[
+                        ev.next_step ? `Next: ${ev.next_step}` : null,
+                        ev.follow_up_at ? `Follow-up: ${new Date(ev.follow_up_at).toLocaleDateString()}` : null,
+                        ev.objection_reason ? `Objection: ${ev.objection_reason}` : null,
+                        ev.quoted_amount > 0 ? `Quote: $${ev.quoted_amount.toLocaleString()}` : null,
+                        ev.close_value > 0 ? `Close: $${ev.close_value.toLocaleString()}` : null,
+                      ].filter(Boolean).join(" | ")}
+                    </p>
+                  )}
                   <p className="mt-0.5 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                    {formatRelativeTime(ev.created_at)}
+                    {formatRelativeTime(ev.created_at)}{ev.actor_email ? ` by ${ev.actor_email}` : ""}
                   </p>
                 </div>
               </div>
@@ -1304,8 +1590,8 @@ export function LeadDetailClient({
       {/* Notes */}
       <section className="glass rounded-2xl p-6">
         <h3 className="section-label">Notes</h3>
-        <textarea className="glass-input mt-3 w-full" rows={4} placeholder="Add notes..." value={notes} onChange={(e) => setNotes(e.target.value)} />
-        <button type="button" className="btn-primary mt-3 text-sm" onClick={handleSaveNotes}>Save Notes</button>
+        <textarea className="glass-input mt-3 w-full" rows={4} placeholder="Add notes..." value={notes} onChange={(e) => setNotes(e.target.value)} disabled={!canEditLead} />
+        <button type="button" className="btn-primary mt-3 text-sm" onClick={handleSaveNotes} disabled={!canEditLead}>Save Notes</button>
       </section>
 
       <section className="glass rounded-2xl p-6">
@@ -1316,8 +1602,9 @@ export function LeadDetailClient({
             placeholder="Add a research note..."
             value={leadNoteBody}
             onChange={(event) => setLeadNoteBody(event.target.value)}
+            disabled={!canEditLead}
           />
-          <button type="button" className="btn-primary self-start text-sm" disabled={noteLoading || !leadNoteBody.trim()} onClick={handleAddLeadNote}>
+          <button type="button" className="btn-primary self-start text-sm" disabled={noteLoading || !leadNoteBody.trim() || !canEditLead} onClick={handleAddLeadNote}>
             Add Note
           </button>
         </div>
@@ -1357,6 +1644,19 @@ function ProfileField({ label, value, link, action }: {
         )}
       </div>
     </div>
+  );
+}
+
+function WorkflowStep({ label, active, done }: { label: string; active: boolean; done: boolean }) {
+  const style = done
+    ? { background: "rgba(34,197,94,0.12)", color: "#15803d", borderColor: "rgba(34,197,94,0.22)" }
+    : active
+      ? { background: "rgba(99,102,241,0.12)", color: "#4f46e5", borderColor: "rgba(99,102,241,0.24)" }
+      : { background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)", borderColor: "rgba(255,255,255,0.45)" };
+  return (
+    <span className="rounded-md border px-2.5 py-1 font-semibold" style={style}>
+      {label}
+    </span>
   );
 }
 
@@ -1689,6 +1989,39 @@ function formatHealthSummary(health: Record<string, unknown> | null | undefined)
     `${signals} business signals`,
   ].filter(Boolean);
   return parts.join(" | ");
+}
+
+function AdminRequestActionButton({
+  label,
+  alreadyQueued,
+  busy,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  alreadyQueued: boolean;
+  busy: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className="btn-glass text-sm" disabled={disabled || alreadyQueued} onClick={onClick}>
+      {alreadyQueued ? "Already in admin queue" : busy ? "Sending..." : label}
+    </button>
+  );
+}
+
+function isOpenAdminRequestStatus(status: string): boolean {
+  return status === "new" || status === "seen" || status === "in_progress" || status === "waiting_on_researcher";
+}
+
+function buildAdminRequestSummary(requestType: AdminRequestType, contactPersonName: string, note: string): string {
+  const parts = [
+    requestType === "website_request" ? "Website needed." : "Quote requested.",
+    contactPersonName.trim() ? `Contact: ${contactPersonName.trim()}.` : null,
+    note.trim() || null,
+  ].filter(Boolean);
+  return parts.join(" ");
 }
 
 const VERIFICATION_ITEMS: Array<{ key: string; label: string }> = [

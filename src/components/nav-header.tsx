@@ -4,19 +4,29 @@ import { useState } from "react";
 import Link from "next/link";
 import type { AppRole } from "@/lib/permissions";
 
-const navItems = [
-  { href: "/dashboard", label: "Discover", adminOnly: true },
+type NavItem = {
+  href: string;
+  label: string;
+  adminOnly: boolean;
+  badge?: "fulfillment";
+};
+
+const navItems: NavItem[] = [
+  { href: "/queue", label: "Workbench", adminOnly: false },
+  { href: "/leads?assigned=me", label: "My Leads", adminOnly: false },
+  { href: "/team", label: "Team Board", adminOnly: false },
+  { href: "/dashboard", label: "Revenue", adminOnly: true },
+  { href: "/fulfillment", label: "Fulfillment", adminOnly: true, badge: "fulfillment" },
   { href: "/coverage", label: "Discovery Monitor", adminOnly: true },
   { href: "/scheduler", label: "Scheduler", adminOnly: true },
-  { href: "/quality", label: "Quality", adminOnly: false },
-  { href: "/leads", label: "Leads", adminOnly: false },
-  { href: "/queue", label: "Queue", adminOnly: false },
-  { href: "/statistics", label: "Statistics", adminOnly: false },
+  { href: "/quality", label: "Quality", adminOnly: true },
+  { href: "/leads", label: "All Leads", adminOnly: true },
+  { href: "/statistics", label: "Statistics", adminOnly: true },
   { href: "/settings", label: "Settings", adminOnly: true },
   { href: "/users", label: "Users", adminOnly: true },
 ];
 
-export function NavHeader({ email, role, logoutAction }: { email: string; role: AppRole; logoutAction: () => Promise<void> }) {
+export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: { email: string; role: AppRole; fulfillmentCount?: number; logoutAction: () => Promise<void> }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const visibleItems = navItems.filter((item) => !item.adminOnly || role === "admin");
 
@@ -60,7 +70,7 @@ export function NavHeader({ email, role, logoutAction }: { email: string; role: 
         <nav className="hidden items-center gap-1 md:flex">
           {visibleItems.map((item) => (
             <Link key={item.href} href={item.href} className="nav-link">
-              {item.label}
+              <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
             </Link>
           ))}
         </nav>
@@ -111,7 +121,7 @@ export function NavHeader({ email, role, logoutAction }: { email: string; role: 
                 className="nav-link block"
                 onClick={() => setMobileOpen(false)}
               >
-                {item.label}
+                <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
               </Link>
             ))}
           </nav>
@@ -121,5 +131,21 @@ export function NavHeader({ email, role, logoutAction }: { email: string; role: 
         </div>
       )}
     </header>
+  );
+}
+
+function NavLabel({ label, count }: { label: string; count: number }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span>{label}</span>
+      {count > 0 && (
+        <span
+          className="rounded-full px-1.5 py-0.5 text-[0.65rem] font-semibold leading-none"
+          style={{ background: "rgba(239,68,68,0.12)", color: "#dc2626" }}
+        >
+          {count > 99 ? "99+" : count}
+        </span>
+      )}
+    </span>
   );
 }

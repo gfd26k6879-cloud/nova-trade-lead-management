@@ -1,6 +1,7 @@
 "use client";
 
 import { createBrowserClient } from "@supabase/ssr";
+import { getSupabaseBrowserCookieOptions } from "@/lib/supabase/cookies";
 
 export function createSupabaseBrowserClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
@@ -10,5 +11,7 @@ export function createSupabaseBrowserClient() {
     throw new Error("Supabase Auth is not configured");
   }
 
-  return createBrowserClient(url, publishableKey);
+  return createBrowserClient(url, publishableKey, {
+    cookieOptions: getSupabaseBrowserCookieOptions(),
+  });
 }

@@ -14,7 +14,7 @@ interface Props {
 }
 
 export default async function StatisticsPage({ searchParams }: Props) {
-  await requirePermission("view:workspace");
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   const params = await searchParams;
   const summary = await getStatisticsSummary({

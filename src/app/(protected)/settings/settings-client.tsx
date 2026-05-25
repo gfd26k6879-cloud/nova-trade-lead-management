@@ -177,6 +177,7 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
               <input
                 type="password"
                 className="glass-input w-full"
+                aria-label="Google Places API Key"
                 value={googleKeyInput}
                 placeholder={settings.google_places_api_key_configured ? "Configured. Paste a new key to replace it." : "Paste your Google Places API key"}
                 autoComplete="off"
@@ -201,7 +202,7 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
             </button>
           </div>
           <div className="mt-3 flex flex-wrap gap-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            <span className="rounded-md px-2 py-1" style={{ background: settings.google_places_api_key_configured ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)", color: settings.google_places_api_key_configured ? "#16a34a" : "#dc2626" }}>
+            <span className="rounded-md px-2 py-1" style={{ background: settings.google_places_api_key_configured ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)", color: settings.google_places_api_key_configured ? "#166534" : "#991b1b" }}>
               {settings.google_places_api_key_configured ? `Configured via ${settings.google_places_api_key_source}` : "No Google Places key configured"}
             </span>
             <span>Used for crawling, enrichment, and Places billing.</span>
@@ -318,6 +319,7 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
               <input
                 type="password"
                 className="glass-input w-full"
+                aria-label="OpenAI API Key"
                 value={apiKeyInput}
                 placeholder={settings.openai_api_key_configured ? "Configured. Paste a new key to replace it." : "Paste your OpenAI API key"}
                 autoComplete="off"
@@ -342,7 +344,7 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
             </button>
           </div>
           <div className="mt-3 flex flex-wrap gap-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            <span className="rounded-md px-2 py-1" style={{ background: settings.openai_api_key_configured ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)", color: settings.openai_api_key_configured ? "#16a34a" : "#dc2626" }}>
+            <span className="rounded-md px-2 py-1" style={{ background: settings.openai_api_key_configured ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)", color: settings.openai_api_key_configured ? "#166534" : "#991b1b" }}>
               {settings.openai_api_key_configured ? `Configured via ${settings.openai_api_key_source}` : "No OpenAI key configured"}
             </span>
             <span>The key is encrypted server-side and never shown again.</span>
@@ -415,6 +417,7 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
         </p>
         <textarea
           className="glass-input mt-3 w-full font-mono text-xs"
+          aria-label="Niche weights JSON"
           rows={10}
           value={nicheText}
           onChange={(e) => setNicheText(e.target.value)}
@@ -430,6 +433,7 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
           </p>
           <textarea
             className="glass-input mt-3 w-full font-mono text-xs"
+            aria-label="Social hosts"
             rows={8}
             value={socialText}
             onChange={(e) => setSocialText(e.target.value)}
@@ -443,6 +447,7 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
           </p>
           <textarea
             className="glass-input mt-3 w-full font-mono text-xs"
+            aria-label="Basic site hosts"
             rows={8}
             value={basicText}
             onChange={(e) => setBasicText(e.target.value)}
@@ -483,7 +488,7 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
         </button>
         {saveMsg && (
           <span className="text-sm" style={{
-            color: saveMsg.includes("Error") || saveMsg.includes("Invalid") ? "#dc2626" : "#16a34a"
+            color: saveMsg.includes("Error") || saveMsg.includes("Invalid") ? "#991b1b" : "#166534"
           }}>
             {saveMsg}
           </span>
@@ -507,6 +512,7 @@ function NumberField({ label, value, onChange, step }: {
       <input
         type="number"
         className="glass-input w-full"
+        aria-label={label}
         value={value}
         step={step ?? 1}
         onChange={(e) => onChange(Number(e.target.value))}
@@ -524,6 +530,7 @@ function TextField({ label, value }: { label: string; value: string }) {
       <input
         type="text"
         className="glass-input w-full"
+        aria-label={label}
         value={value}
         readOnly
         aria-readonly="true"

@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { requirePermission } from "@/lib/auth";
-import { ensureDbReady, getDemoByLeadId, getLatestAiVerification, getLeadAiArtifacts, getLeadById, getLeadNotes, getOutreachEvents, getScoreBandThresholds, getSettings } from "@/lib/db/queries";
+import { ensureDbReady, getAdminRequests, getDemoByLeadId, getLatestAiVerification, getLeadAiArtifacts, getLeadById, getLeadNotes, getOutreachEvents, getScoreBandThresholds, getSettings } from "@/lib/db/queries";
+import { canReadLeadForSession } from "@/lib/lead-access";
 import { computeScoreWithBreakdown } from "@/lib/scoring";
 import { computeDensityByAddress } from "@/lib/competitive-density";
 import type { WebsiteStatus } from "@/lib/classify-website";
@@ -27,8 +28,12 @@ export default async function LeadDetailPage({ params }: Props) {
   if (!lead) {
     notFound();
   }
+  if (!canReadLeadForSession(session, lead)) {
+    notFound();
+  }
 
   const events = await getOutreachEvents(id);
+  const adminRequests = await getAdminRequests({ leadId: id, status: "open" });
   const leadNotes = await getLeadNotes(id);
   const demo = await getDemoByLeadId(id);
   const latestAiVerification = await getLatestAiVerification(id);
@@ -53,6 +58,7 @@ export default async function LeadDetailPage({ params }: Props) {
     <LeadDetailClient
       lead={lead}
       initialEvents={events}
+      initialAdminRequests={adminRequests}
       initialLeadNotes={leadNotes}
       initialDemo={demo}
       initialAiVerification={latestAiVerification}

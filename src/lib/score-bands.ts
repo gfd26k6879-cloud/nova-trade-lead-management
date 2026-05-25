@@ -54,7 +54,7 @@ export const SCORE_BAND_STYLE_MAP: Record<ScoreBandKey, ScoreBandStyle> = {
   high: {
     background: "rgba(34,197,94,0.12)",
     border: "rgba(34,197,94,0.25)",
-    color: "#15803d",
+    color: "#166534",
   },
   hot: {
     background: "rgba(147,51,234,0.12)",
@@ -64,7 +64,7 @@ export const SCORE_BAND_STYLE_MAP: Record<ScoreBandKey, ScoreBandStyle> = {
   probably_win: {
     background: "rgba(234,179,8,0.16)",
     border: "rgba(234,179,8,0.35)",
-    color: "#a16207",
+    color: "#713f12",
   },
 };
 

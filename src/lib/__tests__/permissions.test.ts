@@ -9,14 +9,18 @@ describe("role permission matrix", () => {
     expect(hasPermission("admin", "export:csv")).toBe(true);
     expect(hasPermission("admin", "users:manage")).toBe(true);
     expect(hasPermission("admin", "lead:close")).toBe(true);
+    expect(hasPermission("admin", "admin_request:manage")).toBe(true);
   });
 
-  it("lets researchers work leads and AI without billing-sensitive controls", () => {
+  it("lets researchers work claimed leads without admin, AI, demo, or billing-sensitive controls", () => {
     expect(hasPermission("researcher", "view:workspace")).toBe(true);
     expect(hasPermission("researcher", "lead:update")).toBe(true);
     expect(hasPermission("researcher", "outreach:create")).toBe(true);
-    expect(hasPermission("researcher", "demo:create")).toBe(true);
-    expect(hasPermission("researcher", "ai:verify")).toBe(true);
+    expect(hasPermission("researcher", "admin_request:create")).toBe(true);
+    expect(hasPermission("researcher", "admin_request:manage")).toBe(false);
+    expect(hasPermission("researcher", "demo:create")).toBe(false);
+    expect(hasPermission("researcher", "ai:verify")).toBe(false);
+    expect(hasPermission("researcher", "lead:apply_ai_opportunity")).toBe(false);
     expect(hasPermission("researcher", "crawl:manage")).toBe(false);
     expect(hasPermission("researcher", "settings:manage")).toBe(false);
     expect(hasPermission("researcher", "export:csv")).toBe(false);

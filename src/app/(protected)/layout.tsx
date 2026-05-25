@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { logoutAction } from "@/app/login/actions";
 import { getSession } from "@/lib/auth";
+import { ensureDbReady, getAdminFulfillmentSummary } from "@/lib/db/queries";
 import { NavHeader } from "@/components/nav-header";
 
 export const dynamic = "force-dynamic";
@@ -42,9 +43,16 @@ export default async function ProtectedLayout({
     );
   }
 
+  let fulfillmentCount = 0;
+  if (session.role === "admin") {
+    await ensureDbReady();
+    const fulfillmentSummary = await getAdminFulfillmentSummary();
+    fulfillmentCount = fulfillmentSummary.openTotal;
+  }
+
   return (
     <div className="min-h-screen">
-      <NavHeader email={session.email} role={session.role} logoutAction={logoutAction} />
+      <NavHeader email={session.email} role={session.role} fulfillmentCount={fulfillmentCount} logoutAction={logoutAction} />
       <main className="mx-auto w-full max-w-7xl px-6 py-7">{children}</main>
     </div>
   );

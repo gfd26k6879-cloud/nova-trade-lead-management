@@ -48,7 +48,7 @@ test.describe("Smoke pass", () => {
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL(/\/queue/, { timeout: 10000 });
 
-    await page.getByRole("link", { name: "Leads", exact: true }).click();
+    await page.getByRole("link", { name: "All Leads", exact: true }).click();
     await page.waitForURL(/\/leads/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Leads", exact: true })).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole("button", { name: "Kanban View" })).toBeVisible();
@@ -93,7 +93,7 @@ test.describe("Smoke pass", () => {
     await expect(toast).toBeVisible({ timeout: 5000 }).catch(() => {});
   });
 
-  test("6. Queue page and Refresh Queue", async ({ page }) => {
+  test("6. Workbench page", async ({ page }) => {
   skipIfMissingAuth();
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
@@ -104,12 +104,20 @@ test.describe("Smoke pass", () => {
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL(/\/queue/, { timeout: 10000 });
 
-    await page.getByRole("link", { name: "Queue", exact: true }).click();
+    await page.getByRole("link", { name: "Workbench", exact: true }).click();
     await page.waitForURL(/\/queue/, { timeout: 5000 });
-    await expect(page.getByText("Now Queue")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("heading", { name: "Workbench", exact: true })).toBeVisible({ timeout: 5000 });
 
-    await page.getByRole("button", { name: "Refresh Queue" }).click();
-    await page.waitForTimeout(600);
+    await expect(page.getByText("Your next action")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("Log outcome").first()).toBeVisible({ timeout: 5000 });
+    const logButton = page.getByRole("button", { name: "Log outcome" }).first();
+    if (await logButton.isVisible().catch(() => false)) {
+      await logButton.click();
+      await expect(page.getByText("Send to Steve")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByRole("button", { name: /Website needed|Already in admin queue/ }).first()).toBeVisible();
+      await expect(page.getByRole("button", { name: /Quote requested|Already in admin queue/ }).first()).toBeVisible();
+      await page.getByRole("button", { name: "Close" }).click();
+    }
     expect(errors).toHaveLength(0);
   });
 
@@ -121,10 +129,38 @@ test.describe("Smoke pass", () => {
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL(/\/queue/, { timeout: 10000 });
 
-    await page.getByRole("link", { name: "Queue", exact: true }).click();
+    await page.getByRole("link", { name: "Workbench", exact: true }).click();
     await page.waitForURL(/\/queue/, { timeout: 5000 });
-    await page.getByRole("link", { name: "Dashboard", exact: true }).click();
+    await page.getByRole("link", { name: "Revenue", exact: true }).click();
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
-    await expect(page.locator("h1, [role='heading']").first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("heading", { name: "Revenue Dashboard", exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("heading", { name: "Team performance", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Latest activity", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "My Fulfillment Queue", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Operations", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open Workbench", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open Fulfillment", exact: true })).toBeVisible();
+  });
+
+  test("8. Fulfillment page and Users team controls render", async ({ page }) => {
+  skipIfMissingAuth();
+    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle" });
+    await page.getByLabel("Email").fill(EMAIL);
+    await page.getByLabel("Password").fill(PASSWORD);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL(/\/queue/, { timeout: 10000 });
+
+    await page.getByRole("link", { name: /Fulfillment/ }).click();
+    await page.waitForURL(/\/fulfillment/, { timeout: 5000 });
+    await expect(page.getByRole("heading", { name: "Fulfillment", exact: true })).toBeVisible({ timeout: 5000 });
+    const hasWebsiteFilter = await page.getByRole("link", { name: "Website needed", exact: true }).isVisible().catch(() => false);
+    const hasEmptyState = await page.getByRole("heading", { name: "No fulfillment requests", exact: true }).isVisible().catch(() => false);
+    expect(hasWebsiteFilter || hasEmptyState).toBeTruthy();
+
+    await page.getByRole("link", { name: "Users", exact: true }).click();
+    await page.waitForURL(/\/users/, { timeout: 5000 });
+    await expect(page.getByRole("columnheader", { name: "Team", exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('select[aria-label^="Role for"]:visible').first()).toBeVisible();
+    await expect(page.locator('select[aria-label^="Team lead for"]:visible').first()).toBeVisible();
   });
 });

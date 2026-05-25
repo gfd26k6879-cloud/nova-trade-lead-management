@@ -13,6 +13,11 @@ export interface AppUser {
   role: AppRole;
   status: AppUserStatus;
   created_by: string | null;
+  is_team_lead: boolean;
+  team_lead_user_id: string | null;
+  team_lead_email: string | null;
+  team_lead_display_name: string | null;
+  team_label: string | null;
   last_seen_at: string | null;
   created_at: string;
   updated_at: string;
@@ -72,7 +77,10 @@ export async function getAppUserByEmail(email: string): Promise<AppUser | null> 
 export async function listAppUsers(): Promise<AppUser[]> {
   const db = await getDb();
   const rows = await db.prepare(
-    "SELECT * FROM app_users ORDER BY role ASC, lower(email) ASC"
+    `SELECT au.*, tl.email as team_lead_email, tl.display_name as team_lead_display_name
+     FROM app_users au
+     LEFT JOIN app_users tl ON tl.user_id = au.team_lead_user_id
+     ORDER BY au.role ASC, lower(au.email) ASC`
   ).all<Record<string, unknown>>();
   return rows.map(parseAppUser);
 }
@@ -129,6 +137,28 @@ export async function updateAppUserStatus(userId: string, status: AppUserStatus)
     .run(status, nowISO(), userId);
 }
 
+export async function updateAppUserTeam(input: {
+  userId: string;
+  isTeamLead: boolean;
+  teamLeadUserId?: string | null;
+  teamLabel?: string | null;
+}): Promise<AppUser | null> {
+  const db = await getDb();
+  const teamLeadUserId = !input.isTeamLead && input.teamLeadUserId && input.teamLeadUserId !== input.userId ? input.teamLeadUserId : null;
+  await db.prepare(
+    `UPDATE app_users
+     SET is_team_lead = ?, team_lead_user_id = ?, team_label = ?, updated_at = ?
+     WHERE user_id = ?`
+  ).run(input.isTeamLead ? 1 : 0, teamLeadUserId, normalizeOptionalText(input.teamLabel), nowISO(), input.userId);
+  const row = await db.prepare(
+    `SELECT au.*, tl.email as team_lead_email, tl.display_name as team_lead_display_name
+     FROM app_users au
+     LEFT JOIN app_users tl ON tl.user_id = au.team_lead_user_id
+     WHERE au.user_id = ?`
+  ).get<Record<string, unknown>>(input.userId);
+  return row ? parseAppUser(row) : null;
+}
+
 async function countAdminUsers(): Promise<number> {
   const db = await getDb();
   const row = await db.prepare(
@@ -152,6 +182,11 @@ function parseAppUser(row: Record<string, unknown>): AppUser {
     role: isAppRole(row.role) ? row.role : "researcher",
     status: row.status === "disabled" ? "disabled" : "active",
     created_by: row.created_by ? String(row.created_by) : null,
+    is_team_lead: row.is_team_lead === true || row.is_team_lead === 1,
+    team_lead_user_id: row.team_lead_user_id ? String(row.team_lead_user_id) : null,
+    team_lead_email: row.team_lead_email ? String(row.team_lead_email) : null,
+    team_lead_display_name: row.team_lead_display_name ? String(row.team_lead_display_name) : null,
+    team_label: row.team_label ? String(row.team_label) : null,
     last_seen_at: row.last_seen_at ? String(row.last_seen_at) : null,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
@@ -170,4 +205,9 @@ function toSessionProfile(user: AppUser): AppUserSessionProfile {
 
 function normalizeEmail(email: string | undefined | null): string {
   return (email ?? "").trim().toLowerCase();
+}
+
+function normalizeOptionalText(value: string | undefined | null): string | null {
+  const normalized = (value ?? "").trim();
+  return normalized.length > 0 ? normalized : null;
 }
