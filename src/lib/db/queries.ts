@@ -2731,16 +2731,6 @@ export async function getLeadMapZipCoverage(): Promise<LeadMapZipCoverage[]> {
          MAX(COALESCE(finished_at, started_at, created_at)) as lastRunAt
        FROM crawl_units
        GROUP BY zip
-     ),
-     lead_rollup AS (
-       SELECT
-         z.zip,
-         COUNT(l.id) as leadCount
-       FROM zip_codes z
-       LEFT JOIN leads l
-         ON l.is_excluded = 0
-        AND l.address LIKE '%' || z.zip || '%'
-       GROUP BY z.zip
      )
      SELECT
        z.zip,
@@ -2749,7 +2739,7 @@ export async function getLeadMapZipCoverage(): Promise<LeadMapZipCoverage[]> {
        z.county,
        z.lat,
        z.lng,
-       COALESCE(lr.leadCount, 0) as leadCount,
+       COALESCE(ur.discoveredCount, 0) as leadCount,
        COALESCE(ur.totalUnits, 0) as totalUnits,
        COALESCE(ur.doneUnits, 0) as doneUnits,
        COALESCE(ur.failedUnits, 0) as failedUnits,
@@ -2758,7 +2748,6 @@ export async function getLeadMapZipCoverage(): Promise<LeadMapZipCoverage[]> {
        ur.lastRunAt
      FROM zip_codes z
      LEFT JOIN unit_rollup ur ON ur.zip = z.zip
-     LEFT JOIN lead_rollup lr ON lr.zip = z.zip
      WHERE z.is_active = 1
        AND z.lat IS NOT NULL
        AND z.lng IS NOT NULL

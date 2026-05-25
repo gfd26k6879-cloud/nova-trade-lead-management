@@ -139,7 +139,7 @@ describe("state county zip planner queries", () => {
     expect(coverage.completed).toBe(false);
   });
 
-  it("returns active zip map coverage with crawl progress and lead counts", async () => {
+  it("returns active zip map coverage with crawl progress and discovered counts", async () => {
     const runId = seedTestRun(testDb);
     await createCrawlUnitsForSelection(runId, ["dentist", "plumber"], ["80202", "80123"]);
     testDb.prepare("UPDATE crawl_units SET status = 'done', discovered_count = 7 WHERE crawl_run_id = ? AND zip = '80202'").run(runId);
@@ -149,21 +149,12 @@ describe("state county zip planner queries", () => {
     testDb.prepare(
       "UPDATE crawl_units SET status = 'failed' WHERE crawl_run_id = ? AND zip = '80123' AND category = 'plumber'"
     ).run(runId);
-    testDb.prepare(
-      "INSERT INTO leads (id, place_id, name, address, lat, lng, is_excluded) VALUES (?, ?, ?, ?, ?, ?, 0)"
-    ).run("lead-1", "place-1", "Denver Lead", "100 Main St, Denver, CO 80202", 39.75, -104.99);
-    testDb.prepare(
-      "INSERT INTO leads (id, place_id, name, address, lat, lng, is_excluded) VALUES (?, ?, ?, ?, ?, ?, 0)"
-    ).run("lead-2", "place-2", "Hidden Lead", "200 Main St, Denver, CO 80202", 39.75, -104.99);
-    testDb.prepare(
-      "INSERT INTO leads (id, place_id, name, address, lat, lng, is_excluded) VALUES (?, ?, ?, ?, ?, ?, 1)"
-    ).run("lead-3", "place-3", "Excluded Lead", "300 Main St, Aurora, CO 80010", 39.73, -104.85);
-
     const coverage = await getLeadMapZipCoverage();
 
     expect(coverage.map((row) => row.zip)).toEqual(["80010", "80123", "80202"]);
     expect(coverage.find((row) => row.zip === "80202")).toMatchObject({
-      leadCount: 2,
+      leadCount: 14,
+      discoveredCount: 14,
       totalUnits: 2,
       doneUnits: 2,
       failedUnits: 0,
