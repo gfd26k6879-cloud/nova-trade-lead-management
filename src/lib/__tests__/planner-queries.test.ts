@@ -139,7 +139,7 @@ describe("state county zip planner queries", () => {
     expect(coverage.completed).toBe(false);
   });
 
-  it("returns active zip map coverage with crawl progress and discovered counts", async () => {
+  it("returns active zip map coverage coordinates without crawl aggregation", async () => {
     const runId = seedTestRun(testDb);
     await createCrawlUnitsForSelection(runId, ["dentist", "plumber"], ["80202", "80123"]);
     testDb.prepare("UPDATE crawl_units SET status = 'done', discovered_count = 7 WHERE crawl_run_id = ? AND zip = '80202'").run(runId);
@@ -153,20 +153,22 @@ describe("state county zip planner queries", () => {
 
     expect(coverage.map((row) => row.zip)).toEqual(["80010", "80123", "80202"]);
     expect(coverage.find((row) => row.zip === "80202")).toMatchObject({
-      leadCount: 14,
-      discoveredCount: 14,
-      totalUnits: 2,
-      doneUnits: 2,
+      city: "Denver",
+      leadCount: 0,
+      discoveredCount: 0,
+      totalUnits: 0,
+      doneUnits: 0,
       failedUnits: 0,
-      scrapeStatus: "complete",
+      scrapeStatus: "not_started",
     });
     expect(coverage.find((row) => row.zip === "80123")).toMatchObject({
-      totalUnits: 2,
-      doneUnits: 1,
-      failedUnits: 1,
-      scrapeStatus: "partial",
+      city: "Littleton",
+      leadCount: 0,
+      totalUnits: 0,
+      scrapeStatus: "not_started",
     });
     expect(coverage.find((row) => row.zip === "80010")).toMatchObject({
+      city: "Aurora",
       leadCount: 0,
       totalUnits: 0,
       scrapeStatus: "not_started",

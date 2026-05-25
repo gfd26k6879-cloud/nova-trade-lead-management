@@ -2720,34 +2720,14 @@ export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
 export async function getLeadMapZipCoverage(): Promise<LeadMapZipCoverage[]> {
   const db = await getDb();
   const rows = await db.prepare(
-    `WITH unit_rollup AS (
-       SELECT
-         zip,
-         COUNT(*) as totalUnits,
-         COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) as doneUnits,
-         COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failedUnits,
-         COALESCE(SUM(CASE WHEN status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) as remainingUnits,
-         COALESCE(SUM(discovered_count), 0) as discoveredCount,
-         MAX(COALESCE(finished_at, started_at, created_at)) as lastRunAt
-       FROM crawl_units
-       GROUP BY zip
-     )
-     SELECT
+    `SELECT
        z.zip,
        z.city,
        z.state,
        z.county,
        z.lat,
-       z.lng,
-       COALESCE(ur.discoveredCount, 0) as leadCount,
-       COALESCE(ur.totalUnits, 0) as totalUnits,
-       COALESCE(ur.doneUnits, 0) as doneUnits,
-       COALESCE(ur.failedUnits, 0) as failedUnits,
-       COALESCE(ur.remainingUnits, 0) as remainingUnits,
-       COALESCE(ur.discoveredCount, 0) as discoveredCount,
-       ur.lastRunAt
+       z.lng
      FROM zip_codes z
-     LEFT JOIN unit_rollup ur ON ur.zip = z.zip
      WHERE z.is_active = 1
        AND z.lat IS NOT NULL
        AND z.lng IS NOT NULL
@@ -2759,40 +2739,25 @@ export async function getLeadMapZipCoverage(): Promise<LeadMapZipCoverage[]> {
     county: string;
     lat: number;
     lng: number;
-    leadCount: number;
-    totalUnits: number;
-    doneUnits: number;
-    failedUnits: number;
-    remainingUnits: number;
-    discoveredCount: number;
-    lastRunAt: string | null;
   }>;
 
-  return rows.map((row) => {
-    const totalUnits = Number(row.totalUnits) || 0;
-    const doneUnits = Number(row.doneUnits) || 0;
-    const failedUnits = Number(row.failedUnits) || 0;
-    const remainingUnits = Number(row.remainingUnits) || 0;
-    const leadCount = Number(row.leadCount) || 0;
-    const completionRatio = totalUnits > 0 ? doneUnits / totalUnits : leadCount > 0 ? 1 : 0;
-    return {
-      zip: row.zip,
-      city: row.city,
-      state: row.state,
-      county: row.county,
-      lat: Number(row.lat),
-      lng: Number(row.lng),
-      leadCount,
-      totalUnits,
-      doneUnits,
-      failedUnits,
-      remainingUnits,
-      discoveredCount: Number(row.discoveredCount) || 0,
-      lastRunAt: row.lastRunAt ?? null,
-      completionRatio,
-      scrapeStatus: resolveZipScrapeStatus(totalUnits, doneUnits, failedUnits, remainingUnits, leadCount),
-    };
-  });
+  return rows.map((row) => ({
+    zip: row.zip,
+    city: row.city,
+    state: row.state,
+    county: row.county,
+    lat: Number(row.lat),
+    lng: Number(row.lng),
+    leadCount: 0,
+    totalUnits: 0,
+    doneUnits: 0,
+    failedUnits: 0,
+    remainingUnits: 0,
+    discoveredCount: 0,
+    lastRunAt: null,
+    completionRatio: 0,
+    scrapeStatus: "not_started",
+  }));
 }
 
 export async function getCoverageByCounty(runId: string): Promise<CountyCoverageProgress[]>{
@@ -2859,19 +2824,6 @@ function normalizeZipProgress(row: ZipProgress): ZipProgress {
     apiCalls: Number(row.apiCalls ?? raw.apicalls ?? raw.api_calls) || 0,
     lastRunAt: row.lastRunAt ?? raw.lastrunat ?? raw.last_run_at ?? null,
   };
-}
-
-function resolveZipScrapeStatus(
-  totalUnits: number,
-  doneUnits: number,
-  failedUnits: number,
-  remainingUnits: number,
-  leadCount: number,
-): ZipScrapeStatus {
-  if (totalUnits === 0) return leadCount > 0 ? "complete" : "not_started";
-  if (doneUnits >= totalUnits) return "complete";
-  if (doneUnits > 0 || failedUnits > 0 || remainingUnits > 0) return "partial";
-  return "not_started";
 }
 
 function normalizeCountyCoverageProgress(row: CountyCoverageProgress): CountyCoverageProgress {

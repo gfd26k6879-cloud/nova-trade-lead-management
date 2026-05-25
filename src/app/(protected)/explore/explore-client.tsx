@@ -105,16 +105,17 @@ export function ExploreClient({
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const view = normalizeView(filters.view);
   const selectedMapPoint = mapPoints.find((lead) => lead.id === selectedLeadId) ?? mapPoints[0] ?? null;
+  const zipCoverageWithLeadCounts = useMemo(() => mergeZipCoverageWithMapPoints(zipCoverage, mapPoints), [zipCoverage, mapPoints]);
   const visibleMapList = useMemo(() => mapPoints.slice(0, MAP_LIST_LIMIT), [mapPoints]);
-  const zipCoverageSummary = useMemo(() => summarizeZipCoverage(zipCoverage), [zipCoverage]);
+  const zipCoverageSummary = useMemo(() => summarizeZipCoverage(zipCoverageWithLeadCounts), [zipCoverageWithLeadCounts]);
   const pageUnclaimed = leads.filter((lead) => !lead.assigned_to_user_id).length;
   const pageMapped = leads.filter((lead) => typeof lead.lat === "number" && typeof lead.lng === "number").length;
   const stats = view === "map"
     ? [
         { label: "Matching Leads", value: String(total) },
         { label: "Shown On Map", value: String(mapPoints.length), hint: "No external map calls" },
-        { label: "Scraped ZIPs", value: `${zipCoverageSummary.scraped} / ${zipCoverageSummary.total}`, hint: "Dark ZIPs are covered" },
-        { label: "Not Started ZIPs", value: String(zipCoverageSummary.notStarted) },
+        { label: "Covered ZIPs", value: `${zipCoverageSummary.scraped} / ${zipCoverageSummary.total}`, hint: "Dark ZIPs have mapped leads" },
+        { label: "Light ZIPs", value: String(zipCoverageSummary.notStarted), hint: "No mapped lead in this view" },
       ]
     : [
         { label: "Matching Leads", value: String(total) },
@@ -153,7 +154,7 @@ export function ExploreClient({
   };
 
   const applyMapQuadrant = (quadrant: "nw" | "ne" | "sw" | "se") => {
-    const bounds = getBounds([...mapPoints, ...zipCoverage]);
+    const bounds = getBounds([...mapPoints, ...zipCoverageWithLeadCounts]);
     if (!bounds) return;
     const midLat = (bounds.minLat + bounds.maxLat) / 2;
     const midLng = (bounds.minLng + bounds.maxLng) / 2;
@@ -343,7 +344,7 @@ export function ExploreClient({
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(22rem,0.7fr)]">
           <LeadMap
             points={mapPoints}
-            zipCoverage={zipCoverage}
+            zipCoverage={zipCoverageWithLeadCounts}
             total={total}
             totalMapped={totalMapped}
             mapPointLimit={mapPointLimit}
@@ -556,7 +557,7 @@ function LeadMap({
                   height: 34,
                   ...zipCoverageStyle(zip),
                 }}
-                title={`${zip.zip} ${zip.city}: ${zip.scrapeStatus.replace(/_/g, " ")}, ${zip.doneUnits}/${zip.totalUnits} units done, ${zip.leadCount} leads`}
+                title={`${zip.zip} ${zip.city}: ${zip.scrapeStatus.replace(/_/g, " ")}, ${zip.leadCount} mapped leads in this view`}
                 aria-label={`Filter to ZIP ${zip.zip}`}
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={() => onZipSelect(zip.zip)}
@@ -596,7 +597,7 @@ function LeadMap({
         <div className="absolute bottom-4 left-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.84)", color: "var(--text-secondary)" }}>
           <LegendDot color="#f8fafc" label={`Not started ${coverageSummary.notStarted}`} />
           <LegendDot color="#f59e0b" label={`Partial ${coverageSummary.partial}`} />
-          <LegendDot color="#0f766e" label={`Scraped ${coverageSummary.complete}`} />
+          <LegendDot color="#0f766e" label={`Covered ${coverageSummary.complete}`} />
           <span className="mx-1 h-4 w-px bg-slate-300/70" />
           <LegendDot color="#dc2626" label="No site" />
           <LegendDot color="#ea580c" label="Broken" />
@@ -1027,6 +1028,36 @@ function summarizeZipCoverage(zipCoverage: LeadMapZipCoverage[]): ZipCoverageSum
     partial,
     notStarted,
   };
+}
+
+function mergeZipCoverageWithMapPoints(zipCoverage: LeadMapZipCoverage[], mapPoints: LeadMapPoint[]): LeadMapZipCoverage[] {
+  const countByZip = new Map<string, number>();
+  for (const point of mapPoints) {
+    const zip = extractZip(point.address);
+    if (!zip) continue;
+    countByZip.set(zip, (countByZip.get(zip) ?? 0) + 1);
+  }
+
+  return zipCoverage.map((zip) => {
+    const leadCount = countByZip.get(zip.zip) ?? 0;
+    if (leadCount === 0) return zip;
+    return {
+      ...zip,
+      leadCount,
+      discoveredCount: leadCount,
+      totalUnits: 1,
+      doneUnits: 1,
+      failedUnits: 0,
+      remainingUnits: 0,
+      completionRatio: 1,
+      scrapeStatus: "complete",
+    };
+  });
+}
+
+function extractZip(address: string | null | undefined): string | null {
+  const match = address?.match(/\b(8\d{4})\b/);
+  return match?.[1] ?? null;
 }
 
 function normalizeMapViewport(viewport: MapViewport): MapViewport {
