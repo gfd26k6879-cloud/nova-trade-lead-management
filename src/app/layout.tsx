@@ -4,6 +4,8 @@ import { Toaster } from "sonner";
 import { AuthHashRecovery } from "@/components/auth-hash-recovery";
 import "./globals.css";
 
+export const dynamic = "force-dynamic";
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
