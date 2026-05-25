@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { requirePermission } from "@/lib/auth";
-import { ensureDbReady, getBusinessTypeCounts, getLeadMapPoints, getLeads, getScoreBandThresholds, type LeadFilters } from "@/lib/db/queries";
+import { ensureDbReady, getBusinessTypeCounts, getLeadMapPoints, getLeadMapZipCoverage, getLeads, getScoreBandThresholds, type LeadFilters } from "@/lib/db/queries";
 import { ExploreClient } from "./explore-client";
 
 export const metadata: Metadata = { title: "Lead Explorer | NoSite Leads" };
@@ -77,9 +77,10 @@ export default async function ExplorePage({ searchParams }: Props) {
     pageSize: EXPLORER_PAGE_SIZE,
   };
 
-  const [result, mapResult, scoreThresholds, businessTypeCounts] = await Promise.all([
+  const [result, mapResult, zipCoverage, scoreThresholds, businessTypeCounts] = await Promise.all([
     getLeads(filters),
     getLeadMapPoints(filters, MAP_POINT_LIMIT),
+    getLeadMapZipCoverage(),
     getScoreBandThresholds(),
     getBusinessTypeCounts(),
   ]);
@@ -91,6 +92,7 @@ export default async function ExplorePage({ searchParams }: Props) {
       mapPoints={mapResult.points}
       totalMapped={mapResult.totalMapped}
       mapPointLimit={MAP_POINT_LIMIT}
+      zipCoverage={zipCoverage}
       filters={{ ...filters, view: params.view ?? "map", geo: params.geo }}
       scoreThresholds={scoreThresholds}
       businessTypeCounts={businessTypeCounts}

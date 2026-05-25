@@ -3,33 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { ADMIN_NAV_ITEMS, PRIMARY_NAV_ITEMS } from "@/lib/navigation";
 import type { AppRole } from "@/lib/permissions";
-
-type NavItem = {
-  href: string;
-  label: string;
-  description?: string;
-  badge?: "fulfillment";
-};
-
-const primaryItems: NavItem[] = [
-  { href: "/queue", label: "Workbench", description: "Daily call, text, email, and follow-up queue." },
-  { href: "/explore", label: "Explore", description: "Search, map, filter, and claim available businesses." },
-  { href: "/leads?assigned=me", label: "My Leads", description: "Only leads owned by the current user." },
-  { href: "/team", label: "Team", description: "Team workload and recent outreach activity." },
-];
-
-const adminItems: NavItem[] = [
-  { href: "/dashboard", label: "Overview", description: "Revenue, discovery controls, and admin shortcuts." },
-  { href: "/fulfillment", label: "Fulfillment", description: "Website and quote requests from researchers.", badge: "fulfillment" },
-  { href: "/coverage", label: "Discovery", description: "Live crawl run status and ZIP/category unit health." },
-  { href: "/scheduler", label: "Scheduler", description: "Background workers, backlogs, and worker controls." },
-  { href: "/quality", label: "Quality", description: "AI verification and manual lead quality review." },
-  { href: "/leads", label: "All Leads", description: "Full lead database, filters, Kanban, and export." },
-  { href: "/statistics", label: "Statistics", description: "Lead mix, quality, and conversion reporting." },
-  { href: "/settings", label: "Settings", description: "API keys, scoring, cost, and model settings." },
-  { href: "/users", label: "Users", description: "Team roles, status, and team lead assignment." },
-];
 
 export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: { email: string; role: AppRole; fulfillmentCount?: number; logoutAction: () => Promise<void> }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -37,7 +12,7 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const isAdmin = role === "admin";
-  const activeAdminItem = adminItems.find((item) => isActivePath(pathname, item.href, searchParams));
+  const activeAdminItem = ADMIN_NAV_ITEMS.find((item) => isActivePath(pathname, item.href, searchParams));
 
   return (
     <header
@@ -77,7 +52,7 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
 
         {/* Desktop nav */}
         <nav className="hidden items-center gap-1 md:flex" aria-label="Primary">
-          {primaryItems.map((item) => (
+          {PRIMARY_NAV_ITEMS.map((item) => (
             <Link key={item.href} href={item.href} className={`nav-link ${isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}>
               <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
             </Link>
@@ -104,7 +79,7 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
                     boxShadow: "0 18px 60px rgba(15,23,42,0.16)",
                   }}
                 >
-                  {adminItems.map((item) => (
+                  {ADMIN_NAV_ITEMS.map((item) => (
                     <Link
                       key={item.href}
                       href={item.href}
@@ -167,7 +142,7 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
           style={{ borderColor: "rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.55)" }}
         >
           <nav className="flex flex-col gap-1">
-            {primaryItems.map((item) => (
+            {PRIMARY_NAV_ITEMS.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
@@ -180,7 +155,7 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
             {isAdmin && (
               <>
                 <p className="section-label px-3 pt-3">Admin</p>
-                {adminItems.map((item) => (
+                {ADMIN_NAV_ITEMS.map((item) => (
                   <Link
                     key={item.href}
                     href={item.href}

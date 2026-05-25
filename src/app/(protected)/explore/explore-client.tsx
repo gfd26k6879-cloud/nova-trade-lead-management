@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { HelpTip } from "@/components/help-tip";
@@ -8,7 +8,7 @@ import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
 import { claimLeadAction } from "@/lib/leads/actions";
 import { getBusinessTypeLabel } from "@/lib/business-types";
-import type { Lead, LeadMapPoint } from "@/lib/db/queries";
+import type { Lead, LeadMapPoint, LeadMapZipCoverage } from "@/lib/db/queries";
 import type { AppRole } from "@/lib/permissions";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
 
@@ -20,6 +20,7 @@ interface Props {
   mapPoints: LeadMapPoint[];
   totalMapped: number;
   mapPointLimit: number;
+  zipCoverage: LeadMapZipCoverage[];
   filters: {
     search?: string;
     status?: string;
@@ -84,6 +85,7 @@ export function ExploreClient({
   mapPoints,
   totalMapped,
   mapPointLimit,
+  zipCoverage,
   filters,
   scoreThresholds,
   businessTypeCounts,
@@ -104,19 +106,15 @@ export function ExploreClient({
   const view = normalizeView(filters.view);
   const selectedMapPoint = mapPoints.find((lead) => lead.id === selectedLeadId) ?? mapPoints[0] ?? null;
   const visibleMapList = useMemo(() => mapPoints.slice(0, MAP_LIST_LIMIT), [mapPoints]);
-  const missingCoordinates = Math.max(0, total - totalMapped);
+  const zipCoverageSummary = useMemo(() => summarizeZipCoverage(zipCoverage), [zipCoverage]);
   const pageUnclaimed = leads.filter((lead) => !lead.assigned_to_user_id).length;
   const pageMapped = leads.filter((lead) => typeof lead.lat === "number" && typeof lead.lng === "number").length;
   const stats = view === "map"
     ? [
         { label: "Matching Leads", value: String(total) },
-        {
-          label: "Mapped Leads",
-          value: String(totalMapped),
-          hint: totalMapped > mapPointLimit ? `Showing top ${mapPoints.length}` : "Stored coordinates",
-        },
         { label: "Shown On Map", value: String(mapPoints.length), hint: "No external map calls" },
-        { label: "Missing Coords", value: String(missingCoordinates) },
+        { label: "Scraped ZIPs", value: `${zipCoverageSummary.scraped} / ${zipCoverageSummary.total}`, hint: "Dark ZIPs are covered" },
+        { label: "Not Started ZIPs", value: String(zipCoverageSummary.notStarted) },
       ]
     : [
         { label: "Matching Leads", value: String(total) },
@@ -155,7 +153,7 @@ export function ExploreClient({
   };
 
   const applyMapQuadrant = (quadrant: "nw" | "ne" | "sw" | "se") => {
-    const bounds = getBounds(mapPoints);
+    const bounds = getBounds([...mapPoints, ...zipCoverage]);
     if (!bounds) return;
     const midLat = (bounds.minLat + bounds.maxLat) / 2;
     const midLng = (bounds.minLng + bounds.maxLng) / 2;
@@ -166,6 +164,11 @@ export function ExploreClient({
       minLng: quadrant.includes("w") ? bounds.minLng : midLng,
       maxLng: quadrant.includes("w") ? midLng : bounds.maxLng,
     });
+  };
+
+  const selectMapZip = (nextZip: string) => {
+    setZip(nextZip);
+    pushFilters({ zip: nextZip });
   };
 
   return (
@@ -340,12 +343,14 @@ export function ExploreClient({
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(22rem,0.7fr)]">
           <LeadMap
             points={mapPoints}
+            zipCoverage={zipCoverage}
             total={total}
             totalMapped={totalMapped}
             mapPointLimit={mapPointLimit}
             selectedLeadId={selectedMapPoint?.id ?? null}
             onSelect={setSelectedLeadId}
             onQuadrant={applyMapQuadrant}
+            onZipSelect={selectMapZip}
           />
           <MapSidePanel
             points={visibleMapList}
@@ -398,25 +403,76 @@ export function ExploreClient({
 
 function LeadMap({
   points,
+  zipCoverage,
   total,
   totalMapped,
   mapPointLimit,
   selectedLeadId,
   onSelect,
   onQuadrant,
+  onZipSelect,
 }: {
   points: LeadMapPoint[];
+  zipCoverage: LeadMapZipCoverage[];
   total: number;
   totalMapped: number;
   mapPointLimit: number;
   selectedLeadId: string | null;
   onSelect: (leadId: string) => void;
   onQuadrant: (quadrant: "nw" | "ne" | "sw" | "se") => void;
+  onZipSelect: (zip: string) => void;
 }) {
-  const bounds = getBounds(points);
+  const [viewport, setViewport] = useState<MapViewport>(DEFAULT_MAP_VIEWPORT);
+  const [showCoverage, setShowCoverage] = useState(true);
+  const dragRef = useRef<MapDragState | null>(null);
+  const bounds = getBounds([...points, ...zipCoverage]);
   const hasMore = totalMapped > points.length;
   const missingCoordinates = Math.max(0, total - totalMapped);
   const markers = bounds ? getMapMarkers(points, bounds, selectedLeadId) : [];
+  const zipTiles = bounds ? zipCoverage.map((zip) => ({ zip, ...projectLead(zip, bounds) })) : [];
+  const coverageSummary = summarizeZipCoverage(zipCoverage);
+
+  const zoomBy = (factor: number) => {
+    setViewport((current) => normalizeMapViewport({ ...current, scale: clamp(current.scale * factor, 1, 4) }));
+  };
+
+  const beginPan = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: viewport.x,
+      originY: viewport.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const movePan = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = normalizeMapViewport({
+      scale: viewport.scale,
+      x: drag.originX + event.clientX - drag.startX,
+      y: drag.originY + event.clientY - drag.startY,
+    });
+    setViewport(next);
+  };
+
+  const endPan = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+  };
+
+  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    zoomBy(event.deltaY < 0 ? 1.12 : 0.88);
+  };
 
   return (
     <div className="glass rounded-2xl p-5">
@@ -427,24 +483,39 @@ function LeadMap({
             <HelpTip>Uses stored lead latitude and longitude from the database only. It does not call Google Maps, Mapbox, Places, geocoding, or paid tile APIs.</HelpTip>
           </div>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            Click a marker to inspect a lead. Quadrants apply a latitude/longitude filter to this result set.
+            Drag to move, scroll to zoom, click a ZIP tile to filter, or click a lead marker to inspect it.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-1">
-          <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("nw")}>NW</button>
-          <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("ne")}>NE</button>
-          <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("sw")}>SW</button>
-          <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("se")}>SE</button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className={`btn-glass px-3 py-1.5 text-xs ${showCoverage ? "nav-link-active" : ""}`} onClick={() => setShowCoverage((value) => !value)}>
+            ZIP coverage
+          </button>
+          <button type="button" className="btn-glass px-3 py-1.5 text-xs" onClick={() => setViewport(DEFAULT_MAP_VIEWPORT)}>
+            Reset view
+          </button>
+          <div className="grid grid-cols-2 gap-1">
+            <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("nw")}>NW</button>
+            <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("ne")}>NE</button>
+            <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("sw")}>SW</button>
+            <button type="button" className="btn-glass px-2 py-1 text-xs" disabled={!bounds} onClick={() => onQuadrant("se")}>SE</button>
+          </div>
         </div>
       </div>
 
       <div
-        className="relative h-[28rem] overflow-hidden rounded-xl"
+        className="relative h-[32rem] overflow-hidden rounded-xl"
         style={{
           background:
-            "linear-gradient(135deg, rgba(219,234,254,0.92), rgba(240,253,250,0.82)), repeating-linear-gradient(0deg, rgba(15,23,42,0.06) 0, rgba(15,23,42,0.06) 1px, transparent 1px, transparent 44px), repeating-linear-gradient(90deg, rgba(15,23,42,0.06) 0, rgba(15,23,42,0.06) 1px, transparent 1px, transparent 44px)",
+            "linear-gradient(135deg, rgba(219,234,254,0.95), rgba(240,253,250,0.9)), radial-gradient(circle at 12% 18%, rgba(15,118,110,0.16), transparent 30%), radial-gradient(circle at 88% 82%, rgba(59,130,246,0.12), transparent 32%)",
           border: "1px solid rgba(255,255,255,0.58)",
+          touchAction: "none",
+          cursor: viewport.scale > 1 ? "grab" : "default",
         }}
+        onPointerDown={beginPan}
+        onPointerMove={movePan}
+        onPointerUp={endPan}
+        onPointerCancel={endPan}
+        onWheel={handleWheel}
       >
         <div className="absolute left-4 top-4 z-10 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.82)", color: "var(--text-secondary)" }}>
           {points.length} shown / {totalMapped} mapped
@@ -454,44 +525,79 @@ function LeadMap({
             Showing top {mapPointLimit} by current sort. Narrow filters to inspect more.
           </div>
         )}
-        <div className="absolute inset-x-0 top-1/2 border-t border-dashed border-slate-400/35" />
-        <div className="absolute inset-y-0 left-1/2 border-l border-dashed border-slate-400/35" />
-        <span className="absolute left-1/2 top-3 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>North</span>
-        <span className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>South</span>
-        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>West</span>
-        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>East</span>
+        <div className="absolute right-4 top-20 z-20 flex flex-col gap-1">
+          <button type="button" className="btn-glass h-8 w-8 px-0 text-base" onClick={() => zoomBy(1.18)} aria-label="Zoom in">+</button>
+          <button type="button" className="btn-glass h-8 w-8 px-0 text-base" onClick={() => zoomBy(0.84)} aria-label="Zoom out">-</button>
+        </div>
         {!bounds ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm" style={{ color: "var(--text-tertiary)" }}>
             {total > 0
               ? `${missingCoordinates} matching leads do not have stored coordinates. Use list/table filters or add coordinates during data enrichment.`
               : "No leads match the current filters."}
           </div>
-        ) : markers.map((marker) => {
-          const markerSize = marker.active ? 30 : marker.count > 1 ? clamp(18 + Math.log2(marker.count) * 4, 20, 38) : 18;
-          return (
-            <button
-              key={marker.id}
-              type="button"
-              className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-[10px] font-semibold leading-none transition"
-              style={{
-                left: `${marker.x}%`,
-                top: `${marker.y}%`,
-                width: markerSize,
-                height: markerSize,
-                color: "#fff",
-                background: marker.active ? "#4f46e5" : marker.color,
-                border: "2px solid rgba(255,255,255,0.92)",
-                boxShadow: marker.active ? "0 0 0 7px rgba(79,70,229,0.16), 0 8px 22px rgba(15,23,42,0.24)" : "0 5px 14px rgba(15,23,42,0.18)",
-              }}
-              title={marker.count > 1 ? `${marker.count} leads near ${formatPlace(marker.lead.address)}` : `${marker.lead.name ?? "Unknown business"} - ${formatLabel(marker.lead.website_status)}`}
-              aria-label={marker.count > 1 ? `Select cluster with ${marker.count} leads` : `Select ${marker.lead.name ?? "lead"}`}
-              onClick={() => onSelect(marker.lead.id)}
-            >
-              {marker.label}
-            </button>
-          );
-        })}
-        <div className="absolute bottom-4 left-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.82)", color: "var(--text-secondary)" }}>
+        ) : (
+          <div
+            className="absolute inset-0"
+            style={{
+              transform: `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.scale})`,
+              transformOrigin: "50% 50%",
+            }}
+          >
+            <MapBaseLayer bounds={bounds} zipCoverage={zipCoverage} />
+            {showCoverage && zipTiles.map(({ zip, x, y }) => (
+              <button
+                key={zip.zip}
+                type="button"
+                className="absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-xl border text-[10px] font-semibold leading-tight shadow-sm transition hover:shadow-md"
+                style={{
+                  left: `${x}%`,
+                  top: `${y}%`,
+                  width: 46,
+                  height: 34,
+                  ...zipCoverageStyle(zip),
+                }}
+                title={`${zip.zip} ${zip.city}: ${zip.scrapeStatus.replace(/_/g, " ")}, ${zip.doneUnits}/${zip.totalUnits} units done, ${zip.leadCount} leads`}
+                aria-label={`Filter to ZIP ${zip.zip}`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={() => onZipSelect(zip.zip)}
+              >
+                <span>{zip.zip}</span>
+                <span className="text-[9px] font-medium">{zip.leadCount}</span>
+              </button>
+            ))}
+            {markers.map((marker) => {
+              const markerSize = marker.active ? 30 : marker.count > 1 ? clamp(18 + Math.log2(marker.count) * 4, 20, 38) : 18;
+              return (
+                <button
+                  key={marker.id}
+                  type="button"
+                  className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-[10px] font-semibold leading-none transition"
+                  style={{
+                    left: `${marker.x}%`,
+                    top: `${marker.y}%`,
+                    width: markerSize,
+                    height: markerSize,
+                    color: "#fff",
+                    background: marker.active ? "#4f46e5" : marker.color,
+                    border: "2px solid rgba(255,255,255,0.92)",
+                    boxShadow: marker.active ? "0 0 0 7px rgba(79,70,229,0.16), 0 8px 22px rgba(15,23,42,0.24)" : "0 5px 14px rgba(15,23,42,0.18)",
+                  }}
+                  title={marker.count > 1 ? `${marker.count} leads near ${formatPlace(marker.lead.address)}` : `${marker.lead.name ?? "Unknown business"} - ${formatLabel(marker.lead.website_status)}`}
+                  aria-label={marker.count > 1 ? `Select cluster with ${marker.count} leads` : `Select ${marker.lead.name ?? "lead"}`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={() => onSelect(marker.lead.id)}
+                >
+                  {marker.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div className="absolute bottom-4 left-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.84)", color: "var(--text-secondary)" }}>
+          <LegendDot color="#f8fafc" label={`Not started ${coverageSummary.notStarted}`} />
+          <LegendDot color="#f59e0b" label={`Partial ${coverageSummary.partial}`} />
+          <LegendDot color="#0f766e" label={`Scraped ${coverageSummary.complete}`} />
+          <span className="mx-1 h-4 w-px bg-slate-300/70" />
           <LegendDot color="#dc2626" label="No site" />
           <LegendDot color="#ea580c" label="Broken" />
           <LegendDot color="#d97706" label="Social" />
@@ -500,6 +606,49 @@ function LeadMap({
         </div>
       </div>
     </div>
+  );
+}
+
+function MapBaseLayer({ bounds, zipCoverage }: { bounds: LeadMapBounds; zipCoverage: LeadMapZipCoverage[] }) {
+  const cityLabels = getCityLabels(zipCoverage, bounds);
+  return (
+    <>
+      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <pattern id="map-grid" width="8" height="8" patternUnits="userSpaceOnUse">
+            <path d="M 8 0 L 0 0 0 8" fill="none" stroke="rgba(15,23,42,0.08)" strokeWidth="0.2" />
+          </pattern>
+        </defs>
+        <rect width="100" height="100" fill="url(#map-grid)" />
+        <path d="M 6 28 C 20 31 34 28 48 31 S 78 31 96 35" fill="none" stroke="rgba(30,64,175,0.18)" strokeWidth="1.2" />
+        <path d="M 53 4 C 47 19 50 33 49 48 S 54 76 50 96" fill="none" stroke="rgba(30,64,175,0.22)" strokeWidth="1.4" />
+        <path d="M 15 74 C 29 66 40 64 51 67 S 78 74 92 70" fill="none" stroke="rgba(15,118,110,0.16)" strokeWidth="1" />
+        <path d="M 10 10 C 17 32 13 58 22 92" fill="none" stroke="rgba(71,85,105,0.14)" strokeWidth="5" />
+        <text x="56" y="30" fill="rgba(30,64,175,0.48)" fontSize="2.7" fontWeight="700">I-70</text>
+        <text x="51" y="54" fill="rgba(30,64,175,0.48)" fontSize="2.7" fontWeight="700">I-25</text>
+        <text x="10" y="16" fill="rgba(71,85,105,0.36)" fontSize="3" fontWeight="700">Front Range</text>
+      </svg>
+      <div className="absolute inset-x-0 top-1/2 border-t border-dashed border-slate-400/35" />
+      <div className="absolute inset-y-0 left-1/2 border-l border-dashed border-slate-400/35" />
+      <span className="absolute left-1/2 top-3 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>North</span>
+      <span className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>South</span>
+      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>West</span>
+      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>East</span>
+      {cityLabels.map((label) => (
+        <span
+          key={label.city}
+          className="absolute -translate-x-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]"
+          style={{
+            left: `${label.x}%`,
+            top: `${label.y}%`,
+            background: "rgba(255,255,255,0.5)",
+            color: "rgba(15,23,42,0.46)",
+          }}
+        >
+          {label.city}
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -807,6 +956,36 @@ function normalizeView(value: string | undefined): ExplorerView {
   return value === "cards" || value === "table" || value === "map" ? value : "map";
 }
 
+const DEFAULT_MAP_VIEWPORT: MapViewport = { scale: 1, x: 0, y: 0 };
+
+interface MapViewport {
+  scale: number;
+  x: number;
+  y: number;
+}
+
+interface MapDragState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+}
+
+interface ZipCoverageSummary {
+  total: number;
+  scraped: number;
+  complete: number;
+  partial: number;
+  notStarted: number;
+}
+
+interface CityLabel {
+  city: string;
+  x: number;
+  y: number;
+}
+
 type LeadCoordinate = Pick<LeadMapPoint, "lat" | "lng">;
 type LeadMarkerStatus = Pick<LeadMapPoint, "website_status" | "ai_website_viability_status" | "quality_bucket">;
 type LeadOwner = Pick<LeadMapPoint, "assigned_to_user_id" | "assigned_user_display_name" | "assigned_user_email">;
@@ -835,6 +1014,77 @@ function getBounds(points: LeadCoordinate[]) {
     minLng: minLng === maxLng ? minLng - 0.01 : minLng,
     maxLng: minLng === maxLng ? maxLng + 0.01 : maxLng,
   };
+}
+
+function summarizeZipCoverage(zipCoverage: LeadMapZipCoverage[]): ZipCoverageSummary {
+  const complete = zipCoverage.filter((zip) => zip.scrapeStatus === "complete").length;
+  const partial = zipCoverage.filter((zip) => zip.scrapeStatus === "partial").length;
+  const notStarted = zipCoverage.filter((zip) => zip.scrapeStatus === "not_started").length;
+  return {
+    total: zipCoverage.length,
+    scraped: complete + partial,
+    complete,
+    partial,
+    notStarted,
+  };
+}
+
+function normalizeMapViewport(viewport: MapViewport): MapViewport {
+  const scale = clamp(viewport.scale, 1, 4);
+  if (scale === 1) return DEFAULT_MAP_VIEWPORT;
+  const maxOffset = (scale - 1) * 180;
+  return {
+    scale,
+    x: clamp(viewport.x, -maxOffset, maxOffset),
+    y: clamp(viewport.y, -maxOffset, maxOffset),
+  };
+}
+
+function zipCoverageStyle(zip: LeadMapZipCoverage): React.CSSProperties {
+  const leadWeight = clamp(Math.log10(zip.leadCount + 1) / 3, 0, 0.22);
+  if (zip.scrapeStatus === "complete") {
+    const alpha = clamp(0.5 + leadWeight + zip.completionRatio * 0.18, 0.5, 0.86);
+    return {
+      background: `rgba(15,118,110,${alpha})`,
+      borderColor: "rgba(15,118,110,0.72)",
+      color: "#ffffff",
+    };
+  }
+  if (zip.scrapeStatus === "partial") {
+    const alpha = clamp(0.28 + zip.completionRatio * 0.32 + leadWeight, 0.28, 0.7);
+    return {
+      background: `rgba(245,158,11,${alpha})`,
+      borderColor: "rgba(180,83,9,0.46)",
+      color: "#713f12",
+    };
+  }
+  return {
+    background: "rgba(248,250,252,0.74)",
+    borderColor: "rgba(148,163,184,0.42)",
+    color: "#475569",
+  };
+}
+
+function getCityLabels(zipCoverage: LeadMapZipCoverage[], bounds: LeadMapBounds): CityLabel[] {
+  const cities = new Map<string, { city: string; latTotal: number; lngTotal: number; count: number; leadCount: number }>();
+  for (const zip of zipCoverage) {
+    const city = zip.city.trim();
+    if (!city) continue;
+    const existing = cities.get(city) ?? { city, latTotal: 0, lngTotal: 0, count: 0, leadCount: 0 };
+    existing.latTotal += zip.lat;
+    existing.lngTotal += zip.lng;
+    existing.count += 1;
+    existing.leadCount += zip.leadCount;
+    cities.set(city, existing);
+  }
+
+  return Array.from(cities.values())
+    .sort((a, b) => b.leadCount - a.leadCount || b.count - a.count || a.city.localeCompare(b.city))
+    .slice(0, 10)
+    .map((city) => {
+      const point = projectLead({ lat: city.latTotal / city.count, lng: city.lngTotal / city.count }, bounds);
+      return { city: city.city, ...point };
+    });
 }
 
 function getMapMarkers(points: LeadMapPoint[], bounds: LeadMapBounds, selectedLeadId: string | null): LeadMapMarker[] {
