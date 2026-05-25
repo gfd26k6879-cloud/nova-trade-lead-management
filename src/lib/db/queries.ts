@@ -466,6 +466,8 @@ export interface Settings {
   openai_api_key_source: "ui" | "env" | "none";
   google_places_api_key_configured: boolean;
   google_places_api_key_source: "ui" | "env" | "none";
+  google_maps_browser_api_key_configured: boolean;
+  google_maps_browser_api_key_source: "ui" | "env" | "none";
 }
 
 export interface AiLeadVerification {
@@ -1377,6 +1379,8 @@ export async function getSettings(): Promise<Settings>{
     openai_api_key_source: row.openai_api_key_encrypted ? "ui" : process.env.OPENAI_API_KEY ? "env" : "none",
     google_places_api_key_configured: !!row.google_places_api_key_encrypted || !!process.env.GOOGLE_PLACES_API_KEY,
     google_places_api_key_source: row.google_places_api_key_encrypted ? "ui" : process.env.GOOGLE_PLACES_API_KEY ? "env" : "none",
+    google_maps_browser_api_key_configured: !!row.google_maps_browser_api_key_encrypted || !!process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY,
+    google_maps_browser_api_key_source: row.google_maps_browser_api_key_encrypted ? "ui" : process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY ? "env" : "none",
   };
 }
 
@@ -1521,7 +1525,9 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
     "openai_api_key_configured" in settings ||
     "openai_api_key_source" in settings ||
     "google_places_api_key_configured" in settings ||
-    "google_places_api_key_source" in settings
+    "google_places_api_key_source" in settings ||
+    "google_maps_browser_api_key_configured" in settings ||
+    "google_maps_browser_api_key_source" in settings
   ) {
     // API keys are managed through dedicated secret actions, never by the generic settings save.
   }
@@ -2243,6 +2249,43 @@ export async function getConfiguredGooglePlacesApiKey(): Promise<string>{
     return decryptSecret(row.google_places_api_key_encrypted);
   }
   return (process.env.GOOGLE_PLACES_API_KEY || "").trim();
+}
+
+export async function setStoredGoogleMapsBrowserApiKey(apiKey: string): Promise<void>{
+  const db = await getDb();
+  await ensureGoogleMapsBrowserApiKeyColumn(db);
+  await db.prepare("UPDATE settings SET google_maps_browser_api_key_encrypted = ?, updated_at = ? WHERE id = 1")
+    .run(encryptSecret(apiKey), nowISO());
+}
+
+export async function clearStoredGoogleMapsBrowserApiKey(): Promise<void>{
+  const db = await getDb();
+  await ensureGoogleMapsBrowserApiKeyColumn(db);
+  await db.prepare("UPDATE settings SET google_maps_browser_api_key_encrypted = NULL, updated_at = ? WHERE id = 1")
+    .run(nowISO());
+}
+
+export async function getConfiguredGoogleMapsBrowserApiKey(): Promise<string>{
+  const db = await getDb();
+  const row = await db.prepare("SELECT * FROM settings WHERE id = 1").get() as Record<string, unknown> | undefined;
+  const encrypted = row?.google_maps_browser_api_key_encrypted;
+  if (typeof encrypted === "string" && encrypted) {
+    return decryptSecret(encrypted);
+  }
+  return (process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY || "").trim();
+}
+
+async function ensureGoogleMapsBrowserApiKeyColumn(db: Awaited<ReturnType<typeof getDb>>): Promise<void> {
+  try {
+    await db.prepare("ALTER TABLE settings ADD COLUMN google_maps_browser_api_key_encrypted TEXT").run();
+  } catch (error) {
+    if (!isDuplicateColumnError(error)) throw error;
+  }
+}
+
+function isDuplicateColumnError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return message.includes("duplicate column") || message.includes("already exists");
 }
 
 // ─── Zip Codes ───

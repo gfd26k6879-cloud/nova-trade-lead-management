@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS settings (
   ai_manual_apply_required integer NOT NULL DEFAULT 1,
   openai_api_key_encrypted text,
   google_places_api_key_encrypted text,
+  google_maps_browser_api_key_encrypted text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );

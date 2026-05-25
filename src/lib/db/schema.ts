@@ -84,6 +84,7 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "settings", column: "scheduler_score_recompute_enabled", type: "INTEGER NOT NULL DEFAULT 1" },
   { table: "settings", column: "openai_api_key_encrypted", type: "TEXT" },
   { table: "settings", column: "google_places_api_key_encrypted", type: "TEXT" },
+  { table: "settings", column: "google_maps_browser_api_key_encrypted", type: "TEXT" },
   { table: "leads", column: "ai_website_feedback_status", type: "TEXT" },
   { table: "leads", column: "ai_corrected_website_url", type: "TEXT" },
   { table: "leads", column: "ai_false_positive_reason", type: "TEXT" },
@@ -350,6 +351,7 @@ CREATE TABLE IF NOT EXISTS settings (
   scheduler_score_recompute_enabled INTEGER NOT NULL DEFAULT 1,
   openai_api_key_encrypted TEXT,
   google_places_api_key_encrypted TEXT,
+  google_maps_browser_api_key_encrypted TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

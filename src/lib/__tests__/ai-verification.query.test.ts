@@ -18,6 +18,7 @@ import {
   getAiBudgetStatus,
   getConfiguredOpenAiApiKey,
   getConfiguredGooglePlacesApiKey,
+  getConfiguredGoogleMapsBrowserApiKey,
   getLatestAiVerification,
   getAiWebsiteViabilityRepairLeads,
   getSettings,
@@ -26,6 +27,8 @@ import {
   clearStoredOpenAiApiKey,
   setStoredGooglePlacesApiKey,
   clearStoredGooglePlacesApiKey,
+  setStoredGoogleMapsBrowserApiKey,
+  clearStoredGoogleMapsBrowserApiKey,
   updateLeadAiVerificationSummary,
 } from "@/lib/db/queries";
 
@@ -47,6 +50,7 @@ beforeEach(() => {
   vi.stubEnv("NOSITE_SESSION_SECRET", "test-secret-for-encrypting-openai-keys");
   vi.stubEnv("OPENAI_API_KEY", "");
   vi.stubEnv("GOOGLE_PLACES_API_KEY", "");
+  vi.stubEnv("NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY", "");
   testDb = createTestDb();
   insertLead();
 });
@@ -209,5 +213,29 @@ describe("AI verification queries", () => {
     await clearStoredGooglePlacesApiKey();
     expect(await getConfiguredGooglePlacesApiKey()).toBe("AIzaEnvKeyForTests1234567890");
     expect((await getSettings()).google_places_api_key_source).toBe("env");
+  });
+
+  it("stores Google Maps browser API keys encrypted and falls back to env after clearing", async () => {
+    vi.stubEnv("NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY", "AIzaEnvMapsKeyForTests1234567890");
+    await setStoredGoogleMapsBrowserApiKey("AIzaUiMapsKeyForTests1234567890");
+
+    const raw = testDb.prepare("SELECT google_maps_browser_api_key_encrypted FROM settings WHERE id = 1").get() as { google_maps_browser_api_key_encrypted: string };
+    expect(raw.google_maps_browser_api_key_encrypted).not.toContain("AIzaUiMapsKey");
+    expect(await getConfiguredGoogleMapsBrowserApiKey()).toBe("AIzaUiMapsKeyForTests1234567890");
+    expect((await getSettings()).google_maps_browser_api_key_source).toBe("ui");
+
+    await clearStoredGoogleMapsBrowserApiKey();
+    expect(await getConfiguredGoogleMapsBrowserApiKey()).toBe("AIzaEnvMapsKeyForTests1234567890");
+    expect((await getSettings()).google_maps_browser_api_key_source).toBe("env");
+  });
+
+  it("adds the Google Maps browser API key column before saving when an older database is missing it", async () => {
+    testDb.prepare("ALTER TABLE settings DROP COLUMN google_maps_browser_api_key_encrypted").run();
+
+    await setStoredGoogleMapsBrowserApiKey("AIzaUiMapsKeyForOlderDatabase1234567890");
+
+    const raw = testDb.prepare("SELECT google_maps_browser_api_key_encrypted FROM settings WHERE id = 1").get() as { google_maps_browser_api_key_encrypted: string };
+    expect(raw.google_maps_browser_api_key_encrypted).toMatch(/^v1\./);
+    expect(await getConfiguredGoogleMapsBrowserApiKey()).toBe("AIzaUiMapsKeyForOlderDatabase1234567890");
   });
 });

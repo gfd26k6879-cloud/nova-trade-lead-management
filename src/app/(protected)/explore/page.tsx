@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { requirePermission } from "@/lib/auth";
 import { BUSINESS_TYPE_OPTIONS } from "@/lib/business-types";
-import { ensureDbReady, getBusinessTypeCounts, getLeadMapPoints, getLeadMapZipCoverage, getLeads, getScoreBandThresholds, type LeadFilters } from "@/lib/db/queries";
+import { ensureDbReady, getBusinessTypeCounts, getConfiguredGoogleMapsBrowserApiKey, getLeadMapPoints, getLeadMapZipCoverage, getLeads, getScoreBandThresholds, type LeadFilters } from "@/lib/db/queries";
 import { ExploreClient } from "./explore-client";
 
 export const metadata: Metadata = { title: "Lead Explorer | NoSite Leads" };
@@ -79,11 +79,12 @@ export default async function ExplorePage({ searchParams }: Props) {
     pageSize: EXPLORER_PAGE_SIZE,
   };
 
-  const [mapResult, zipCoverage, scoreThresholds, businessTypeCounts, result] = await Promise.all([
+  const [mapResult, zipCoverage, scoreThresholds, businessTypeCounts, googleMapsApiKey, result] = await Promise.all([
     getLeadMapPoints(filters, MAP_POINT_LIMIT, { includeTotal: view !== "map", fastOrder: view === "map" }),
     getLeadMapZipCoverage(),
     getScoreBandThresholds(),
     view === "map" ? Promise.resolve(getStaticBusinessTypeCounts()) : getBusinessTypeCounts(),
+    getConfiguredGoogleMapsBrowserApiKey(),
     view === "map" ? Promise.resolve({ leads: [], total: 0 }) : getLeads(filters),
   ]);
   const total = view === "map" ? mapResult.totalMapped : result.total;
@@ -100,7 +101,7 @@ export default async function ExplorePage({ searchParams }: Props) {
       scoreThresholds={scoreThresholds}
       businessTypeCounts={businessTypeCounts}
       currentUser={{ userId: session.userId, email: session.email, role: session.role }}
-      googleMapsApiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY?.trim() || null}
+      googleMapsApiKey={googleMapsApiKey || null}
     />
   );
 }

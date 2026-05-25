@@ -8,6 +8,8 @@ import {
   clearStoredOpenAiApiKey,
   setStoredGooglePlacesApiKey,
   clearStoredGooglePlacesApiKey,
+  setStoredGoogleMapsBrowserApiKey,
+  clearStoredGoogleMapsBrowserApiKey,
   backfillPlacesMasterFromLeads,
   createAuditLog,
   type Settings,
@@ -20,6 +22,10 @@ const openAiApiKeySchema = z.string().trim().min(20).max(500).refine((value) => 
 });
 
 const googlePlacesApiKeySchema = z.string().trim().min(20).max(500).refine((value) => !/\s/.test(value), {
+  message: "API key cannot contain spaces.",
+});
+
+const googleMapsBrowserApiKeySchema = z.string().trim().min(20).max(500).refine((value) => !/\s/.test(value), {
   message: "API key cannot contain spaces.",
 });
 
@@ -74,6 +80,26 @@ export async function clearGooglePlacesApiKeyAction() {
   await ensureDbReady();
   await clearStoredGooglePlacesApiKey();
   await createAuditLog("google_places_api_key_cleared", "settings", "1");
+  return { success: true, settings: await querySettings() };
+}
+
+export async function updateGoogleMapsBrowserApiKeyAction(apiKey: string) {
+  await requirePermission("settings:manage");
+  await ensureDbReady();
+  const parsed = googleMapsBrowserApiKeySchema.safeParse(apiKey);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid Google Maps browser API key." };
+  }
+  await setStoredGoogleMapsBrowserApiKey(parsed.data);
+  await createAuditLog("google_maps_browser_api_key_updated", "settings", "1");
+  return { success: true, settings: await querySettings() };
+}
+
+export async function clearGoogleMapsBrowserApiKeyAction() {
+  await requirePermission("settings:manage");
+  await ensureDbReady();
+  await clearStoredGoogleMapsBrowserApiKey();
+  await createAuditLog("google_maps_browser_api_key_cleared", "settings", "1");
   return { success: true, settings: await querySettings() };
 }
 

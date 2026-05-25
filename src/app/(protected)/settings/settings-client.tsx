@@ -5,8 +5,10 @@ import { HelpTip } from "@/components/help-tip";
 import { PageShell } from "@/components/page-shell";
 import {
   backfillCanonicalPlacesAction,
+  clearGoogleMapsBrowserApiKeyAction,
   clearGooglePlacesApiKeyAction,
   clearOpenAiApiKeyAction,
+  updateGoogleMapsBrowserApiKeyAction,
   updateGooglePlacesApiKeyAction,
   updateOpenAiApiKeyAction,
   updateSettingsAction,
@@ -53,6 +55,8 @@ interface Settings {
   openai_api_key_source: "ui" | "env" | "none";
   google_places_api_key_configured: boolean;
   google_places_api_key_source: "ui" | "env" | "none";
+  google_maps_browser_api_key_configured: boolean;
+  google_maps_browser_api_key_source: "ui" | "env" | "none";
 }
 
 export function SettingsClient({ initialSettings }: { initialSettings: Settings }) {
@@ -62,6 +66,8 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
   const [googleKeyInput, setGoogleKeyInput] = useState("");
   const [googleKeyLoading, setGoogleKeyLoading] = useState(false);
+  const [mapsKeyInput, setMapsKeyInput] = useState("");
+  const [mapsKeyLoading, setMapsKeyLoading] = useState(false);
   const [nicheText, setNicheText] = useState(
     JSON.stringify(
       Object.keys(settings.niche_weights).length > 0 ? settings.niche_weights : DEFAULT_NICHE_WEIGHTS,
@@ -164,6 +170,34 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
     setTimeout(() => setSaveMsg(null), 3000);
   };
 
+  const handleSaveMapsKey = async () => {
+    setMapsKeyLoading(true);
+    const result = await updateGoogleMapsBrowserApiKeyAction(mapsKeyInput);
+    if ("error" in result) {
+      setSaveMsg(result.error ?? "Error saving Google Maps browser key");
+    } else {
+      setSettings(result.settings as Settings);
+      setMapsKeyInput("");
+      setSaveMsg("Google Maps browser key saved");
+    }
+    setMapsKeyLoading(false);
+    setTimeout(() => setSaveMsg(null), 3000);
+  };
+
+  const handleClearMapsKey = async () => {
+    setMapsKeyLoading(true);
+    const result = await clearGoogleMapsBrowserApiKeyAction();
+    if ("settings" in result) {
+      setSettings(result.settings as Settings);
+      setMapsKeyInput("");
+      setSaveMsg(result.settings.google_maps_browser_api_key_configured ? "UI Maps key cleared; env key is still configured" : "Google Maps browser key cleared");
+    } else {
+      setSaveMsg("Error clearing Google Maps browser key");
+    }
+    setMapsKeyLoading(false);
+    setTimeout(() => setSaveMsg(null), 3000);
+  };
+
   return (
     <PageShell title="Settings" description="Configure lead scoring, classification hosts, and budget guardrails.">
       {/* Rate Limiting & Budget */}
@@ -207,6 +241,46 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
               {settings.google_places_api_key_configured ? `Configured via ${settings.google_places_api_key_source}` : "No Google Places key configured"}
             </span>
             <span>Used for crawling, enrichment, and Places billing.</span>
+          </div>
+        </div>
+        <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="min-w-56 flex-1">
+              <label className="mb-1.5 block text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
+                Google Maps Browser Key
+              </label>
+              <input
+                type="password"
+                className="glass-input w-full"
+                aria-label="Google Maps Browser API Key"
+                value={mapsKeyInput}
+                placeholder={settings.google_maps_browser_api_key_configured ? "Configured. Paste a new key to replace it." : "Paste your browser-restricted Maps key"}
+                autoComplete="off"
+                onChange={(e) => setMapsKeyInput(e.target.value)}
+              />
+            </div>
+            <button
+              type="button"
+              className="btn-primary text-xs"
+              disabled={mapsKeyLoading || mapsKeyInput.trim().length < 20}
+              onClick={handleSaveMapsKey}
+            >
+              {mapsKeyLoading ? "Saving..." : "Save Key"}
+            </button>
+            <button
+              type="button"
+              className="btn-glass text-xs"
+              disabled={mapsKeyLoading || settings.google_maps_browser_api_key_source !== "ui"}
+              onClick={handleClearMapsKey}
+            >
+              Clear UI Key
+            </button>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
+            <span className="rounded-md px-2 py-1" style={{ background: settings.google_maps_browser_api_key_configured ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)", color: settings.google_maps_browser_api_key_configured ? "#166534" : "#991b1b" }}>
+              {settings.google_maps_browser_api_key_configured ? `Configured via ${settings.google_maps_browser_api_key_source}` : "No Google Maps browser key configured"}
+            </span>
+            <span>Used only when Explorer users manually switch to Google map.</span>
           </div>
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
