@@ -95,6 +95,8 @@ export interface Lead {
   ai_reviewer_notes: string | null;
   ai_feedback_at: string | null;
   assigned_to_user_id: string | null;
+  assigned_user_email: string | null;
+  assigned_user_display_name: string | null;
   qualification_status: QualificationStatus;
   disqualification_reason: string | null;
   website_verified_at: string | null;
@@ -156,6 +158,9 @@ export interface KanbanLead {
   verification_score: number;
   sales_priority_score: number;
   qualification_status: QualificationStatus;
+  assigned_to_user_id: string | null;
+  assigned_user_email: string | null;
+  assigned_user_display_name: string | null;
 }
 
 export interface QueueLead {
@@ -198,15 +203,61 @@ export interface QueueLead {
   raw_opportunity_score: number;
   verification_score: number;
   sales_priority_score: number;
+  assigned_to_user_id: string | null;
+  assigned_user_email: string | null;
+  assigned_user_display_name: string | null;
   demo_slug: string | null;
+  open_website_request_id: string | null;
+  open_quote_request_id: string | null;
   business_detail_status: LeadAiArtifactStatus | null;
   competitive_report_status: LeadAiArtifactStatus | null;
+}
+
+export type OutreachOutcome =
+  | "not_reached"
+  | "left_voicemail"
+  | "contacted"
+  | "decision_maker_reached"
+  | "demo_sent"
+  | "meeting_set"
+  | "follow_up_needed"
+  | "not_interested"
+  | "quoted"
+  | "closed_won"
+  | "closed_lost";
+
+export interface OutreachEventInput {
+  leadId: string;
+  channel: string;
+  note?: string | null;
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  contactPersonName?: string | null;
+  contactPersonRole?: string | null;
+  decisionMakerReached?: boolean;
+  outcome?: OutreachOutcome;
+  objectionReason?: string | null;
+  quotedAmount?: number;
+  closeValue?: number;
+  followUpAt?: string | null;
+  nextStep?: string | null;
 }
 
 export interface OutreachEvent {
   id: string;
   lead_id: string;
   channel: string;
+  actor_user_id: string | null;
+  actor_email: string | null;
+  contact_person_name: string | null;
+  contact_person_role: string | null;
+  decision_maker_reached: boolean;
+  outcome: OutreachOutcome;
+  objection_reason: string | null;
+  quoted_amount: number;
+  close_value: number;
+  follow_up_at: string | null;
+  next_step: string | null;
   note: string | null;
   created_at: string;
 }
@@ -220,6 +271,67 @@ export interface LeadNote {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+}
+
+export type AdminRequestType = "website_request" | "quote_request";
+export type AdminRequestStatus = "new" | "seen" | "in_progress" | "waiting_on_researcher" | "done" | "cancelled";
+export type AdminRequestPriority = "urgent" | "normal" | "low";
+
+export interface AdminRequestInput {
+  leadId: string;
+  createdByUserId?: string | null;
+  createdByEmail?: string | null;
+  assignedAdminUserId?: string | null;
+  requestType: AdminRequestType;
+  priority?: AdminRequestPriority;
+  summary?: string | null;
+  contactPersonName?: string | null;
+  budgetHint?: string | null;
+  dueAt?: string | null;
+  nextStep?: string | null;
+}
+
+export interface AdminRequest {
+  id: string;
+  lead_id: string;
+  created_by_user_id: string | null;
+  created_by_email: string | null;
+  assigned_admin_user_id: string | null;
+  request_type: AdminRequestType;
+  status: AdminRequestStatus;
+  priority: AdminRequestPriority;
+  summary: string | null;
+  contact_person_name: string | null;
+  budget_hint: string | null;
+  due_at: string | null;
+  next_step: string | null;
+  seen_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  lead_name: string | null;
+  lead_phone: string | null;
+  lead_address: string | null;
+  lead_website_status: string | null;
+  lead_owner_user_id: string | null;
+  lead_owner_email: string | null;
+  lead_owner_display_name: string | null;
+  creator_email: string | null;
+  creator_display_name: string | null;
+  creator_team_lead_user_id: string | null;
+  creator_team_lead_email: string | null;
+  creator_team_lead_display_name: string | null;
+  creator_team_label: string | null;
+}
+
+export interface AdminFulfillmentSummary {
+  openTotal: number;
+  openWebsiteRequests: number;
+  openQuoteRequests: number;
+  waitingOnResearcher: number;
+  overdueRequests: number;
+  newRequests: number;
+  latestRequests: AdminRequest[];
 }
 
 export interface Demo {
@@ -507,6 +619,8 @@ export interface LeadFilters {
   phoneVerificationStatus?: PhoneVerificationStatus | string;
   aiVerificationStatus?: AiVerificationStatus | string;
   includeExcluded?: boolean;
+  assigned?: "me" | "unassigned" | "any";
+  assignedToUserId?: string;
   sortBy?: string;
   sortDir?: "asc" | "desc";
   page?: number;
@@ -715,6 +829,60 @@ export interface QualitySummary {
   removedBecauseWebsiteFound: number;
   averageQualityScore: number;
   estimatedPipelineValue: number;
+}
+
+export interface ResearcherWorkbenchSummary {
+  myClaimed: number;
+  dueToday: number;
+  contactedThisWeek: number;
+  bestUnclaimed: number;
+}
+
+export interface ResearcherWorkbench {
+  nextAction: QueueLead | null;
+  myLeads: QueueLead[];
+  unclaimedLeads: QueueLead[];
+  summary: ResearcherWorkbenchSummary;
+}
+
+export interface TeamBoardMember {
+  user_id: string;
+  email: string;
+  display_name: string | null;
+  role: string;
+  is_team_lead: boolean;
+  team_lead_user_id: string | null;
+  team_lead_email: string | null;
+  team_lead_display_name: string | null;
+  team_label: string | null;
+  claimed_active: number;
+  due_today: number;
+  stale_claimed: number;
+  contacts_7d: number;
+  meetings: number;
+  closed_won: number;
+  closed_lost: number;
+  website_requests_open: number;
+  quote_requests_open: number;
+  fulfillment_open: number;
+}
+
+export interface TeamBoardActivity {
+  id: string;
+  lead_id: string;
+  lead_name: string | null;
+  actor_email: string | null;
+  channel: string;
+  outcome: OutreachOutcome;
+  note: string | null;
+  created_at: string;
+}
+
+export interface TeamBoardSummary {
+  members: TeamBoardMember[];
+  unassignedReady: number;
+  overdueFollowUps: number;
+  latestActivity: TeamBoardActivity[];
 }
 
 export interface QualityFilters {
@@ -951,6 +1119,65 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
     "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS last_error text",
     "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS next_retry_at timestamptz",
     "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 3",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS assigned_to_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL",
+    "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS actor_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL",
+    "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS actor_email text",
+    "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS contact_person_name text",
+    "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS contact_person_role text",
+    "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS decision_maker_reached integer NOT NULL DEFAULT 0",
+    "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS outcome text NOT NULL DEFAULT 'contacted'",
+    "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS objection_reason text",
+    "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS quoted_amount double precision NOT NULL DEFAULT 0",
+    "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS close_value double precision NOT NULL DEFAULT 0",
+    "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS follow_up_at timestamptz",
+    "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS next_step text",
+    "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS actor_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL",
+    "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS actor_email text",
+    "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS actor_role app_role",
+    "ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_team_lead integer NOT NULL DEFAULT 0 CHECK (is_team_lead IN (0, 1))",
+    "ALTER TABLE app_users ADD COLUMN IF NOT EXISTS team_lead_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL",
+    "ALTER TABLE app_users ADD COLUMN IF NOT EXISTS team_label text",
+    `CREATE TABLE IF NOT EXISTS lead_notes (
+      id text PRIMARY KEY,
+      lead_id text NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      author_user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+      body text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      deleted_at timestamptz
+    )`,
+    `CREATE TABLE IF NOT EXISTS admin_requests (
+      id text PRIMARY KEY,
+      lead_id text NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      created_by_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+      created_by_email text,
+      assigned_admin_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+      request_type text NOT NULL CHECK (request_type IN ('website_request','quote_request')),
+      status text NOT NULL DEFAULT 'new' CHECK (status IN ('new','seen','in_progress','waiting_on_researcher','done','cancelled')),
+      priority text NOT NULL DEFAULT 'normal' CHECK (priority IN ('urgent','normal','low')),
+      summary text,
+      contact_person_name text,
+      budget_hint text,
+      due_at timestamptz,
+      next_step text,
+      seen_at timestamptz,
+      completed_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_leads_assigned_to_user ON leads(assigned_to_user_id, updated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_outreach_events_actor_created ON outreach_events(actor_user_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_lead_notes_lead_created ON lead_notes(lead_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_lead_notes_author_created ON lead_notes(author_user_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_app_users_team_lead ON app_users(team_lead_user_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_admin_requests_status_type_created ON admin_requests(status, request_type, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_admin_requests_lead_created ON admin_requests(lead_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_admin_requests_creator_created ON admin_requests(created_by_user_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_admin_requests_assigned_created ON admin_requests(assigned_admin_user_id, created_at DESC)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_requests_open_unique ON admin_requests(lead_id, request_type) WHERE status IN ('new','seen','in_progress','waiting_on_researcher')",
+    "ALTER TABLE IF EXISTS lead_notes ENABLE ROW LEVEL SECURITY",
+    "ALTER TABLE IF EXISTS admin_requests ENABLE ROW LEVEL SECURITY",
+    "REVOKE ALL ON TABLE lead_notes, admin_requests FROM anon, authenticated",
     "CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_retry_ready ON lead_ai_artifacts(status, next_retry_at, created_at) WHERE status = 'queued'",
     "CREATE INDEX IF NOT EXISTS idx_leads_ai_queue_ready ON leads(ai_queue_status, ai_next_retry_at, sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at) WHERE ai_queue_status = 'queued'",
   ];
@@ -2701,80 +2928,90 @@ function buildLeadFilterWhere(filters: LeadFilters): { where: string; params: un
   const params: unknown[] = [];
 
   if (filters.status === EXCLUDED_STATUS_FILTER) {
-    conditions.push("COALESCE(is_excluded, 0) = 1");
+    conditions.push("COALESCE(l.is_excluded, 0) = 1");
   } else {
     if (!filters.includeExcluded) {
-      conditions.push(SCORE_ELIGIBLE_CONDITION);
+      conditions.push("COALESCE(l.is_excluded, 0) = 0");
     }
     if (filters.status) {
-      conditions.push("status = ?");
+      conditions.push("l.status = ?");
       params.push(filters.status);
     }
   }
 
   if (filters.search) {
-    conditions.push("(name LIKE ? OR phone LIKE ? OR address LIKE ?)");
+    conditions.push("(l.name LIKE ? OR l.phone LIKE ? OR l.address LIKE ?)");
     const term = `%${filters.search}%`;
     params.push(term, term, term);
   }
   if (filters.websiteStatus) {
-    conditions.push("website_status = ?");
+    conditions.push("l.website_status = ?");
     params.push(filters.websiteStatus);
     if (NO_WEBSITE_OPPORTUNITY_STATUSES.has(filters.websiteStatus)) {
-      conditions.push(noUsableAiWebsiteCondition());
+      conditions.push(noUsableAiWebsiteCondition("l"));
     }
   }
   if (filters.enrichment) {
-    conditions.push("enrichment_status = ?");
+    conditions.push("l.enrichment_status = ?");
     params.push(filters.enrichment);
   }
   if (filters.minReviews != null && filters.minReviews > 0) {
-    conditions.push("review_count >= ?");
+    conditions.push("l.review_count >= ?");
     params.push(filters.minReviews);
   }
   if (filters.minRating != null && filters.minRating > 0) {
-    conditions.push("rating >= ?");
+    conditions.push("l.rating >= ?");
     params.push(filters.minRating);
   }
   if (filters.minScore != null && filters.minScore > 0) {
-    conditions.push("score >= ?");
+    conditions.push("l.score >= ?");
     params.push(filters.minScore);
   }
   if (filters.category) {
-    conditions.push("primary_type = ?");
+    conditions.push("l.primary_type = ?");
     params.push(filters.category);
   }
   if (filters.businessType) {
-    conditions.push("business_type = ?");
+    conditions.push("l.business_type = ?");
     params.push(filters.businessType);
   }
   if (filters.sellingNiche) {
-    conditions.push("selling_niche = ?");
+    conditions.push("l.selling_niche = ?");
     params.push(filters.sellingNiche);
   }
   if (filters.qualificationStatus) {
-    conditions.push("qualification_status = ?");
+    conditions.push("l.qualification_status = ?");
     params.push(filters.qualificationStatus);
   }
   if (filters.qualityBucket) {
-    conditions.push("quality_bucket = ?");
+    conditions.push("l.quality_bucket = ?");
     params.push(filters.qualityBucket);
   }
   if (filters.recommendedOffer) {
-    conditions.push("recommended_offer = ?");
+    conditions.push("l.recommended_offer = ?");
     params.push(filters.recommendedOffer);
   }
   if (filters.phoneVerificationStatus) {
-    conditions.push("phone_verification_status = ?");
+    conditions.push("l.phone_verification_status = ?");
     params.push(filters.phoneVerificationStatus);
   }
   if (filters.aiVerificationStatus) {
-    conditions.push("ai_verification_status = ?");
+    conditions.push("l.ai_verification_status = ?");
     params.push(filters.aiVerificationStatus);
+  }
+  if (filters.assigned === "unassigned") {
+    conditions.push(leadUnassignedCondition("l.assigned_to_user_id"));
+  } else if (filters.assignedToUserId) {
+    conditions.push("l.assigned_to_user_id = ?");
+    params.push(filters.assignedToUserId);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   return { where, params };
+}
+
+function leadUnassignedCondition(column: string): string {
+  return `(${column} IS NULL OR CAST(${column} AS TEXT) = '')`;
 }
 
 function resolveLeadSort(filters: LeadFilters): { safeSortBy: string; safeSortDir: "ASC" | "DESC" } {
@@ -2794,10 +3031,15 @@ export async function getLeads(filters: LeadFilters = {}): Promise<{ leads: Lead
   const pageSize = Math.min(200, Math.max(1, filters.pageSize ?? 25));
   const offset = (page - 1) * pageSize;
 
-  const countRow = await db.prepare(`SELECT COUNT(*) as count FROM leads ${where}`).get(...params) as { count: number };
+  const countRow = await db.prepare(`SELECT COUNT(*) as count FROM leads l ${where}`).get(...params) as { count: number };
 
   const leads = await db.prepare(
-    `SELECT * FROM leads ${where} ORDER BY ${safeSortBy} ${safeSortDir} LIMIT ? OFFSET ?`
+    `SELECT l.*, au.email as assigned_user_email, au.display_name as assigned_user_display_name
+     FROM leads l
+     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${where}
+     ORDER BY l.${safeSortBy} ${safeSortDir}
+     LIMIT ? OFFSET ?`
   ).all(...params, pageSize, offset) as Array<Record<string, unknown>>;
 
   return {
@@ -2813,7 +3055,12 @@ export async function getLeadsForExport(filters: LeadFilters = {}, limit = 50000
   const safeLimit = Math.min(100000, Math.max(1, Math.floor(limit)));
 
   const rows = await db.prepare(
-    `SELECT * FROM leads ${where} ORDER BY ${safeSortBy} ${safeSortDir} LIMIT ?`
+    `SELECT l.*, au.email as assigned_user_email, au.display_name as assigned_user_display_name
+     FROM leads l
+     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${where}
+     ORDER BY l.${safeSortBy} ${safeSortDir}
+     LIMIT ?`
   ).all(...params, safeLimit) as Array<Record<string, unknown>>;
 
   return rows.map(parseLeadRow);
@@ -2850,18 +3097,21 @@ export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads
   const pageSize = Math.min(200, Math.max(1, filters.pageSize ?? 100));
   const offset = (page - 1) * pageSize;
 
-  const countRow = await db.prepare(`SELECT COUNT(*) as count FROM leads ${where}`).get(...params) as { count: number };
+  const countRow = await db.prepare(`SELECT COUNT(*) as count FROM leads l ${where}`).get(...params) as { count: number };
 
   const rows = await db.prepare(
-    `SELECT id, name, phone, rating, review_count, website_status, score, status, is_excluded, exclusion_reason,
-      enrichment_status, primary_type, selling_niche, business_type, win_probability_score,
-      lead_quality_score, quality_bucket, easy_build_score, cash_speed_score, need_score,
-      quality_reason, recommended_offer, next_best_action, phone_verification_status,
-      ai_verification_status, ai_confidence, ai_found_website_url, ai_recommendation, ai_summary, ai_checked_at,
-      ai_website_viability_status, ai_website_health, ai_queue_status,
-      raw_opportunity_score, verification_score, sales_priority_score, qualification_status
-     FROM leads ${where}
-     ORDER BY ${safeSortBy} ${safeSortDir}
+    `SELECT l.id, l.name, l.phone, l.rating, l.review_count, l.website_status, l.score, l.status, l.is_excluded, l.exclusion_reason,
+      l.enrichment_status, l.primary_type, l.selling_niche, l.business_type, l.win_probability_score,
+      l.lead_quality_score, l.quality_bucket, l.easy_build_score, l.cash_speed_score, l.need_score,
+      l.quality_reason, l.recommended_offer, l.next_best_action, l.phone_verification_status,
+      l.ai_verification_status, l.ai_confidence, l.ai_found_website_url, l.ai_recommendation, l.ai_summary, l.ai_checked_at,
+      l.ai_website_viability_status, l.ai_website_health, l.ai_queue_status,
+      l.raw_opportunity_score, l.verification_score, l.sales_priority_score, l.qualification_status,
+      l.assigned_to_user_id, au.email as assigned_user_email, au.display_name as assigned_user_display_name
+     FROM leads l
+     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${where}
+     ORDER BY l.${safeSortBy} ${safeSortDir}
      LIMIT ? OFFSET ?`
   ).all(...params, pageSize, offset) as Array<Record<string, unknown>>;
 
@@ -2905,6 +3155,9 @@ export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads
     verification_score: Number(row.verification_score ?? 0),
     sales_priority_score: Number(row.sales_priority_score ?? row.lead_quality_score ?? row.score ?? 0),
     qualification_status: ((row.qualification_status as QualificationStatus | null) ?? "needs_verification"),
+    assigned_to_user_id: (row.assigned_to_user_id as string | null) ?? null,
+    assigned_user_email: (row.assigned_user_email as string | null) ?? null,
+    assigned_user_display_name: (row.assigned_user_display_name as string | null) ?? null,
   }));
 
   return {
@@ -2955,7 +3208,12 @@ export async function getScoreBandThresholds(): Promise<ScoreBandThresholds>{
 
 export async function getLeadById(id: string): Promise<Lead | null>{
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM leads WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  const row = await db.prepare(
+    `SELECT l.*, au.email as assigned_user_email, au.display_name as assigned_user_display_name
+     FROM leads l
+     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     WHERE l.id = ?`
+  ).get(id) as Record<string, unknown> | undefined;
   if (!row) return null;
   return parseLeadRow(row);
 }
@@ -3035,6 +3293,17 @@ export async function assignLeadToUser(leadId: string, userId: string | null): P
   const db = await getDb();
   await db.prepare("UPDATE leads SET assigned_to_user_id = ?, updated_at = ? WHERE id = ?")
     .run(userId, nowISO(), leadId);
+}
+
+export async function claimLeadForUser(leadId: string, userId: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.prepare(
+    `UPDATE leads
+     SET assigned_to_user_id = ?, updated_at = ?
+     WHERE id = ?
+       AND (${leadUnassignedCondition("assigned_to_user_id")} OR assigned_to_user_id = ?)`
+  ).run(userId, nowISO(), leadId, userId);
+  return result.changes;
 }
 
 async function getLeadNoteById(id: string): Promise<LeadNote | null> {
@@ -4175,6 +4444,8 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
   const countRow = await db.prepare(`SELECT COUNT(*) as count FROM leads l ${where}`).get(...params) as { count: number };
   const rows = await db.prepare(
     `SELECT l.*,
+       au.email as assigned_user_email,
+       au.display_name as assigned_user_display_name,
        (
          SELECT a.status
          FROM lead_ai_artifacts a
@@ -4189,7 +4460,9 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
          ORDER BY a.created_at DESC
          LIMIT 1
        ) as competitive_report_status
-     FROM leads l ${where}
+     FROM leads l
+     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${where}
      ORDER BY
        CASE l.quality_bucket
          WHEN 'ready_to_call' THEN 1
@@ -4213,6 +4486,8 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
         ...lead,
         city: extractCity(lead.address),
         demo_slug: null,
+        open_website_request_id: null,
+        open_quote_request_id: null,
         business_detail_status: normalizeNullableLeadAiArtifactStatus(row.business_detail_status),
         competitive_report_status: normalizeNullableLeadAiArtifactStatus(row.competitive_report_status),
       } as QualityLead;
@@ -4310,6 +4585,8 @@ function parseLeadRow(row: Record<string, unknown>): Lead {
     ai_reviewer_notes: (row.ai_reviewer_notes as string | null) ?? null,
     ai_feedback_at: (row.ai_feedback_at as string | null) ?? null,
     assigned_to_user_id: (row.assigned_to_user_id as string | null) ?? null,
+    assigned_user_email: (row.assigned_user_email as string | null) ?? null,
+    assigned_user_display_name: (row.assigned_user_display_name as string | null) ?? null,
     qualification_status: ((row.qualification_status as QualificationStatus | null) ?? "needs_verification"),
     disqualification_reason: (row.disqualification_reason as string | null) ?? null,
     website_verified_at: (row.website_verified_at as string | null) ?? null,
@@ -4340,6 +4617,98 @@ function parseLeadNoteRow(row: Record<string, unknown>): LeadNote {
     updated_at: String(row.updated_at),
     deleted_at: row.deleted_at ? String(row.deleted_at) : null,
   };
+}
+
+function parseOutreachEventRow(row: Record<string, unknown>): OutreachEvent {
+  return {
+    id: String(row.id),
+    lead_id: String(row.lead_id),
+    channel: String(row.channel),
+    actor_user_id: (row.actor_user_id as string | null) ?? null,
+    actor_email: (row.actor_email as string | null) ?? null,
+    contact_person_name: (row.contact_person_name as string | null) ?? null,
+    contact_person_role: (row.contact_person_role as string | null) ?? null,
+    decision_maker_reached: toBoolean(row.decision_maker_reached),
+    outcome: normalizeOutreachOutcome(row.outcome),
+    objection_reason: (row.objection_reason as string | null) ?? null,
+    quoted_amount: Number(row.quoted_amount ?? 0),
+    close_value: Number(row.close_value ?? 0),
+    follow_up_at: (row.follow_up_at as string | null) ?? null,
+    next_step: (row.next_step as string | null) ?? null,
+    note: (row.note as string | null) ?? null,
+    created_at: String(row.created_at),
+  };
+}
+
+function parseAdminRequestRow(row: Record<string, unknown>): AdminRequest {
+  return {
+    id: String(row.id),
+    lead_id: String(row.lead_id),
+    created_by_user_id: row.created_by_user_id ? String(row.created_by_user_id) : null,
+    created_by_email: row.created_by_email ? String(row.created_by_email) : null,
+    assigned_admin_user_id: row.assigned_admin_user_id ? String(row.assigned_admin_user_id) : null,
+    request_type: normalizeAdminRequestType(row.request_type),
+    status: normalizeAdminRequestStatus(row.status),
+    priority: normalizeAdminRequestPriority(row.priority),
+    summary: row.summary ? String(row.summary) : null,
+    contact_person_name: row.contact_person_name ? String(row.contact_person_name) : null,
+    budget_hint: row.budget_hint ? String(row.budget_hint) : null,
+    due_at: row.due_at ? String(row.due_at) : null,
+    next_step: row.next_step ? String(row.next_step) : null,
+    seen_at: row.seen_at ? String(row.seen_at) : null,
+    completed_at: row.completed_at ? String(row.completed_at) : null,
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+    lead_name: row.lead_name ? String(row.lead_name) : null,
+    lead_phone: row.lead_phone ? String(row.lead_phone) : null,
+    lead_address: row.lead_address ? String(row.lead_address) : null,
+    lead_website_status: row.lead_website_status ? String(row.lead_website_status) : null,
+    lead_owner_user_id: row.lead_owner_user_id ? String(row.lead_owner_user_id) : null,
+    lead_owner_email: row.lead_owner_email ? String(row.lead_owner_email) : null,
+    lead_owner_display_name: row.lead_owner_display_name ? String(row.lead_owner_display_name) : null,
+    creator_email: row.creator_email ? String(row.creator_email) : null,
+    creator_display_name: row.creator_display_name ? String(row.creator_display_name) : null,
+    creator_team_lead_user_id: row.creator_team_lead_user_id ? String(row.creator_team_lead_user_id) : null,
+    creator_team_lead_email: row.creator_team_lead_email ? String(row.creator_team_lead_email) : null,
+    creator_team_lead_display_name: row.creator_team_lead_display_name ? String(row.creator_team_lead_display_name) : null,
+    creator_team_label: row.creator_team_label ? String(row.creator_team_label) : null,
+  };
+}
+
+function normalizeOutreachOutcome(value: unknown): OutreachOutcome {
+  const outcomes = new Set<OutreachOutcome>([
+    "not_reached",
+    "left_voicemail",
+    "contacted",
+    "decision_maker_reached",
+    "demo_sent",
+    "meeting_set",
+    "follow_up_needed",
+    "not_interested",
+    "quoted",
+    "closed_won",
+    "closed_lost",
+  ]);
+  return outcomes.has(value as OutreachOutcome) ? value as OutreachOutcome : "contacted";
+}
+
+function normalizeAdminRequestType(value: unknown): AdminRequestType {
+  return value === "quote_request" ? "quote_request" : "website_request";
+}
+
+function normalizeAdminRequestStatus(value: unknown): AdminRequestStatus {
+  const statuses = new Set<AdminRequestStatus>(["new", "seen", "in_progress", "waiting_on_researcher", "done", "cancelled"]);
+  return statuses.has(value as AdminRequestStatus) ? value as AdminRequestStatus : "new";
+}
+
+function normalizeAdminRequestPriority(value: unknown): AdminRequestPriority {
+  const priorities = new Set<AdminRequestPriority>(["urgent", "normal", "low"]);
+  return priorities.has(value as AdminRequestPriority) ? value as AdminRequestPriority : "normal";
+}
+
+function normalizeNullableText(value: string | null | undefined): string | null {
+  const clean = (value ?? "").trim();
+  return clean.length > 0 ? clean : null;
 }
 
 // ─── Dashboard Stats ───
@@ -5523,36 +5892,105 @@ export async function getPublishedDemoBySlug(slug: string): Promise<PublishedDem
   return { demo, lead: parseLeadRow(row) };
 }
 
-export async function createOutreachEvent(leadId: string, channel: string, note: string | null): Promise<OutreachEvent>{
+export async function createOutreachEvent(input: OutreachEventInput): Promise<OutreachEvent>{
   const db = await getDb();
   const id = generateId();
   const now = nowISO();
+  const outcome = input.outcome ?? "contacted";
+  const decisionMakerReached = Boolean(input.decisionMakerReached || outcome === "decision_maker_reached" || outcome === "meeting_set" || outcome === "quoted" || outcome === "closed_won");
+  const quotedAmount = Math.max(0, Number(input.quotedAmount ?? 0) || 0);
+  const closeValue = Math.max(0, Number(input.closeValue ?? 0) || 0);
 
   await db.prepare(
-    "INSERT INTO outreach_events (id, lead_id, channel, note, created_at) VALUES (?, ?, ?, ?, ?)"
-  ).run(id, leadId, channel, note, now);
+    `INSERT INTO outreach_events (
+      id, lead_id, channel, actor_user_id, actor_email,
+      contact_person_name, contact_person_role, decision_maker_reached,
+      outcome, objection_reason, quoted_amount, close_value,
+      follow_up_at, next_step, note, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    input.leadId,
+    input.channel,
+    input.actorUserId ?? null,
+    input.actorEmail ?? null,
+    input.contactPersonName ?? null,
+    input.contactPersonRole ?? null,
+    decisionMakerReached ? 1 : 0,
+    outcome,
+    input.objectionReason ?? null,
+    quotedAmount,
+    closeValue,
+    input.followUpAt ?? null,
+    input.nextStep ?? null,
+    input.note ?? null,
+    now,
+  );
 
   await db.prepare(
-    "UPDATE leads SET last_contacted_at = ?, updated_at = ? WHERE id = ?"
-  ).run(now, now, leadId);
+    `UPDATE leads SET
+      last_contacted_at = ?,
+      first_contacted_at = COALESCE(first_contacted_at, ?),
+      first_reply_at = CASE
+        WHEN ? = 1 OR ? IN ('decision_maker_reached','meeting_set','quoted','closed_won') THEN COALESCE(first_reply_at, ?)
+        ELSE first_reply_at
+      END,
+      meeting_booked_at = CASE WHEN ? = 'meeting_set' THEN COALESCE(meeting_booked_at, ?) ELSE meeting_booked_at END,
+      demo_sent_at = CASE WHEN ? = 'demo_sent' THEN COALESCE(demo_sent_at, ?) ELSE demo_sent_at END,
+      reminder_date = COALESCE(?, reminder_date),
+      status = CASE
+        WHEN status IN ('closed_won','closed_lost') THEN status
+        WHEN ? = 'demo_sent' THEN 'preview_sent'
+        WHEN ? = 'meeting_set' THEN 'meeting_set'
+        WHEN ? = 'closed_won' THEN 'closed_won'
+        WHEN ? = 'closed_lost' THEN 'closed_lost'
+        ELSE 'contacted'
+      END,
+      pitch_outcome = ?,
+      objection_reason = COALESCE(?, objection_reason),
+      decision_maker_reached = CASE WHEN ? = 1 THEN 1 ELSE decision_maker_reached END,
+      quoted_amount = CASE WHEN ? > 0 THEN ? ELSE quoted_amount END,
+      close_value = CASE WHEN ? > 0 THEN ? ELSE close_value END,
+      updated_at = ?
+     WHERE id = ?`
+  ).run(
+    now,
+    now,
+    decisionMakerReached ? 1 : 0,
+    outcome,
+    now,
+    outcome,
+    now,
+    outcome,
+    now,
+    input.followUpAt ?? null,
+    outcome,
+    outcome,
+    outcome,
+    outcome,
+    outcome,
+    input.objectionReason ?? null,
+    decisionMakerReached ? 1 : 0,
+    quotedAmount,
+    quotedAmount,
+    closeValue,
+    closeValue,
+    now,
+    input.leadId,
+  );
 
-  const firstContact = await db.prepare(
-    "SELECT first_contacted_at FROM leads WHERE id = ?"
-  ).get(leadId) as { first_contacted_at: string | null } | undefined;
-
-  if (firstContact && !firstContact.first_contacted_at) {
-    await db.prepare("UPDATE leads SET first_contacted_at = ? WHERE id = ?").run(now, leadId);
-  }
-
-  await updateLeadQualityScores(leadId);
-  return { id, lead_id: leadId, channel, note, created_at: now };
+  await updateLeadQualityScores(input.leadId);
+  const event = await db.prepare("SELECT * FROM outreach_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  if (!event) throw new Error("Unable to create outreach event");
+  return parseOutreachEventRow(event);
 }
 
 export async function getOutreachEvents(leadId: string): Promise<OutreachEvent[]>{
   const db = await getDb();
-  return await db.prepare(
+  const rows = await db.prepare(
     "SELECT * FROM outreach_events WHERE lead_id = ? ORDER BY created_at DESC"
-  ).all(leadId) as OutreachEvent[];
+  ).all<Record<string, unknown>>(leadId);
+  return rows.map(parseOutreachEventRow);
 }
 
 export async function getOutreachEventCount(leadId: string): Promise<number>{
@@ -5561,6 +5999,166 @@ export async function getOutreachEventCount(leadId: string): Promise<number>{
     "SELECT COUNT(*) as c FROM outreach_events WHERE lead_id = ?"
   ).get(leadId) as { c: number };
   return row.c;
+}
+
+// ─── Admin Fulfillment Requests ───
+
+const OPEN_ADMIN_REQUEST_STATUS_SQL = "'new','seen','in_progress','waiting_on_researcher'";
+
+function adminRequestSelectSql(): string {
+  return `SELECT
+      ar.*,
+      l.name as lead_name,
+      l.phone as lead_phone,
+      l.address as lead_address,
+      l.website_status as lead_website_status,
+      l.assigned_to_user_id as lead_owner_user_id,
+      owner.email as lead_owner_email,
+      owner.display_name as lead_owner_display_name,
+      creator.email as creator_email,
+      creator.display_name as creator_display_name,
+      COALESCE(creator.team_lead_user_id, CASE WHEN creator.is_team_lead = 1 THEN creator.user_id ELSE NULL END) as creator_team_lead_user_id,
+      team_lead.email as creator_team_lead_email,
+      team_lead.display_name as creator_team_lead_display_name,
+      creator.team_label as creator_team_label
+    FROM admin_requests ar
+    LEFT JOIN leads l ON l.id = ar.lead_id
+    LEFT JOIN app_users owner ON owner.user_id = l.assigned_to_user_id
+    LEFT JOIN app_users creator ON creator.user_id = ar.created_by_user_id
+    LEFT JOIN app_users team_lead ON team_lead.user_id = COALESCE(creator.team_lead_user_id, CASE WHEN creator.is_team_lead = 1 THEN creator.user_id ELSE NULL END)`;
+}
+
+export async function getOpenAdminRequestForLead(leadId: string, requestType: AdminRequestType): Promise<AdminRequest | null> {
+  const db = await getDb();
+  const row = await db.prepare(
+    `${adminRequestSelectSql()}
+     WHERE ar.lead_id = ? AND ar.request_type = ? AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+     ORDER BY ar.created_at DESC
+     LIMIT 1`
+  ).get<Record<string, unknown>>(leadId, requestType);
+  return row ? parseAdminRequestRow(row) : null;
+}
+
+export async function createAdminRequest(input: AdminRequestInput): Promise<{ request: AdminRequest; alreadyExists: boolean }> {
+  const existing = await getOpenAdminRequestForLead(input.leadId, input.requestType);
+  if (existing) return { request: existing, alreadyExists: true };
+
+  const db = await getDb();
+  const id = generateId();
+  const now = nowISO();
+  await db.prepare(
+    `INSERT INTO admin_requests (
+      id, lead_id, created_by_user_id, created_by_email, assigned_admin_user_id,
+      request_type, status, priority, summary, contact_person_name, budget_hint,
+      due_at, next_step, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    input.leadId,
+    input.createdByUserId ?? null,
+    input.createdByEmail ?? null,
+    input.assignedAdminUserId ?? null,
+    input.requestType,
+    input.priority ?? "normal",
+    normalizeNullableText(input.summary),
+    normalizeNullableText(input.contactPersonName),
+    normalizeNullableText(input.budgetHint),
+    normalizeNullableText(input.dueAt),
+    normalizeNullableText(input.nextStep),
+    now,
+    now,
+  );
+
+  const request = await getAdminRequestById(id);
+  if (!request) throw new Error("Unable to create admin request");
+  return { request, alreadyExists: false };
+}
+
+export async function getAdminRequestById(id: string): Promise<AdminRequest | null> {
+  const db = await getDb();
+  const row = await db.prepare(
+    `${adminRequestSelectSql()} WHERE ar.id = ? LIMIT 1`
+  ).get<Record<string, unknown>>(id);
+  return row ? parseAdminRequestRow(row) : null;
+}
+
+export async function updateAdminRequestStatus(id: string, status: AdminRequestStatus): Promise<AdminRequest | null> {
+  const db = await getDb();
+  const now = nowISO();
+  await db.prepare(
+    `UPDATE admin_requests
+     SET status = ?,
+         seen_at = CASE
+           WHEN seen_at IS NULL AND ? IN ('seen','in_progress','waiting_on_researcher','done','cancelled') THEN ?
+           ELSE seen_at
+         END,
+         completed_at = CASE WHEN ? IN ('done','cancelled') THEN ? ELSE NULL END,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(status, status, now, status, now, now, id);
+  return getAdminRequestById(id);
+}
+
+export async function getAdminRequests(filters: {
+  leadId?: string;
+  status?: AdminRequestStatus | "open" | "all";
+  requestType?: AdminRequestType;
+  limit?: number;
+} = {}): Promise<AdminRequest[]> {
+  const db = await getDb();
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (filters.leadId) {
+    conditions.push("ar.lead_id = ?");
+    params.push(filters.leadId);
+  }
+  if (filters.requestType) {
+    conditions.push("ar.request_type = ?");
+    params.push(filters.requestType);
+  }
+  if (filters.status === "open" || !filters.status) {
+    conditions.push(`ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})`);
+  } else if (filters.status !== "all") {
+    conditions.push("ar.status = ?");
+    params.push(filters.status);
+  }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limit = Math.min(200, Math.max(1, filters.limit ?? 50));
+  const rows = await db.prepare(
+    `${adminRequestSelectSql()}
+     ${where}
+     ORDER BY
+       CASE ar.priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
+       CASE ar.status WHEN 'new' THEN 0 WHEN 'seen' THEN 1 WHEN 'in_progress' THEN 2 WHEN 'waiting_on_researcher' THEN 3 ELSE 4 END,
+       ar.created_at DESC
+     LIMIT ?`
+  ).all<Record<string, unknown>>(...params, limit);
+  return rows.map(parseAdminRequestRow);
+}
+
+export async function getAdminFulfillmentSummary(): Promise<AdminFulfillmentSummary> {
+  const db = await getDb();
+  const now = nowISO();
+  const row = await db.prepare(
+    `SELECT
+       COALESCE(SUM(CASE WHEN status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL}) THEN 1 ELSE 0 END), 0) as open_total,
+       COALESCE(SUM(CASE WHEN status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL}) AND request_type = 'website_request' THEN 1 ELSE 0 END), 0) as website_open,
+       COALESCE(SUM(CASE WHEN status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL}) AND request_type = 'quote_request' THEN 1 ELSE 0 END), 0) as quote_open,
+       COALESCE(SUM(CASE WHEN status = 'waiting_on_researcher' THEN 1 ELSE 0 END), 0) as waiting_on_researcher,
+       COALESCE(SUM(CASE WHEN status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL}) AND due_at IS NOT NULL AND due_at <= ? THEN 1 ELSE 0 END), 0) as overdue,
+       COALESCE(SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END), 0) as new_requests
+     FROM admin_requests`
+  ).get<Record<string, unknown>>(now);
+  const latestRequests = await getAdminRequests({ status: "open", limit: 6 });
+  return {
+    openTotal: Number(row?.open_total ?? 0),
+    openWebsiteRequests: Number(row?.website_open ?? 0),
+    openQuoteRequests: Number(row?.quote_open ?? 0),
+    waitingOnResearcher: Number(row?.waiting_on_researcher ?? 0),
+    overdueRequests: Number(row?.overdue ?? 0),
+    newRequests: Number(row?.new_requests ?? 0),
+    latestRequests,
+  };
 }
 
 // ─── Lead Timestamp Updates ───
@@ -5583,10 +6181,23 @@ export async function updateLeadTimestamp(id: string, field: string, value: stri
 
 // ─── Now Queue ───
 
-export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
+export async function getNowQueue(
+  limit = 25,
+  options: { assignedToUserId?: string; unassignedOnly?: boolean } = {},
+): Promise<QueueLead[]>{
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const candidateLimit = Math.max(limit * 20, 200);
+  const assignmentConditions: string[] = [];
+  const assignmentParams: unknown[] = [];
+  if (options.assignedToUserId) {
+    assignmentConditions.push("assigned_to_user_id = ?");
+    assignmentParams.push(options.assignedToUserId);
+  }
+  if (options.unassignedOnly) {
+    assignmentConditions.push(leadUnassignedCondition("assigned_to_user_id"));
+  }
+  const assignmentWhere = assignmentConditions.length > 0 ? `AND ${assignmentConditions.join(" AND ")}` : "";
 
   const rows = await db.prepare(`
     WITH candidates AS (
@@ -5604,6 +6215,7 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
         )
         AND score > 0
         AND ${SCORE_ELIGIBLE_CONDITION}
+        ${assignmentWhere}
       ORDER BY sales_priority_score DESC, lead_quality_score DESC, score DESC
       LIMIT ?
     ),
@@ -5648,6 +6260,9 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
         l.raw_opportunity_score,
         l.verification_score,
         l.sales_priority_score,
+        l.assigned_to_user_id,
+        au.email as assigned_user_email,
+        au.display_name as assigned_user_display_name,
         (
           SELECT a.status
           FROM lead_ai_artifacts a
@@ -5669,6 +6284,24 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
           ORDER BY d.created_at DESC
           LIMIT 1
         ) as demo_slug,
+        (
+          SELECT ar.id
+          FROM admin_requests ar
+          WHERE ar.lead_id = l.id
+            AND ar.request_type = 'website_request'
+            AND ar.status IN ('new','seen','in_progress','waiting_on_researcher')
+          ORDER BY ar.created_at DESC
+          LIMIT 1
+        ) as open_website_request_id,
+        (
+          SELECT ar.id
+          FROM admin_requests ar
+          WHERE ar.lead_id = l.id
+            AND ar.request_type = 'quote_request'
+            AND ar.status IN ('new','seen','in_progress','waiting_on_researcher')
+          ORDER BY ar.created_at DESC
+          LIMIT 1
+        ) as open_quote_request_id,
         CASE WHEN l.reminder_date IS NOT NULL AND l.reminder_date <= ? THEN 1 ELSE 0 END as has_urgent_reminder,
         CASE
           WHEN l.contactability_score > 0 THEN l.contactability_score
@@ -5683,6 +6316,7 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
           ELSE 0.2
         END as freshness
       FROM leads l
+      LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
       INNER JOIN candidates c ON c.id = l.id
     )
     SELECT *
@@ -5694,7 +6328,7 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
       win_probability_score DESC,
       score DESC
     LIMIT ?
-  `).all(candidateLimit, today, limit) as Array<Record<string, unknown>>;
+  `).all(...assignmentParams, candidateLimit, today, limit) as Array<Record<string, unknown>>;
 
   return rows.map((row) => ({
     id: row.id as string,
@@ -5736,10 +6370,164 @@ export async function getNowQueue(limit = 25): Promise<QueueLead[]>{
     raw_opportunity_score: Number(row.raw_opportunity_score ?? row.score ?? 0),
     verification_score: Number(row.verification_score ?? 0),
     sales_priority_score: Number(row.sales_priority_score ?? row.lead_quality_score ?? row.score ?? 0),
+    assigned_to_user_id: (row.assigned_to_user_id as string | null) ?? null,
+    assigned_user_email: (row.assigned_user_email as string | null) ?? null,
+    assigned_user_display_name: (row.assigned_user_display_name as string | null) ?? null,
     demo_slug: (row.demo_slug as string | null) ?? null,
+    open_website_request_id: (row.open_website_request_id as string | null) ?? null,
+    open_quote_request_id: (row.open_quote_request_id as string | null) ?? null,
     business_detail_status: normalizeNullableLeadAiArtifactStatus(row.business_detail_status),
     competitive_report_status: normalizeNullableLeadAiArtifactStatus(row.competitive_report_status),
   }));
+}
+
+export async function getResearcherWorkbench(userId: string): Promise<ResearcherWorkbench> {
+  const db = await getDb();
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const [myLeads, unclaimedLeads] = await Promise.all([
+    getNowQueue(25, { assignedToUserId: userId }),
+    getNowQueue(25, { unassignedOnly: true }),
+  ]);
+
+  const summaryRow = await db.prepare(
+    `SELECT
+       COALESCE(SUM(CASE WHEN l.assigned_to_user_id = ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as my_claimed,
+       COALESCE(SUM(CASE WHEN l.assigned_to_user_id = ? AND l.reminder_date IS NOT NULL AND l.reminder_date <= ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as due_today,
+       COALESCE(SUM(CASE WHEN ${leadUnassignedCondition("l.assigned_to_user_id")} AND l.quality_bucket IN ('ready_to_call','broken_site_opportunity') AND l.status IN ('new','verified','contacted') THEN 1 ELSE 0 END), 0) as best_unclaimed
+     FROM leads l
+     WHERE COALESCE(l.is_excluded, 0) = 0`
+  ).get(userId, userId, today) as Record<string, unknown>;
+  const contactRow = await db.prepare(
+    "SELECT COUNT(*) as count FROM outreach_events WHERE actor_user_id = ? AND created_at >= ?"
+  ).get(userId, weekAgo) as { count: number } | undefined;
+
+  return {
+    nextAction: myLeads[0] ?? unclaimedLeads[0] ?? null,
+    myLeads,
+    unclaimedLeads,
+    summary: {
+      myClaimed: Number(summaryRow.my_claimed ?? 0),
+      dueToday: Number(summaryRow.due_today ?? 0),
+      contactedThisWeek: Number(contactRow?.count ?? 0),
+      bestUnclaimed: Number(summaryRow.best_unclaimed ?? 0),
+    },
+  };
+}
+
+export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
+  const db = await getDb();
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const staleBefore = weekAgo;
+
+  const members = await db.prepare(
+    `SELECT
+       au.user_id,
+       au.email,
+       au.display_name,
+       au.role,
+       au.is_team_lead,
+       au.team_lead_user_id,
+       au.team_label,
+       tl.email as team_lead_email,
+       tl.display_name as team_lead_display_name,
+       COALESCE(COUNT(CASE WHEN l.status NOT IN ('closed_won','closed_lost') THEN l.id END), 0) as claimed_active,
+       COALESCE(SUM(CASE WHEN l.reminder_date IS NOT NULL AND l.reminder_date <= ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as due_today,
+       COALESCE(SUM(CASE WHEN l.updated_at < ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as stale_claimed,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+       ), 0) as contacts_7d,
+       COALESCE(SUM(CASE WHEN l.status = 'meeting_set' THEN 1 ELSE 0 END), 0) as meetings,
+       COALESCE(SUM(CASE WHEN l.status = 'closed_won' THEN 1 ELSE 0 END), 0) as closed_won,
+       COALESCE(SUM(CASE WHEN l.status = 'closed_lost' THEN 1 ELSE 0 END), 0) as closed_lost,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM admin_requests ar
+         LEFT JOIN app_users creator ON creator.user_id = ar.created_by_user_id
+         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+           AND ar.request_type = 'website_request'
+           AND (ar.created_by_user_id = au.user_id OR (au.is_team_lead = 1 AND creator.team_lead_user_id = au.user_id))
+       ), 0) as website_requests_open,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM admin_requests ar
+         LEFT JOIN app_users creator ON creator.user_id = ar.created_by_user_id
+         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+           AND ar.request_type = 'quote_request'
+           AND (ar.created_by_user_id = au.user_id OR (au.is_team_lead = 1 AND creator.team_lead_user_id = au.user_id))
+       ), 0) as quote_requests_open
+     FROM app_users au
+     LEFT JOIN app_users tl ON tl.user_id = au.team_lead_user_id
+     LEFT JOIN leads l ON l.assigned_to_user_id = au.user_id AND COALESCE(l.is_excluded, 0) = 0
+     WHERE au.status = 'active'
+     GROUP BY au.user_id, au.email, au.display_name, au.role, au.is_team_lead, au.team_lead_user_id, au.team_label, tl.email, tl.display_name
+     ORDER BY au.role ASC, au.is_team_lead DESC, au.email ASC`
+  ).all<Record<string, unknown>>(today, staleBefore, weekAgo);
+
+  const unassignedRow = await db.prepare(
+    `SELECT COUNT(*) as count
+     FROM leads
+     WHERE COALESCE(is_excluded, 0) = 0
+       AND ${leadUnassignedCondition("assigned_to_user_id")}
+       AND quality_bucket IN ('ready_to_call','broken_site_opportunity')
+       AND status IN ('new','verified','contacted')`
+  ).get() as { count: number } | undefined;
+  const overdueRow = await db.prepare(
+    `SELECT COUNT(*) as count
+     FROM leads
+     WHERE COALESCE(is_excluded, 0) = 0
+       AND reminder_date IS NOT NULL
+       AND reminder_date <= ?
+       AND status NOT IN ('closed_won','closed_lost')`
+  ).get(today) as { count: number } | undefined;
+  const activityRows = await db.prepare(
+    `SELECT oe.id, oe.lead_id, l.name as lead_name, COALESCE(oe.actor_email, au.email) as actor_email,
+       oe.channel, oe.outcome, oe.note, oe.created_at
+     FROM outreach_events oe
+     LEFT JOIN leads l ON l.id = oe.lead_id
+     LEFT JOIN app_users au ON au.user_id = oe.actor_user_id
+     ORDER BY oe.created_at DESC
+     LIMIT 25`
+  ).all<Record<string, unknown>>();
+
+  return {
+    members: members.map((row) => ({
+      user_id: String(row.user_id),
+      email: String(row.email),
+      display_name: row.display_name ? String(row.display_name) : null,
+      role: String(row.role),
+      is_team_lead: toBoolean(row.is_team_lead),
+      team_lead_user_id: (row.team_lead_user_id as string | null) ?? null,
+      team_lead_email: (row.team_lead_email as string | null) ?? null,
+      team_lead_display_name: (row.team_lead_display_name as string | null) ?? null,
+      team_label: (row.team_label as string | null) ?? null,
+      claimed_active: Number(row.claimed_active ?? 0),
+      due_today: Number(row.due_today ?? 0),
+      stale_claimed: Number(row.stale_claimed ?? 0),
+      contacts_7d: Number(row.contacts_7d ?? 0),
+      meetings: Number(row.meetings ?? 0),
+      closed_won: Number(row.closed_won ?? 0),
+      closed_lost: Number(row.closed_lost ?? 0),
+      website_requests_open: Number(row.website_requests_open ?? 0),
+      quote_requests_open: Number(row.quote_requests_open ?? 0),
+      fulfillment_open: Number(row.website_requests_open ?? 0) + Number(row.quote_requests_open ?? 0),
+    })),
+    unassignedReady: Number(unassignedRow?.count ?? 0),
+    overdueFollowUps: Number(overdueRow?.count ?? 0),
+    latestActivity: activityRows.map((row) => ({
+      id: String(row.id),
+      lead_id: String(row.lead_id),
+      lead_name: (row.lead_name as string | null) ?? null,
+      actor_email: (row.actor_email as string | null) ?? null,
+      channel: String(row.channel),
+      outcome: normalizeOutreachOutcome(row.outcome),
+      note: (row.note as string | null) ?? null,
+      created_at: String(row.created_at),
+    })),
+  };
 }
 
 // ─── Dashboard Extended Stats ───

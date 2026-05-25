@@ -1,5 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
+import { applyNoStoreHeaders } from "@/lib/http-cache";
+import { getSupabaseServerCookieOptions } from "@/lib/supabase/cookies";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -7,10 +9,10 @@ export async function proxy(request: NextRequest) {
   if (routeAlias) {
     const aliasUrl = request.nextUrl.clone();
     aliasUrl.pathname = routeAlias;
-    return NextResponse.redirect(aliasUrl);
+    return applyNoStoreHeaders(NextResponse.redirect(aliasUrl));
   }
 
-  const isProtectedPage = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users"].some((prefix) =>
+  const isProtectedPage = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users", "/fulfillment", "/team"].some((prefix) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`)
   );
   const isProtectedApi = pathname.startsWith("/api/crawl") || pathname.startsWith("/api/export");
@@ -28,25 +30,29 @@ export async function proxy(request: NextRequest) {
 
   if (!url || !publishableKey) {
     if (isProtectedApi) {
-      return NextResponse.json({ error: "Supabase Auth is not configured" }, { status: 500 });
+      return applyNoStoreHeaders(NextResponse.json({ error: "Supabase Auth is not configured" }, { status: 500 }));
     }
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";
     loginUrl.search = "error=missing_config";
-    return NextResponse.redirect(loginUrl);
+    return applyNoStoreHeaders(NextResponse.redirect(loginUrl));
   }
 
   let response = NextResponse.next({ request });
   const supabase = createServerClient(url, publishableKey, {
+    cookieOptions: getSupabaseServerCookieOptions(),
     cookies: {
       getAll() {
         return request.cookies.getAll();
       },
-      setAll(cookiesToSet) {
+      setAll(cookiesToSet, headersToSet) {
         cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
         response = NextResponse.next({ request });
         cookiesToSet.forEach(({ name, value, options }) => {
           response.cookies.set(name, value, options);
+        });
+        Object.entries(headersToSet).forEach(([name, value]) => {
+          response.headers.set(name, value);
         });
       },
     },
@@ -56,13 +62,13 @@ export async function proxy(request: NextRequest) {
 
   if (error || !data.user) {
     if (isProtectedApi) {
-      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+      return applyNoStoreHeaders(NextResponse.json({ error: "Authentication required" }, { status: 401 }));
     }
 
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";
     loginUrl.search = "";
-    return NextResponse.redirect(loginUrl);
+    return applyNoStoreHeaders(NextResponse.redirect(loginUrl));
   }
 
   return response;
@@ -96,7 +102,7 @@ function getRouteAlias(pathname: string): string | null {
   };
   if (aliases[normalized]) return aliases[normalized];
 
-  const canonicalRoutes = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users"];
+  const canonicalRoutes = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users", "/fulfillment", "/team"];
   const canonical = canonicalRoutes.find((route) => route === normalized);
   return canonical && pathname !== canonical ? canonical : null;
 }

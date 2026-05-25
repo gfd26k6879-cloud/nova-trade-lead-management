@@ -41,6 +41,9 @@ interface Lead {
   enrichment_status: string;
   primary_type: string | null;
   business_type: string;
+  assigned_to_user_id: string | null;
+  assigned_user_email: string | null;
+  assigned_user_display_name: string | null;
 }
 
 const STATUS_COLUMNS = [
@@ -508,6 +511,9 @@ function LeadCard({ lead, scoreThresholds, isDragging }: { lead: Lead; scoreThre
           {lead.phone}
         </p>
       )}
+      <p className="mt-1 text-[0.62rem]" style={{ color: "var(--text-tertiary)" }}>
+        {lead.assigned_to_user_id ? `Owner: ${lead.assigned_user_display_name || lead.assigned_user_email || "Assigned"}` : "Unclaimed"}
+      </p>
     </div>
   );
 }

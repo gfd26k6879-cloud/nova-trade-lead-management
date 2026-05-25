@@ -1,7 +1,7 @@
 node_modules
 .next
 .vercel/output
-coverage
+/coverage
 test-results
 playwright-report
 

@@ -15,6 +15,7 @@ import {
   getDashboardStatsAction,
 } from "@/lib/crawl/actions";
 import { queueMissingAiVerificationsAction } from "@/lib/leads/actions";
+import type { AdminFulfillmentSummary, AdminRequest, StatisticsSummary, TeamBoardSummary } from "@/lib/db/queries";
 
 const CATEGORY_OPTIONS = [
   "dentist", "lawyer", "hvac", "plumber", "electrician", "roofing",
@@ -124,7 +125,17 @@ interface DashboardStats {
   schedulerHealth: SchedulerHealth;
 }
 
-export function DashboardClient({ initialStats }: { initialStats: DashboardStats }) {
+export function DashboardClient({
+  initialStats,
+  teamSummary,
+  weeklyStats,
+  fulfillmentSummary,
+}: {
+  initialStats: DashboardStats;
+  teamSummary: TeamBoardSummary;
+  weeklyStats: StatisticsSummary;
+  fulfillmentSummary: AdminFulfillmentSummary;
+}) {
   const [stats, setStats] = useState<DashboardStats>(initialStats);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([...CATEGORY_OPTIONS]);
   const [locationScope, setLocationScope] = useState<LocationScopeValue>({ state: "CO", counties: [], zipCodes: [] });
@@ -359,22 +370,130 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
   const pausedWorkerCount = stats.schedulerHealth.workers.length - activeWorkerCount;
   const backgroundQueueDepth = stats.schedulerHealth.workers.reduce((sum, worker) => sum + worker.queueDepth, 0);
   const workerIssueCount = stats.schedulerHealth.workers.filter((worker) => worker.enabled && worker.warning).length;
+  const contactsThisWeek = teamSummary.members.reduce((sum, member) => sum + member.contacts_7d, 0);
+  const claimedActive = teamSummary.members.reduce((sum, member) => sum + member.claimed_active, 0);
 
   return (
     <PageShell
-      title="Discover"
-      description="Choose the market and business categories to search, start or pause discovery, and watch the backend queue from the run monitor."
+      title="Revenue Dashboard"
+      description="Track pipeline, follow-ups, team accountability, and the work most likely to turn into paid clients."
       stats={[
-        { label: "Run Status", value: isRunning ? "Running" : isQueued ? "Queued" : isPaused ? "Paused" : "Idle" },
-        { label: "Total Leads", value: String(stats.leadsTotal) },
-        { label: "Qualified", value: String(stats.qualifiedLeadCount) },
-        { label: "Leads Today", value: String(stats.leadsToday) },
-        { label: "Today's Focus", value: String(stats.todayFocus) },
-        { label: "Needs Follow-up", value: String(stats.needsFollowUp) },
-        { label: "AI Queued", value: String(stats.aiQueueStats.queued) },
-        { label: "Failed Units", value: String(stats.failedUnits) },
+        { label: "Pipeline", value: formatCurrency(weeklyStats.economics.pipelineValue), hint: "last 7 days" },
+        { label: "Contacts This Week", value: String(contactsThisWeek) },
+        { label: "Meetings", value: String(weeklyStats.kpis.meetings), hint: "last 7 days" },
+        { label: "Won / Lost", value: `${weeklyStats.kpis.closedWon} / ${weeklyStats.kpis.closedLost}`, hint: "last 7 days" },
+        { label: "Overdue Follow-ups", value: String(teamSummary.overdueFollowUps) },
+        { label: "Unclaimed Ready", value: String(teamSummary.unassignedReady) },
+        { label: "Steve Queue", value: String(fulfillmentSummary.openTotal), hint: "website + quote" },
       ]}
     >
+      <section className="glass rounded-2xl p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="section-label">My Fulfillment Queue</h3>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              Website and quote requests sent by researchers for admin follow-through.
+            </p>
+          </div>
+          <Link href="/fulfillment" className="btn-primary text-sm">Open Fulfillment</Link>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <AttentionCard label="Website requests" value={fulfillmentSummary.openWebsiteRequests} href="/fulfillment?type=website_request" cta="Design queue" />
+          <AttentionCard label="Quote requests" value={fulfillmentSummary.openQuoteRequests} href="/fulfillment?type=quote_request" cta="Price leads" />
+          <AttentionCard label="Waiting on researcher" value={fulfillmentSummary.waitingOnResearcher} href="/fulfillment?status=waiting_on_researcher" cta="Unblock" />
+          <AttentionCard label="Overdue requests" value={fulfillmentSummary.overdueRequests} href="/fulfillment?status=open" cta="Review today" />
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {fulfillmentSummary.latestRequests.length === 0 ? (
+            <p className="rounded-xl p-4 text-sm lg:col-span-2" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+              No website or quote requests are waiting on Steve.
+            </p>
+          ) : fulfillmentSummary.latestRequests.slice(0, 4).map((request) => (
+            <FulfillmentMiniCard key={request.id} request={request} />
+          ))}
+        </div>
+      </section>
+
+      <section className="grid gap-5 lg:grid-cols-[1fr_1.2fr]">
+        <section className="glass rounded-2xl p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="section-label">Today needs attention</h3>
+              <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+                Clear these before starting more discovery.
+              </p>
+            </div>
+            <Link href="/queue" className="btn-primary text-sm">Open Workbench</Link>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <AttentionCard label="Overdue follow-ups" value={teamSummary.overdueFollowUps} href="/team" cta="Review owners" />
+            <AttentionCard label="Unclaimed ready leads" value={teamSummary.unassignedReady} href="/leads?assigned=unassigned" cta="Assign or claim" />
+            <AttentionCard label="Needs follow-up" value={stats.needsFollowUp} href="/leads?status=contacted" cta="Open leads" />
+            <AttentionCard label="Claimed active" value={claimedActive} href="/team" cta="Team board" />
+          </div>
+        </section>
+
+        <section className="glass rounded-2xl p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="section-label">Latest activity</h3>
+              <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+                Recent outreach logged by the team.
+              </p>
+            </div>
+            <Link href="/team" className="btn-glass text-sm">Open Team Board</Link>
+          </div>
+          <div className="mt-4 space-y-3">
+            {teamSummary.latestActivity.length === 0 ? (
+              <p className="rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+                No outreach activity has been logged yet.
+              </p>
+            ) : teamSummary.latestActivity.slice(0, 5).map((activity) => (
+              <ActivityRow key={activity.id} activity={activity} />
+            ))}
+          </div>
+        </section>
+      </section>
+
+      <section className="glass rounded-2xl p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="section-label">Team performance</h3>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              Ownership, follow-up pressure, contacts, meetings, and closes by person.
+            </p>
+          </div>
+          <Link href="/team" className="btn-glass text-sm">Open full board</Link>
+        </div>
+        {teamSummary.members.length === 0 ? (
+          <p className="rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+            No active team members yet.
+          </p>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {teamSummary.members.map((member) => (
+              <TeamMemberCard key={member.user_id} member={member} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      <details className="group">
+        <summary className="glass flex cursor-pointer list-none flex-wrap items-center justify-between gap-4 rounded-2xl p-5">
+          <div>
+            <h3 className="section-label">Operations</h3>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              Discovery, scheduler, AI queue, enrichment, cost, and run controls.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span style={{ color: "var(--text-tertiary)" }}>
+              {isRunning ? "Running" : isQueued ? "Queued" : isPaused ? "Paused" : "Idle"} · {backgroundQueueDepth.toLocaleString()} queued
+            </span>
+            <span className="btn-glass text-sm">Expand operations</span>
+          </div>
+        </summary>
+        <div className="mt-5 space-y-5">
       <section className="glass rounded-2xl p-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -498,7 +617,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
       {/* Last error */}
       {stats.lastError && (
         <section className="rounded-2xl px-5 py-4" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)" }}>
-          <p className="text-xs font-medium" style={{ color: "#dc2626" }}>Last Error</p>
+          <p className="text-xs font-medium" style={{ color: "#991b1b" }}>Last Error</p>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{stats.lastError}</p>
         </section>
       )}
@@ -715,7 +834,7 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
         <h3 className="section-label">Quick Actions</h3>
         <div className="mt-3 flex flex-wrap gap-3">
           <Link href="/coverage" className="btn-primary text-sm">Open Discovery Monitor</Link>
-          <Link href="/queue" className="btn-primary text-sm">Open Now Queue</Link>
+          <Link href="/queue" className="btn-primary text-sm">Open Workbench</Link>
           <Link href="/leads" className="btn-glass text-sm">Browse Leads</Link>
         </div>
       </section>
@@ -728,6 +847,8 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
           costPerQualifiedLead={stats.costPerQualifiedLead}
         />
       )}
+        </div>
+      </details>
 
       <ConfirmDialog
         open={!!confirmAction}
@@ -740,6 +861,106 @@ export function DashboardClient({ initialStats }: { initialStats: DashboardStats
         onCancel={() => setConfirmAction(null)}
       />
     </PageShell>
+  );
+}
+
+function AttentionCard({ label, value, href, cta }: { label: string; value: number; href: string; cta: string }) {
+  return (
+    <Link
+      href={href}
+      className="rounded-xl p-4 transition-transform hover:-translate-y-0.5"
+      style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}
+    >
+      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
+      <p className="mt-1 text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
+      <span className="mt-2 inline-block text-xs font-medium" style={{ color: "var(--accent)" }}>{cta}</span>
+    </Link>
+  );
+}
+
+function FulfillmentMiniCard({ request }: { request: AdminRequest }) {
+  const owner = request.lead_owner_display_name || request.lead_owner_email || request.creator_display_name || request.creator_email || "Unassigned";
+  const teamLead = request.creator_team_lead_display_name || request.creator_team_lead_email || request.creator_team_label;
+  return (
+    <article
+      className="rounded-xl p-4"
+      style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <Link className="link-accent break-words font-semibold" href={`/leads/${request.lead_id}`}>
+            {request.lead_name ?? "Unknown business"}
+          </Link>
+          <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+            {formatAdminRequestType(request.request_type)} · {formatOutcome(request.status)}
+          </p>
+        </div>
+        <Link href="/fulfillment" className="btn-glass text-xs">Open</Link>
+      </div>
+      <p className="mt-3 line-clamp-2 text-sm" style={{ color: "var(--text-secondary)" }}>
+        {request.summary ?? request.next_step ?? "No summary yet."}
+      </p>
+      <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
+        Owner: {owner}{teamLead ? ` · Team: ${teamLead}` : ""}
+      </p>
+    </article>
+  );
+}
+
+function TeamMemberCard({ member }: { member: TeamBoardSummary["members"][number] }) {
+  return (
+    <article
+      className="rounded-xl p-4"
+      style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}
+    >
+      <Link className="link-accent break-words font-semibold" href={`/leads?owner=${encodeURIComponent(member.user_id)}`}>
+        {member.display_name || member.email}
+      </Link>
+      <p className="mt-1 text-xs uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>{member.role}</p>
+      <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+        <TeamMetric label="Claimed" value={member.claimed_active} />
+        <TeamMetric label="Due today" value={member.due_today} />
+        <TeamMetric label="Steve queue" value={member.fulfillment_open} />
+        <TeamMetric label="Web / Quote" value={`${member.website_requests_open} / ${member.quote_requests_open}`} />
+        <TeamMetric label="Stale" value={member.stale_claimed} />
+        <TeamMetric label="Contacts 7d" value={member.contacts_7d} />
+        <TeamMetric label="Meetings" value={member.meetings} />
+        <TeamMetric label="Won / Lost" value={`${member.closed_won} / ${member.closed_lost}`} />
+      </div>
+    </article>
+  );
+}
+
+function TeamMetric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.35)" }}>
+      <span className="text-[0.68rem]" style={{ color: "var(--text-tertiary)" }}>{label}</span>
+      <p className="font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
+    </div>
+  );
+}
+
+function ActivityRow({ activity }: { activity: TeamBoardSummary["latestActivity"][number] }) {
+  return (
+    <article
+      className="rounded-xl px-4 py-3"
+      style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Link className="link-accent break-words font-medium" href={`/leads/${activity.lead_id}`}>
+          {activity.lead_name ?? "Unknown lead"}
+        </Link>
+        <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
+          {formatDateTime(activity.created_at)}
+        </span>
+      </div>
+      <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+        {activity.actor_email ?? "Someone"} logged {channelLabel(activity.channel)} as {formatOutcome(activity.outcome)}.
+      </p>
+      {activity.note && (
+        <p className="mt-2 text-sm" style={{ color: "var(--text-primary)" }}>{activity.note}</p>
+      )}
+    </article>
   );
 }
 
@@ -798,4 +1019,34 @@ function SummaryChip({ label }: { label: string }) {
       {label}
     </span>
   );
+}
+
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
+}
+
+function formatOutcome(outcome: string): string {
+  return outcome.replace(/_/g, " ");
+}
+
+function channelLabel(channel: string): string {
+  return channel === "walkin" ? "in person" : channel;
+}
+
+function formatAdminRequestType(type: string): string {
+  return type === "quote_request" ? "Quote requested" : "Website needed";
 }

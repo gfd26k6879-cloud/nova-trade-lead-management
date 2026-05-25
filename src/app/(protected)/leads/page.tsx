@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth";
-import { ensureDbReady, getBusinessTypeCounts, getKanbanLeads, getLeads, getScoreBandThresholds } from "@/lib/db/queries";
+import { ensureDbReady, getBusinessTypeCounts, getKanbanLeads, getLeads, getScoreBandThresholds, type LeadFilters } from "@/lib/db/queries";
+import { constrainLeadFiltersForSession, shouldRedirectResearcherLeadList } from "@/lib/lead-access";
 import { LeadsClient } from "./leads-client";
 import { KanbanClient } from "./kanban-client";
 
@@ -18,6 +20,8 @@ interface Props {
     minScore?: string;
     category?: string;
     businessType?: string;
+    assigned?: string;
+    owner?: string;
     sortBy?: string;
     sortDir?: string;
     page?: string;
@@ -30,10 +34,15 @@ export default async function LeadsPage({ searchParams }: Props) {
   await ensureDbReady();
   const params = await searchParams;
 
+  if (shouldRedirectResearcherLeadList(session, params)) {
+    redirect("/leads?assigned=me");
+  }
+
   const isKanban = params.view === "kanban";
   const scoreThresholds = await getScoreBandThresholds();
+  const assignedFilter: "me" | "unassigned" | undefined = params.assigned === "me" || params.assigned === "unassigned" ? params.assigned : undefined;
 
-  const filters = {
+  const filters: LeadFilters = constrainLeadFiltersForSession(session, {
     search: params.search,
     status: isKanban ? undefined : params.status,
     includeExcluded: isKanban,
@@ -44,11 +53,13 @@ export default async function LeadsPage({ searchParams }: Props) {
     minScore: params.minScore ? parseFloat(params.minScore) : undefined,
     category: params.category,
     businessType: params.businessType,
+    assigned: assignedFilter,
+    assignedToUserId: params.assigned === "me" ? session.userId : params.owner,
     sortBy: params.sortBy ?? "score",
     sortDir: (params.sortDir ?? "desc") as "asc" | "desc",
     page: params.page ? parseInt(params.page) : 1,
     pageSize: isKanban ? KANBAN_PAGE_SIZE : 25,
-  };
+  });
   const businessTypeCounts = await getBusinessTypeCounts();
 
   if (isKanban) {

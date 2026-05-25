@@ -1,460 +1,608 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
-import { ScoreBandLegend } from "@/components/score-band-legend";
-import { generateOutreachPackageAction, logOutreachEventAction, queueLeadPitchPackAction, runAiVerificationBatchAction, updateLeadStatusAction } from "@/lib/leads/actions";
+import { createAdminRequestAction } from "@/lib/admin-requests/actions";
+import { claimLeadAction, logOutreachEventAction, unclaimLeadAction } from "@/lib/leads/actions";
+import type { AdminRequestType, OutreachOutcome, QueueLead, ResearcherWorkbench } from "@/lib/db/queries";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
+import type { AppRole } from "@/lib/permissions";
 
-interface Lead {
-  id: string;
-  name: string | null;
-  phone: string | null;
-  address: string | null;
-  categories: string[];
-  score: number;
-  website_status: string;
-  rating: number | null;
-  review_count: number | null;
-  last_contacted_at: string | null;
-  reminder_date: string | null;
-  status: string;
-  win_probability_score: number;
-  lead_quality_score: number;
-  quality_bucket: string;
-  recommended_offer: string;
-  next_best_action: string | null;
-  phone_verification_status: string;
-  ai_verification_status: string;
-  ai_confidence: number;
-  ai_found_website_url: string | null;
-  ai_recommendation: string | null;
-  ai_checked_at: string | null;
-  ai_website_viability_status: string | null;
-  ai_queue_status: string;
-  contactability_score: number;
-  estimated_deal_value: number;
-  raw_opportunity_score: number;
-  verification_score: number;
-  sales_priority_score: number;
-  demo_slug: string | null;
-  business_detail_status: string | null;
-  competitive_report_status: string | null;
+interface Props {
+  workbench: ResearcherWorkbench;
+  scoreThresholds: ScoreBandThresholds;
+  currentUser: { userId: string; email: string; role: AppRole };
 }
 
-interface OutreachPackage {
-  fullMessage: string;
-}
+type ContactChannel = "call" | "text" | "email" | "walkin";
 
-const websiteBadgeStyle = (ws: string): React.CSSProperties => {
-  const colors: Record<string, { bg: string; color: string }> = {
-    none: { bg: "rgba(239,68,68,0.1)", color: "#dc2626" },
-    social: { bg: "rgba(245,158,11,0.1)", color: "#d97706" },
-    basic: { bg: "rgba(99,102,241,0.1)", color: "#6366f1" },
-  };
-  const c = colors[ws] ?? { bg: "rgba(0,0,0,0.05)", color: "var(--text-secondary)" };
-  return { background: c.bg, color: c.color, padding: "2px 8px", borderRadius: "6px", fontSize: "0.7rem", fontWeight: 600 };
+type LogDraft = {
+  channel: ContactChannel;
+  outcome: OutreachOutcome;
+  contactPersonName: string;
+  note: string;
+  followUpAt: string;
+  nextStep: string;
 };
 
-const aiBadgeStyle = (status: string): React.CSSProperties => {
-  const colors: Record<string, { bg: string; color: string }> = {
-    no_site_found: { bg: "rgba(34,197,94,0.1)", color: "#16a34a" },
-    site_found: { bg: "rgba(239,68,68,0.1)", color: "#dc2626" },
-    weak_site_found: { bg: "rgba(245,158,11,0.1)", color: "#d97706" },
-    uncertain: { bg: "rgba(99,102,241,0.1)", color: "#6366f1" },
-    mismatch: { bg: "rgba(107,114,128,0.1)", color: "#4b5563" },
-    error: { bg: "rgba(239,68,68,0.1)", color: "#dc2626" },
-  };
-  const c = colors[status] ?? { bg: "rgba(0,0,0,0.05)", color: "var(--text-secondary)" };
-  return { background: c.bg, color: c.color, padding: "2px 8px", borderRadius: "6px", fontSize: "0.7rem", fontWeight: 600 };
-};
+const OUTCOME_OPTIONS: Array<{ value: OutreachOutcome; label: string }> = [
+  { value: "not_reached", label: "Not reached" },
+  { value: "left_voicemail", label: "Left voicemail" },
+  { value: "contacted", label: "Contacted" },
+  { value: "decision_maker_reached", label: "Decision-maker reached" },
+  { value: "demo_sent", label: "Demo sent" },
+  { value: "meeting_set", label: "Meeting set" },
+  { value: "follow_up_needed", label: "Follow-up needed" },
+  { value: "not_interested", label: "Not interested" },
+];
 
-function websiteFindingLabel(lead: Lead): string {
-  if (lead.ai_verification_status === "no_site_found" || lead.ai_website_viability_status === "directory_only") {
-    return "Verified no usable website";
-  }
-  if (lead.ai_verification_status === "weak_site_found") {
-    return `Weak site: ${lead.ai_website_viability_status ?? "unknown"}`;
-  }
-  return lead.ai_verification_status.replace(/_/g, " ");
-}
-
-export function QueueClient({ initialQueue, manualReviewQueue, scoreThresholds }: { initialQueue: Lead[]; manualReviewQueue: Lead[]; scoreThresholds: ScoreBandThresholds }) {
+export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) {
   const router = useRouter();
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [packages, setPackages] = useState<Record<string, string>>({});
-  const [loadingId, setLoadingId] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [aiBatchLoading, setAiBatchLoading] = useState(false);
-  const [aiBatchMsg, setAiBatchMsg] = useState<string | null>(null);
-  const [filter, setFilter] = useState<"all" | "brief_missing" | "report_missing" | "demo_missing" | "high_confidence" | "manual_review">("all");
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [pitchPackLoading, setPitchPackLoading] = useState(false);
+  const [busyLeadId, setBusyLeadId] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [activeLogLead, setActiveLogLead] = useState<QueueLead | null>(null);
+  const [logDraft, setLogDraft] = useState<LogDraft>(createLogDraft("call"));
+  const [requestBusy, setRequestBusy] = useState<AdminRequestType | null>(null);
 
   useEffect(() => {
-    const refresh = () => router.refresh();
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") refresh();
-    };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") router.refresh();
+    }, 5000);
+    return () => window.clearInterval(interval);
   }, [router]);
 
-  const handleGenerate = async (leadId: string) => {
-    if (packages[leadId]) {
-      setExpandedId(expandedId === leadId ? null : leadId);
-      return;
-    }
-    setLoadingId(leadId);
-    const result = await generateOutreachPackageAction(leadId);
-    if ("fullMessage" in result) {
-      setPackages((prev) => ({ ...prev, [leadId]: (result as OutreachPackage).fullMessage }));
-      setExpandedId(leadId);
-    }
-    setLoadingId(null);
+  const flash = (text: string) => {
+    setMessage(text);
+    window.setTimeout(() => setMessage(null), 3500);
   };
 
-  const copyPhone = (phone: string, leadId: string) => {
-    navigator.clipboard.writeText(phone);
-    setCopied(leadId);
-    setTimeout(() => setCopied(null), 2000);
-  };
-
-  const copyMessage = (leadId: string) => {
-    if (packages[leadId]) {
-      navigator.clipboard.writeText(packages[leadId]);
-      setCopied(`msg-${leadId}`);
-      setTimeout(() => setCopied(null), 2000);
-    }
-  };
-
-  const copyDemoPitch = (lead: Lead) => {
-    if (!lead.demo_slug) return;
-    const demoUrl = `${window.location.origin}/demo/${lead.demo_slug}`;
-    const pitch = [
-      `${lead.name ?? "This business"} looks like a verified website opportunity.`,
-      `Finding: ${websiteFindingLabel(lead)}.`,
-      `Demo: ${demoUrl}`,
-      lead.next_best_action ? `Next action: ${lead.next_best_action}` : null,
-    ].filter(Boolean).join("\n");
-    navigator.clipboard.writeText(pitch);
-    setCopied(`demo-${lead.id}`);
-    setTimeout(() => setCopied(null), 2000);
-  };
-
-  const markContacted = async (lead: Lead) => {
-    await updateLeadStatusAction(lead.id, "contacted");
-    await logOutreachEventAction(lead.id, lead.phone ? "call" : "other", "Marked contacted from Now Queue");
+  const claimLead = async (leadId: string) => {
+    setBusyLeadId(leadId);
+    const result = await claimLeadAction(leadId);
+    if ("error" in result) flash(result.error ?? "Unable to claim lead");
+    else flash("Lead claimed");
     router.refresh();
+    setBusyLeadId(null);
   };
 
-  const verifyTopLeads = async () => {
-    setAiBatchLoading(true);
-    setAiBatchMsg(null);
-    const result = await runAiVerificationBatchAction({ limit: 10 });
+  const releaseLead = async (leadId: string) => {
+    setBusyLeadId(leadId);
+    const result = await unclaimLeadAction(leadId);
+    if ("error" in result) flash(result.error ?? "Unable to release lead");
+    else flash("Lead released");
+    router.refresh();
+    setBusyLeadId(null);
+  };
+
+  const openLogSheet = (lead: QueueLead, channel: ContactChannel) => {
+    setActiveLogLead(lead);
+    setLogDraft(createLogDraft(channel, lead.next_best_action ?? undefined));
+  };
+
+  const closeLogSheet = () => {
+    setActiveLogLead(null);
+    setLogDraft(createLogDraft("call"));
+  };
+
+  const submitLog = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!activeLogLead) return;
+
+    setBusyLeadId(activeLogLead.id);
+    const result = await logOutreachEventAction(activeLogLead.id, {
+      channel: logDraft.channel,
+      outcome: logDraft.outcome,
+      contactPersonName: cleanText(logDraft.contactPersonName),
+      note: cleanText(logDraft.note),
+      followUpAt: normalizeDateTime(logDraft.followUpAt),
+      nextStep: cleanText(logDraft.nextStep),
+    });
+
     if ("error" in result) {
-      setAiBatchMsg(result.error ?? "AI verification failed");
+      flash(result.error ?? "Unable to log outcome");
     } else {
-      setAiBatchMsg(`AI checked ${result.processed} leads (${result.verified} new, ${result.cached} cached)`);
-      router.refresh();
+      flash("Outcome logged");
+      closeLogSheet();
     }
-    setAiBatchLoading(false);
-  };
-
-  const baseQueue = filter === "manual_review" ? manualReviewQueue : initialQueue;
-  const filteredQueue = baseQueue.filter((lead) => {
-    if (filter === "brief_missing") return lead.business_detail_status !== "complete";
-    if (filter === "report_missing") return lead.competitive_report_status !== "complete";
-    if (filter === "demo_missing") return !lead.demo_slug;
-    if (filter === "high_confidence") return lead.ai_confidence >= 0.8;
-    return true;
-  });
-
-  const selectedReadyLeads = baseQueue.filter((lead) =>
-    selectedIds.includes(lead.id) && ["ready_to_call", "broken_site_opportunity"].includes(lead.quality_bucket)
-  );
-
-  const toggleSelected = (leadId: string) => {
-    setSelectedIds((previous) =>
-      previous.includes(leadId) ? previous.filter((id) => id !== leadId) : [...previous, leadId]
-    );
-  };
-
-  const generateSelectedPitchPacks = async () => {
-    setPitchPackLoading(true);
-    let queued = 0;
-    for (const lead of selectedReadyLeads) {
-      const result = await queueLeadPitchPackAction(lead.id);
-      if (!("error" in result)) queued++;
-    }
-    setAiBatchMsg(`Queued pitch packs for ${queued} selected leads`);
-    setSelectedIds([]);
     router.refresh();
-    setPitchPackLoading(false);
+    setBusyLeadId(null);
   };
 
-  const today = new Date().toISOString().slice(0, 10);
+  const sendToSteve = async (requestType: AdminRequestType) => {
+    if (!activeLogLead) return;
+    setRequestBusy(requestType);
+    const result = await createAdminRequestAction(activeLogLead.id, {
+      requestType,
+      contactPersonName: cleanText(logDraft.contactPersonName),
+      summary: buildAdminRequestSummary(requestType, logDraft),
+      dueAt: normalizeDateTime(logDraft.followUpAt),
+      nextStep: cleanText(logDraft.nextStep),
+    });
+    if ("error" in result) {
+      flash(result.error ?? "Unable to send to Steve");
+    } else {
+      flash(result.alreadyExists ? "Already in admin queue" : "Sent to Steve");
+      setActiveLogLead((lead) => lead ? {
+        ...lead,
+        open_website_request_id: requestType === "website_request" ? result.request.id : lead.open_website_request_id,
+        open_quote_request_id: requestType === "quote_request" ? result.request.id : lead.open_quote_request_id,
+      } : lead);
+    }
+    router.refresh();
+    setRequestBusy(null);
+  };
 
   return (
     <PageShell
-      title="Now Queue"
-      description="Top actionable leads prioritized by score, contactability, and freshness. Work through these first."
+      title="Workbench"
+      description="Claim the best leads, work your own list, and keep follow-ups visible for the team."
       stats={[
-        { label: "Queue Size", value: String(initialQueue.length) },
-        { label: "Shown", value: String(filteredQueue.length) },
-        { label: "Selected", value: String(selectedIds.length) },
+        { label: "My Claimed", value: String(workbench.summary.myClaimed) },
+        { label: "Due Today", value: String(workbench.summary.dueToday) },
+        { label: "Contacts This Week", value: String(workbench.summary.contactedThisWeek) },
+        { label: "Best Unclaimed", value: String(workbench.summary.bestUnclaimed) },
       ]}
     >
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap gap-2">
-          {[
-            ["all", "All"],
-            ["brief_missing", "Brief missing"],
-            ["report_missing", "Report missing"],
-            ["demo_missing", "Demo missing"],
-            ["high_confidence", "High confidence"],
-            ["manual_review", "Needs review"],
-          ].map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={filter === value ? "btn-primary text-xs" : "btn-glass text-xs"}
-              onClick={() => setFilter(value as typeof filter)}
-            >
-              {label}
-            </button>
-          ))}
+      {message && (
+        <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(99,102,241,0.1)", color: "var(--text-primary)" }}>
+          {message}
         </div>
-        {aiBatchMsg && (
-          <span className="text-xs" style={{ color: aiBatchMsg.includes("failed") || aiBatchMsg.includes("disabled") ? "#dc2626" : "#16a34a" }}>
-            {aiBatchMsg}
-          </span>
-        )}
-        <button
-          type="button"
-          className="btn-glass text-xs"
-          disabled={pitchPackLoading || selectedReadyLeads.length === 0}
-          onClick={generateSelectedPitchPacks}
-        >
-          {pitchPackLoading ? "Queueing..." : `Generate Pitch Pack (${selectedReadyLeads.length})`}
-        </button>
-        <button
-          type="button"
-          className="btn-glass text-xs"
-          disabled={aiBatchLoading}
-          onClick={verifyTopLeads}
-        >
-          {aiBatchLoading ? "Checking..." : "AI Verify Top 10"}
-        </button>
-        <button
-          type="button"
-          className="btn-glass text-xs"
-          disabled={refreshing}
-          onClick={() => {
-            setRefreshing(true);
-            router.refresh();
-            setTimeout(() => setRefreshing(false), 400);
-          }}
-        >
-          {refreshing ? "Refreshing..." : "Refresh Queue"}
-        </button>
-      </div>
-
-      <div className="mb-3">
-        <ScoreBandLegend thresholds={scoreThresholds} />
-      </div>
-
-      {filteredQueue.length === 0 ? (
-        <section className="glass rounded-2xl p-6">
-          <div className="rounded-xl p-5 text-center text-sm"
-            style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-tertiary)" }}>
-            No actionable leads in queue. Run a crawl from the Dashboard to discover leads.
-          </div>
-        </section>
-      ) : (
-        <section className="space-y-3">
-          {filteredQueue.map((lead, i) => {
-            const isUrgent = lead.reminder_date && lead.reminder_date <= today;
-            return (
-              <article key={lead.id} className="glass rounded-2xl p-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(lead.id)}
-                        onChange={() => toggleSelected(lead.id)}
-                        aria-label={`Select ${lead.name ?? "lead"}`}
-                      />
-                      <span className="text-xs font-medium" style={{ color: "var(--text-tertiary)" }}>#{i + 1}</span>
-                      <Link href={`/leads/${lead.id}`} className="link-accent font-medium text-sm">
-                        {lead.name ?? "Unknown"}
-                      </Link>
-                      <span style={websiteBadgeStyle(lead.website_status)}>{lead.website_status}</span>
-                      <span style={aiBadgeStyle(lead.ai_verification_status)}>
-                        AI {lead.ai_verification_status.replace(/_/g, " ")}
-                      </span>
-                      <ArtifactBadge type="brief" status={lead.business_detail_status} />
-                      <ArtifactBadge type="report" status={lead.competitive_report_status} />
-                      <DemoBadge ready={Boolean(lead.demo_slug)} />
-                      {isUrgent && (
-                        <span style={{ background: "rgba(239,68,68,0.1)", color: "#dc2626", padding: "2px 8px", borderRadius: "6px", fontSize: "0.7rem", fontWeight: 600 }}>
-                          follow up
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-                      {lead.phone && (
-                        <button type="button" onClick={() => copyPhone(lead.phone!, lead.id)}
-                          className="hover:underline" style={{ color: "var(--text-primary)" }}>
-                          {lead.phone} {copied === lead.id ? "✓" : ""}
-                        </button>
-                      )}
-                      <span>{lead.categories[0]?.replace(/_/g, " ") ?? "—"}</span>
-                      {lead.rating && <span>{lead.rating.toFixed(1)} ({lead.review_count})</span>}
-                      <span>Win {Math.round(lead.win_probability_score)}%</span>
-                      <span>Priority {Math.round(lead.sales_priority_score)}%</span>
-                      {lead.ai_found_website_url && lead.ai_website_viability_status === "usable" && <span>AI usable site</span>}
-                      {lead.ai_found_website_url && ["broken", "parked", "placeholder"].includes(lead.ai_website_viability_status ?? "") && <span>AI weak site opportunity</span>}
-                      {lead.last_contacted_at && (
-                        <span>Last: {new Date(lead.last_contacted_at).toLocaleDateString()}</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <ScoreBandBadge score={lead.score} thresholds={scoreThresholds} />
-                    {lead.phone && (
-                      <a className="btn-glass text-xs" href={`tel:${lead.phone.replace(/[^\d+]/g, "")}`}>
-                        Call
-                      </a>
-                    )}
-                    <button
-                      type="button"
-                      className="btn-primary text-xs"
-                      onClick={() => handleGenerate(lead.id)}
-                      disabled={loadingId === lead.id}
-                    >
-                      {loadingId === lead.id ? "..." : packages[lead.id] ? (expandedId === lead.id ? "Hide" : "Show") : "Outreach"}
-                    </button>
-                    <button type="button" className="btn-glass text-xs" onClick={() => markContacted(lead)}>
-                      Contacted
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-4 rounded-xl p-4 text-xs" style={{ background: "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="section-label">Call Sheet</span>
-                    {lead.demo_slug && (
-                      <button type="button" className="btn-glass text-xs" onClick={() => copyDemoPitch(lead)}>
-                        {copied === `demo-${lead.id}` ? "Copied!" : "Copy Demo Pitch"}
-                      </button>
-                    )}
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <CallSheetItem label="Website finding" value={websiteFindingLabel(lead)} />
-                    <CallSheetItem label="Evidence" value={`${Math.round((lead.ai_confidence ?? 0) * 100)}% confidence${lead.ai_checked_at ? `, ${new Date(lead.ai_checked_at).toLocaleDateString()}` : ""}`} />
-                    <CallSheetItem label="Phone" value={`${lead.phone ?? "No phone"} (${lead.phone_verification_status.replace(/_/g, " ")})`} />
-                    <CallSheetItem label="Offer" value={lead.recommended_offer.replace(/_/g, " ")} />
-                    <CallSheetItem label="Next action" value={lead.next_best_action ?? "Call and qualify owner interest."} />
-                    <CallSheetItem label="Last contact" value={lead.last_contacted_at ? new Date(lead.last_contacted_at).toLocaleDateString() : "Not contacted"} />
-                    <CallSheetItem label="Follow-up" value={lead.reminder_date ? new Date(lead.reminder_date).toLocaleDateString() : "No reminder"} />
-                    <CallSheetItem label="Demo" value={lead.demo_slug ? `/demo/${lead.demo_slug}` : "No demo yet"} href={lead.demo_slug ? `/demo/${lead.demo_slug}` : undefined} />
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <ScoreChip label="Raw" value={lead.raw_opportunity_score} />
-                    <ScoreChip label="Verify" value={lead.verification_score} />
-                    <ScoreChip label="Quality" value={lead.lead_quality_score} />
-                    <ScoreChip label="Sales" value={lead.sales_priority_score} />
-                    <ScoreChip label="Deal" value={lead.estimated_deal_value} money />
-                  </div>
-                </div>
-
-                {expandedId === lead.id && packages[lead.id] && (
-                  <div className="mt-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="section-label">Outreach Message</span>
-                      <button type="button" className="btn-glass text-xs" onClick={() => copyMessage(lead.id)}>
-                        {copied === `msg-${lead.id}` ? "Copied!" : "Copy All"}
-                      </button>
-                    </div>
-                    <div className="whitespace-pre-wrap rounded-xl p-4 text-sm leading-relaxed"
-                      style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-primary)" }}>
-                      {packages[lead.id]}
-                    </div>
-                  </div>
-                )}
-              </article>
-            );
-          })}
-        </section>
       )}
+
+      <section className="glass rounded-2xl p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="section-label">Your next action</h3>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              Start here, then use Log outcome after every call, text, email, or in-person visit.
+            </p>
+          </div>
+          <Link href="/leads?assigned=me" className="btn-glass text-sm">Open My Leads</Link>
+        </div>
+        {workbench.nextAction ? (
+          <LeadActionCard
+            lead={workbench.nextAction}
+            scoreThresholds={scoreThresholds}
+            busy={busyLeadId === workbench.nextAction.id}
+            currentUserId={currentUser.userId}
+            onClaim={claimLead}
+            onRelease={releaseLead}
+            onOpenLogSheet={openLogSheet}
+            prominent
+          />
+        ) : (
+          <EmptyState text="No lead needs action yet. Claim a lead from Best unclaimed leads once new opportunities arrive." />
+        )}
+      </section>
+
+      <section className="grid gap-5 lg:grid-cols-2">
+        <div className="glass rounded-2xl p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h3 className="section-label">My claimed leads</h3>
+            <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>{workbench.myLeads.length}</span>
+          </div>
+          <LeadList
+            leads={workbench.myLeads}
+            scoreThresholds={scoreThresholds}
+            busyLeadId={busyLeadId}
+            currentUserId={currentUser.userId}
+            onClaim={claimLead}
+            onRelease={releaseLead}
+            onOpenLogSheet={openLogSheet}
+            emptyText="You have no claimed leads. Claim one from the list on the right."
+          />
+        </div>
+
+        <div className="glass rounded-2xl p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h3 className="section-label">Best unclaimed leads</h3>
+            <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>{workbench.unclaimedLeads.length}</span>
+          </div>
+          <LeadList
+            leads={workbench.unclaimedLeads}
+            scoreThresholds={scoreThresholds}
+            busyLeadId={busyLeadId}
+            currentUserId={currentUser.userId}
+            onClaim={claimLead}
+            onRelease={releaseLead}
+            onOpenLogSheet={openLogSheet}
+            emptyText="No unclaimed ready leads are available."
+          />
+        </div>
+      </section>
+
+      <LogOutcomeSheet
+        lead={activeLogLead}
+        draft={logDraft}
+        busy={Boolean(activeLogLead && busyLeadId === activeLogLead.id)}
+        requestBusy={requestBusy}
+        onChange={setLogDraft}
+        onClose={closeLogSheet}
+        onSubmit={submitLog}
+        onSendToSteve={sendToSteve}
+      />
     </PageShell>
   );
 }
 
-function CallSheetItem({ label, value, href }: { label: string; value: string; href?: string }) {
+function LeadList({
+  leads,
+  scoreThresholds,
+  busyLeadId,
+  currentUserId,
+  onClaim,
+  onRelease,
+  onOpenLogSheet,
+  emptyText,
+}: {
+  leads: QueueLead[];
+  scoreThresholds: ScoreBandThresholds;
+  busyLeadId: string | null;
+  currentUserId: string;
+  onClaim: (leadId: string) => void;
+  onRelease: (leadId: string) => void;
+  onOpenLogSheet: (lead: QueueLead, channel: ContactChannel) => void;
+  emptyText: string;
+}) {
+  if (leads.length === 0) return <EmptyState text={emptyText} />;
   return (
-    <div>
-      <p className="font-medium" style={{ color: "var(--text-tertiary)" }}>{label}</p>
-      {href ? (
-        <Link href={href} target="_blank" className="link-accent break-all">{value}</Link>
-      ) : (
-        <p className="mt-0.5" style={{ color: "var(--text-primary)" }}>{value}</p>
-      )}
+    <div className="space-y-3">
+      {leads.map((lead) => (
+        <LeadActionCard
+          key={lead.id}
+          lead={lead}
+          scoreThresholds={scoreThresholds}
+          busy={busyLeadId === lead.id}
+          currentUserId={currentUserId}
+          onClaim={onClaim}
+          onRelease={onRelease}
+          onOpenLogSheet={onOpenLogSheet}
+        />
+      ))}
     </div>
   );
 }
 
-function ScoreChip({ label, value, money = false }: { label: string; value: number; money?: boolean }) {
+function LeadActionCard({
+  lead,
+  scoreThresholds,
+  busy,
+  currentUserId,
+  onClaim,
+  onRelease,
+  onOpenLogSheet,
+  prominent = false,
+}: {
+  lead: QueueLead;
+  scoreThresholds: ScoreBandThresholds;
+  busy: boolean;
+  currentUserId: string;
+  onClaim: (leadId: string) => void;
+  onRelease: (leadId: string) => void;
+  onOpenLogSheet: (lead: QueueLead, channel: ContactChannel) => void;
+  prominent?: boolean;
+}) {
+  const isMine = lead.assigned_to_user_id === currentUserId;
+  const isTaken = Boolean(lead.assigned_to_user_id && !isMine);
+
   return (
-    <span className="rounded-md px-2 py-1" style={{ background: "rgba(255,255,255,0.45)", color: "var(--text-secondary)" }}>
-      {label}: {money ? `$${Math.round(value).toLocaleString()}` : `${Math.round(value)}%`}
-    </span>
+    <article
+      className="rounded-xl p-3 sm:p-4"
+      style={{ background: "rgba(255,255,255,0.5)", border: "1px solid rgba(255,255,255,0.55)" }}
+    >
+      <div className="space-y-3">
+        <div className="min-w-0">
+          <Link
+            href={`/leads/${lead.id}`}
+            className={`${prominent ? "text-lg" : "text-base"} link-accent block break-words font-semibold leading-snug`}
+          >
+            {lead.name ?? "Unknown business"}
+          </Link>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <ScoreBandBadge score={lead.score} thresholds={scoreThresholds} compact={!prominent} />
+            <OwnerBadge lead={lead} currentUserId={currentUserId} />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <p className="break-words text-sm" style={{ color: "var(--text-secondary)" }}>{lead.address ?? "No address"}</p>
+          <p className="text-sm leading-relaxed" style={{ color: "var(--text-primary)" }}>
+            {lead.next_best_action ?? lead.quality_reason ?? "Call and confirm owner interest."}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <MetaChip label={lead.phone ?? "No phone"} />
+            <MetaChip label={lead.website_status.replace(/_/g, " ")} />
+            <MetaChip label={lead.rating ? `${lead.rating.toFixed(1)} rating` : "No rating"} />
+            <MetaChip label={`${lead.review_count ?? 0} reviews`} />
+            {lead.reminder_date && <MetaChip label={`Follow-up ${formatDate(lead.reminder_date)}`} />}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
+          {!lead.assigned_to_user_id && (
+            <button type="button" className="btn-primary flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onClaim(lead.id)}>
+              {busy ? "Claiming..." : "Claim"}
+            </button>
+          )}
+          {isMine && (
+            <button type="button" className="btn-glass flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onRelease(lead.id)}>
+              Release
+            </button>
+          )}
+          <Link href={`/leads/${lead.id}`} className="btn-glass flex-1 text-sm sm:flex-none">Open</Link>
+          {isMine && (
+            <button type="button" className="btn-glass flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onOpenLogSheet(lead, "call")}>
+              Log outcome
+            </button>
+          )}
+        </div>
+
+        {isMine && (
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+            {lead.phone && <a className="btn-primary text-sm" href={`tel:${lead.phone.replace(/[^\d+]/g, "")}`}>Call</a>}
+            <button type="button" className="btn-glass text-sm" disabled={busy} onClick={() => onOpenLogSheet(lead, "text")}>Text</button>
+            <button type="button" className="btn-glass text-sm" disabled={busy} onClick={() => onOpenLogSheet(lead, "email")}>Email</button>
+            <button type="button" className="btn-glass text-sm" disabled={busy} onClick={() => onOpenLogSheet(lead, "walkin")}>In person</button>
+          </div>
+        )}
+        {isTaken && (
+          <p className="text-sm" style={{ color: "var(--text-tertiary)" }}>
+            This lead is already owned by {ownerName(lead)}.
+          </p>
+        )}
+      </div>
+    </article>
   );
 }
 
-function ArtifactBadge({ type, status }: { type: "brief" | "report"; status: string | null }) {
-  const label = artifactBadgeLabel(type, status);
-  const color = status === "complete"
-    ? { bg: "rgba(34,197,94,0.1)", color: "#16a34a" }
-    : status === "queued" || status === "running"
-      ? { bg: "rgba(99,102,241,0.1)", color: "#6366f1" }
-      : status === "error"
-        ? { bg: "rgba(239,68,68,0.1)", color: "#dc2626" }
-        : { bg: "rgba(107,114,128,0.1)", color: "#4b5563" };
+function LogOutcomeSheet({
+  lead,
+  draft,
+  busy,
+  requestBusy,
+  onChange,
+  onClose,
+  onSubmit,
+  onSendToSteve,
+}: {
+  lead: QueueLead | null;
+  draft: LogDraft;
+  busy: boolean;
+  requestBusy: AdminRequestType | null;
+  onChange: (draft: LogDraft) => void;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onSendToSteve: (requestType: AdminRequestType) => void;
+}) {
+  if (!lead) return null;
+
+  const update = <Key extends keyof LogDraft>(key: Key, value: LogDraft[Key]) => {
+    onChange({ ...draft, [key]: value });
+  };
+
   return (
-    <span style={{ background: color.bg, color: color.color, padding: "2px 8px", borderRadius: "6px", fontSize: "0.7rem", fontWeight: 600 }}>
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/45 px-3 py-4 sm:items-center">
+      <form
+        onSubmit={onSubmit}
+        className="glass-lg max-h-[90vh] w-full max-w-lg overflow-auto rounded-2xl p-5"
+        style={{ background: "rgba(255,255,255,0.98)", boxShadow: "0 24px 80px rgba(15,23,42,0.28)" }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="workbench-log-outcome-title"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 id="workbench-log-outcome-title" className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>Log outcome</h3>
+            <p className="mt-1 break-words text-sm" style={{ color: "var(--text-secondary)" }}>
+              {lead.name ?? "Unknown business"}
+            </p>
+          </div>
+          <button type="button" className="btn-glass text-sm" onClick={onClose} disabled={busy}>Close</button>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium" style={{ color: "var(--text-tertiary)" }}>Channel</span>
+            <select className="glass-select" value={draft.channel} onChange={(event) => update("channel", event.target.value as ContactChannel)}>
+              <option value="call">Call</option>
+              <option value="text">Text</option>
+              <option value="email">Email</option>
+              <option value="walkin">In person</option>
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium" style={{ color: "var(--text-tertiary)" }}>Outcome</span>
+            <select className="glass-select" value={draft.outcome} onChange={(event) => update("outcome", event.target.value as OutreachOutcome)}>
+              {OUTCOME_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <label className="mt-3 flex flex-col gap-1">
+          <span className="text-xs font-medium" style={{ color: "var(--text-tertiary)" }}>Contact person</span>
+          <input
+            className="glass-input"
+            value={draft.contactPersonName}
+            onChange={(event) => update("contactPersonName", event.target.value)}
+            placeholder="Owner, manager, front desk..."
+          />
+        </label>
+
+        <label className="mt-3 flex flex-col gap-1">
+          <span className="text-xs font-medium" style={{ color: "var(--text-tertiary)" }}>Note</span>
+          <textarea
+            className="glass-input min-h-24 resize-y"
+            value={draft.note}
+            onChange={(event) => update("note", event.target.value)}
+            placeholder="What happened?"
+          />
+        </label>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium" style={{ color: "var(--text-tertiary)" }}>Follow-up date/time</span>
+            <input
+              type="datetime-local"
+              className="glass-input"
+              value={draft.followUpAt}
+              onChange={(event) => update("followUpAt", event.target.value)}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium" style={{ color: "var(--text-tertiary)" }}>Next step</span>
+            <input
+              className="glass-input"
+              value={draft.nextStep}
+              onChange={(event) => update("nextStep", event.target.value)}
+              placeholder="Send demo, call back, visit..."
+            />
+          </label>
+        </div>
+
+        <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(238,242,255,0.96)", border: "1px solid rgba(99,102,241,0.18)" }}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Send to Steve</h4>
+              <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
+                Use this when the lead needs a website or a quote from the admin queue.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <AdminRequestButton
+                label="Website needed"
+                alreadyQueued={Boolean(lead.open_website_request_id)}
+                busy={requestBusy === "website_request"}
+                disabled={busy || Boolean(requestBusy)}
+                onClick={() => onSendToSteve("website_request")}
+              />
+              <AdminRequestButton
+                label="Quote requested"
+                alreadyQueued={Boolean(lead.open_quote_request_id)}
+                busy={requestBusy === "quote_request"}
+                disabled={busy || Boolean(requestBusy)}
+                onClick={() => onSendToSteve("quote_request")}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button type="button" className="btn-glass text-sm" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="submit" className="btn-primary text-sm" disabled={busy}>
+            {busy ? "Logging..." : "Log outcome"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function AdminRequestButton({
+  label,
+  alreadyQueued,
+  busy,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  alreadyQueued: boolean;
+  busy: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className="btn-glass text-sm" disabled={disabled || alreadyQueued} onClick={onClick}>
+      {alreadyQueued ? "Already in admin queue" : busy ? "Sending..." : label}
+    </button>
+  );
+}
+
+function OwnerBadge({ lead, currentUserId }: { lead: QueueLead; currentUserId: string }) {
+  const label = !lead.assigned_to_user_id
+    ? "Unclaimed"
+    : lead.assigned_to_user_id === currentUserId
+      ? "Mine"
+      : ownerName(lead);
+  const mine = lead.assigned_to_user_id === currentUserId;
+  const color = !lead.assigned_to_user_id
+    ? { bg: "rgba(107,114,128,0.1)", text: "#4b5563" }
+    : mine
+      ? { bg: "rgba(34,197,94,0.12)", text: "#166534" }
+      : { bg: "rgba(245,158,11,0.12)", text: "#92400e" };
+  return (
+    <span className="rounded-md px-2 py-1 text-xs font-semibold" style={{ background: color.bg, color: color.text }}>
       {label}
     </span>
   );
 }
 
-function DemoBadge({ ready }: { ready: boolean }) {
+function EmptyState({ text }: { text: string }) {
   return (
-    <span style={{
-      background: ready ? "rgba(34,197,94,0.1)" : "rgba(107,114,128,0.1)",
-      color: ready ? "#16a34a" : "#4b5563",
-      padding: "2px 8px",
-      borderRadius: "6px",
-      fontSize: "0.7rem",
-      fontWeight: 600,
-    }}>
-      {ready ? "Demo ready" : "Demo missing"}
+    <div className="rounded-xl p-5 text-center text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+      {text}
+    </div>
+  );
+}
+
+function ownerName(lead: QueueLead): string {
+  return lead.assigned_user_display_name || lead.assigned_user_email || "another researcher";
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
+function MetaChip({ label }: { label: string }) {
+  return (
+    <span
+      className="max-w-full break-words rounded-md px-2 py-1 text-xs"
+      style={{ background: "rgba(255,255,255,0.45)", color: "var(--text-tertiary)" }}
+    >
+      {label}
     </span>
   );
 }
 
-function artifactBadgeLabel(type: "brief" | "report", status: string | null): string {
-  if (status === "complete") return type === "brief" ? "Brief ready" : "Report ready";
-  if (status === "queued" || status === "running") return "Generating";
-  return "Missing";
+function createLogDraft(channel: ContactChannel, nextStep = ""): LogDraft {
+  return {
+    channel,
+    outcome: channel === "call" ? "contacted" : "follow_up_needed",
+    contactPersonName: "",
+    note: "",
+    followUpAt: "",
+    nextStep,
+  };
+}
+
+function cleanText(value: string): string {
+  const clean = value.trim();
+  return clean;
+}
+
+function normalizeDateTime(value: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function buildAdminRequestSummary(requestType: AdminRequestType, draft: LogDraft): string {
+  const parts = [
+    requestType === "website_request" ? "Website needed." : "Quote requested.",
+    draft.contactPersonName.trim() ? `Contact: ${draft.contactPersonName.trim()}.` : null,
+    draft.note.trim() || null,
+  ].filter(Boolean);
+  return parts.join(" ");
 }

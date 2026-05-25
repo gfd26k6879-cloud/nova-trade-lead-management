@@ -104,6 +104,7 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 NOSITE_BOOTSTRAP_ADMIN_EMAIL=
 NOSITE_ENCRYPTION_SECRET=
+NOSITE_SESSION_SECRET=
 WORKER_CRON_SECRET=
 GOOGLE_PLACES_API_KEY=
 OPENAI_API_KEY=
@@ -112,6 +113,20 @@ OPENAI_AI_COST_RESERVATION_USD=0.05
 ```
 
 Redeploy after any environment variable change.
+
+Preview deployments should either point at a dedicated staging Supabase project
+with the same required variables or be treated as build-only. Do not point PR
+previews at production Supabase unless the test plan is explicitly read-only.
+At minimum, production and any usable preview environment need:
+
+- `DATABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `NOSITE_BOOTSTRAP_ADMIN_EMAIL`
+- `NOSITE_ENCRYPTION_SECRET`
+- `NOSITE_SESSION_SECRET`
+- `WORKER_CRON_SECRET` or Supabase Vault `worker_cron_secret`
 
 ## 6. Supabase Cron Scheduler
 

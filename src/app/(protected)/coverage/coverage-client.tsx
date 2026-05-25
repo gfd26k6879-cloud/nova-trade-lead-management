@@ -413,7 +413,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
             <div className="mt-4 h-2.5 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }}>
               <div
                 className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${runPct}%`, background: runPct === 100 ? "#16a34a" : "var(--accent)" }}
+                style={{ width: `${runPct}%`, background: runPct === 100 ? "#166534" : "var(--accent)" }}
               />
             </div>
 
@@ -449,14 +449,14 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
             </div>
 
             {run.last_error && (
-              <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", color: "#dc2626" }}>
+              <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", color: "#991b1b" }}>
                 {run.last_error}
               </div>
             )}
           </>
         ) : (
           <div className="mt-5 rounded-xl p-5 text-sm" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>
-            No discovery run exists yet. Open Discover, choose counties/ZIP codes and categories, then start a run.
+            No discovery run exists yet. Open Revenue, choose counties/ZIP codes and categories, then start a run.
           </div>
         )}
       </section>
@@ -546,6 +546,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
             className="glass-input min-w-48"
           />
           <select
+            aria-label="County filter"
             className="glass-input text-xs"
             value={selectedCounty}
             onChange={(event) => setSelectedCounty(event.target.value)}
@@ -574,6 +575,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
             Failed only
           </label>
           <select
+            aria-label="Coverage ledger filter"
             className="glass-input text-xs"
             value={ledgerView}
             onChange={(event) => setLedgerView(event.target.value as typeof ledgerView)}
@@ -617,7 +619,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
             {errors.map((err, i) => (
               <div key={i} className="rounded-xl px-4 py-2.5 text-xs"
                 style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.12)" }}>
-                <span className="font-medium" style={{ color: "#dc2626" }}>{err.zip} / {err.category}</span>
+                <span className="font-medium" style={{ color: "#991b1b" }}>{err.zip} / {err.category}</span>
                 <span className="ml-2" style={{ color: "var(--text-secondary)" }}>{err.last_error || "No error message"}</span>
               </div>
             ))}
@@ -630,7 +632,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
             style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-tertiary)" }}
           >
             {coverage.length === 0
-              ? `No crawl coverage yet.${!run ? " Start a discovery from Discover." : ""}${runStatus ? ` Current run status: ${formatRunStatus(runStatus)}.` : ""}`
+              ? `No crawl coverage yet.${!run ? " Start a discovery from Revenue." : ""}${runStatus ? ` Current run status: ${formatRunStatus(runStatus)}.` : ""}`
               : "No matching records for the selected filters."}
           </div>
         ) : (
@@ -721,7 +723,7 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
                                           <td>{row.city}</td>
                                           <td>{row.total}</td>
                                           <td>{row.done}</td>
-                                          <td style={{ color: row.failed > 0 ? "#dc2626" : undefined }}>{row.failed}</td>
+                                          <td style={{ color: row.failed > 0 ? "#991b1b" : undefined }}>{row.failed}</td>
                                           <td style={{ color: row.canceled > 0 ? "#b45309" : undefined }}>{row.canceled}</td>
                                           <td>{row.remaining}</td>
                                           <td>{row.leadsFound}</td>
@@ -764,7 +766,7 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: s
   return (
     <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
       <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
-      <p className="mt-0.5 text-lg font-semibold capitalize" style={{ color: tone === "paused" || tone === "canceled" ? "#b45309" : tone === "running" ? "#15803d" : "var(--text-primary)" }}>
+      <p className="mt-0.5 text-lg font-semibold capitalize" style={{ color: tone === "paused" || tone === "canceled" ? "#92400e" : tone === "running" ? "#166534" : "var(--text-primary)" }}>
         {value}
       </p>
     </div>
@@ -772,7 +774,7 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: s
 }
 
 function StatusPill({ status }: { status: string }) {
-  const color = status === "running" ? "#15803d" : status === "pending" ? "var(--accent)" : status === "failed" ? "#dc2626" : status === "done" ? "#64748b" : "#b45309";
+  const color = status === "running" ? "#166534" : status === "pending" ? "var(--accent)" : status === "failed" ? "#991b1b" : status === "done" ? "#475569" : "#92400e";
   return (
     <span className="inline-flex rounded-full px-2.5 py-1 text-xs font-medium capitalize" style={{ background: "rgba(255,255,255,0.55)", border: "1px solid rgba(255,255,255,0.65)", color }}>
       {status.replace(/_/g, " ")}
@@ -802,5 +804,13 @@ function formatDateTime(value: string | null): string {
   if (!value) return "Not started";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
 }

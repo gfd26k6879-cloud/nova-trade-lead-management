@@ -25,6 +25,9 @@ interface Lead {
   is_excluded: boolean;
   exclusion_reason: string | null;
   enrichment_status: string;
+  assigned_to_user_id?: string | null;
+  assigned_user_email?: string | null;
+  assigned_user_display_name?: string | null;
 }
 
 interface Props {
@@ -39,6 +42,8 @@ interface Props {
     minScore?: number;
     category?: string;
     businessType?: string;
+    assigned?: string;
+    assignedToUserId?: string;
     sortBy?: string;
     sortDir?: string;
     page?: number;
@@ -56,13 +61,13 @@ const WEBSITE_OPTIONS = ["", "none", "social", "basic", "custom"];
 
 const statusBadgeStyle = (status: string): React.CSSProperties => {
   const colors: Record<string, { bg: string; color: string }> = {
-    new: { bg: "rgba(99,102,241,0.1)", color: "#6366f1" },
-    verified: { bg: "rgba(34,197,94,0.1)", color: "#16a34a" },
-    contacted: { bg: "rgba(245,158,11,0.1)", color: "#d97706" },
+    new: { bg: "rgba(99,102,241,0.1)", color: "#4338ca" },
+    verified: { bg: "rgba(34,197,94,0.1)", color: "#166534" },
+    contacted: { bg: "rgba(245,158,11,0.1)", color: "#92400e" },
     preview_sent: { bg: "rgba(168,85,247,0.1)", color: "#9333ea" },
     meeting_set: { bg: "rgba(14,165,233,0.1)", color: "#0284c7" },
-    closed_won: { bg: "rgba(34,197,94,0.15)", color: "#15803d" },
-    closed_lost: { bg: "rgba(239,68,68,0.1)", color: "#dc2626" },
+    closed_won: { bg: "rgba(34,197,94,0.15)", color: "#166534" },
+    closed_lost: { bg: "rgba(239,68,68,0.1)", color: "#991b1b" },
     excluded: { bg: "rgba(107,114,128,0.14)", color: "#374151" },
   };
   const c = colors[status] ?? { bg: "rgba(0,0,0,0.05)", color: "var(--text-secondary)" };
@@ -71,10 +76,10 @@ const statusBadgeStyle = (status: string): React.CSSProperties => {
 
 const websiteBadgeStyle = (ws: string): React.CSSProperties => {
   const colors: Record<string, { bg: string; color: string }> = {
-    none: { bg: "rgba(239,68,68,0.1)", color: "#dc2626" },
-    social: { bg: "rgba(245,158,11,0.1)", color: "#d97706" },
-    basic: { bg: "rgba(99,102,241,0.1)", color: "#6366f1" },
-    custom: { bg: "rgba(34,197,94,0.1)", color: "#16a34a" },
+    none: { bg: "rgba(239,68,68,0.1)", color: "#991b1b" },
+    social: { bg: "rgba(245,158,11,0.1)", color: "#92400e" },
+    basic: { bg: "rgba(99,102,241,0.1)", color: "#4338ca" },
+    custom: { bg: "rgba(34,197,94,0.1)", color: "#166534" },
   };
   const c = colors[ws] ?? { bg: "rgba(0,0,0,0.05)", color: "var(--text-secondary)" };
   return { background: c.bg, color: c.color, padding: "2px 8px", borderRadius: "6px", fontSize: "0.75rem", fontWeight: 500 };
@@ -163,6 +168,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
           <form onSubmit={handleSearchSubmit} className="flex gap-2">
             <input
               type="text"
+              aria-label="Search leads"
               placeholder="Search name, phone, ZIP..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -181,6 +187,12 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
             }}
           >
             Kanban View
+          </button>
+          <button type="button" className="btn-glass text-xs" onClick={() => updateFilter("assigned", "me")}>
+            My Leads
+          </button>
+          <button type="button" className="btn-glass text-xs" onClick={() => updateFilter("assigned", "unassigned")}>
+            Unclaimed
           </button>
 
           {canExport && (
@@ -207,6 +219,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
           </select>
           <select
             className="glass-select"
+            aria-label="Lead status"
             value={filters.status ?? ""}
             onChange={(e) => updateFilter("status", e.target.value)}
           >
@@ -217,6 +230,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
           </select>
           <select
             className="glass-select"
+            aria-label="Website status"
             value={filters.websiteStatus ?? ""}
             onChange={(e) => updateFilter("websiteStatus", e.target.value)}
           >
@@ -227,6 +241,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
           </select>
           <select
             className="glass-select"
+            aria-label="Enrichment status"
             value={(filters as Record<string, string>).enrichment ?? ""}
             onChange={(e) => updateFilter("enrichment", e.target.value)}
           >
@@ -305,14 +320,14 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
           <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl px-4 py-3"
             style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.15)" }}>
             <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>{selected.size} selected</span>
-            <select className="glass-select text-xs" value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)}>
+            <select className="glass-select text-xs" aria-label="Bulk status" value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)}>
             {BULK_STATUS_OPTIONS.filter((s) => canClose || (s !== "closed_won" && s !== "closed_lost")).map((s) => (
                 <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
               ))}
             </select>
             <button type="button" className="btn-primary text-xs" onClick={handleBulkUpdate}>Apply Status</button>
             <button type="button" className="btn-glass text-xs" onClick={() => setSelected(new Set())}>Clear</button>
-            {bulkMsg && <span className="text-xs" style={{ color: "#16a34a" }}>{bulkMsg}</span>}
+            {bulkMsg && <span className="text-xs" style={{ color: "#166534" }}>{bulkMsg}</span>}
           </div>
         )}
 
@@ -345,6 +360,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
                     <th>Business Type</th>
                     <th>Website</th>
                     <th>Score</th>
+                    <th>Owner</th>
                     <th>Status</th>
                   </tr>
                 </thead>
@@ -376,6 +392,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
                       <td>
                         <ScoreBandBadge score={lead.score} thresholds={scoreThresholds} />
                       </td>
+                      <td>{ownerLabel(lead)}</td>
                       <td>
                         <span style={statusBadgeStyle(lead.is_excluded ? "excluded" : lead.status)}>
                           {(lead.is_excluded ? "excluded" : lead.status).replace(/_/g, " ")}
@@ -390,7 +407,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
                           </span>
                         )}
                         {lead.enrichment_status === "enriched" && (
-                          <span className="ml-1 inline-block rounded px-1.5 py-0.5 text-[0.65rem] font-medium" style={{ background: "rgba(34,197,94,0.1)", color: "#16a34a" }}>E</span>
+                          <span className="ml-1 inline-block rounded px-1.5 py-0.5 text-[0.65rem] font-medium" style={{ background: "rgba(34,197,94,0.1)", color: "#166534" }}>E</span>
                         )}
                       </td>
                     </tr>
@@ -427,4 +444,9 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
       </section>
     </PageShell>
   );
+}
+
+function ownerLabel(lead: Lead): string {
+  if (!lead.assigned_to_user_id) return "Unclaimed";
+  return lead.assigned_user_display_name || lead.assigned_user_email || "Assigned";
 }

@@ -25,7 +25,7 @@ interface Props {
 }
 
 export default async function QualityPage({ searchParams }: Props) {
-  await requirePermission("view:workspace");
+  await requirePermission("crawl:manage");
   await ensureDbReady();
   const params = await searchParams;
   const filters: QualityFilters = {

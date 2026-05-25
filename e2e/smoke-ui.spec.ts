@@ -16,24 +16,32 @@ test.describe("UI Smoke Test", () => {
   test("1. Open app and log in", async ({ page }) => {
   skipIfMissingAuth();
     expect(page.url()).toContain("/queue");
-    await expect(page.getByRole("heading", { name: "Now Queue", exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("heading", { name: "Workbench", exact: true })).toBeVisible({ timeout: 5000 });
   });
 
   test("2. Protected navigation and Dashboard loads", async ({ page }) => {
   skipIfMissingAuth();
-    await expect(page.getByRole("link", { name: "Queue", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Dashboard", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Leads", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Workbench", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Revenue", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: /Fulfillment/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: "All Leads", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
-    await page.getByRole("link", { name: "Dashboard", exact: true }).click();
+    await page.getByRole("link", { name: "Revenue", exact: true }).click();
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
-    await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("heading", { name: "Revenue Dashboard", exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("heading", { name: "Team performance", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Latest activity", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "My Fulfillment Queue", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Operations", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open Workbench", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open Fulfillment", exact: true })).toBeVisible();
   });
 
   test("3. Dashboard cost breakdown / monthly cost intelligence", async ({ page }) => {
   skipIfMissingAuth();
-    await page.getByRole("link", { name: "Dashboard", exact: true }).click();
+    await page.getByRole("link", { name: "Revenue", exact: true }).click();
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
+    await page.getByText("Expand operations", { exact: true }).click();
     const runCostText = page.getByText(/Run API:.*calls.*\$/);
     const apiCostSection = page.getByRole("heading", { name: "API Cost Intelligence" });
     const discoveryEnrichment = page.getByText(/Discovery:.*calls.*Enrichment:.*calls/);
@@ -131,18 +139,18 @@ test.describe("UI Smoke Test", () => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
-    await page.getByRole("link", { name: "Dashboard", exact: true }).click();
+    await page.getByRole("link", { name: "Revenue", exact: true }).click();
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
     await page.getByRole("link", { name: "Settings", exact: true }).click();
     await page.waitForURL(/\/settings/, { timeout: 5000 });
-    await page.getByRole("link", { name: "Dashboard", exact: true }).click();
+    await page.getByRole("link", { name: "Revenue", exact: true }).click();
 
     expect(errors).toHaveLength(0);
   });
 
   test("7. Business type filter and Statistics page", async ({ page }) => {
   skipIfMissingAuth();
-    await page.getByRole("link", { name: "Leads", exact: true }).click();
+    await page.getByRole("link", { name: "All Leads", exact: true }).click();
     await page.waitForURL(/\/leads/, { timeout: 5000 });
 
     await page.getByLabel("Business type").selectOption("dental");

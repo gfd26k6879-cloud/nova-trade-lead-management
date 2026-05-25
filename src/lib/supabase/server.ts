@@ -2,6 +2,7 @@ import "server-only";
 
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { getSupabaseServerCookieOptions } from "@/lib/supabase/cookies";
 
 export function isSupabaseAuthConfigured(): boolean {
   return Boolean(
@@ -26,6 +27,7 @@ export async function createSupabaseServerClient() {
   const cookieStore = await cookies();
 
   return createServerClient(url, publishableKey, {
+    cookieOptions: getSupabaseServerCookieOptions(),
     cookies: {
       getAll() {
         return cookieStore.getAll();

@@ -11,6 +11,7 @@ import {
   listAppUsers,
   updateAppUserRole,
   updateAppUserStatus,
+  updateAppUserTeam,
   type AppUserStatus,
 } from "@/lib/app-users";
 import { requirePermission } from "@/lib/auth";
@@ -22,6 +23,12 @@ const createUserSchema = z.object({
   email: z.string().trim().email().max(320).transform((value) => value.toLowerCase()),
   displayName: z.string().trim().max(120).optional(),
   role: z.enum(["admin", "researcher"]).default("researcher"),
+});
+
+const updateUserTeamSchema = z.object({
+  isTeamLead: z.boolean().default(false),
+  teamLeadUserId: z.string().trim().min(1).max(120).nullable().optional(),
+  teamLabel: z.string().trim().max(120).nullable().optional(),
 });
 
 export async function listUsersAction() {
@@ -98,6 +105,25 @@ export async function updateUserStatusAction(userId: string, status: AppUserStat
   await createAuditLog("app_user_status_updated", "app_user", userId, { status });
   revalidatePath("/users");
   return { success: true };
+}
+
+export async function updateUserTeamAction(userId: string, input: { isTeamLead?: boolean; teamLeadUserId?: string | null; teamLabel?: string | null }) {
+  await requirePermission("users:manage");
+  await ensureDbReady();
+  const parsed = updateUserTeamSchema.safeParse(input);
+  if (!parsed.success) return { error: "Invalid team settings." };
+  const user = await updateAppUserTeam({
+    userId,
+    isTeamLead: parsed.data.isTeamLead,
+    teamLeadUserId: parsed.data.teamLeadUserId ?? null,
+    teamLabel: parsed.data.teamLabel ?? null,
+  });
+  if (!user) return { error: "User not found." };
+  await createAuditLog("app_user_team_updated", "app_user", userId, parsed.data);
+  revalidatePath("/users");
+  revalidatePath("/team");
+  revalidatePath("/dashboard");
+  return { success: true, user };
 }
 
 export async function resetUserPasswordAction(userId: string) {

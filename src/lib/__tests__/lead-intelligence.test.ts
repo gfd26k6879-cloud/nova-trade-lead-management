@@ -13,7 +13,7 @@ function makeContext(overrides: Partial<LeadArtifactContext> = {}): LeadArtifact
   const snapshot: CompetitorSnapshot = {
     zip: "80202",
     primaryType: "dentist",
-    businessType: "medical",
+    businessType: "dental",
     count: 12,
     websiteStatusMix: { none: 3, social: 2, basic: 2, custom: 5, usable_ai_site: 4, weak_or_broken: 1, unknown: 0 },
     averageRating: 4.4,
@@ -28,7 +28,7 @@ function makeContext(overrides: Partial<LeadArtifactContext> = {}): LeadArtifact
       phone: "303-555-0100",
       categories: ["dentist"],
       primaryType: "dentist",
-      businessType: "medical",
+      businessType: "dental",
       rating: 4.6,
       reviewCount: 120,
       websiteUri: null,
@@ -83,7 +83,7 @@ describe("lead intelligence", () => {
 
   it("returns conservative revenue ranges with assumptions", () => {
     const lead = {
-      business_type: "medical",
+      business_type: "dental",
       primary_type: "dentist",
       categories: ["dentist"],
       ai_verification_status: "no_site_found",
@@ -100,7 +100,7 @@ describe("lead intelligence", () => {
 
   it("normalizes contactability before applying revenue multiplier", () => {
     const baseLead = {
-      business_type: "medical",
+      business_type: "dental",
       primary_type: "dentist",
       categories: ["dentist"],
       ai_verification_status: "no_site_found",

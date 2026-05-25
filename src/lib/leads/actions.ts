@@ -12,6 +12,7 @@ import {
   createLeadNote as dbCreateLeadNote,
   getLeadNotes as dbGetLeadNotes,
   assignLeadToUser as dbAssignLeadToUser,
+  claimLeadForUser as dbClaimLeadForUser,
   setLeadExclusion as dbSetLeadExclusion,
   clearLeadExclusion as dbClearLeadExclusion,
   updateLeadTimestamp,
@@ -43,6 +44,7 @@ import {
   type LeadFilters,
 } from "@/lib/db/queries";
 import { requirePermission } from "@/lib/auth";
+import { canReadLeadForSession, constrainLeadFiltersForSession } from "@/lib/lead-access";
 import type { PhoneVerificationStatus, QualityBucket } from "@/lib/lead-quality";
 import { generateOutreachPackage } from "@/lib/outreach-package";
 import { computeScoreWithBreakdown } from "@/lib/scoring";
@@ -59,6 +61,32 @@ import type { LeadAiArtifactType } from "@/lib/db/queries";
 
 const statusSchema = z.enum(["new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost"]);
 const channelSchema = z.enum(["call", "text", "email", "walkin", "other"]);
+const outreachOutcomeSchema = z.enum([
+  "not_reached",
+  "left_voicemail",
+  "contacted",
+  "decision_maker_reached",
+  "demo_sent",
+  "meeting_set",
+  "follow_up_needed",
+  "not_interested",
+  "quoted",
+  "closed_won",
+  "closed_lost",
+]);
+const structuredOutreachSchema = z.object({
+  channel: channelSchema,
+  note: z.string().trim().max(2000).optional().default(""),
+  contactPersonName: z.string().trim().max(120).optional().or(z.literal("")),
+  contactPersonRole: z.string().trim().max(120).optional().or(z.literal("")),
+  decisionMakerReached: z.boolean().optional().default(false),
+  outcome: outreachOutcomeSchema.optional().default("contacted"),
+  objectionReason: z.string().trim().max(500).optional().or(z.literal("")),
+  quotedAmount: z.coerce.number().min(0).max(1000000).optional().default(0),
+  closeValue: z.coerce.number().min(0).max(1000000).optional().default(0),
+  followUpAt: z.string().trim().max(40).optional().or(z.literal("")),
+  nextStep: z.string().trim().max(500).optional().or(z.literal("")),
+});
 const exclusionReasonSchema = z.string().trim().min(5).max(500);
 const aiApplySchema = z.enum(["update_website", "exclude_has_website", "mark_broken_site_opportunity", "mark_manual_review"]);
 const leadNoteSchema = z.string().trim().min(1).max(4000);
@@ -81,28 +109,53 @@ const qualityAiBatchSchema = z.object({
 function revalidateLeadViews(): void {
   revalidatePath("/leads");
   revalidatePath("/queue");
+  revalidatePath("/team");
   revalidatePath("/quality");
   revalidatePath("/statistics");
   revalidatePath("/dashboard");
 }
 
+function leadOwnerLabel(lead: { assigned_user_display_name?: string | null; assigned_user_email?: string | null; assigned_to_user_id?: string | null }): string {
+  return lead.assigned_user_display_name || lead.assigned_user_email || lead.assigned_to_user_id || "another researcher";
+}
+
+async function requireLeadOwnershipForMutation(
+  id: string,
+  session: { userId: string; role: string },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (session.role === "admin") return { ok: true };
+  const lead = await queryLeadById(id);
+  if (!lead) return { ok: false, error: "Lead not found" };
+  if (!lead.assigned_to_user_id) return { ok: false, error: "Claim this lead before updating it." };
+  if (lead.assigned_to_user_id !== session.userId) return { ok: false, error: `Taken by ${leadOwnerLabel(lead)}.` };
+  return { ok: true };
+}
+
+function normalizeOptionalText(value: string | undefined): string | null {
+  const trimmed = (value ?? "").trim();
+  return trimmed ? trimmed : null;
+}
+
 export async function getLeadsAction(filters: LeadFilters = {}) {
-  await requirePermission("view:workspace");
+  const session = await requirePermission("view:workspace");
   await ensureDbReady();
-  return queryLeads(filters);
+  return queryLeads(constrainLeadFiltersForSession(session, filters));
 }
 
 export async function getLeadByIdAction(id: string) {
-  await requirePermission("view:workspace");
+  const session = await requirePermission("view:workspace");
   await ensureDbReady();
-  return queryLeadById(id);
+  const lead = await queryLeadById(id);
+  return lead && canReadLeadForSession(session, lead) ? lead : null;
 }
 
 export async function updateLeadStatusAction(id: string, status: string) {
   const parsed = statusSchema.safeParse(status);
   if (!parsed.success) return { error: "Invalid status value" };
-  await requirePermission(parsed.data === "closed_won" || parsed.data === "closed_lost" ? "lead:close" : "lead:update");
+  const session = await requirePermission(parsed.data === "closed_won" || parsed.data === "closed_lost" ? "lead:close" : "lead:update");
   await ensureDbReady();
+  const ownership = await requireLeadOwnershipForMutation(id, session);
+  if (!ownership.ok) return { error: ownership.error };
   await dbUpdateStatus(id, parsed.data);
   await createAuditLog("lead_status_change", "lead", id, { status: parsed.data });
   revalidateLeadViews();
@@ -110,8 +163,10 @@ export async function updateLeadStatusAction(id: string, status: string) {
 }
 
 export async function updateLeadNotesAction(id: string, notes: string) {
-  await requirePermission("lead:update");
+  const session = await requirePermission("lead:update");
   await ensureDbReady();
+  const ownership = await requireLeadOwnershipForMutation(id, session);
+  if (!ownership.ok) return { error: ownership.error };
   await dbUpdateNotes(id, notes);
   revalidatePath(`/leads/${id}`);
   return { success: true };
@@ -122,6 +177,8 @@ export async function addLeadNoteAction(id: string, body: string) {
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(id, session);
+  if (!ownership.ok) return { error: ownership.error };
   const parsed = leadNoteSchema.safeParse(body);
   if (!parsed.success) return { error: "Note must be between 1 and 4000 characters." };
   const note = await dbCreateLeadNote(id, session.userId, parsed.data);
@@ -131,8 +188,10 @@ export async function addLeadNoteAction(id: string, body: string) {
 }
 
 export async function getLeadNotesAction(id: string) {
-  await requirePermission("view:workspace");
+  const session = await requirePermission("view:workspace");
   await ensureDbReady();
+  const lead = await queryLeadById(id);
+  if (!lead || !canReadLeadForSession(session, lead)) return [];
   return dbGetLeadNotes(id);
 }
 
@@ -141,7 +200,11 @@ export async function claimLeadAction(id: string) {
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
-  await dbAssignLeadToUser(id, session.userId);
+  const changes = await dbClaimLeadForUser(id, session.userId);
+  if (changes === 0) {
+    const current = await queryLeadById(id);
+    return { error: current ? `Taken by ${leadOwnerLabel(current)}.` : "Lead not found" };
+  }
   await createAuditLog("lead_claimed", "lead", id);
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
@@ -176,8 +239,10 @@ export async function assignLeadAction(id: string, userId: string | null) {
 }
 
 export async function updateLeadReminderAction(id: string, date: string | null) {
-  await requirePermission("lead:update");
+  const session = await requirePermission("lead:update");
   await ensureDbReady();
+  const ownership = await requireLeadOwnershipForMutation(id, session);
+  if (!ownership.ok) return { error: ownership.error };
   await dbUpdateReminder(id, date);
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
@@ -217,31 +282,64 @@ export async function restoreExcludedLeadAction(id: string) {
   return { success: true };
 }
 
-export async function logOutreachEventAction(leadId: string, channel: string, note: string) {
-  await requirePermission("outreach:create");
+export async function logOutreachEventAction(
+  leadId: string,
+  inputOrChannel: string | Record<string, unknown>,
+  note = "",
+) {
+  const session = await requirePermission("outreach:create");
   await ensureDbReady();
-  const parsed = channelSchema.safeParse(channel);
-  if (!parsed.success) return { error: "Invalid channel" };
-  const noteSchema = z.string().max(2000);
-  const noteParsed = noteSchema.safeParse(note);
-  if (!noteParsed.success) return { error: "Note too long (max 2000 chars)" };
-  const event = await createOutreachEvent(leadId, parsed.data, noteParsed.data || null);
+  const lead = await queryLeadById(leadId);
+  if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(leadId, session);
+  if (!ownership.ok) return { error: ownership.error };
+
+  const rawInput = typeof inputOrChannel === "string"
+    ? { channel: inputOrChannel, note }
+    : inputOrChannel;
+  const parsed = structuredOutreachSchema.safeParse(rawInput);
+  if (!parsed.success) return { error: "Please complete the contact outcome fields." };
+  if ((parsed.data.outcome === "closed_won" || parsed.data.outcome === "closed_lost") && session.role !== "admin") {
+    return { error: "Only admins can mark leads closed won or closed lost." };
+  }
+
+  const event = await createOutreachEvent({
+    leadId,
+    channel: parsed.data.channel,
+    note: normalizeOptionalText(parsed.data.note),
+    actorUserId: session.userId,
+    actorEmail: session.email,
+    contactPersonName: normalizeOptionalText(parsed.data.contactPersonName),
+    contactPersonRole: normalizeOptionalText(parsed.data.contactPersonRole),
+    decisionMakerReached: parsed.data.decisionMakerReached,
+    outcome: parsed.data.outcome,
+    objectionReason: normalizeOptionalText(parsed.data.objectionReason),
+    quotedAmount: parsed.data.quotedAmount,
+    closeValue: parsed.data.closeValue,
+    followUpAt: normalizeOptionalText(parsed.data.followUpAt),
+    nextStep: normalizeOptionalText(parsed.data.nextStep),
+  });
+  await createAuditLog("outreach_logged", "lead", leadId, { channel: parsed.data.channel, outcome: parsed.data.outcome });
   revalidateLeadViews();
   revalidatePath(`/leads/${leadId}`);
   return { success: true, event };
 }
 
 export async function getOutreachEventsAction(leadId: string) {
-  await requirePermission("view:workspace");
+  const session = await requirePermission("view:workspace");
   await ensureDbReady();
+  const lead = await queryLeadById(leadId);
+  if (!lead || !canReadLeadForSession(session, lead)) return [];
   return dbGetOutreachEvents(leadId);
 }
 
 export async function markLeadRepliedAction(id: string) {
-  await requirePermission("outreach:create");
+  const session = await requirePermission("outreach:create");
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(id, session);
+  if (!ownership.ok) return { error: ownership.error };
   if (lead.first_reply_at) return { error: "Already marked as replied" };
   await updateLeadTimestamp(id, "first_reply_at", null);
   revalidateLeadViews();
@@ -250,10 +348,12 @@ export async function markLeadRepliedAction(id: string) {
 }
 
 export async function markMeetingBookedAction(id: string) {
-  await requirePermission("outreach:create");
+  const session = await requirePermission("outreach:create");
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(id, session);
+  if (!ownership.ok) return { error: ownership.error };
   if (lead.meeting_booked_at) return { error: "Already marked as meeting booked" };
   await updateLeadTimestamp(id, "meeting_booked_at", null);
   if (lead.status !== "meeting_set" && lead.status !== "closed_won") {
@@ -265,18 +365,21 @@ export async function markMeetingBookedAction(id: string) {
 }
 
 export async function generateOutreachPackageAction(leadId: string) {
-  await requirePermission("view:workspace");
+  const session = await requirePermission("view:workspace");
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
   if (!lead) return { error: "Lead not found" };
+  if (!canReadLeadForSession(session, lead)) return { error: "Lead not found" };
   return generateOutreachPackage(lead);
 }
 
 export async function createDemoForLeadAction(leadId: string) {
-  await requirePermission("demo:create");
+  const session = await requirePermission("demo:create");
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
   if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(leadId, session);
+  if (!ownership.ok) return { error: ownership.error };
   const demo = await dbCreateDemoForLead(leadId);
   if (!demo) return { error: "Unable to create demo" };
   await createAuditLog("demo_created", "lead", leadId, { demoId: demo.id, slug: demo.slug });
@@ -285,16 +388,19 @@ export async function createDemoForLeadAction(leadId: string) {
 }
 
 export async function getDemoByLeadIdAction(leadId: string) {
-  await requirePermission("view:workspace");
+  const session = await requirePermission("view:workspace");
   await ensureDbReady();
+  const lead = await queryLeadById(leadId);
+  if (!lead || !canReadLeadForSession(session, lead)) return null;
   return dbGetDemoByLeadId(leadId);
 }
 
 export async function getScoreBreakdownAction(leadId: string) {
-  await requirePermission("view:workspace");
+  const session = await requirePermission("view:workspace");
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
   if (!lead) return null;
+  if (!canReadLeadForSession(session, lead)) return null;
   const settings = await getSettings();
   const breakdown = computeScoreWithBreakdown(
     {
@@ -357,6 +463,8 @@ export async function updateLeadPhoneVerificationStatusAction(id: string, status
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(id, session);
+  if (!ownership.ok) return { error: ownership.error };
   const changes = await updateLeadPhoneVerificationStatus(id, parsed.data as PhoneVerificationStatus, session.userId);
   if (changes === 0) return { error: "Lead was not updated. Refresh and try again." };
   await createAuditLog("lead_phone_verification_updated", "lead", id, { status: parsed.data });
@@ -375,6 +483,8 @@ export async function markLeadQualityBucketAction(id: string, bucket: string) {
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(id, session);
+  if (!ownership.ok) return { error: ownership.error };
   const changes = await setLeadQualityBucket(id, parsed.data as QualityBucket, session.userId);
   if (changes === 0) return { error: "Lead was not updated. Refresh and try again." };
   await createAuditLog("lead_quality_bucket_updated", "lead", id, { bucket: parsed.data });
@@ -398,9 +508,15 @@ export async function refreshStaleUnitsAction(runId: string, olderThanDays: numb
 export async function bulkUpdateLeadStatusAction(ids: string[], status: string) {
   const parsed = statusSchema.safeParse(status);
   if (!parsed.success) return { error: "Invalid status" };
-  await requirePermission(parsed.data === "closed_won" || parsed.data === "closed_lost" ? "lead:close" : "lead:update");
+  const session = await requirePermission(parsed.data === "closed_won" || parsed.data === "closed_lost" ? "lead:close" : "lead:update");
   await ensureDbReady();
   if (ids.length === 0) return { error: "No leads selected" };
+  if (session.role !== "admin") {
+    for (const id of ids) {
+      const ownership = await requireLeadOwnershipForMutation(id, session);
+      if (!ownership.ok) return { error: ownership.error };
+    }
+  }
   const count = await dbBulkUpdateStatus(ids, parsed.data);
   await createAuditLog("bulk_status_update", "leads", undefined, { status: parsed.data, count });
   revalidateLeadViews();
@@ -673,11 +789,13 @@ export async function repairAiWebsiteViabilityBatchAction(input: { limit?: numbe
 const VERIFICATION_KEYS = new Set(["phone_works", "no_real_website", "address_verified", "business_active", "ready_for_outreach"]);
 
 export async function updateLeadVerificationAction(id: string, key: string, value: boolean) {
-  await requirePermission("lead:update");
+  const session = await requirePermission("lead:update");
   await ensureDbReady();
   if (!VERIFICATION_KEYS.has(key)) return { error: "Invalid verification key" };
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(id, session);
+  if (!ownership.ok) return { error: ownership.error };
   const verification = { ...lead.verification, [key]: value };
   await dbUpdateVerification(id, verification);
   revalidatePath(`/leads/${id}`);

@@ -97,9 +97,23 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "lead_ai_artifacts", column: "last_error", type: "TEXT" },
   { table: "lead_ai_artifacts", column: "next_retry_at", type: "TEXT" },
   { table: "lead_ai_artifacts", column: "max_attempts", type: "INTEGER NOT NULL DEFAULT 3" },
+  { table: "outreach_events", column: "actor_user_id", type: "TEXT" },
+  { table: "outreach_events", column: "actor_email", type: "TEXT" },
+  { table: "outreach_events", column: "contact_person_name", type: "TEXT" },
+  { table: "outreach_events", column: "contact_person_role", type: "TEXT" },
+  { table: "outreach_events", column: "decision_maker_reached", type: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "outreach_events", column: "outcome", type: "TEXT NOT NULL DEFAULT 'contacted'" },
+  { table: "outreach_events", column: "objection_reason", type: "TEXT" },
+  { table: "outreach_events", column: "quoted_amount", type: "REAL NOT NULL DEFAULT 0" },
+  { table: "outreach_events", column: "close_value", type: "REAL NOT NULL DEFAULT 0" },
+  { table: "outreach_events", column: "follow_up_at", type: "TEXT" },
+  { table: "outreach_events", column: "next_step", type: "TEXT" },
   { table: "audit_logs", column: "actor_user_id", type: "TEXT" },
   { table: "audit_logs", column: "actor_email", type: "TEXT" },
   { table: "audit_logs", column: "actor_role", type: "TEXT" },
+  { table: "app_users", column: "is_team_lead", type: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "app_users", column: "team_lead_user_id", type: "TEXT" },
+  { table: "app_users", column: "team_label", type: "TEXT" },
 ];
 
 export const SCHEMA_SQL = `
@@ -152,6 +166,9 @@ CREATE TABLE IF NOT EXISTS app_users (
   role TEXT NOT NULL DEFAULT 'researcher' CHECK(role IN ('admin','researcher')),
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')),
   created_by TEXT,
+  is_team_lead INTEGER NOT NULL DEFAULT 0,
+  team_lead_user_id TEXT,
+  team_label TEXT,
   last_seen_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -250,8 +267,39 @@ CREATE TABLE IF NOT EXISTS outreach_events (
   id TEXT PRIMARY KEY,
   lead_id TEXT NOT NULL REFERENCES leads(id),
   channel TEXT NOT NULL CHECK(channel IN ('call','text','email','walkin','other')),
+  actor_user_id TEXT,
+  actor_email TEXT,
+  contact_person_name TEXT,
+  contact_person_role TEXT,
+  decision_maker_reached INTEGER NOT NULL DEFAULT 0,
+  outcome TEXT NOT NULL DEFAULT 'contacted',
+  objection_reason TEXT,
+  quoted_amount REAL NOT NULL DEFAULT 0,
+  close_value REAL NOT NULL DEFAULT 0,
+  follow_up_at TEXT,
+  next_step TEXT,
   note TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS admin_requests (
+  id TEXT PRIMARY KEY,
+  lead_id TEXT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  created_by_user_id TEXT,
+  created_by_email TEXT,
+  assigned_admin_user_id TEXT,
+  request_type TEXT NOT NULL CHECK(request_type IN ('website_request','quote_request')),
+  status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','seen','in_progress','waiting_on_researcher','done','cancelled')),
+  priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('urgent','normal','low')),
+  summary TEXT,
+  contact_person_name TEXT,
+  budget_hint TEXT,
+  due_at TEXT,
+  next_step TEXT,
+  seen_at TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS demos (
@@ -496,6 +544,7 @@ CREATE INDEX IF NOT EXISTS idx_leads_sales_priority ON leads(sales_priority_scor
 CREATE INDEX IF NOT EXISTS idx_leads_component_scores ON leads(raw_opportunity_score DESC, verification_score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_assigned_to_user ON leads(assigned_to_user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_users_role_status ON app_users(role, status);
+CREATE INDEX IF NOT EXISTS idx_app_users_team_lead ON app_users(team_lead_user_id, status);
 CREATE INDEX IF NOT EXISTS idx_lead_notes_lead_created ON lead_notes(lead_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_crawl_units_status_zip ON crawl_units(status, zip);
 CREATE INDEX IF NOT EXISTS idx_crawl_units_run ON crawl_units(crawl_run_id);
@@ -518,6 +567,13 @@ CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_status_created ON lead_ai_artif
 CREATE INDEX IF NOT EXISTS idx_worker_runs_worker_started ON worker_runs(worker_name, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_worker_runs_status_started ON worker_runs(status, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_outreach_events_lead ON outreach_events(lead_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_outreach_events_actor_created ON outreach_events(actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_requests_status_type_created ON admin_requests(status, request_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_requests_lead_created ON admin_requests(lead_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_requests_creator_created ON admin_requests(created_by_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_requests_assigned_created ON admin_requests(assigned_admin_user_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_requests_open_unique ON admin_requests(lead_id, request_type)
+  WHERE status IN ('new','seen','in_progress','waiting_on_researcher');
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_user_id, created_at DESC);
 
