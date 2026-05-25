@@ -29,7 +29,7 @@ export default async function TeamBoardPage() {
       <section className="glass rounded-2xl p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
           <h3 className="section-label">Team workload</h3>
-          <Link href="/leads?assigned=unassigned" className="btn-glass text-sm">Open unclaimed leads</Link>
+          <Link href="/explore?assigned=unassigned&sortBy=opportunity" className="btn-glass text-sm">Open unclaimed leads</Link>
         </div>
         <div className="overflow-x-auto">
           <table className="glass-table">

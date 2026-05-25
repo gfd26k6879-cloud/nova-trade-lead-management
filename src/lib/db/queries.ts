@@ -607,6 +607,12 @@ export interface LeadFilters {
   status?: string;
   websiteStatus?: string;
   enrichment?: string;
+  city?: string;
+  zip?: string;
+  minLat?: number;
+  maxLat?: number;
+  minLng?: number;
+  maxLng?: number;
   minReviews?: number;
   minRating?: number;
   minScore?: number;
@@ -1104,11 +1110,23 @@ export async function ensureDbReady(): Promise<void>{
   if (!dbReadyPromise) {
     dbReadyPromise = (async () => {
       await getDb();
-      await ensureRuntimePostgresRepairs();
-      await seedZipCodes();
+      if (shouldRunRuntimePostgresRepairs()) {
+        await ensureRuntimePostgresRepairs();
+      }
+      if (shouldSeedZipCodesAtRuntime()) {
+        await seedZipCodes();
+      }
     })();
   }
   await dbReadyPromise;
+}
+
+function shouldRunRuntimePostgresRepairs(): boolean {
+  return Boolean(process.env.DATABASE_URL?.trim()) && process.env.NOSITE_RUNTIME_POSTGRES_REPAIR === "1";
+}
+
+function shouldSeedZipCodesAtRuntime(): boolean {
+  return !process.env.DATABASE_URL?.trim() || process.env.NOSITE_RUNTIME_ZIP_SEED === "1";
 }
 
 async function ensureRuntimePostgresRepairs(): Promise<void> {
@@ -2898,6 +2916,7 @@ const LEAD_ALLOWED_SORT = [
   "raw_opportunity_score",
   "verification_score",
   "sales_priority_score",
+  "estimated_deal_value",
   "rating",
   "review_count",
   "name",
@@ -2912,6 +2931,22 @@ export const API_ENDPOINT_PLACE_DETAILS = "places.placeDetails";
 function noUsableAiWebsiteCondition(alias?: string): string {
   const prefix = alias ? `${alias}.` : "";
   return `NOT (${prefix}ai_verification_status = 'site_found' AND ${prefix}ai_website_viability_status = 'usable' AND COALESCE(${prefix}ai_found_website_url, '') != '')`;
+}
+
+function leadWebsiteNeedRankExpression(alias = "l"): string {
+  const prefix = `${alias}.`;
+  return `CASE
+    WHEN ${prefix}website_status = 'none'
+      AND (${prefix}ai_verification_status IN ('no_site_found','not_checked') OR ${prefix}ai_website_viability_status IS NULL OR ${prefix}ai_website_viability_status IN ('directory_only','not_found')) THEN 5
+    WHEN ${prefix}ai_website_viability_status IN ('broken','parked','placeholder')
+      OR ${prefix}quality_bucket = 'broken_site_opportunity' THEN 4
+    WHEN ${prefix}website_status = 'social'
+      OR ${prefix}ai_website_viability_status = 'directory_only' THEN 3
+    WHEN ${prefix}ai_verification_status = 'weak_site_found'
+      OR ${prefix}website_status = 'basic' THEN 2
+    WHEN ${prefix}website_status IN ('none','social','basic') THEN 1
+    ELSE 0
+  END`;
 }
 
 function startOfToday(): string {
@@ -2954,6 +2989,30 @@ function buildLeadFilterWhere(filters: LeadFilters): { where: string; params: un
   if (filters.enrichment) {
     conditions.push("l.enrichment_status = ?");
     params.push(filters.enrichment);
+  }
+  if (filters.city) {
+    conditions.push("l.address LIKE ?");
+    params.push(`%${filters.city}%`);
+  }
+  if (filters.zip) {
+    conditions.push("l.address LIKE ?");
+    params.push(`%${filters.zip}%`);
+  }
+  if (filters.minLat != null) {
+    conditions.push("l.lat IS NOT NULL AND l.lat >= ?");
+    params.push(filters.minLat);
+  }
+  if (filters.maxLat != null) {
+    conditions.push("l.lat IS NOT NULL AND l.lat <= ?");
+    params.push(filters.maxLat);
+  }
+  if (filters.minLng != null) {
+    conditions.push("l.lng IS NOT NULL AND l.lng >= ?");
+    params.push(filters.minLng);
+  }
+  if (filters.maxLng != null) {
+    conditions.push("l.lng IS NOT NULL AND l.lng <= ?");
+    params.push(filters.maxLng);
   }
   if (filters.minReviews != null && filters.minReviews > 0) {
     conditions.push("l.review_count >= ?");
@@ -3014,18 +3073,30 @@ function leadUnassignedCondition(column: string): string {
   return `(${column} IS NULL OR CAST(${column} AS TEXT) = '')`;
 }
 
-function resolveLeadSort(filters: LeadFilters): { safeSortBy: string; safeSortDir: "ASC" | "DESC" } {
+function resolveLeadSort(filters: LeadFilters): { orderBySql: string } {
   const sortBy = filters.sortBy || "score";
   const sortDir = filters.sortDir || "desc";
-  const safeSortBy = LEAD_ALLOWED_SORT.includes(sortBy) ? sortBy : "score";
   const safeSortDir = sortDir === "asc" ? "ASC" : "DESC";
-  return { safeSortBy, safeSortDir };
+  if (sortBy === "opportunity" || sortBy === "website_need") {
+    return {
+      orderBySql: [
+        `${leadWebsiteNeedRankExpression("l")} ${safeSortDir}`,
+        "l.lead_quality_score DESC",
+        "l.sales_priority_score DESC",
+        "l.win_probability_score DESC",
+        "l.score DESC",
+        "l.review_count DESC",
+      ].join(", "),
+    };
+  }
+  const safeSortBy = LEAD_ALLOWED_SORT.includes(sortBy) ? sortBy : "score";
+  return { orderBySql: `l.${safeSortBy} ${safeSortDir}` };
 }
 
 export async function getLeads(filters: LeadFilters = {}): Promise<{ leads: Lead[]; total: number }> {
   const db = await getDb();
   const { where, params } = buildLeadFilterWhere(filters);
-  const { safeSortBy, safeSortDir } = resolveLeadSort(filters);
+  const { orderBySql } = resolveLeadSort(filters);
 
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(200, Math.max(1, filters.pageSize ?? 25));
@@ -3038,7 +3109,7 @@ export async function getLeads(filters: LeadFilters = {}): Promise<{ leads: Lead
      FROM leads l
      LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
      ${where}
-     ORDER BY l.${safeSortBy} ${safeSortDir}
+     ORDER BY ${orderBySql}
      LIMIT ? OFFSET ?`
   ).all(...params, pageSize, offset) as Array<Record<string, unknown>>;
 
@@ -3051,7 +3122,7 @@ export async function getLeads(filters: LeadFilters = {}): Promise<{ leads: Lead
 export async function getLeadsForExport(filters: LeadFilters = {}, limit = 50000): Promise<Lead[]>{
   const db = await getDb();
   const { where, params } = buildLeadFilterWhere(filters);
-  const { safeSortBy, safeSortDir } = resolveLeadSort(filters);
+  const { orderBySql } = resolveLeadSort(filters);
   const safeLimit = Math.min(100000, Math.max(1, Math.floor(limit)));
 
   const rows = await db.prepare(
@@ -3059,7 +3130,7 @@ export async function getLeadsForExport(filters: LeadFilters = {}, limit = 50000
      FROM leads l
      LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
      ${where}
-     ORDER BY l.${safeSortBy} ${safeSortDir}
+     ORDER BY ${orderBySql}
      LIMIT ?`
   ).all(...params, safeLimit) as Array<Record<string, unknown>>;
 
@@ -3091,7 +3162,7 @@ export async function getBusinessTypeCounts(): Promise<BusinessTypeCount[]>{
 export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads: KanbanLead[]; total: number }> {
   const db = await getDb();
   const { where, params } = buildLeadFilterWhere(filters);
-  const { safeSortBy, safeSortDir } = resolveLeadSort(filters);
+  const { orderBySql } = resolveLeadSort(filters);
 
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(200, Math.max(1, filters.pageSize ?? 100));
@@ -3111,7 +3182,7 @@ export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads
      FROM leads l
      LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
      ${where}
-     ORDER BY l.${safeSortBy} ${safeSortDir}
+     ORDER BY ${orderBySql}
      LIMIT ? OFFSET ?`
   ).all(...params, pageSize, offset) as Array<Record<string, unknown>>;
 
@@ -6216,7 +6287,7 @@ export async function getNowQueue(
         AND score > 0
         AND ${SCORE_ELIGIBLE_CONDITION}
         ${assignmentWhere}
-      ORDER BY sales_priority_score DESC, lead_quality_score DESC, score DESC
+      ORDER BY ${leadWebsiteNeedRankExpression("leads")} DESC, sales_priority_score DESC, lead_quality_score DESC, score DESC
       LIMIT ?
     ),
     ranked AS (
@@ -6303,6 +6374,7 @@ export async function getNowQueue(
           LIMIT 1
         ) as open_quote_request_id,
         CASE WHEN l.reminder_date IS NOT NULL AND l.reminder_date <= ? THEN 1 ELSE 0 END as has_urgent_reminder,
+        ${leadWebsiteNeedRankExpression("l")} as website_need_rank,
         CASE
           WHEN l.contactability_score > 0 THEN l.contactability_score
           WHEN l.phone IS NOT NULL AND l.phone != '' THEN 1.0
@@ -6323,6 +6395,7 @@ export async function getNowQueue(
     FROM ranked
     ORDER BY
       has_urgent_reminder DESC,
+      website_need_rank DESC,
       sales_priority_score DESC,
       lead_quality_score DESC,
       win_probability_score DESC,
@@ -6403,7 +6476,7 @@ export async function getResearcherWorkbench(userId: string): Promise<Researcher
   ).get(userId, weekAgo) as { count: number } | undefined;
 
   return {
-    nextAction: myLeads[0] ?? unclaimedLeads[0] ?? null,
+    nextAction: myLeads[0] ?? null,
     myLeads,
     unclaimedLeads,
     summary: {

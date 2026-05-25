@@ -108,6 +108,7 @@ const qualityAiBatchSchema = z.object({
 
 function revalidateLeadViews(): void {
   revalidatePath("/leads");
+  revalidatePath("/explore");
   revalidatePath("/queue");
   revalidatePath("/team");
   revalidatePath("/quality");

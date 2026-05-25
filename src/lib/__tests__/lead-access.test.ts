@@ -40,10 +40,10 @@ describe("lead access boundaries", () => {
     expect(shouldRedirectResearcherLeadList(admin, { owner: "researcher-2", view: "kanban" })).toBe(false);
   });
 
-  it("lets researchers read unclaimed and self-owned leads but not other-owned leads", () => {
+  it("lets researchers read lead details across the shared inventory", () => {
     expect(canReadLeadForSession(researcher, { assigned_to_user_id: null })).toBe(true);
     expect(canReadLeadForSession(researcher, { assigned_to_user_id: "researcher-1" })).toBe(true);
-    expect(canReadLeadForSession(researcher, { assigned_to_user_id: "other-user" })).toBe(false);
+    expect(canReadLeadForSession(researcher, { assigned_to_user_id: "other-user" })).toBe(true);
     expect(canReadLeadForSession(admin, { assigned_to_user_id: "other-user" })).toBe(true);
   });
 });

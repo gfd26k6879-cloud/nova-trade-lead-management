@@ -14,6 +14,7 @@ type NavItem = {
 
 const primaryItems: NavItem[] = [
   { href: "/queue", label: "Workbench", description: "Daily call, text, email, and follow-up queue." },
+  { href: "/explore", label: "Explore", description: "Search, map, filter, and claim available businesses." },
   { href: "/leads?assigned=me", label: "My Leads", description: "Only leads owned by the current user." },
   { href: "/team", label: "Team", description: "Team workload and recent outreach activity." },
 ];

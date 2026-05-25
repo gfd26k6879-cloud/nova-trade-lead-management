@@ -139,12 +139,11 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
   return (
     <PageShell
       title="Workbench"
-      description="Claim the best leads, work your own list, and keep follow-ups visible for the team."
+      description="Work the leads you own, log every touch, and keep follow-ups visible for the team."
       stats={[
         { label: "My Claimed", value: String(workbench.summary.myClaimed) },
         { label: "Due Today", value: String(workbench.summary.dueToday) },
         { label: "Contacts This Week", value: String(workbench.summary.contactedThisWeek) },
-        { label: "Best Unclaimed", value: String(workbench.summary.bestUnclaimed) },
       ]}
     >
       {message && (
@@ -161,7 +160,10 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
               Start here, then use Log outcome after every call, text, email, or in-person visit.
             </p>
           </div>
-          <Link href="/leads?assigned=me" className="btn-glass text-sm">Open My Leads</Link>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/leads?assigned=me" className="btn-glass text-sm">Open My Leads</Link>
+            <Link href="/explore" className="btn-primary text-sm">Find Leads</Link>
+          </div>
         </div>
         {workbench.nextAction ? (
           <LeadActionCard
@@ -175,44 +177,30 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
             prominent
           />
         ) : (
-          <EmptyState text="No lead needs action yet. Claim a lead from Best unclaimed leads once new opportunities arrive." />
+          <EmptyState text="No claimed lead needs action yet. Use Lead Explorer to find and claim your next lead." />
         )}
       </section>
 
-      <section className="grid gap-5 lg:grid-cols-2">
-        <div className="glass rounded-2xl p-5">
-          <div className="mb-4 flex items-center justify-between gap-3">
+      <section className="glass rounded-2xl p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
             <h3 className="section-label">My claimed leads</h3>
-            <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>{workbench.myLeads.length}</span>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              This page only shows leads assigned to you.
+            </p>
           </div>
-          <LeadList
-            leads={workbench.myLeads}
-            scoreThresholds={scoreThresholds}
-            busyLeadId={busyLeadId}
-            currentUserId={currentUser.userId}
-            onClaim={claimLead}
-            onRelease={releaseLead}
-            onOpenLogSheet={openLogSheet}
-            emptyText="You have no claimed leads. Claim one from the list on the right."
-          />
+          <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>{workbench.myLeads.length}</span>
         </div>
-
-        <div className="glass rounded-2xl p-5">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <h3 className="section-label">Best unclaimed leads</h3>
-            <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>{workbench.unclaimedLeads.length}</span>
-          </div>
-          <LeadList
-            leads={workbench.unclaimedLeads}
-            scoreThresholds={scoreThresholds}
-            busyLeadId={busyLeadId}
-            currentUserId={currentUser.userId}
-            onClaim={claimLead}
-            onRelease={releaseLead}
-            onOpenLogSheet={openLogSheet}
-            emptyText="No unclaimed ready leads are available."
-          />
-        </div>
+        <LeadList
+          leads={workbench.myLeads}
+          scoreThresholds={scoreThresholds}
+          busyLeadId={busyLeadId}
+          currentUserId={currentUser.userId}
+          onClaim={claimLead}
+          onRelease={releaseLead}
+          onOpenLogSheet={openLogSheet}
+          emptyText="You have no claimed leads. Use Lead Explorer to claim one."
+        />
       </section>
 
       <LogOutcomeSheet

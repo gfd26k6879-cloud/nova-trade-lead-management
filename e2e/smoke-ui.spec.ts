@@ -22,6 +22,7 @@ test.describe("UI Smoke Test", () => {
   test("2. Protected navigation and Dashboard loads", async ({ page }) => {
   skipIfMissingAuth();
     await expect(page.getByRole("link", { name: "Workbench", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Explore", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "My Leads", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Team", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /^Admin/ })).toBeVisible();

@@ -31,7 +31,17 @@ function insertUser(userId: string, email: string, displayName: string) {
   ).run(`app-${userId}`, userId, email, displayName);
 }
 
-function insertLead(input: { id: string; assignedTo?: string | null; salesPriority?: number; reminder?: string | null }) {
+function insertLead(input: {
+  id: string;
+  assignedTo?: string | null;
+  salesPriority?: number;
+  leadQuality?: number;
+  reminder?: string | null;
+  websiteStatus?: string;
+  qualityBucket?: string;
+  aiVerificationStatus?: string;
+  aiWebsiteViabilityStatus?: string | null;
+}) {
   testDb.prepare(
     `INSERT INTO leads (
       id, place_id, name, address, phone, categories, website_status, score, status,
@@ -39,16 +49,21 @@ function insertLead(input: { id: string; assignedTo?: string | null; salesPriori
       ai_website_viability_status, ai_queue_status, sales_priority_score, lead_quality_score,
       assigned_to_user_id, reminder_date, discovered_at, created_at, updated_at
     ) VALUES (
-      ?, ?, ?, '123 Main St, Denver, CO 80202', '303-555-0100', '["plumber"]', 'none', 20, 'new',
-      'plumbing', 'qualified', 'ready_to_call', 'no_site_found',
-      'directory_only', 'verified', ?, 80,
+      ?, ?, ?, '123 Main St, Denver, CO 80202', '303-555-0100', '["plumber"]', ?, 20, 'new',
+      'plumbing', 'qualified', ?, ?,
+      ?, 'verified', ?, ?,
       ?, ?, '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z'
     )`
   ).run(
     input.id,
     `place-${input.id}`,
     `Lead ${input.id}`,
+    input.websiteStatus ?? "none",
+    input.qualityBucket ?? "ready_to_call",
+    input.aiVerificationStatus ?? "no_site_found",
+    input.aiWebsiteViabilityStatus ?? "directory_only",
     input.salesPriority ?? 70,
+    input.leadQuality ?? 80,
     input.assignedTo ?? null,
     input.reminder ?? null,
   );
@@ -76,15 +91,18 @@ describe("researcher workbench queries", () => {
     expect(lead?.assigned_user_email).toBe("one@example.com");
   });
 
-  it("splits workbench leads into mine and best unclaimed", async () => {
+  it("keeps workbench next action on owned leads and ranks unclaimed no-site opportunities first", async () => {
     insertLead({ id: "mine", assignedTo: "user-1", salesPriority: 50, reminder: "2026-05-15" });
-    insertLead({ id: "open", salesPriority: 90 });
+    insertLead({ id: "weak-high", salesPriority: 100, websiteStatus: "basic", aiVerificationStatus: "weak_site_found", aiWebsiteViabilityStatus: null });
+    insertLead({ id: "broken", salesPriority: 80, websiteStatus: "basic", qualityBucket: "broken_site_opportunity", aiVerificationStatus: "weak_site_found", aiWebsiteViabilityStatus: "broken" });
+    insertLead({ id: "no-site", salesPriority: 60, websiteStatus: "none", aiVerificationStatus: "no_site_found", aiWebsiteViabilityStatus: "directory_only" });
     insertLead({ id: "other", assignedTo: "user-2", salesPriority: 100 });
 
     const workbench = await getResearcherWorkbench("user-1");
 
     expect(workbench.myLeads.map((lead) => lead.id)).toContain("mine");
-    expect(workbench.unclaimedLeads.map((lead) => lead.id)).toEqual(["open"]);
+    expect(workbench.nextAction?.id).toBe("mine");
+    expect(workbench.unclaimedLeads.map((lead) => lead.id).slice(0, 3)).toEqual(["no-site", "broken", "weak-high"]);
     expect(workbench.summary.myClaimed).toBe(1);
     expect(workbench.summary.dueToday).toBe(1);
   });
