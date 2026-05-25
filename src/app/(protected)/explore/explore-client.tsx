@@ -8,7 +8,7 @@ import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
 import { claimLeadAction } from "@/lib/leads/actions";
 import { getBusinessTypeLabel } from "@/lib/business-types";
-import type { Lead } from "@/lib/db/queries";
+import type { Lead, LeadMapPoint } from "@/lib/db/queries";
 import type { AppRole } from "@/lib/permissions";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
 
@@ -17,6 +17,9 @@ type ExplorerView = "map" | "cards" | "table";
 interface Props {
   leads: Lead[];
   total: number;
+  mapPoints: LeadMapPoint[];
+  totalMapped: number;
+  mapPointLimit: number;
   filters: {
     search?: string;
     status?: string;
@@ -73,8 +76,19 @@ const GEO_PRESETS = [
   { value: "boulder", label: "Boulder" },
   { value: "colorado_springs", label: "Colorado Springs" },
 ];
+const MAP_LIST_LIMIT = 80;
 
-export function ExploreClient({ leads, total, filters, scoreThresholds, businessTypeCounts, currentUser }: Props) {
+export function ExploreClient({
+  leads,
+  total,
+  mapPoints,
+  totalMapped,
+  mapPointLimit,
+  filters,
+  scoreThresholds,
+  businessTypeCounts,
+  currentUser,
+}: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [search, setSearch] = useState(filters.search ?? "");
@@ -82,14 +96,15 @@ export function ExploreClient({ leads, total, filters, scoreThresholds, business
   const [zip, setZip] = useState(filters.zip ?? "");
   const [busyLeadId, setBusyLeadId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(leads[0]?.id ?? null);
+  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(mapPoints[0]?.id ?? leads[0]?.id ?? null);
 
   const page = filters.page ?? 1;
   const pageSize = filters.pageSize ?? 60;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const view = normalizeView(filters.view);
-  const mappedLeads = useMemo(() => leads.filter((lead) => typeof lead.lat === "number" && typeof lead.lng === "number"), [leads]);
-  const selectedLead = leads.find((lead) => lead.id === selectedLeadId) ?? leads[0] ?? null;
+  const selectedMapPoint = mapPoints.find((lead) => lead.id === selectedLeadId) ?? mapPoints[0] ?? null;
+  const visibleMapList = useMemo(() => mapPoints.slice(0, MAP_LIST_LIMIT), [mapPoints]);
+  const missingCoordinates = Math.max(0, total - totalMapped);
 
   const pushFilters = useCallback(
     (updates: Record<string, string | number | null | undefined>) => {
@@ -121,7 +136,7 @@ export function ExploreClient({ leads, total, filters, scoreThresholds, business
   };
 
   const applyMapQuadrant = (quadrant: "nw" | "ne" | "sw" | "se") => {
-    const bounds = getBounds(mappedLeads);
+    const bounds = getBounds(mapPoints);
     if (!bounds) return;
     const midLat = (bounds.minLat + bounds.maxLat) / 2;
     const midLng = (bounds.minLng + bounds.maxLng) / 2;
@@ -141,7 +156,12 @@ export function ExploreClient({ leads, total, filters, scoreThresholds, business
       stats={[
         { label: "Matching Leads", value: String(total) },
         { label: "Unclaimed Here", value: String(leads.filter((lead) => !lead.assigned_to_user_id).length), hint: "On this page" },
-        { label: "Mapped Here", value: String(mappedLeads.length), hint: "Current page" },
+        {
+          label: "Mapped Leads",
+          value: String(totalMapped),
+          hint: totalMapped > mapPointLimit ? `Showing top ${mapPoints.length}` : "Stored coordinates",
+        },
+        { label: "Missing Coords", value: String(missingCoordinates) },
         { label: "Page", value: `${page} / ${totalPages}` },
       ]}
     >
@@ -307,29 +327,31 @@ export function ExploreClient({ leads, total, filters, scoreThresholds, business
         </div>
       </section>
 
-      {view === "map" && (
+      {view === "map" ? (
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(22rem,0.7fr)]">
-          <LeadMap leads={mappedLeads} selectedLeadId={selectedLead?.id ?? null} onSelect={setSelectedLeadId} onQuadrant={applyMapQuadrant} />
-          <div className="glass rounded-2xl p-5">
-            <h3 className="section-label">Selected business</h3>
-            {selectedLead ? (
-              <div className="mt-3">
-                <LeadCard
-                  lead={selectedLead}
-                  currentUserId={currentUser.userId}
-                  scoreThresholds={scoreThresholds}
-                  busy={busyLeadId === selectedLead.id}
-                  onClaim={claimLead}
-                />
-              </div>
-            ) : (
-              <EmptyState text="No lead selected." />
-            )}
-          </div>
+          <LeadMap
+            points={mapPoints}
+            total={total}
+            totalMapped={totalMapped}
+            mapPointLimit={mapPointLimit}
+            selectedLeadId={selectedMapPoint?.id ?? null}
+            onSelect={setSelectedLeadId}
+            onQuadrant={applyMapQuadrant}
+          />
+          <MapSidePanel
+            points={visibleMapList}
+            selectedPoint={selectedMapPoint}
+            selectedLeadId={selectedMapPoint?.id ?? null}
+            totalMapped={totalMapped}
+            listLimit={MAP_LIST_LIMIT}
+            currentUserId={currentUser.userId}
+            scoreThresholds={scoreThresholds}
+            busyLeadId={busyLeadId}
+            onSelect={setSelectedLeadId}
+            onClaim={claimLead}
+          />
         </section>
-      )}
-
-      {view === "table" ? (
+      ) : view === "table" ? (
         <LeadTable leads={leads} currentUserId={currentUser.userId} scoreThresholds={scoreThresholds} busyLeadId={busyLeadId} onClaim={claimLead} />
       ) : (
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -350,7 +372,7 @@ export function ExploreClient({ leads, total, filters, scoreThresholds, business
         </section>
       )}
 
-      {totalPages > 1 && (
+      {view !== "map" && totalPages > 1 && (
         <div className="flex items-center justify-center gap-2">
           <button type="button" className="btn-glass text-sm" disabled={page <= 1} onClick={() => pushFilters({ page: page - 1 })}>
             Previous
@@ -366,24 +388,37 @@ export function ExploreClient({ leads, total, filters, scoreThresholds, business
 }
 
 function LeadMap({
-  leads,
+  points,
+  total,
+  totalMapped,
+  mapPointLimit,
   selectedLeadId,
   onSelect,
   onQuadrant,
 }: {
-  leads: Lead[];
+  points: LeadMapPoint[];
+  total: number;
+  totalMapped: number;
+  mapPointLimit: number;
   selectedLeadId: string | null;
   onSelect: (leadId: string) => void;
   onQuadrant: (quadrant: "nw" | "ne" | "sw" | "se") => void;
 }) {
-  const bounds = getBounds(leads);
+  const bounds = getBounds(points);
+  const hasMore = totalMapped > points.length;
+  const missingCoordinates = Math.max(0, total - totalMapped);
+  const dense = points.length > 150;
+
   return (
     <div className="glass rounded-2xl p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="section-label">Map view</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="section-label">Map view</h3>
+            <HelpTip>Uses stored lead latitude and longitude from the database only. It does not call Google Maps, Mapbox, Places, geocoding, or paid tile APIs.</HelpTip>
+          </div>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            Click a marker to inspect a lead. Use quadrants to narrow this result set by location.
+            Click a marker to inspect a lead. Quadrants apply a latitude/longitude filter to this result set.
           </p>
         </div>
         <div className="grid grid-cols-2 gap-1">
@@ -402,26 +437,38 @@ function LeadMap({
           border: "1px solid rgba(255,255,255,0.58)",
         }}
       >
-        <div className="absolute left-4 top-4 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.78)", color: "var(--text-secondary)" }}>
-          {leads.length} mapped leads
+        <div className="absolute left-4 top-4 z-10 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.82)", color: "var(--text-secondary)" }}>
+          {points.length} shown / {totalMapped} mapped
         </div>
+        {hasMore && (
+          <div className="absolute right-4 top-4 z-10 max-w-64 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.82)", color: "var(--text-secondary)" }}>
+            Showing top {mapPointLimit} by current sort. Narrow filters to inspect more.
+          </div>
+        )}
         <div className="absolute inset-x-0 top-1/2 border-t border-dashed border-slate-400/35" />
         <div className="absolute inset-y-0 left-1/2 border-l border-dashed border-slate-400/35" />
+        <span className="absolute left-1/2 top-3 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>North</span>
+        <span className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>South</span>
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>West</span>
+        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-[0.18em]" style={{ color: "rgba(15,23,42,0.45)" }}>East</span>
         {!bounds ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm" style={{ color: "var(--text-tertiary)" }}>
-            No coordinates on this page. Try clearing filters or selecting a different page.
+            {total > 0
+              ? `${missingCoordinates} matching leads do not have stored coordinates. Use list/table filters or add coordinates during data enrichment.`
+              : "No leads match the current filters."}
           </div>
-        ) : leads.map((lead) => {
+        ) : points.map((lead, index) => {
           const point = projectLead(lead, bounds);
           const active = lead.id === selectedLeadId;
           return (
             <button
               key={lead.id}
               type="button"
-              className="absolute h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full transition"
+              className={`absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full font-semibold leading-none transition ${active ? "h-7 w-7 text-[10px]" : dense ? "h-4 w-4 text-[0px]" : "h-5 w-5 text-[10px]"}`}
               style={{
                 left: `${point.x}%`,
                 top: `${point.y}%`,
+                color: "#fff",
                 background: active ? "#4f46e5" : markerColor(lead),
                 border: "2px solid rgba(255,255,255,0.92)",
                 boxShadow: active ? "0 0 0 7px rgba(79,70,229,0.16), 0 8px 22px rgba(15,23,42,0.24)" : "0 5px 14px rgba(15,23,42,0.18)",
@@ -429,11 +476,170 @@ function LeadMap({
               title={`${lead.name ?? "Unknown business"} - ${formatLabel(lead.website_status)}`}
               aria-label={`Select ${lead.name ?? "lead"}`}
               onClick={() => onSelect(lead.id)}
-            />
+            >
+              {index < 99 ? index + 1 : ""}
+            </button>
           );
         })}
+        <div className="absolute bottom-4 left-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.82)", color: "var(--text-secondary)" }}>
+          <LegendDot color="#dc2626" label="No site" />
+          <LegendDot color="#ea580c" label="Broken" />
+          <LegendDot color="#d97706" label="Social" />
+          <LegendDot color="#4f46e5" label="Basic" />
+          <LegendDot color="#16a34a" label="Custom" />
+        </div>
       </div>
     </div>
+  );
+}
+
+function MapSidePanel({
+  points,
+  selectedPoint,
+  selectedLeadId,
+  totalMapped,
+  listLimit,
+  currentUserId,
+  scoreThresholds,
+  busyLeadId,
+  onSelect,
+  onClaim,
+}: {
+  points: LeadMapPoint[];
+  selectedPoint: LeadMapPoint | null;
+  selectedLeadId: string | null;
+  totalMapped: number;
+  listLimit: number;
+  currentUserId: string;
+  scoreThresholds: ScoreBandThresholds;
+  busyLeadId: string | null;
+  onSelect: (leadId: string) => void;
+  onClaim: (leadId: string) => void;
+}) {
+  return (
+    <aside className="glass rounded-2xl p-5">
+      <div>
+        <h3 className="section-label">Selected business</h3>
+        <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+          Inspect the best mapped opportunities without loading the full card grid.
+        </p>
+      </div>
+
+      <div className="mt-3">
+        {selectedPoint ? (
+          <MapPointCard
+            point={selectedPoint}
+            currentUserId={currentUserId}
+            scoreThresholds={scoreThresholds}
+            busy={busyLeadId === selectedPoint.id}
+            onClaim={onClaim}
+          />
+        ) : (
+          <EmptyState text="No mapped lead selected." />
+        )}
+      </div>
+
+      <div className="mt-5 border-t pt-4" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="section-label">Mapped list</h3>
+          <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
+            {points.length} of {totalMapped}
+          </span>
+        </div>
+        <div className="mt-3 max-h-[22rem] space-y-2 overflow-y-auto pr-1">
+          {points.length === 0 ? (
+            <EmptyState text="No stored coordinates for the current filters." />
+          ) : points.map((point, index) => (
+            <button
+              key={point.id}
+              type="button"
+              className={`w-full rounded-xl border px-3 py-2 text-left transition ${point.id === selectedLeadId ? "bg-white/70" : "bg-white/35 hover:bg-white/55"}`}
+              style={{ borderColor: point.id === selectedLeadId ? "rgba(79,70,229,0.32)" : "rgba(255,255,255,0.5)" }}
+              onClick={() => onSelect(point.id)}
+            >
+              <div className="flex items-start gap-2">
+                <span
+                  className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"
+                  style={{ background: markerColor(point) }}
+                >
+                  {index + 1}
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+                    {point.name ?? "Unknown business"}
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs" style={{ color: "var(--text-tertiary)" }}>
+                    {formatPlace(point.address)} &middot; {formatLabel(point.website_status)} &middot; {point.review_count ?? 0} reviews
+                  </span>
+                </span>
+              </div>
+            </button>
+          ))}
+        </div>
+        {totalMapped > listLimit && (
+          <p className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>
+            Showing the first {listLimit} mapped leads in the side list. The map still shows up to the configured point limit.
+          </p>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function MapPointCard({
+  point,
+  currentUserId,
+  scoreThresholds,
+  busy,
+  onClaim,
+}: {
+  point: LeadMapPoint;
+  currentUserId: string;
+  scoreThresholds: ScoreBandThresholds;
+  busy: boolean;
+  onClaim: (leadId: string) => void;
+}) {
+  const owner = ownerLabel(point, currentUserId);
+  return (
+    <article className="rounded-xl border bg-white/45 p-4" style={{ borderColor: "rgba(255,255,255,0.55)" }}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <Link href={`/leads/${point.id}`} className="link-accent block break-words font-semibold leading-snug">
+            {point.name ?? "Unknown business"}
+          </Link>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{point.address ?? "No address"}</p>
+        </div>
+        <ScoreBandBadge score={point.score} thresholds={scoreThresholds} compact />
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Badge label={formatLabel(point.website_status)} style={websiteBadgeStyle(point.website_status)} />
+        <Badge label={formatLabel(point.quality_bucket)} />
+        <Badge label={formatLabel(point.ai_verification_status)} />
+        <Badge label={point.rating ? `${point.rating.toFixed(1)} rating` : "No rating"} />
+        <Badge label={`${point.review_count ?? 0} reviews`} />
+        <Badge label={formatMoney(point.estimated_deal_value)} />
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
+        <OwnerPill label={owner} mine={point.assigned_to_user_id === currentUserId} />
+        <Link href={`/leads/${point.id}`} className="btn-glass ml-auto text-sm">Open</Link>
+        {!point.assigned_to_user_id && (
+          <button type="button" className="btn-primary text-sm" disabled={busy} onClick={() => onClaim(point.id)}>
+            {busy ? "Claiming..." : "Claim"}
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="h-2.5 w-2.5 rounded-full" style={{ background: color }} />
+      {label}
+    </span>
   );
 }
 
@@ -591,8 +797,11 @@ function normalizeView(value: string | undefined): ExplorerView {
   return value === "cards" || value === "table" || value === "map" ? value : "map";
 }
 
-function getBounds(leads: Lead[]) {
-  const points = leads.flatMap((lead) => typeof lead.lat === "number" && typeof lead.lng === "number" ? [{ lat: lead.lat, lng: lead.lng }] : []);
+type LeadCoordinate = Pick<LeadMapPoint, "lat" | "lng">;
+type LeadMarkerStatus = Pick<LeadMapPoint, "website_status" | "ai_website_viability_status" | "quality_bucket">;
+type LeadOwner = Pick<LeadMapPoint, "assigned_to_user_id" | "assigned_user_display_name" | "assigned_user_email">;
+
+function getBounds(points: LeadCoordinate[]) {
   if (points.length === 0) return null;
   const minLat = Math.min(...points.map((point) => point.lat));
   const maxLat = Math.max(...points.map((point) => point.lat));
@@ -606,9 +815,9 @@ function getBounds(leads: Lead[]) {
   };
 }
 
-function projectLead(lead: Lead, bounds: NonNullable<ReturnType<typeof getBounds>>) {
-  const lat = typeof lead.lat === "number" ? lead.lat : bounds.minLat;
-  const lng = typeof lead.lng === "number" ? lead.lng : bounds.minLng;
+function projectLead(lead: LeadCoordinate, bounds: NonNullable<ReturnType<typeof getBounds>>) {
+  const lat = lead.lat;
+  const lng = lead.lng;
   const x = ((lng - bounds.minLng) / (bounds.maxLng - bounds.minLng)) * 88 + 6;
   const y = 94 - ((lat - bounds.minLat) / (bounds.maxLat - bounds.minLat)) * 88;
   return { x: clamp(x, 4, 96), y: clamp(y, 4, 96) };
@@ -618,7 +827,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function markerColor(lead: Lead): string {
+function markerColor(lead: LeadMarkerStatus): string {
   if (lead.website_status === "none") return "#dc2626";
   if (lead.ai_website_viability_status === "broken" || lead.quality_bucket === "broken_site_opportunity") return "#ea580c";
   if (lead.website_status === "social") return "#d97706";
@@ -626,7 +835,7 @@ function markerColor(lead: Lead): string {
   return "#16a34a";
 }
 
-function ownerLabel(lead: Lead, currentUserId: string): string {
+function ownerLabel(lead: LeadOwner, currentUserId: string): string {
   if (!lead.assigned_to_user_id) return "Unclaimed";
   if (lead.assigned_to_user_id === currentUserId) return "Mine";
   return lead.assigned_user_display_name || lead.assigned_user_email || "Taken";

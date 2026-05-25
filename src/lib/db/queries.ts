@@ -633,6 +633,26 @@ export interface LeadFilters {
   pageSize?: number;
 }
 
+export interface LeadMapPoint {
+  id: string;
+  name: string | null;
+  address: string | null;
+  lat: number;
+  lng: number;
+  website_status: string;
+  business_type: BusinessType;
+  rating: number | null;
+  review_count: number | null;
+  score: number;
+  quality_bucket: QualityBucket;
+  ai_verification_status: AiVerificationStatus;
+  ai_website_viability_status: WebsiteViabilityStatus | null;
+  estimated_deal_value: number;
+  assigned_to_user_id: string | null;
+  assigned_user_email: string | null;
+  assigned_user_display_name: string | null;
+}
+
 export type { SchedulerWorkerName } from "@/lib/scheduler/worker-metadata";
 export type SchedulerRunStatus = "running" | "processed" | "idle" | "disabled" | "budget_limit" | "error";
 
@@ -3116,6 +3136,68 @@ export async function getLeads(filters: LeadFilters = {}): Promise<{ leads: Lead
   return {
     total: countRow.count,
     leads: leads.map(parseLeadRow),
+  };
+}
+
+export async function getLeadMapPoints(
+  filters: Omit<LeadFilters, "page" | "pageSize"> = {},
+  limit = 600,
+): Promise<{ points: LeadMapPoint[]; totalMapped: number }> {
+  const db = await getDb();
+  const { where, params } = buildLeadFilterWhere(filters);
+  const { orderBySql } = resolveLeadSort(filters);
+  const coordinateCondition = "l.lat IS NOT NULL AND l.lng IS NOT NULL";
+  const mapWhere = where ? `${where} AND ${coordinateCondition}` : `WHERE ${coordinateCondition}`;
+  const safeLimit = Math.min(1000, Math.max(1, Math.floor(limit)));
+
+  const countRow = await db.prepare(`SELECT COUNT(*) as count FROM leads l ${mapWhere}`).get(...params) as { count: number };
+  const rows = await db.prepare(
+    `SELECT
+       l.id,
+       l.name,
+       l.address,
+       l.lat,
+       l.lng,
+       l.website_status,
+       l.business_type,
+       l.rating,
+       l.review_count,
+       l.score,
+       l.quality_bucket,
+       l.ai_verification_status,
+       l.ai_website_viability_status,
+       l.estimated_deal_value,
+       l.assigned_to_user_id,
+       au.email as assigned_user_email,
+       au.display_name as assigned_user_display_name
+     FROM leads l
+     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${mapWhere}
+     ORDER BY ${orderBySql}
+     LIMIT ?`
+  ).all(...params, safeLimit) as Array<Record<string, unknown>>;
+
+  return {
+    totalMapped: Number(countRow.count ?? 0),
+    points: rows.map((row) => ({
+      id: row.id as string,
+      name: (row.name as string | null) ?? null,
+      address: (row.address as string | null) ?? null,
+      lat: Number(row.lat),
+      lng: Number(row.lng),
+      website_status: (row.website_status as string) ?? "none",
+      business_type: ((row.business_type as BusinessType | null) ?? "local_services"),
+      rating: (row.rating as number | null) ?? null,
+      review_count: (row.review_count as number | null) ?? null,
+      score: Number(row.score ?? 0),
+      quality_bucket: ((row.quality_bucket as QualityBucket | null) ?? "needs_ai_verify"),
+      ai_verification_status: ((row.ai_verification_status as AiVerificationStatus | null) ?? "not_checked"),
+      ai_website_viability_status: (row.ai_website_viability_status as WebsiteViabilityStatus | null) ?? null,
+      estimated_deal_value: Number(row.estimated_deal_value ?? 0),
+      assigned_to_user_id: (row.assigned_to_user_id as string | null) ?? null,
+      assigned_user_email: (row.assigned_user_email as string | null) ?? null,
+      assigned_user_display_name: (row.assigned_user_display_name as string | null) ?? null,
+    })),
   };
 }
 
