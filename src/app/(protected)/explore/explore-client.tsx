@@ -222,7 +222,7 @@ export function ExploreClient({
               <select className="glass-select" value={filters.businessType ?? ""} onChange={(event) => pushFilters({ businessType: event.target.value })}>
                 <option value="">All business types</option>
                 {businessTypeCounts.map((type) => (
-                  <option key={type.id} value={type.id}>{type.label} ({type.active})</option>
+                  <option key={type.id} value={type.id}>{type.label}{type.total > 0 ? ` (${type.active})` : ""}</option>
                 ))}
               </select>
             </label>

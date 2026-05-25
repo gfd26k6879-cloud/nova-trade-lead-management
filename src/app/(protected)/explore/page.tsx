@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { requirePermission } from "@/lib/auth";
+import { BUSINESS_TYPE_OPTIONS } from "@/lib/business-types";
 import { ensureDbReady, getBusinessTypeCounts, getLeadMapPoints, getLeadMapZipCoverage, getLeads, getScoreBandThresholds, type LeadFilters } from "@/lib/db/queries";
 import { ExploreClient } from "./explore-client";
 
@@ -47,6 +48,7 @@ export default async function ExplorePage({ searchParams }: Props) {
   const session = await requirePermission("view:workspace");
   await ensureDbReady();
   const params = await searchParams;
+  const view = normalizeExplorerView(params.view);
   const geoBounds = params.geo ? GEO_PRESETS[params.geo] : undefined;
   const assignedFilter: "me" | "unassigned" | "any" | undefined =
     params.assigned === "me" || params.assigned === "unassigned" || params.assigned === "any" ? params.assigned : undefined;
@@ -77,23 +79,24 @@ export default async function ExplorePage({ searchParams }: Props) {
     pageSize: EXPLORER_PAGE_SIZE,
   };
 
-  const [result, mapResult, zipCoverage, scoreThresholds, businessTypeCounts] = await Promise.all([
-    getLeads(filters),
-    getLeadMapPoints(filters, MAP_POINT_LIMIT),
+  const [mapResult, zipCoverage, scoreThresholds, businessTypeCounts, result] = await Promise.all([
+    getLeadMapPoints(filters, MAP_POINT_LIMIT, { includeTotal: view !== "map", fastOrder: view === "map" }),
     getLeadMapZipCoverage(),
     getScoreBandThresholds(),
-    getBusinessTypeCounts(),
+    view === "map" ? Promise.resolve(getStaticBusinessTypeCounts()) : getBusinessTypeCounts(),
+    view === "map" ? Promise.resolve({ leads: [], total: 0 }) : getLeads(filters),
   ]);
+  const total = view === "map" ? mapResult.totalMapped : result.total;
 
   return (
     <ExploreClient
       leads={result.leads}
-      total={result.total}
+      total={total}
       mapPoints={mapResult.points}
       totalMapped={mapResult.totalMapped}
       mapPointLimit={MAP_POINT_LIMIT}
       zipCoverage={zipCoverage}
-      filters={{ ...filters, view: params.view ?? "map", geo: params.geo }}
+      filters={{ ...filters, view, geo: params.geo }}
       scoreThresholds={scoreThresholds}
       businessTypeCounts={businessTypeCounts}
       currentUser={{ userId: session.userId, email: session.email, role: session.role }}
@@ -104,6 +107,19 @@ export default async function ExplorePage({ searchParams }: Props) {
 function cleanParam(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function normalizeExplorerView(value: string | undefined): "map" | "cards" | "table" {
+  return value === "cards" || value === "table" ? value : "map";
+}
+
+function getStaticBusinessTypeCounts() {
+  return BUSINESS_TYPE_OPTIONS.map((option) => ({
+    id: option.id,
+    label: option.label,
+    total: 0,
+    active: 0,
+  }));
 }
 
 function parseNumber(value: string | undefined): number | undefined {

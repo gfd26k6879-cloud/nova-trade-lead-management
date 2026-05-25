@@ -3176,6 +3176,22 @@ function resolveLeadSort(filters: LeadFilters): { orderBySql: string } {
   return { orderBySql: `l.${safeSortBy} ${safeSortDir}` };
 }
 
+function fastLeadMapOrderBySql(filters: LeadFilters): string {
+  const sortBy = filters.sortBy || "opportunity";
+  const sortDir = filters.sortDir === "asc" ? "ASC" : "DESC";
+  if (sortBy === "opportunity" || sortBy === "website_need") {
+    return [
+      "l.sales_priority_score DESC",
+      "l.lead_quality_score DESC",
+      "l.raw_opportunity_score DESC",
+      "l.score DESC",
+      "l.review_count DESC",
+    ].join(", ");
+  }
+  const safeSortBy = LEAD_ALLOWED_SORT.includes(sortBy) ? sortBy : "score";
+  return `l.${safeSortBy} ${sortDir}`;
+}
+
 export async function getLeads(filters: LeadFilters = {}): Promise<{ leads: Lead[]; total: number }> {
   const db = await getDb();
   const { where, params } = buildLeadFilterWhere(filters);
@@ -3205,15 +3221,19 @@ export async function getLeads(filters: LeadFilters = {}): Promise<{ leads: Lead
 export async function getLeadMapPoints(
   filters: Omit<LeadFilters, "page" | "pageSize"> = {},
   limit = 600,
+  options: { includeTotal?: boolean; fastOrder?: boolean } = {},
 ): Promise<{ points: LeadMapPoint[]; totalMapped: number }> {
   const db = await getDb();
   const { where, params } = buildLeadFilterWhere(filters);
   const { orderBySql } = resolveLeadSort(filters);
+  const mapOrderBySql = options.fastOrder ? fastLeadMapOrderBySql(filters) : orderBySql;
   const coordinateCondition = "l.lat IS NOT NULL AND l.lng IS NOT NULL";
   const mapWhere = where ? `${where} AND ${coordinateCondition}` : `WHERE ${coordinateCondition}`;
   const safeLimit = Math.min(1000, Math.max(1, Math.floor(limit)));
 
-  const countRow = await db.prepare(`SELECT COUNT(*) as count FROM leads l ${mapWhere}`).get(...params) as { count: number };
+  const countRow = options.includeTotal === false
+    ? null
+    : await db.prepare(`SELECT COUNT(*) as count FROM leads l ${mapWhere}`).get(...params) as { count: number };
   const rows = await db.prepare(
     `SELECT
        l.id,
@@ -3236,12 +3256,12 @@ export async function getLeadMapPoints(
      FROM leads l
      LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
      ${mapWhere}
-     ORDER BY ${orderBySql}
+     ORDER BY ${mapOrderBySql}
      LIMIT ?`
   ).all(...params, safeLimit) as Array<Record<string, unknown>>;
 
   return {
-    totalMapped: Number(countRow.count ?? 0),
+    totalMapped: countRow ? Number(countRow.count ?? 0) : rows.length,
     points: rows.map((row) => ({
       id: row.id as string,
       name: (row.name as string | null) ?? null,
