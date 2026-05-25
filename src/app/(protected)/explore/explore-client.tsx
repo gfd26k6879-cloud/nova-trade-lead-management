@@ -407,7 +407,7 @@ function LeadMap({
   const bounds = getBounds(points);
   const hasMore = totalMapped > points.length;
   const missingCoordinates = Math.max(0, total - totalMapped);
-  const dense = points.length > 150;
+  const markers = bounds ? getMapMarkers(points, bounds, selectedLeadId) : [];
 
   return (
     <div className="glass rounded-2xl p-5">
@@ -457,27 +457,28 @@ function LeadMap({
               ? `${missingCoordinates} matching leads do not have stored coordinates. Use list/table filters or add coordinates during data enrichment.`
               : "No leads match the current filters."}
           </div>
-        ) : points.map((lead, index) => {
-          const point = projectLead(lead, bounds);
-          const active = lead.id === selectedLeadId;
+        ) : markers.map((marker) => {
+          const markerSize = marker.active ? 30 : marker.count > 1 ? clamp(18 + Math.log2(marker.count) * 4, 20, 38) : 18;
           return (
             <button
-              key={lead.id}
+              key={marker.id}
               type="button"
-              className={`absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full font-semibold leading-none transition ${active ? "h-7 w-7 text-[10px]" : dense ? "h-4 w-4 text-[0px]" : "h-5 w-5 text-[10px]"}`}
+              className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-[10px] font-semibold leading-none transition"
               style={{
-                left: `${point.x}%`,
-                top: `${point.y}%`,
+                left: `${marker.x}%`,
+                top: `${marker.y}%`,
+                width: markerSize,
+                height: markerSize,
                 color: "#fff",
-                background: active ? "#4f46e5" : markerColor(lead),
+                background: marker.active ? "#4f46e5" : marker.color,
                 border: "2px solid rgba(255,255,255,0.92)",
-                boxShadow: active ? "0 0 0 7px rgba(79,70,229,0.16), 0 8px 22px rgba(15,23,42,0.24)" : "0 5px 14px rgba(15,23,42,0.18)",
+                boxShadow: marker.active ? "0 0 0 7px rgba(79,70,229,0.16), 0 8px 22px rgba(15,23,42,0.24)" : "0 5px 14px rgba(15,23,42,0.18)",
               }}
-              title={`${lead.name ?? "Unknown business"} - ${formatLabel(lead.website_status)}`}
-              aria-label={`Select ${lead.name ?? "lead"}`}
-              onClick={() => onSelect(lead.id)}
+              title={marker.count > 1 ? `${marker.count} leads near ${formatPlace(marker.lead.address)}` : `${marker.lead.name ?? "Unknown business"} - ${formatLabel(marker.lead.website_status)}`}
+              aria-label={marker.count > 1 ? `Select cluster with ${marker.count} leads` : `Select ${marker.lead.name ?? "lead"}`}
+              onClick={() => onSelect(marker.lead.id)}
             >
-              {index < 99 ? index + 1 : ""}
+              {marker.label}
             </button>
           );
         })}
@@ -800,6 +801,18 @@ function normalizeView(value: string | undefined): ExplorerView {
 type LeadCoordinate = Pick<LeadMapPoint, "lat" | "lng">;
 type LeadMarkerStatus = Pick<LeadMapPoint, "website_status" | "ai_website_viability_status" | "quality_bucket">;
 type LeadOwner = Pick<LeadMapPoint, "assigned_to_user_id" | "assigned_user_display_name" | "assigned_user_email">;
+type LeadMapBounds = NonNullable<ReturnType<typeof getBounds>>;
+
+interface LeadMapMarker {
+  id: string;
+  lead: LeadMapPoint;
+  x: number;
+  y: number;
+  count: number;
+  label: string;
+  active: boolean;
+  color: string;
+}
 
 function getBounds(points: LeadCoordinate[]) {
   if (points.length === 0) return null;
@@ -815,7 +828,81 @@ function getBounds(points: LeadCoordinate[]) {
   };
 }
 
-function projectLead(lead: LeadCoordinate, bounds: NonNullable<ReturnType<typeof getBounds>>) {
+function getMapMarkers(points: LeadMapPoint[], bounds: LeadMapBounds, selectedLeadId: string | null): LeadMapMarker[] {
+  const projected = points.map((lead, index) => ({
+    lead,
+    index,
+    ...projectLead(lead, bounds),
+  }));
+
+  if (projected.length <= 220) {
+    return projected.map(({ lead, x, y, index }) => ({
+      id: lead.id,
+      lead,
+      x,
+      y,
+      count: 1,
+      label: index < 99 ? String(index + 1) : "",
+      active: lead.id === selectedLeadId,
+      color: markerColor(lead),
+    }));
+  }
+
+  const cellSize = projected.length > 500 ? 4.5 : 4;
+  const buckets = new Map<string, {
+    leads: LeadMapPoint[];
+    xTotal: number;
+    yTotal: number;
+    bestLead: LeadMapPoint;
+    bestPriority: number;
+    active: boolean;
+  }>();
+
+  for (const point of projected) {
+    const key = `${Math.floor(point.x / cellSize)}:${Math.floor(point.y / cellSize)}`;
+    const priority = markerPriority(point.lead);
+    const existing = buckets.get(key);
+    if (!existing) {
+      buckets.set(key, {
+        leads: [point.lead],
+        xTotal: point.x,
+        yTotal: point.y,
+        bestLead: point.lead,
+        bestPriority: priority,
+        active: point.lead.id === selectedLeadId,
+      });
+      continue;
+    }
+
+    existing.leads.push(point.lead);
+    existing.xTotal += point.x;
+    existing.yTotal += point.y;
+    existing.active = existing.active || point.lead.id === selectedLeadId;
+    if (point.lead.id === selectedLeadId || priority > existing.bestPriority || (priority === existing.bestPriority && point.lead.score > existing.bestLead.score)) {
+      existing.bestLead = point.lead;
+      existing.bestPriority = priority;
+    }
+  }
+
+  return Array.from(buckets.entries()).map(([key, bucket]) => {
+    const count = bucket.leads.length;
+    const lead = bucket.active && selectedLeadId
+      ? bucket.leads.find((item) => item.id === selectedLeadId) ?? bucket.bestLead
+      : bucket.bestLead;
+    return {
+      id: key,
+      lead,
+      x: bucket.xTotal / count,
+      y: bucket.yTotal / count,
+      count,
+      label: count > 1 ? String(count) : "",
+      active: bucket.active,
+      color: clusterColor(bucket.leads),
+    };
+  });
+}
+
+function projectLead(lead: LeadCoordinate, bounds: LeadMapBounds) {
   const lat = lead.lat;
   const lng = lead.lng;
   const x = ((lng - bounds.minLng) / (bounds.maxLng - bounds.minLng)) * 88 + 6;
@@ -833,6 +920,18 @@ function markerColor(lead: LeadMarkerStatus): string {
   if (lead.website_status === "social") return "#d97706";
   if (lead.website_status === "basic") return "#4f46e5";
   return "#16a34a";
+}
+
+function markerPriority(lead: LeadMarkerStatus): number {
+  if (lead.website_status === "none") return 5;
+  if (lead.ai_website_viability_status === "broken" || lead.quality_bucket === "broken_site_opportunity") return 4;
+  if (lead.website_status === "social") return 3;
+  if (lead.website_status === "basic") return 2;
+  return 1;
+}
+
+function clusterColor(leads: LeadMarkerStatus[]): string {
+  return markerColor(leads.reduce((best, lead) => markerPriority(lead) > markerPriority(best) ? lead : best, leads[0]));
 }
 
 function ownerLabel(lead: LeadOwner, currentUserId: string): string {
