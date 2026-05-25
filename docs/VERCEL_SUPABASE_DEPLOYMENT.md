@@ -107,12 +107,20 @@ NOSITE_ENCRYPTION_SECRET=
 NOSITE_SESSION_SECRET=
 WORKER_CRON_SECRET=
 GOOGLE_PLACES_API_KEY=
+NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY=
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.4-mini
 OPENAI_AI_COST_RESERVATION_USD=0.05
 ```
 
 Redeploy after any environment variable change.
+
+`NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` is optional and only enables the Explorer's
+manual Google map switch. It must be a browser-restricted Maps JavaScript API key
+with HTTP referrer restrictions for the production and preview domains, plus a
+low quota/budget in Google Cloud. Do not reuse `GOOGLE_PLACES_API_KEY` here. The
+Explorer does not request Places, Geocoding, Routes, or Map Tiles libraries from
+this browser map.
 
 Preview deployments should either point at a dedicated staging Supabase project
 with the same required variables or be treated as build-only. Do not point PR

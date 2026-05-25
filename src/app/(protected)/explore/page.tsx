@@ -100,6 +100,7 @@ export default async function ExplorePage({ searchParams }: Props) {
       scoreThresholds={scoreThresholds}
       businessTypeCounts={businessTypeCounts}
       currentUser={{ userId: session.userId, email: session.email, role: session.role }}
+      googleMapsApiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY?.trim() || null}
     />
   );
 }

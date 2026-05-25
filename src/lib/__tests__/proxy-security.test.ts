@@ -33,4 +33,17 @@ describe("proxy security headers", () => {
     expect(response.headers.get("Content-Security-Policy")).toContain("script-src");
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
   });
+
+  it("allows Google Maps assets without opening Places or geocoding APIs broadly", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+
+    const response = await proxy(new NextRequest("https://example.test/login"));
+    const csp = response.headers.get("Content-Security-Policy") ?? "";
+
+    expect(csp).toMatch(/script-src[^;]*https:\/\/maps\.googleapis\.com[^;]*https:\/\/maps\.gstatic\.com/);
+    expect(csp).toMatch(/connect-src[^;]*https:\/\/maps\.googleapis\.com[^;]*https:\/\/maps\.gstatic\.com/);
+    expect(csp).toContain("img-src 'self' data: blob: https:");
+    expect(csp).not.toContain("places.googleapis.com");
+    expect(csp).not.toContain("geocoding.googleapis.com");
+  });
 });

@@ -98,7 +98,8 @@ type SecurityContext = {
 function createSecurityContext(): SecurityContext {
   const nonce = createNonce();
   const isDev = process.env.NODE_ENV === "development";
-  const scriptSrc = [`'self'`, `'nonce-${nonce}'`, "'strict-dynamic'"];
+  const googleMapsHosts = ["https://maps.googleapis.com", "https://maps.gstatic.com"];
+  const scriptSrc = [`'self'`, `'nonce-${nonce}'`, "'strict-dynamic'", ...googleMapsHosts];
 
   if (isDev) {
     scriptSrc.push("'unsafe-eval'");
@@ -110,7 +111,7 @@ function createSecurityContext(): SecurityContext {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
-    "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+    `connect-src 'self' https://*.supabase.co wss://*.supabase.co ${googleMapsHosts.join(" ")}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

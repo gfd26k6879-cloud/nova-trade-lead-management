@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { HelpTip } from "@/components/help-tip";
@@ -9,10 +9,63 @@ import { ScoreBandBadge } from "@/components/score-band-badge";
 import { claimLeadAction } from "@/lib/leads/actions";
 import { getBusinessTypeLabel } from "@/lib/business-types";
 import type { Lead, LeadMapPoint, LeadMapZipCoverage } from "@/lib/db/queries";
+import { buildGoogleMapsScriptUrl, GOOGLE_MAPS_SCRIPT_ID, hasGoogleMapsBrowserKey } from "@/lib/google-maps";
 import type { AppRole } from "@/lib/permissions";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
 
 type ExplorerView = "map" | "cards" | "table";
+type MapEngine = "local" | "google";
+type GoogleMapsLoadState = "loading" | "ready" | "error";
+
+type GoogleLatLngLiteral = { lat: number; lng: number };
+
+interface GoogleMapsListener {
+  remove(): void;
+}
+
+interface GoogleMap {
+  fitBounds(bounds: GoogleLatLngBounds, padding?: number | { top: number; right: number; bottom: number; left: number }): void;
+  panTo(point: GoogleLatLngLiteral): void;
+}
+
+interface GoogleOverlay {
+  setMap(map: GoogleMap | null): void;
+}
+
+interface GoogleMarker extends GoogleOverlay {
+  addListener(eventName: string, handler: () => void): GoogleMapsListener;
+}
+
+interface GoogleCircle extends GoogleOverlay {
+  addListener(eventName: string, handler: () => void): GoogleMapsListener;
+}
+
+interface GoogleLatLngBounds {
+  extend(point: GoogleLatLngLiteral): void;
+  isEmpty(): boolean;
+}
+
+interface GoogleMapsNamespace {
+  maps: {
+    Map: new (element: HTMLElement, options: Record<string, unknown>) => GoogleMap;
+    Marker: new (options: Record<string, unknown>) => GoogleMarker;
+    Circle: new (options: Record<string, unknown>) => GoogleCircle;
+    LatLngBounds: new () => GoogleLatLngBounds;
+    Size: new (width: number, height: number) => unknown;
+    Point: new (x: number, y: number) => unknown;
+    SymbolPath: { CIRCLE: number };
+    event: { clearInstanceListeners(target: object): void };
+  };
+}
+
+declare global {
+  interface Window {
+    google?: GoogleMapsNamespace;
+    __nositeGoogleMapsReady?: () => void;
+  }
+}
+
+let googleMapsLoadPromise: Promise<GoogleMapsNamespace> | null = null;
 
 interface Props {
   leads: Lead[];
@@ -49,6 +102,7 @@ interface Props {
   scoreThresholds: ScoreBandThresholds;
   businessTypeCounts: Array<{ id: string; label: string; total: number; active: number }>;
   currentUser: { userId: string; email: string; role: AppRole };
+  googleMapsApiKey: string | null;
 }
 
 const WEBSITE_OPTIONS = ["", "none", "social", "basic", "custom"];
@@ -90,6 +144,7 @@ export function ExploreClient({
   scoreThresholds,
   businessTypeCounts,
   currentUser,
+  googleMapsApiKey,
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -113,7 +168,7 @@ export function ExploreClient({
   const stats = view === "map"
     ? [
         { label: "Matching Leads", value: String(total) },
-        { label: "Shown On Map", value: String(mapPoints.length), hint: "No external map calls" },
+        { label: "Shown On Map", value: String(mapPoints.length), hint: "Uses stored coordinates" },
         { label: "Covered ZIPs", value: `${zipCoverageSummary.scraped} / ${zipCoverageSummary.total}`, hint: "Dark ZIPs have mapped leads" },
         { label: "Light ZIPs", value: String(zipCoverageSummary.notStarted), hint: "No mapped lead in this view" },
       ]
@@ -167,10 +222,10 @@ export function ExploreClient({
     });
   };
 
-  const selectMapZip = (nextZip: string) => {
+  const selectMapZip = useCallback((nextZip: string) => {
     setZip(nextZip);
     pushFilters({ zip: nextZip });
-  };
+  }, [pushFilters]);
 
   return (
     <PageShell
@@ -349,6 +404,7 @@ export function ExploreClient({
             totalMapped={totalMapped}
             mapPointLimit={mapPointLimit}
             selectedLeadId={selectedMapPoint?.id ?? null}
+            googleMapsApiKey={googleMapsApiKey}
             onSelect={setSelectedLeadId}
             onQuadrant={applyMapQuadrant}
             onZipSelect={selectMapZip}
@@ -409,6 +465,7 @@ function LeadMap({
   totalMapped,
   mapPointLimit,
   selectedLeadId,
+  googleMapsApiKey,
   onSelect,
   onQuadrant,
   onZipSelect,
@@ -419,12 +476,15 @@ function LeadMap({
   totalMapped: number;
   mapPointLimit: number;
   selectedLeadId: string | null;
+  googleMapsApiKey: string | null;
   onSelect: (leadId: string) => void;
   onQuadrant: (quadrant: "nw" | "ne" | "sw" | "se") => void;
   onZipSelect: (zip: string) => void;
 }) {
   const [viewport, setViewport] = useState<MapViewport>(DEFAULT_MAP_VIEWPORT);
   const [showCoverage, setShowCoverage] = useState(true);
+  const [mapEngine, setMapEngine] = useState<MapEngine>("local");
+  const [googleResetToken, setGoogleResetToken] = useState(0);
   const dragRef = useRef<MapDragState | null>(null);
   const bounds = getBounds([...points, ...zipCoverage]);
   const hasMore = totalMapped > points.length;
@@ -432,6 +492,8 @@ function LeadMap({
   const markers = bounds ? getMapMarkers(points, bounds, selectedLeadId) : [];
   const zipTiles = bounds ? zipCoverage.map((zip) => ({ zip, ...projectLead(zip, bounds) })) : [];
   const coverageSummary = summarizeZipCoverage(zipCoverage);
+  const googleMapsEnabled = hasGoogleMapsBrowserKey(googleMapsApiKey);
+  const isGoogleMap = mapEngine === "google" && googleMapsEnabled;
 
   const zoomBy = (factor: number) => {
     setViewport((current) => normalizeMapViewport({ ...current, scale: clamp(current.scale * factor, 1, 4) }));
@@ -475,23 +537,52 @@ function LeadMap({
     zoomBy(event.deltaY < 0 ? 1.12 : 0.88);
   };
 
+  const resetMap = () => {
+    if (isGoogleMap) {
+      setGoogleResetToken((value) => value + 1);
+      return;
+    }
+    setViewport(DEFAULT_MAP_VIEWPORT);
+  };
+
   return (
     <div className="glass rounded-2xl p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
             <h3 className="section-label">Map view</h3>
-            <HelpTip>Uses stored lead latitude and longitude from the database only. It does not call Google Maps, Mapbox, Places, geocoding, or paid tile APIs.</HelpTip>
+            <HelpTip>The default local map is free and uses stored coordinates only. Google Maps is optional and loads only after you switch to it.</HelpTip>
           </div>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            Drag to move, scroll to zoom, click a ZIP tile to filter, or click a lead marker to inspect it.
+            {isGoogleMap
+              ? "Pan and zoom the real map, click a marker to inspect a lead, or click a ZIP coverage circle to filter."
+              : "Drag to move, scroll to zoom, click a ZIP tile to filter, or click a lead marker to inspect it."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex overflow-hidden rounded-lg border" style={{ borderColor: "rgba(255,255,255,0.55)" }}>
+            <button
+              type="button"
+              className={`px-3 py-1.5 text-xs font-medium transition ${mapEngine === "local" || !googleMapsEnabled ? "nav-link-active" : "bg-white/35"}`}
+              onClick={() => setMapEngine("local")}
+            >
+              Local map
+            </button>
+            <button
+              type="button"
+              className={`px-3 py-1.5 text-xs font-medium transition ${isGoogleMap ? "nav-link-active" : "bg-white/35"}`}
+              disabled={!googleMapsEnabled}
+              title={googleMapsEnabled ? "Load Google Maps for pan and zoom" : "Set NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY to enable Google Maps"}
+              onClick={() => setMapEngine("google")}
+            >
+              Google map
+            </button>
+          </div>
+          <HelpTip>Google Maps uses the Maps JavaScript API only. It is not loaded on page open, and this app does not call Places, Geocoding, Routes, or Map Tiles from this view.</HelpTip>
           <button type="button" className={`btn-glass px-3 py-1.5 text-xs ${showCoverage ? "nav-link-active" : ""}`} onClick={() => setShowCoverage((value) => !value)}>
             ZIP coverage
           </button>
-          <button type="button" className="btn-glass px-3 py-1.5 text-xs" onClick={() => setViewport(DEFAULT_MAP_VIEWPORT)}>
+          <button type="button" className="btn-glass px-3 py-1.5 text-xs" onClick={resetMap}>
             Reset view
           </button>
           <div className="grid grid-cols-2 gap-1">
@@ -503,6 +594,24 @@ function LeadMap({
         </div>
       </div>
 
+      {!googleMapsEnabled && (
+        <div className="mb-3 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.46)", color: "var(--text-tertiary)" }}>
+          Google map is disabled for this environment. The local map is active and free.
+        </div>
+      )}
+
+      {isGoogleMap ? (
+        <GoogleLeadMap
+          apiKey={googleMapsApiKey ?? ""}
+          points={points}
+          zipCoverage={zipCoverage}
+          selectedLeadId={selectedLeadId}
+          showCoverage={showCoverage}
+          resetToken={googleResetToken}
+          onSelect={onSelect}
+          onZipSelect={onZipSelect}
+        />
+      ) : (
       <div
         className="relative h-[32rem] overflow-hidden rounded-xl"
         style={{
@@ -605,6 +714,204 @@ function LeadMap({
           <LegendDot color="#4f46e5" label="Basic" />
           <LegendDot color="#16a34a" label="Custom" />
         </div>
+      </div>
+      )}
+    </div>
+  );
+}
+
+function GoogleLeadMap({
+  apiKey,
+  points,
+  zipCoverage,
+  selectedLeadId,
+  showCoverage,
+  resetToken,
+  onSelect,
+  onZipSelect,
+}: {
+  apiKey: string;
+  points: LeadMapPoint[];
+  zipCoverage: LeadMapZipCoverage[];
+  selectedLeadId: string | null;
+  showCoverage: boolean;
+  resetToken: number;
+  onSelect: (leadId: string) => void;
+  onZipSelect: (zip: string) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<GoogleMap | null>(null);
+  const mapsRef = useRef<GoogleMapsNamespace["maps"] | null>(null);
+  const overlaysRef = useRef<GoogleOverlay[]>([]);
+  const lastFitSignatureRef = useRef<string | null>(null);
+  const [loadState, setLoadState] = useState<GoogleMapsLoadState>("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const selectedPoint = useMemo(() => points.find((point) => point.id === selectedLeadId) ?? null, [points, selectedLeadId]);
+  const center = useMemo(() => getGoogleMapCenter(points, zipCoverage), [points, zipCoverage]);
+  const fitSignature = useMemo(
+    () => [
+      resetToken,
+      points.map((point) => `${point.id}:${point.lat.toFixed(5)}:${point.lng.toFixed(5)}`).join("|"),
+      zipCoverage.map((zip) => `${zip.zip}:${zip.leadCount}:${zip.scrapeStatus}`).join("|"),
+    ].join("::"),
+    [points, resetToken, zipCoverage],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    loadGoogleMaps(apiKey)
+      .then((google) => {
+        if (cancelled || !containerRef.current) return;
+        mapsRef.current = google.maps;
+
+        if (!mapRef.current) {
+          mapRef.current = new google.maps.Map(containerRef.current, {
+            center,
+            zoom: 10,
+            clickableIcons: false,
+            fullscreenControl: true,
+            gestureHandling: "greedy",
+            mapTypeControl: false,
+            streetViewControl: false,
+            zoomControl: true,
+          });
+        }
+
+        setLoadState("ready");
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setLoadState("error");
+        setLoadError(error instanceof Error ? error.message : "Google Maps failed to load.");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiKey, center]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const maps = mapsRef.current;
+    if (loadState !== "ready" || !map || !maps) return;
+
+    clearGoogleOverlays(overlaysRef.current, maps);
+    const nextOverlays: GoogleOverlay[] = [];
+    const bounds = new maps.LatLngBounds();
+    let hasBounds = false;
+
+    if (showCoverage) {
+      for (const zip of zipCoverage) {
+        const position = { lat: zip.lat, lng: zip.lng };
+        bounds.extend(position);
+        hasBounds = true;
+
+        const circle = new maps.Circle({
+          center: position,
+          clickable: true,
+          fillColor: googleZipFillColor(zip),
+          fillOpacity: googleZipFillOpacity(zip),
+          map,
+          radius: googleZipRadius(zip),
+          strokeColor: googleZipStrokeColor(zip),
+          strokeOpacity: 0.75,
+          strokeWeight: 1,
+        });
+        circle.addListener("click", () => onZipSelect(zip.zip));
+        nextOverlays.push(circle);
+
+        if (zip.leadCount > 0 || zip.scrapeStatus !== "not_started") {
+          const label = new maps.Marker({
+            icon: {
+              path: maps.SymbolPath.CIRCLE,
+              scale: 12,
+              fillColor: googleZipFillColor(zip),
+              fillOpacity: 0.9,
+              strokeColor: "#ffffff",
+              strokeWeight: 2,
+            },
+            label: {
+              text: zip.zip,
+              color: zip.scrapeStatus === "complete" ? "#ffffff" : "#334155",
+              fontSize: "10px",
+              fontWeight: "700",
+            },
+            map,
+            position,
+            title: `${zip.zip} ${zip.city}: ${formatLabel(zip.scrapeStatus)}, ${zip.leadCount} mapped leads in this view`,
+            zIndex: 20,
+          });
+          label.addListener("click", () => onZipSelect(zip.zip));
+          nextOverlays.push(label);
+        }
+      }
+    }
+
+    points.forEach((point, index) => {
+      const position = { lat: point.lat, lng: point.lng };
+      const active = point.id === selectedLeadId;
+      bounds.extend(position);
+      hasBounds = true;
+
+      const marker = new maps.Marker({
+        icon: {
+          path: maps.SymbolPath.CIRCLE,
+          scale: active ? 10 : 7,
+          fillColor: active ? "#4f46e5" : markerColor(point),
+          fillOpacity: 0.96,
+          strokeColor: "#ffffff",
+          strokeWeight: active ? 3 : 2,
+        },
+        label: index < 99
+          ? { text: String(index + 1), color: "#ffffff", fontSize: "10px", fontWeight: "700" }
+          : undefined,
+        map,
+        optimized: true,
+        position,
+        title: `${point.name ?? "Unknown business"} - ${formatLabel(point.website_status)}`,
+        zIndex: active ? 1000 : 100 + index,
+      });
+      marker.addListener("click", () => onSelect(point.id));
+      nextOverlays.push(marker);
+    });
+
+    overlaysRef.current = nextOverlays;
+
+    if (hasBounds && lastFitSignatureRef.current !== fitSignature) {
+      map.fitBounds(bounds, 48);
+      lastFitSignatureRef.current = fitSignature;
+    }
+
+    return () => {
+      clearGoogleOverlays(nextOverlays, maps);
+    };
+  }, [fitSignature, loadState, onSelect, onZipSelect, points, selectedLeadId, showCoverage, zipCoverage]);
+
+  useEffect(() => {
+    if (loadState !== "ready" || !selectedPoint) return;
+    mapRef.current?.panTo({ lat: selectedPoint.lat, lng: selectedPoint.lng });
+  }, [loadState, selectedPoint]);
+
+  return (
+    <div className="relative h-[32rem] overflow-hidden rounded-xl" style={{ border: "1px solid rgba(255,255,255,0.58)" }}>
+      <div ref={containerRef} className="absolute inset-0" />
+      {loadState !== "ready" && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/75 px-6 text-center text-sm" style={{ color: "var(--text-secondary)" }}>
+          {loadState === "error" ? loadError ?? "Google Maps failed to load." : "Loading Google Maps..."}
+        </div>
+      )}
+      <div className="absolute left-4 top-4 z-20 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.88)", color: "var(--text-secondary)" }}>
+        {points.length} shown / {zipCoverage.length} ZIPs
+      </div>
+      <div className="absolute bottom-4 left-4 z-20 flex max-w-[calc(100%-2rem)] flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.88)", color: "var(--text-secondary)" }}>
+        <LegendDot color="#e2e8f0" label="Not started" />
+        <LegendDot color="#f59e0b" label="Partial ZIP" />
+        <LegendDot color="#0f766e" label="Covered ZIP" />
+        <span className="mx-1 h-4 w-px bg-slate-300/70" />
+        <LegendDot color="#dc2626" label="No site" />
+        <LegendDot color="#ea580c" label="Broken" />
+        <LegendDot color="#4f46e5" label="Weak/basic" />
       </div>
     </div>
   );
@@ -951,6 +1258,90 @@ function EmptyState({ text }: { text: string }) {
       {text}
     </div>
   );
+}
+
+function loadGoogleMaps(apiKey: string): Promise<GoogleMapsNamespace> {
+  if (typeof window === "undefined") return Promise.reject(new Error("Google Maps can only load in the browser."));
+  if (window.google?.maps) return Promise.resolve(window.google);
+
+  if (!googleMapsLoadPromise) {
+    googleMapsLoadPromise = new Promise((resolve, reject) => {
+      const callbackName = "__nositeGoogleMapsReady";
+      const existingScript = document.getElementById(GOOGLE_MAPS_SCRIPT_ID);
+      const timeoutId = window.setTimeout(() => {
+        googleMapsLoadPromise = null;
+        reject(new Error("Google Maps timed out."));
+      }, 15000);
+
+      window.__nositeGoogleMapsReady = () => {
+        window.clearTimeout(timeoutId);
+        if (window.google?.maps) resolve(window.google);
+        else {
+          googleMapsLoadPromise = null;
+          reject(new Error("Google Maps loaded without the maps namespace."));
+        }
+      };
+
+      if (existingScript) return;
+
+      const script = document.createElement("script");
+      script.id = GOOGLE_MAPS_SCRIPT_ID;
+      script.src = buildGoogleMapsScriptUrl(apiKey, callbackName);
+      script.async = true;
+      script.defer = true;
+      script.referrerPolicy = "origin";
+      const nonce = document.querySelector<HTMLScriptElement>("script[nonce]")?.nonce;
+      if (nonce) script.nonce = nonce;
+      script.onerror = () => {
+        window.clearTimeout(timeoutId);
+        googleMapsLoadPromise = null;
+        reject(new Error("Google Maps failed to load."));
+      };
+      document.head.appendChild(script);
+    });
+  }
+
+  return googleMapsLoadPromise;
+}
+
+function clearGoogleOverlays(overlays: GoogleOverlay[], maps: GoogleMapsNamespace["maps"]): void {
+  for (const overlay of overlays) {
+    maps.event.clearInstanceListeners(overlay);
+    overlay.setMap(null);
+  }
+  overlays.length = 0;
+}
+
+function getGoogleMapCenter(points: LeadMapPoint[], zipCoverage: LeadMapZipCoverage[]): GoogleLatLngLiteral {
+  const bounds = getBounds([...points, ...zipCoverage]);
+  if (!bounds) return { lat: 39.7392, lng: -104.9903 };
+  return {
+    lat: (bounds.minLat + bounds.maxLat) / 2,
+    lng: (bounds.minLng + bounds.maxLng) / 2,
+  };
+}
+
+function googleZipFillColor(zip: LeadMapZipCoverage): string {
+  if (zip.scrapeStatus === "complete") return "#0f766e";
+  if (zip.scrapeStatus === "partial") return "#f59e0b";
+  return "#e2e8f0";
+}
+
+function googleZipStrokeColor(zip: LeadMapZipCoverage): string {
+  if (zip.scrapeStatus === "complete") return "#0f766e";
+  if (zip.scrapeStatus === "partial") return "#b45309";
+  return "#94a3b8";
+}
+
+function googleZipFillOpacity(zip: LeadMapZipCoverage): number {
+  const leadWeight = clamp(Math.log10(zip.leadCount + 1) / 4, 0, 0.18);
+  if (zip.scrapeStatus === "complete") return clamp(0.16 + zip.completionRatio * 0.16 + leadWeight, 0.16, 0.48);
+  if (zip.scrapeStatus === "partial") return clamp(0.12 + zip.completionRatio * 0.16 + leadWeight, 0.12, 0.4);
+  return 0.1;
+}
+
+function googleZipRadius(zip: LeadMapZipCoverage): number {
+  return clamp(1300 + Math.log10(zip.leadCount + 1) * 900, 1300, 3600);
 }
 
 function normalizeView(value: string | undefined): ExplorerView {
