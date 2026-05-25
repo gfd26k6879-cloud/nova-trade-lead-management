@@ -105,6 +105,25 @@ export function ExploreClient({
   const selectedMapPoint = mapPoints.find((lead) => lead.id === selectedLeadId) ?? mapPoints[0] ?? null;
   const visibleMapList = useMemo(() => mapPoints.slice(0, MAP_LIST_LIMIT), [mapPoints]);
   const missingCoordinates = Math.max(0, total - totalMapped);
+  const pageUnclaimed = leads.filter((lead) => !lead.assigned_to_user_id).length;
+  const pageMapped = leads.filter((lead) => typeof lead.lat === "number" && typeof lead.lng === "number").length;
+  const stats = view === "map"
+    ? [
+        { label: "Matching Leads", value: String(total) },
+        {
+          label: "Mapped Leads",
+          value: String(totalMapped),
+          hint: totalMapped > mapPointLimit ? `Showing top ${mapPoints.length}` : "Stored coordinates",
+        },
+        { label: "Shown On Map", value: String(mapPoints.length), hint: "No external map calls" },
+        { label: "Missing Coords", value: String(missingCoordinates) },
+      ]
+    : [
+        { label: "Matching Leads", value: String(total) },
+        { label: "Unclaimed Here", value: String(pageUnclaimed), hint: "On this page" },
+        { label: "Mapped Here", value: String(pageMapped), hint: "On this page" },
+        { label: "Page", value: `${page} / ${totalPages}` },
+      ];
 
   const pushFilters = useCallback(
     (updates: Record<string, string | number | null | undefined>) => {
@@ -153,17 +172,7 @@ export function ExploreClient({
     <PageShell
       title="Lead Explorer"
       description="Browse the full lead inventory, narrow by location and quality, then claim the business you want to work."
-      stats={[
-        { label: "Matching Leads", value: String(total) },
-        { label: "Unclaimed Here", value: String(leads.filter((lead) => !lead.assigned_to_user_id).length), hint: "On this page" },
-        {
-          label: "Mapped Leads",
-          value: String(totalMapped),
-          hint: totalMapped > mapPointLimit ? `Showing top ${mapPoints.length}` : "Stored coordinates",
-        },
-        { label: "Missing Coords", value: String(missingCoordinates) },
-        { label: "Page", value: `${page} / ${totalPages}` },
-      ]}
+      stats={stats}
     >
       {message && (
         <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(99,102,241,0.1)", color: "var(--text-primary)" }}>
