@@ -1,19 +1,27 @@
 import type { Metadata } from "next";
 import { requirePermission } from "@/lib/auth";
-import { getDashboardStatsAction } from "@/lib/crawl/actions";
-import { ensureDbReady, getAdminFulfillmentSummary, getStatisticsSummary, getTeamBoardSummary } from "@/lib/db/queries";
+import {
+  emptyAdminFulfillmentSummary,
+  emptyDashboardStats,
+  emptyStatisticsSummary,
+  emptyTeamBoardSummary,
+} from "@/lib/dashboard-fallbacks";
+import { startRouteTiming } from "@/lib/route-timing";
 import { DashboardClient } from "./dashboard-client";
 
 export const metadata: Metadata = { title: "Revenue Dashboard | NoSite Leads" };
 
 export default async function DashboardPage() {
+  const logRouteTiming = startRouteTiming("/dashboard");
   await requirePermission("crawl:manage");
-  await ensureDbReady();
-  const [stats, teamSummary, weeklyStats, fulfillmentSummary] = await Promise.all([
-    getDashboardStatsAction(),
-    getTeamBoardSummary(),
-    getStatisticsSummary({ range: "7d" }),
-    getAdminFulfillmentSummary(),
-  ]);
-  return <DashboardClient initialStats={stats} teamSummary={teamSummary} weeklyStats={weeklyStats} fulfillmentSummary={fulfillmentSummary} />;
+  logRouteTiming(200, { mode: "fast_shell" });
+
+  return (
+    <DashboardClient
+      initialStats={emptyDashboardStats("Dashboard data is loading.")}
+      teamSummary={emptyTeamBoardSummary()}
+      weeklyStats={emptyStatisticsSummary()}
+      fulfillmentSummary={emptyAdminFulfillmentSummary()}
+    />
+  );
 }

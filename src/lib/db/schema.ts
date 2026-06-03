@@ -23,6 +23,9 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "leads", column: "is_excluded", type: "INTEGER NOT NULL DEFAULT 0" },
   { table: "leads", column: "exclusion_reason", type: "TEXT" },
   { table: "leads", column: "excluded_at", type: "TEXT" },
+  { table: "leads", column: "archived_at", type: "TEXT" },
+  { table: "leads", column: "archived_by_user_id", type: "TEXT" },
+  { table: "leads", column: "archive_reason", type: "TEXT" },
   { table: "leads", column: "selling_niche", type: "TEXT" },
   { table: "leads", column: "qualification_status", type: "TEXT NOT NULL DEFAULT 'needs_verification'" },
   { table: "leads", column: "disqualification_reason", type: "TEXT" },
@@ -85,6 +88,14 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "settings", column: "openai_api_key_encrypted", type: "TEXT" },
   { table: "settings", column: "google_places_api_key_encrypted", type: "TEXT" },
   { table: "settings", column: "google_maps_browser_api_key_encrypted", type: "TEXT" },
+  { table: "settings", column: "google_text_search_monthly_cap", type: "INTEGER NOT NULL DEFAULT 4900" },
+  { table: "settings", column: "google_enterprise_monthly_cap", type: "INTEGER NOT NULL DEFAULT 900" },
+  { table: "settings", column: "google_test_run_call_cap", type: "INTEGER NOT NULL DEFAULT 50" },
+  { table: "settings", column: "google_auto_pagination_enabled", type: "INTEGER NOT NULL DEFAULT 1" },
+  { table: "settings", column: "google_auto_pagination_min_new_candidates", type: "INTEGER NOT NULL DEFAULT 6" },
+  { table: "settings", column: "google_auto_pagination_max_duplicate_rate", type: "REAL NOT NULL DEFAULT 0.6" },
+  { table: "settings", column: "google_default_discovery_mode", type: "TEXT NOT NULL DEFAULT 'coverage_probe'" },
+  { table: "settings", column: "google_default_pagination_policy", type: "TEXT NOT NULL DEFAULT 'auto_yield_based'" },
   { table: "leads", column: "ai_website_feedback_status", type: "TEXT" },
   { table: "leads", column: "ai_corrected_website_url", type: "TEXT" },
   { table: "leads", column: "ai_false_positive_reason", type: "TEXT" },
@@ -115,6 +126,29 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "app_users", column: "is_team_lead", type: "INTEGER NOT NULL DEFAULT 0" },
   { table: "app_users", column: "team_lead_user_id", type: "TEXT" },
   { table: "app_users", column: "team_label", type: "TEXT" },
+  { table: "leads", column: "market_id", type: "TEXT" },
+  { table: "leads", column: "location_cell_id", type: "TEXT" },
+  { table: "leads", column: "country_code", type: "TEXT" },
+  { table: "leads", column: "admin_area1", type: "TEXT" },
+  { table: "leads", column: "admin_area2", type: "TEXT" },
+  { table: "leads", column: "locality", type: "TEXT" },
+  { table: "leads", column: "postal_code", type: "TEXT" },
+  { table: "crawl_units", column: "market_id", type: "TEXT" },
+  { table: "crawl_units", column: "location_cell_id", type: "TEXT" },
+  { table: "crawl_units", column: "country_code", type: "TEXT" },
+  { table: "crawl_units", column: "query_location_label", type: "TEXT" },
+  { table: "crawl_runs", column: "market_id", type: "TEXT" },
+  { table: "crawl_runs", column: "selection_json", type: "TEXT" },
+  { table: "crawl_runs", column: "name", type: "TEXT" },
+  { table: "crawl_runs", column: "scope_label", type: "TEXT" },
+  { table: "crawl_runs", column: "created_by_user_id", type: "TEXT" },
+  { table: "crawl_runs", column: "updated_at", type: "TEXT NOT NULL DEFAULT (datetime('now'))" },
+  { table: "crawl_units", column: "max_pages", type: "INTEGER NOT NULL DEFAULT 1" },
+  { table: "crawl_units", column: "pages_fetched", type: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "crawl_units", column: "raw_places_seen", type: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "crawl_units", column: "new_places_seen", type: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "crawl_units", column: "duplicate_places_seen", type: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "crawl_units", column: "budget_blocked_at", type: "TEXT" },
 ];
 
 export const SCHEMA_SQL = `
@@ -128,11 +162,47 @@ CREATE TABLE IF NOT EXISTS zip_codes (
   is_active INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS location_markets (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  country_code TEXT NOT NULL,
+  admin_area1 TEXT,
+  admin_area2 TEXT,
+  locality TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','archived')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS location_cells (
+  id TEXT PRIMARY KEY,
+  market_id TEXT NOT NULL REFERENCES location_markets(id),
+  country_code TEXT NOT NULL,
+  admin_area1 TEXT,
+  admin_area2 TEXT,
+  locality TEXT,
+  postal_code TEXT,
+  postal_code_normalized TEXT,
+  cell_type TEXT NOT NULL,
+  cell_label TEXT NOT NULL,
+  lat REAL,
+  lng REAL,
+  radius_meters INTEGER,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS crawl_runs (
   id TEXT PRIMARY KEY,
   mode TEXT NOT NULL DEFAULT 'coverage' CHECK(mode IN ('coverage','manual','refresh')),
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','paused','done','error','canceled')),
   categories TEXT NOT NULL DEFAULT '[]',
+  market_id TEXT,
+  selection_json TEXT,
+  name TEXT,
+  scope_label TEXT,
+  created_by_user_id TEXT,
   started_at TEXT,
   ended_at TEXT,
   discovered_count INTEGER NOT NULL DEFAULT 0,
@@ -140,17 +210,28 @@ CREATE TABLE IF NOT EXISTS crawl_runs (
   error_count INTEGER NOT NULL DEFAULT 0,
   api_calls_used INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS crawl_units (
   id TEXT PRIMARY KEY,
   crawl_run_id TEXT NOT NULL REFERENCES crawl_runs(id),
   zip TEXT NOT NULL,
+  market_id TEXT,
+  location_cell_id TEXT,
+  country_code TEXT,
+  query_location_label TEXT,
   category TEXT NOT NULL,
   keyword TEXT,
   status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','retry_wait','done','failed','canceled')),
   next_page_token TEXT,
+  max_pages INTEGER NOT NULL DEFAULT 1,
+  pages_fetched INTEGER NOT NULL DEFAULT 0,
+  raw_places_seen INTEGER NOT NULL DEFAULT 0,
+  new_places_seen INTEGER NOT NULL DEFAULT 0,
+  duplicate_places_seen INTEGER NOT NULL DEFAULT 0,
+  budget_blocked_at TEXT,
   attempt_count INTEGER NOT NULL DEFAULT 0,
   discovered_count INTEGER NOT NULL DEFAULT 0,
   started_at TEXT,
@@ -175,6 +256,14 @@ CREATE TABLE IF NOT EXISTS app_users (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS user_market_access (
+  user_id TEXT NOT NULL,
+  market_id TEXT NOT NULL REFERENCES location_markets(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_by_user_id TEXT,
+  PRIMARY KEY (user_id, market_id)
+);
+
 CREATE TABLE IF NOT EXISTS leads (
   id TEXT PRIMARY KEY,
   place_id TEXT NOT NULL UNIQUE,
@@ -194,11 +283,21 @@ CREATE TABLE IF NOT EXISTS leads (
   primary_type TEXT,
   lat REAL,
   lng REAL,
+  market_id TEXT,
+  location_cell_id TEXT,
+  country_code TEXT,
+  admin_area1 TEXT,
+  admin_area2 TEXT,
+  locality TEXT,
+  postal_code TEXT,
   score REAL NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','verified','contacted','preview_sent','meeting_set','closed_won','closed_lost')),
   is_excluded INTEGER NOT NULL DEFAULT 0,
   exclusion_reason TEXT,
   excluded_at TEXT,
+  archived_at TEXT,
+  archived_by_user_id TEXT,
+  archive_reason TEXT,
   selling_niche TEXT,
   qualification_status TEXT NOT NULL DEFAULT 'needs_verification' CHECK(qualification_status IN ('qualified','needs_verification','unqualified','disqualified')),
   disqualification_reason TEXT,
@@ -320,7 +419,7 @@ CREATE TABLE IF NOT EXISTS settings (
   social_hosts TEXT NOT NULL DEFAULT '[]',
   basic_hosts TEXT NOT NULL DEFAULT '[]',
   rate_limit_ms INTEGER NOT NULL DEFAULT 200,
-  max_calls_per_day INTEGER NOT NULL DEFAULT 1000,
+  max_calls_per_day INTEGER NOT NULL DEFAULT 300,
   max_calls_per_run INTEGER NOT NULL DEFAULT 500,
   max_monthly_api_spend REAL NOT NULL DEFAULT 50.0,
   stop_on_budget_limit INTEGER NOT NULL DEFAULT 1,
@@ -352,6 +451,14 @@ CREATE TABLE IF NOT EXISTS settings (
   openai_api_key_encrypted TEXT,
   google_places_api_key_encrypted TEXT,
   google_maps_browser_api_key_encrypted TEXT,
+  google_text_search_monthly_cap INTEGER NOT NULL DEFAULT 4900,
+  google_enterprise_monthly_cap INTEGER NOT NULL DEFAULT 900,
+  google_test_run_call_cap INTEGER NOT NULL DEFAULT 50,
+  google_auto_pagination_enabled INTEGER NOT NULL DEFAULT 1,
+  google_auto_pagination_min_new_candidates INTEGER NOT NULL DEFAULT 6,
+  google_auto_pagination_max_duplicate_rate REAL NOT NULL DEFAULT 0.6,
+  google_default_discovery_mode TEXT NOT NULL DEFAULT 'coverage_probe',
+  google_default_pagination_policy TEXT NOT NULL DEFAULT 'auto_yield_based',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -529,10 +636,12 @@ CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
 CREATE INDEX IF NOT EXISTS idx_leads_website_status ON leads(website_status);
 CREATE INDEX IF NOT EXISTS idx_leads_enrichment ON leads(enrichment_status, score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_queue_candidates ON leads(website_status, status, score DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_workbench_active_candidates ON leads(assigned_to_user_id, website_status, qualification_status, status, quality_bucket, sales_priority_score DESC, lead_quality_score DESC, score DESC) WHERE archived_at IS NULL AND COALESCE(is_excluded, 0) = 0 AND score > 0;
 CREATE INDEX IF NOT EXISTS idx_leads_queue_timing ON leads(reminder_date, last_contacted_at);
 CREATE INDEX IF NOT EXISTS idx_leads_primary_type_score ON leads(primary_type, score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_numeric_filters ON leads(review_count, rating, score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_exclusion_score ON leads(is_excluded, score DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_archived_active ON leads(archived_at, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_qualification_score ON leads(qualification_status, score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_selling_niche_score ON leads(selling_niche, score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_business_type_score ON leads(business_type, score DESC);
@@ -545,11 +654,25 @@ CREATE INDEX IF NOT EXISTS idx_leads_ai_queue_status ON leads(ai_queue_status, a
 CREATE INDEX IF NOT EXISTS idx_leads_sales_priority ON leads(sales_priority_score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_component_scores ON leads(raw_opportunity_score DESC, verification_score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_assigned_to_user ON leads(assigned_to_user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_market_active ON leads(market_id, archived_at, score DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_location_cell ON leads(location_cell_id, score DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_country_admin ON leads(country_code, admin_area1, locality);
 CREATE INDEX IF NOT EXISTS idx_app_users_role_status ON app_users(role, status);
 CREATE INDEX IF NOT EXISTS idx_app_users_team_lead ON app_users(team_lead_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_location_markets_country_status ON location_markets(country_code, status, name);
+CREATE INDEX IF NOT EXISTS idx_location_cells_market_active ON location_cells(market_id, is_active, cell_type);
+CREATE INDEX IF NOT EXISTS idx_location_cells_country_postal ON location_cells(country_code, postal_code_normalized);
+CREATE INDEX IF NOT EXISTS idx_user_market_access_user ON user_market_access(user_id, market_id);
+CREATE INDEX IF NOT EXISTS idx_user_market_access_market ON user_market_access(market_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_lead_notes_lead_created ON lead_notes(lead_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_crawl_units_status_zip ON crawl_units(status, zip);
 CREATE INDEX IF NOT EXISTS idx_crawl_units_run ON crawl_units(crawl_run_id);
+CREATE INDEX IF NOT EXISTS idx_crawl_units_run_status ON crawl_units(crawl_run_id, status);
+CREATE INDEX IF NOT EXISTS idx_crawl_runs_status_created ON crawl_runs(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crawl_runs_market_created ON crawl_runs(market_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crawl_runs_created_desc ON crawl_runs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crawl_units_market_status ON crawl_units(market_id, status, category);
+CREATE INDEX IF NOT EXISTS idx_crawl_units_cell_status ON crawl_units(location_cell_id, status, category);
 CREATE INDEX IF NOT EXISTS idx_zip_codes_state_county_zip ON zip_codes(state, county, zip);
 CREATE INDEX IF NOT EXISTS idx_zip_codes_state_county_active ON zip_codes(state, county, is_active);
 CREATE INDEX IF NOT EXISTS idx_places_master_last_seen ON places_master(last_seen_at DESC);
@@ -566,6 +689,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage_events(created_at DE
 CREATE INDEX IF NOT EXISTS idx_ai_usage_model_created ON ai_usage_events(model, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_lead_type_created ON lead_ai_artifacts(lead_id, artifact_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_status_created ON lead_ai_artifacts(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_leads_score_recompute_stale ON leads(updated_at DESC, last_quality_scored_at);
 CREATE INDEX IF NOT EXISTS idx_worker_runs_worker_started ON worker_runs(worker_name, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_worker_runs_status_started ON worker_runs(status, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_outreach_events_lead ON outreach_events(lead_id, created_at DESC);

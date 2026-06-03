@@ -28,7 +28,7 @@ export default async function LeadDetailPage({ params }: Props) {
   if (!lead) {
     notFound();
   }
-  if (!canReadLeadForSession(session, lead)) {
+  if (!await canReadLeadForSession(session, lead)) {
     notFound();
   }
 

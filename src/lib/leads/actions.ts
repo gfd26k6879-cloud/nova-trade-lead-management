@@ -8,6 +8,7 @@ import {
   getLeadById as queryLeadById,
   updateLeadStatus as dbUpdateStatus,
   updateLeadNotes as dbUpdateNotes,
+  updateLeadFacts as dbUpdateLeadFacts,
   updateLeadReminder as dbUpdateReminder,
   createLeadNote as dbCreateLeadNote,
   getLeadNotes as dbGetLeadNotes,
@@ -15,6 +16,11 @@ import {
   claimLeadForUser as dbClaimLeadForUser,
   setLeadExclusion as dbSetLeadExclusion,
   clearLeadExclusion as dbClearLeadExclusion,
+  archiveLead as dbArchiveLead,
+  restoreArchivedLead as dbRestoreArchivedLead,
+  bulkArchiveLeads as dbBulkArchiveLeads,
+  bulkRestoreArchivedLeads as dbBulkRestoreArchivedLeads,
+  createManualLead as dbCreateManualLead,
   updateLeadTimestamp,
   createOutreachEvent,
   getOutreachEvents as dbGetOutreachEvents,
@@ -29,6 +35,7 @@ import {
   getAiVerificationCandidates,
   getQualityAiVerificationCandidates,
   getAiWebsiteViabilityRepairLeads,
+  applyManualWebsiteCorrection as dbApplyManualWebsiteCorrection,
   applyAiFoundWebsite,
   markLeadBrokenSiteOpportunity,
   markLeadManualReview,
@@ -48,7 +55,7 @@ import { canReadLeadForSession, constrainLeadFiltersForSession } from "@/lib/lea
 import type { PhoneVerificationStatus, QualityBucket } from "@/lib/lead-quality";
 import { generateOutreachPackage } from "@/lib/outreach-package";
 import { computeScoreWithBreakdown } from "@/lib/scoring";
-import type { WebsiteStatus } from "@/lib/classify-website";
+import { classifyWebsite, type WebsiteStatus } from "@/lib/classify-website";
 import {
   computeLeadWinProbability,
   isWeakWebsiteOpportunity,
@@ -92,12 +99,45 @@ const aiApplySchema = z.enum(["update_website", "exclude_has_website", "mark_bro
 const leadNoteSchema = z.string().trim().min(1).max(4000);
 const phoneVerificationStatusSchema = z.enum(["unknown", "works", "bad", "no_phone"]);
 const qualityBucketSchema = z.enum(["ready_to_call", "needs_ai_verify", "needs_manual_review", "broken_site_opportunity", "not_a_fit"]);
+const archiveReasonSchema = z.string().trim().min(5).max(500);
+const manualLeadSchema = z.object({
+  name: z.string().trim().min(2).max(200),
+  businessType: z.string().trim().min(2).max(80),
+  phone: z.string().trim().max(80).optional().or(z.literal("")),
+  address: z.string().trim().max(300).optional().or(z.literal("")),
+  websiteStatus: z.enum(["none", "social", "basic", "custom"]).optional().default("none"),
+  notes: z.string().trim().max(2000).optional().or(z.literal("")),
+}).refine((data) => Boolean(data.phone?.trim() || data.address?.trim()), {
+  message: "Add either a phone number or an address.",
+  path: ["phone"],
+});
 const leadAiArtifactTypeSchema = z.enum(["business_detail", "competitive_report"]);
 const aiFeedbackSchema = z.object({
   status: z.enum(["correct", "incorrect", "uncertain"]),
   correctedWebsiteUrl: z.string().trim().url().max(500).optional().or(z.literal("")),
   falsePositiveReason: z.string().trim().max(500).optional(),
   reviewerNotes: z.string().trim().max(1000).optional(),
+});
+const manualWebsiteCorrectionSchema = z.object({
+  websiteUrl: z.string().trim().max(500).optional().or(z.literal("")),
+  resolution: z.enum(["official_website_found", "weak_or_basic_site", "social_or_directory_only", "remove_website"]),
+  notes: z.string().trim().max(2000).optional().or(z.literal("")),
+});
+const updateLeadFactsSchema = z.object({
+  name: z.string().trim().min(2).max(200).optional(),
+  phone: z.string().trim().max(80).optional().or(z.literal("")),
+  address: z.string().trim().max(300).optional().or(z.literal("")),
+  websiteUrl: z.string().trim().max(500).optional().or(z.literal("")),
+  businessType: z.string().trim().max(80).optional().or(z.literal("")),
+  primaryType: z.string().trim().max(120).optional().or(z.literal("")),
+  status: statusSchema.optional(),
+  notes: z.string().trim().max(4000).optional().or(z.literal("")),
+});
+const workUpdateSchema = z.object({
+  note: z.string().trim().max(4000).optional().or(z.literal("")),
+  action: z.enum(["research_note", "called", "left_voicemail", "follow_up", "not_interested", "done"]),
+  followUpAt: z.string().trim().max(40).optional().or(z.literal("")),
+  nextStep: z.string().trim().max(500).optional().or(z.literal("")),
 });
 const qualityAiBatchSchema = z.object({
   limit: z.number().int().min(1).max(100).optional(),
@@ -127,6 +167,7 @@ async function requireLeadOwnershipForMutation(
   if (session.role === "admin") return { ok: true };
   const lead = await queryLeadById(id);
   if (!lead) return { ok: false, error: "Lead not found" };
+  if (!await canReadLeadForSession(session, lead)) return { ok: false, error: "Lead not found" };
   if (!lead.assigned_to_user_id) return { ok: false, error: "Claim this lead before updating it." };
   if (lead.assigned_to_user_id !== session.userId) return { ok: false, error: `Taken by ${leadOwnerLabel(lead)}.` };
   return { ok: true };
@@ -135,6 +176,25 @@ async function requireLeadOwnershipForMutation(
 function normalizeOptionalText(value: string | undefined): string | null {
   const trimmed = (value ?? "").trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizeWebsiteUrl(value: string | null | undefined): string | null {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return null;
+    }
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return null;
+  }
 }
 
 export async function getLeadsAction(filters: LeadFilters = {}) {
@@ -147,7 +207,7 @@ export async function getLeadByIdAction(id: string) {
   const session = await requirePermission("view:workspace");
   await ensureDbReady();
   const lead = await queryLeadById(id);
-  return lead && canReadLeadForSession(session, lead) ? lead : null;
+  return lead && await canReadLeadForSession(session, lead) ? lead : null;
 }
 
 export async function updateLeadStatusAction(id: string, status: string) {
@@ -192,7 +252,7 @@ export async function getLeadNotesAction(id: string) {
   const session = await requirePermission("view:workspace");
   await ensureDbReady();
   const lead = await queryLeadById(id);
-  if (!lead || !canReadLeadForSession(session, lead)) return [];
+  if (!lead || !await canReadLeadForSession(session, lead)) return [];
   return dbGetLeadNotes(id);
 }
 
@@ -201,6 +261,7 @@ export async function claimLeadAction(id: string) {
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
+  if (!await canReadLeadForSession(session, lead)) return { error: "Lead not found" };
   const changes = await dbClaimLeadForUser(id, session.userId);
   if (changes === 0) {
     const current = await queryLeadById(id);
@@ -217,6 +278,7 @@ export async function unclaimLeadAction(id: string) {
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
+  if (!await canReadLeadForSession(session, lead)) return { error: "Lead not found" };
   if (lead.assigned_to_user_id && lead.assigned_to_user_id !== session.userId && session.role !== "admin") {
     return { error: "Only the assigned researcher or an admin can unclaim this lead." };
   }
@@ -283,6 +345,79 @@ export async function restoreExcludedLeadAction(id: string) {
   return { success: true };
 }
 
+export async function archiveLeadAction(id: string, reason: string) {
+  const session = await requirePermission("lead:exclude");
+  await ensureDbReady();
+  const lead = await queryLeadById(id);
+  if (!lead) return { error: "Lead not found" };
+  const parsedReason = archiveReasonSchema.safeParse(reason);
+  if (!parsedReason.success) return { error: "Please provide an archive reason of at least 5 characters." };
+  const changes = await dbArchiveLead(id, session.userId, parsedReason.data);
+  if (changes === 0) return { error: "Lead is already archived or was not found." };
+  await createAuditLog("lead_archived", "lead", id, { reason: parsedReason.data });
+  revalidateLeadViews();
+  revalidatePath(`/leads/${id}`);
+  return { success: true };
+}
+
+export async function restoreArchivedLeadAction(id: string) {
+  await requirePermission("lead:exclude");
+  await ensureDbReady();
+  const lead = await queryLeadById(id);
+  if (!lead) return { error: "Lead not found" };
+  const changes = await dbRestoreArchivedLead(id);
+  if (changes === 0) return { error: "Lead is not archived or was not found." };
+  await createAuditLog("lead_restored", "lead", id, {});
+  revalidateLeadViews();
+  revalidatePath(`/leads/${id}`);
+  return { success: true };
+}
+
+export async function bulkArchiveLeadsAction(ids: string[], reason: string) {
+  const session = await requirePermission("lead:exclude");
+  await ensureDbReady();
+  const parsedReason = archiveReasonSchema.safeParse(reason);
+  if (!parsedReason.success) return { error: "Please provide an archive reason of at least 5 characters." };
+  const count = await dbBulkArchiveLeads(ids, session.userId, parsedReason.data);
+  await createAuditLog("lead_archived", "leads", undefined, { reason: parsedReason.data, count });
+  revalidateLeadViews();
+  return { success: true, count };
+}
+
+export async function bulkRestoreArchivedLeadsAction(ids: string[]) {
+  await requirePermission("lead:exclude");
+  await ensureDbReady();
+  const count = await dbBulkRestoreArchivedLeads(ids);
+  await createAuditLog("lead_restored", "leads", undefined, { count });
+  revalidateLeadViews();
+  return { success: true, count };
+}
+
+export async function createManualLeadAction(input: unknown) {
+  const session = await requirePermission("lead:exclude");
+  await ensureDbReady();
+  const parsed = manualLeadSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Please complete the required lead fields." };
+  }
+  const lead = await dbCreateManualLead({
+    name: parsed.data.name,
+    businessType: parsed.data.businessType,
+    phone: normalizeOptionalText(parsed.data.phone),
+    address: normalizeOptionalText(parsed.data.address),
+    websiteStatus: parsed.data.websiteStatus,
+    notes: normalizeOptionalText(parsed.data.notes),
+  });
+  await createAuditLog("manual_lead_created", "lead", lead.id, {
+    businessType: parsed.data.businessType,
+    websiteStatus: parsed.data.websiteStatus,
+    actorUserId: session.userId,
+  });
+  revalidateLeadViews();
+  revalidatePath(`/leads/${lead.id}`);
+  return { success: true, lead };
+}
+
 export async function logOutreachEventAction(
   leadId: string,
   inputOrChannel: string | Record<string, unknown>,
@@ -330,7 +465,7 @@ export async function getOutreachEventsAction(leadId: string) {
   const session = await requirePermission("view:workspace");
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
-  if (!lead || !canReadLeadForSession(session, lead)) return [];
+  if (!lead || !await canReadLeadForSession(session, lead)) return [];
   return dbGetOutreachEvents(leadId);
 }
 
@@ -370,7 +505,7 @@ export async function generateOutreachPackageAction(leadId: string) {
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
   if (!lead) return { error: "Lead not found" };
-  if (!canReadLeadForSession(session, lead)) return { error: "Lead not found" };
+  if (!await canReadLeadForSession(session, lead)) return { error: "Lead not found" };
   return generateOutreachPackage(lead);
 }
 
@@ -392,7 +527,7 @@ export async function getDemoByLeadIdAction(leadId: string) {
   const session = await requirePermission("view:workspace");
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
-  if (!lead || !canReadLeadForSession(session, lead)) return null;
+  if (!lead || !await canReadLeadForSession(session, lead)) return null;
   return dbGetDemoByLeadId(leadId);
 }
 
@@ -401,7 +536,7 @@ export async function getScoreBreakdownAction(leadId: string) {
   await ensureDbReady();
   const lead = await queryLeadById(leadId);
   if (!lead) return null;
-  if (!canReadLeadForSession(session, lead)) return null;
+  if (!await canReadLeadForSession(session, lead)) return null;
   const settings = await getSettings();
   const breakdown = computeScoreWithBreakdown(
     {
@@ -570,6 +705,249 @@ export async function queueLeadPitchPackAction(leadId: string, options: { force?
   revalidateLeadViews();
   revalidatePath(`/leads/${leadId}`);
   return result;
+}
+
+export async function manualWebsiteCorrectionAction(leadId: string, input: unknown) {
+  const session = await requirePermission("lead:update");
+  await ensureDbReady();
+  const parsed = manualWebsiteCorrectionSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid website correction" };
+  }
+
+  const ownership = await requireLeadOwnershipForMutation(leadId, session);
+  if (!ownership.ok) {
+    return { error: ownership.error };
+  }
+
+  const normalizedUrl = normalizeWebsiteUrl(parsed.data.websiteUrl);
+  if (parsed.data.resolution !== "remove_website" && !normalizedUrl) {
+    return { error: "Enter a valid website URL." };
+  }
+
+  const websiteStatus: WebsiteStatus =
+    parsed.data.resolution === "remove_website"
+      ? "none"
+      : parsed.data.resolution === "weak_or_basic_site"
+        ? "basic"
+        : parsed.data.resolution === "social_or_directory_only"
+          ? "social"
+          : classifyWebsite(normalizedUrl ?? "");
+
+  const before = await queryLeadById(leadId);
+  if (!before) {
+    return { error: "Lead not found" };
+  }
+
+  const lead = await dbApplyManualWebsiteCorrection(leadId, {
+    websiteUrl: normalizedUrl,
+    websiteStatus,
+    resolution: parsed.data.resolution,
+    notes: normalizeOptionalText(parsed.data.notes),
+    actorUserId: session.userId,
+  });
+
+  if (!lead) {
+    return { error: "Lead not found" };
+  }
+
+  await createAuditLog("manual_website_corrected", "lead", leadId, {
+    actorUserId: session.userId,
+    resolution: parsed.data.resolution,
+    before: {
+      website_uri: before.website_uri,
+      website_status: before.website_status,
+      qualification_status: before.qualification_status,
+      is_excluded: before.is_excluded,
+    },
+    after: {
+      website_uri: lead.website_uri,
+      website_status: lead.website_status,
+      qualification_status: lead.qualification_status,
+      is_excluded: lead.is_excluded,
+    },
+    notes: normalizeOptionalText(parsed.data.notes),
+  });
+
+  if (parsed.data.resolution === "official_website_found") {
+    await createAuditLog("ai_false_positive_corrected", "lead", leadId, {
+      actorUserId: session.userId,
+      correctedWebsiteUrl: normalizedUrl,
+      previousAiStatus: before.ai_verification_status,
+    });
+    await createAuditLog("lead_excluded", "lead", leadId, {
+      actorUserId: session.userId,
+      reason: "Manual correction: official website found",
+    });
+  }
+
+  revalidateLeadViews();
+  revalidatePath(`/leads/${leadId}`);
+  return { success: true, lead };
+}
+
+export async function updateLeadFactsAction(leadId: string, input: unknown) {
+  const session = await requirePermission("lead:update");
+  await ensureDbReady();
+  const parsed = updateLeadFactsSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid lead facts" };
+  }
+
+  const ownership = await requireLeadOwnershipForMutation(leadId, session);
+  if (!ownership.ok) {
+    return { error: ownership.error };
+  }
+  if ((parsed.data.status === "closed_won" || parsed.data.status === "closed_lost") && session.role !== "admin") {
+    return { error: "Only admins can mark leads closed won or closed lost." };
+  }
+
+  const normalizedUrl =
+    parsed.data.websiteUrl === undefined ? undefined : normalizeWebsiteUrl(parsed.data.websiteUrl);
+  if (parsed.data.websiteUrl && !normalizedUrl) {
+    return { error: "Enter a valid website URL." };
+  }
+
+  const before = await queryLeadById(leadId);
+  if (!before) {
+    return { error: "Lead not found" };
+  }
+
+  const lead = await dbUpdateLeadFacts(leadId, {
+    name: parsed.data.name,
+    phone: parsed.data.phone === undefined ? undefined : normalizeOptionalText(parsed.data.phone),
+    address: parsed.data.address === undefined ? undefined : normalizeOptionalText(parsed.data.address),
+    websiteUrl: normalizedUrl,
+    websiteStatus: normalizedUrl ? classifyWebsite(normalizedUrl) : parsed.data.websiteUrl === "" ? "none" : undefined,
+    businessType: parsed.data.businessType === undefined ? undefined : (normalizeOptionalText(parsed.data.businessType) ?? undefined),
+    primaryType: parsed.data.primaryType === undefined ? undefined : (normalizeOptionalText(parsed.data.primaryType) ?? undefined),
+    status: parsed.data.status,
+    notes: parsed.data.notes === undefined ? undefined : normalizeOptionalText(parsed.data.notes),
+    actorUserId: session.userId,
+  });
+
+  if (!lead) {
+    return { error: "Lead not found" };
+  }
+
+  await createAuditLog("lead_facts_updated", "lead", leadId, {
+    actorUserId: session.userId,
+    before: {
+      name: before.name,
+      phone: before.phone,
+      address: before.address,
+      website_uri: before.website_uri,
+      business_type: before.business_type,
+      primary_type: before.primary_type,
+      status: before.status,
+    },
+    after: {
+      name: lead.name,
+      phone: lead.phone,
+      address: lead.address,
+      website_uri: lead.website_uri,
+      business_type: lead.business_type,
+      primary_type: lead.primary_type,
+      status: lead.status,
+    },
+  });
+
+  revalidateLeadViews();
+  revalidatePath(`/leads/${leadId}`);
+  return { success: true, lead };
+}
+
+export async function saveLeadWorkUpdateAction(leadId: string, input: unknown) {
+  const session = await requirePermission("lead:update");
+  await ensureDbReady();
+  const parsed = workUpdateSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid work update" };
+  }
+
+  const ownership = await requireLeadOwnershipForMutation(leadId, session);
+  if (!ownership.ok) {
+    return { error: ownership.error };
+  }
+
+  const note = normalizeOptionalText(parsed.data.note);
+  const followUpAt = normalizeOptionalText(parsed.data.followUpAt);
+  const nextStep = normalizeOptionalText(parsed.data.nextStep);
+  if (!note && !followUpAt && !nextStep && parsed.data.action === "research_note") {
+    return { error: "Add a note or choose a work action." };
+  }
+
+  if (note && ["research_note", "done"].includes(parsed.data.action)) {
+    await dbCreateLeadNote(leadId, session.userId, note);
+  }
+
+  if (parsed.data.action === "called") {
+    await createOutreachEvent({
+      leadId,
+      channel: "call",
+      actorUserId: session.userId,
+      actorEmail: session.email,
+      outcome: "contacted",
+      note,
+      followUpAt,
+      nextStep,
+    });
+  } else if (parsed.data.action === "left_voicemail") {
+    await createOutreachEvent({
+      leadId,
+      channel: "call",
+      actorUserId: session.userId,
+      actorEmail: session.email,
+      outcome: "left_voicemail",
+      note,
+      followUpAt,
+      nextStep,
+    });
+  } else if (parsed.data.action === "follow_up") {
+    await createOutreachEvent({
+      leadId,
+      channel: "other",
+      actorUserId: session.userId,
+      actorEmail: session.email,
+      outcome: "follow_up_needed",
+      note,
+      followUpAt,
+      nextStep,
+    });
+    if (followUpAt) {
+      await dbUpdateReminder(leadId, followUpAt);
+    }
+  } else if (parsed.data.action === "not_interested") {
+    await createOutreachEvent({
+      leadId,
+      channel: "other",
+      actorUserId: session.userId,
+      actorEmail: session.email,
+      outcome: "not_interested",
+      note,
+      followUpAt,
+      nextStep,
+    });
+  } else if (parsed.data.action === "done") {
+    await dbUpdateStatus(leadId, "verified");
+    await dbUpdateReminder(leadId, null);
+  }
+
+  if (followUpAt && parsed.data.action !== "follow_up" && parsed.data.action !== "done") {
+    await dbUpdateReminder(leadId, followUpAt);
+  }
+
+  await createAuditLog("lead_work_update_saved", "lead", leadId, {
+    actorUserId: session.userId,
+    action: parsed.data.action,
+    hasNote: Boolean(note),
+    followUpAt,
+    nextStep,
+  });
+
+  revalidateLeadViews();
+  revalidatePath(`/leads/${leadId}`);
+  return { success: true };
 }
 
 export async function updateLeadAiFeedbackAction(leadId: string, input: unknown) {

@@ -15,3 +15,8 @@ export function buildAuthCallbackUrl(nextPath: string, appUrl: string): string {
   const safeNext = nextPath.startsWith("/") ? nextPath : `/${nextPath}`;
   return `${appUrl}/auth/callback?next=${encodeURIComponent(safeNext)}`;
 }
+
+export function buildPasswordRecoveryUrl(nextPath: string, appUrl: string): string {
+  const safeNext = nextPath.startsWith("/") ? nextPath : `/${nextPath}`;
+  return `${appUrl}/auth/callback?next=${encodeURIComponent(safeNext)}`;
+}

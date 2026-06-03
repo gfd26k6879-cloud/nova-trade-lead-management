@@ -19,6 +19,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const hasError = params.error === "invalid_credentials";
   const missingConfig = params.error === "missing_config";
   const invalidRecoveryLink = params.error === "invalid_recovery_link";
+  const expiredLink = params.error === "expired_link";
   const resetSuccess = params.reset === "success";
 
   return (
@@ -118,7 +119,20 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 color: "#dc2626",
               }}
             >
-              The recovery link is missing required information. Request a fresh password reset.
+              The recovery link is missing required information. Request a fresh password reset and open only the newest email.
+            </div>
+          )}
+
+          {expiredLink && (
+            <div
+              className="rounded-xl px-3.5 py-2.5 text-sm"
+              style={{
+                background: "rgba(239, 68, 68, 0.08)",
+                border: "1px solid rgba(239, 68, 68, 0.15)",
+                color: "#dc2626",
+              }}
+            >
+              That recovery link is expired or was already used. Request a fresh password reset link.
             </div>
           )}
 

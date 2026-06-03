@@ -17,6 +17,7 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { PageShell } from "@/components/page-shell";
+import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { ScoreBandBadge } from "@/components/score-band-badge";
 import { ScoreBandLegend } from "@/components/score-band-legend";
 import {
@@ -41,6 +42,11 @@ interface Lead {
   enrichment_status: string;
   primary_type: string | null;
   business_type: string;
+  ai_verification_status: string;
+  ai_checked_at: string | null;
+  ai_queue_status: string;
+  ai_website_viability_status: string | null;
+  ai_confidence: number;
   assigned_to_user_id: string | null;
   assigned_user_email: string | null;
   assigned_user_display_name: string | null;
@@ -471,6 +477,7 @@ function LeadCard({ lead, scoreThresholds, isDragging }: { lead: Lead; scoreThre
       <div className="flex items-start justify-between gap-1">
         <Link
           href={`/leads/${lead.id}`}
+          prefetch={false}
           className="text-xs font-semibold leading-tight"
           style={{ color: "var(--text-primary)" }}
           onClick={(e) => e.stopPropagation()}
@@ -500,6 +507,14 @@ function LeadCard({ lead, scoreThresholds, isDragging }: { lead: Lead; scoreThre
         >
           {lead.website_status}
         </span>
+        <AiVerificationBadge
+          status={lead.ai_verification_status}
+          checkedAt={lead.ai_checked_at}
+          queueStatus={lead.ai_queue_status}
+          viability={lead.ai_website_viability_status}
+          confidence={lead.ai_confidence}
+          compact
+        />
         {lead.rating != null && (
           <span className="text-[0.6rem]" style={{ color: "var(--text-tertiary)" }}>
             {lead.rating.toFixed(1)}*

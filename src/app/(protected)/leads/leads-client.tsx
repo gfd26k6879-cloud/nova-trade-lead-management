@@ -3,10 +3,12 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useState } from "react";
 import Link from "next/link";
+import { AiVerificationBadge } from "@/components/ai-verification-badge";
+import { ManualLeadModal } from "@/components/manual-lead-modal";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
 import { ScoreBandLegend } from "@/components/score-band-legend";
-import { bulkUpdateLeadStatusAction } from "@/lib/leads/actions";
+import { bulkArchiveLeadsAction, bulkRestoreArchivedLeadsAction, bulkUpdateLeadStatusAction } from "@/lib/leads/actions";
 import { getBusinessTypeLabel } from "@/lib/business-types";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
 
@@ -24,7 +26,14 @@ interface Lead {
   status: string;
   is_excluded: boolean;
   exclusion_reason: string | null;
+  archived_at: string | null;
+  archive_reason: string | null;
   enrichment_status: string;
+  ai_verification_status: string;
+  ai_checked_at: string | null;
+  ai_queue_status: string;
+  ai_website_viability_status: string | null;
+  ai_confidence: number;
   assigned_to_user_id?: string | null;
   assigned_user_email?: string | null;
   assigned_user_display_name?: string | null;
@@ -48,14 +57,21 @@ interface Props {
     sortDir?: string;
     page?: number;
     pageSize?: number;
+    archived?: "active" | "archived" | "all";
   };
   scoreThresholds: ScoreBandThresholds;
   businessTypeCounts: Array<{ id: string; label: string; total: number; active: number }>;
   canExport: boolean;
   canClose: boolean;
+  canArchive: boolean;
 }
 
 const STATUS_FILTER_OPTIONS = ["", "new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost", "excluded"];
+const ARCHIVE_FILTER_OPTIONS = [
+  { value: "active", label: "Active" },
+  { value: "archived", label: "Archived" },
+  { value: "all", label: "All" },
+];
 const BULK_STATUS_OPTIONS = ["new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost"];
 const WEBSITE_OPTIONS = ["", "none", "social", "basic", "custom"];
 
@@ -69,6 +85,7 @@ const statusBadgeStyle = (status: string): React.CSSProperties => {
     closed_won: { bg: "rgba(34,197,94,0.15)", color: "#166534" },
     closed_lost: { bg: "rgba(239,68,68,0.1)", color: "#991b1b" },
     excluded: { bg: "rgba(107,114,128,0.14)", color: "#374151" },
+    archived: { bg: "rgba(15,23,42,0.12)", color: "#0f172a" },
   };
   const c = colors[status] ?? { bg: "rgba(0,0,0,0.05)", color: "var(--text-secondary)" };
   return { background: c.bg, color: c.color, padding: "2px 8px", borderRadius: "6px", fontSize: "0.75rem", fontWeight: 500 };
@@ -91,13 +108,14 @@ const CATEGORY_OPTIONS = [
   "restaurant","gym","landscaper","veterinarian","accountant","lawyer",
 ];
 
-export function LeadsClient({ leads, total, filters, scoreThresholds, businessTypeCounts, canExport, canClose }: Props) {
+export function LeadsClient({ leads, total, filters, scoreThresholds, businessTypeCounts, canExport, canClose, canArchive }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [search, setSearch] = useState(filters.search ?? "");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkStatus, setBulkStatus] = useState("verified");
   const [bulkMsg, setBulkMsg] = useState<string | null>(null);
+  const [manualLeadOpen, setManualLeadOpen] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(
     !!(filters.minReviews || filters.minRating || filters.minScore || filters.category)
   );
@@ -143,15 +161,46 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
 
   const handleBulkUpdate = async () => {
     if (selected.size === 0) return;
-    const result = await bulkUpdateLeadStatusAction(Array.from(selected), bulkStatus);
-    if ("count" in result) {
-      setBulkMsg(`Updated ${result.count} leads to "${bulkStatus.replace(/_/g, " ")}"`);
-      setSelected(new Set());
-      setTimeout(() => setBulkMsg(null), 3000);
-      router.refresh();
-    } else if ("error" in result) {
+    const result = await bulkUpdateLeadStatusAction(Array.from(selected), bulkStatus) as { count?: number; error?: string };
+    if (result.error) {
       setBulkMsg(result.error ?? "Error");
+      return;
     }
+    setBulkMsg(`Updated ${result.count ?? 0} leads to "${bulkStatus.replace(/_/g, " ")}"`);
+    setSelected(new Set());
+    setTimeout(() => setBulkMsg(null), 3000);
+    router.refresh();
+  };
+
+  const handleBulkArchive = async () => {
+    if (selected.size === 0) return;
+    const reason = window.prompt("Archive reason (required, at least 5 characters)");
+    if (!reason || reason.trim().length < 5) {
+      setBulkMsg("Archive reason must be at least 5 characters.");
+      return;
+    }
+    const result = await bulkArchiveLeadsAction(Array.from(selected), reason) as { count?: number; error?: string };
+    if (result.error) {
+      setBulkMsg(result.error ?? "Error");
+      return;
+    }
+    setBulkMsg(`Archived ${result.count ?? 0} leads`);
+    setSelected(new Set());
+    setTimeout(() => setBulkMsg(null), 3000);
+    router.refresh();
+  };
+
+  const handleBulkRestore = async () => {
+    if (selected.size === 0) return;
+    const result = await bulkRestoreArchivedLeadsAction(Array.from(selected)) as { count?: number; error?: string };
+    if (result.error) {
+      setBulkMsg(result.error ?? "Error");
+      return;
+    }
+    setBulkMsg(`Restored ${result.count ?? 0} leads`);
+    setSelected(new Set());
+    setTimeout(() => setBulkMsg(null), 3000);
+    router.refresh();
   };
 
   return (
@@ -169,7 +218,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
             <input
               type="text"
               aria-label="Search leads"
-              placeholder="Search name, phone, ZIP..."
+              placeholder="Search name, phone, postal code..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="glass-input min-w-56"
@@ -195,6 +244,12 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
             Unclaimed
           </button>
 
+          {canArchive && (
+            <button type="button" className="btn-primary text-xs" onClick={() => setManualLeadOpen(true)}>
+              Add Lead
+            </button>
+          )}
+
           {canExport && (
             <a
               href={`/api/export/csv?${searchParams.toString()}`}
@@ -204,6 +259,16 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
               Export CSV
             </a>
           )}
+          <select
+            className="glass-select"
+            aria-label="Archive filter"
+            value={filters.archived ?? "active"}
+            onChange={(e) => updateFilter("archived", e.target.value === "active" ? "" : e.target.value)}
+          >
+            {ARCHIVE_FILTER_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
           <select
             className="glass-select"
             aria-label="Business type"
@@ -326,6 +391,12 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
               ))}
             </select>
             <button type="button" className="btn-primary text-xs" onClick={handleBulkUpdate}>Apply Status</button>
+            {canArchive && filters.archived === "archived" && (
+              <button type="button" className="btn-glass text-xs" onClick={handleBulkRestore}>Restore selected</button>
+            )}
+            {canArchive && filters.archived !== "archived" && (
+              <button type="button" className="btn-glass text-xs" onClick={handleBulkArchive}>Archive selected</button>
+            )}
             <button type="button" className="btn-glass text-xs" onClick={() => setSelected(new Set())}>Clear</button>
             {bulkMsg && <span className="text-xs" style={{ color: "#166534" }}>{bulkMsg}</span>}
           </div>
@@ -359,6 +430,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
                     <th>Reviews</th>
                     <th>Business Type</th>
                     <th>Website</th>
+                    <th>AI</th>
                     <th>Score</th>
                     <th>Owner</th>
                     <th>Status</th>
@@ -379,6 +451,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
                       <td>
                         <Link
                           href={`/leads/${lead.id}`}
+                          prefetch={false}
                           className="link-accent font-medium"
                         >
                           {lead.name ?? "—"}
@@ -390,13 +463,32 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
                       <td>{getBusinessTypeLabel(lead.business_type)}</td>
                       <td><span style={websiteBadgeStyle(lead.website_status)}>{lead.website_status}</span></td>
                       <td>
+                        <AiVerificationBadge
+                          status={lead.ai_verification_status}
+                          checkedAt={lead.ai_checked_at}
+                          queueStatus={lead.ai_queue_status}
+                          viability={lead.ai_website_viability_status}
+                          confidence={lead.ai_confidence}
+                          compact
+                        />
+                      </td>
+                      <td>
                         <ScoreBandBadge score={lead.score} thresholds={scoreThresholds} />
                       </td>
                       <td>{ownerLabel(lead)}</td>
                       <td>
-                        <span style={statusBadgeStyle(lead.is_excluded ? "excluded" : lead.status)}>
-                          {(lead.is_excluded ? "excluded" : lead.status).replace(/_/g, " ")}
+                        <span style={statusBadgeStyle(lead.archived_at ? "archived" : lead.is_excluded ? "excluded" : lead.status)}>
+                          {(lead.archived_at ? "archived" : lead.is_excluded ? "excluded" : lead.status).replace(/_/g, " ")}
                         </span>
+                        {lead.archived_at && lead.archive_reason && (
+                          <span
+                            className="ml-1 inline-block rounded px-1.5 py-0.5 text-[0.65rem] font-medium"
+                            title={lead.archive_reason}
+                            style={{ background: "rgba(15,23,42,0.1)", color: "#0f172a" }}
+                          >
+                            reason
+                          </span>
+                        )}
                         {lead.is_excluded && lead.exclusion_reason && (
                           <span
                             className="ml-1 inline-block rounded px-1.5 py-0.5 text-[0.65rem] font-medium"
@@ -442,6 +534,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
           </>
         )}
       </section>
+      <ManualLeadModal open={manualLeadOpen} onClose={() => setManualLeadOpen(false)} />
     </PageShell>
   );
 }

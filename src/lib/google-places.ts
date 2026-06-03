@@ -1,4 +1,4 @@
-import type { GooglePlacesSku } from "@/lib/google-pricing";
+import { inferPlaceDetailsSkuFromFieldMask, type GooglePlacesSku } from "@/lib/google-pricing";
 import { getConfiguredGooglePlacesApiKey } from "@/lib/db/queries";
 
 const API_BASE = "https://places.googleapis.com/v1";
@@ -19,6 +19,18 @@ export const TEXT_SEARCH_FIELD_MASK = [
   "places.regularOpeningHours",
   "places.photos",
   "places.location",
+  "nextPageToken",
+].join(",");
+
+export const TEXT_SEARCH_PRO_FIELD_MASK = [
+  "places.id",
+  "places.displayName",
+  "places.formattedAddress",
+  "places.types",
+  "places.businessStatus",
+  "places.primaryType",
+  "places.location",
+  "nextPageToken",
 ].join(",");
 
 export const DETAILS_STAGE_A_FIELD_MASK = [
@@ -84,6 +96,21 @@ export interface TextSearchResponse {
   nextPageToken?: string;
 }
 
+export interface TextSearchOptions {
+  fieldMask?: string;
+}
+
+export class PlacesApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly body: string,
+    message = `Places API error ${status}: ${body}`,
+  ) {
+    super(message);
+    this.name = "PlacesApiError";
+  }
+}
+
 export interface GetPlaceDetailsOptions {
   includeAtmosphere?: boolean;
   cacheTtlDays?: number;
@@ -119,8 +146,11 @@ async function fetchWithRetry(
 
       if (res.ok) return res;
 
+      const body = await res.text();
+      const apiError = new PlacesApiError(res.status, body);
+
       if (res.status === 429 || res.status >= 500) {
-        lastError = new Error(`HTTP ${res.status}: ${await res.text()}`);
+        lastError = apiError;
         if (attempt < maxRetries) {
           const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
           await sleep(delay);
@@ -128,10 +158,9 @@ async function fetchWithRetry(
         }
       }
 
-      const body = await res.text();
-      throw new Error(`Places API error ${res.status}: ${body}`);
+      throw apiError;
     } catch (err) {
-      if (err instanceof Error && !err.message.startsWith("Places API error")) {
+      if (err instanceof Error && !(err instanceof PlacesApiError)) {
         lastError = err;
         if (attempt < maxRetries) {
           const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
@@ -151,28 +180,21 @@ export async function textSearch(
   pageToken?: string,
   rateLimitMs = 200,
   locationBias?: LocationBias,
+  options: TextSearchOptions = {},
 ): Promise<TextSearchResponse> {
   const apiKey = await getApiKey();
 
   if (rateLimitMs > 0) await sleep(rateLimitMs);
 
-  const body: Record<string, unknown> = { textQuery, pageSize: 20 };
-  if (pageToken) body.pageToken = pageToken;
-  if (locationBias && !pageToken) {
-    body.locationBias = {
-      circle: {
-        center: { latitude: locationBias.lat, longitude: locationBias.lng },
-        radius: locationBias.radiusMeters,
-      },
-    };
-  }
+  const body = buildTextSearchRequestBody(textQuery, pageToken, locationBias);
+  const fieldMask = options.fieldMask ?? TEXT_SEARCH_FIELD_MASK;
 
   const res = await fetchWithRetry(`${API_BASE}/places:searchText`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Goog-Api-Key": apiKey,
-      "X-Goog-FieldMask": TEXT_SEARCH_FIELD_MASK,
+      "X-Goog-FieldMask": fieldMask,
     },
     body: JSON.stringify(body),
   });
@@ -184,6 +206,24 @@ export async function textSearch(
   };
 }
 
+function buildTextSearchRequestBody(
+  textQuery: string,
+  pageToken?: string,
+  locationBias?: LocationBias,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { textQuery, pageSize: 20 };
+  if (locationBias) {
+    body.locationBias = {
+      circle: {
+        center: { latitude: locationBias.lat, longitude: locationBias.lng },
+        radius: locationBias.radiusMeters,
+      },
+    };
+  }
+  if (pageToken) body.pageToken = pageToken;
+  return body;
+}
+
 export async function getPlaceDetails(
   placeId: string,
   rateLimitMs = 200,
@@ -193,9 +233,7 @@ export async function getPlaceDetails(
   const includeAtmosphere = options.includeAtmosphere ?? false;
   const cacheTtlDays = options.cacheTtlDays ?? 30;
   const fieldMask = includeAtmosphere ? DETAILS_STAGE_B_FIELD_MASK : DETAILS_STAGE_A_FIELD_MASK;
-  const sku: GooglePlacesSku = includeAtmosphere
-    ? "places_place_details_enterprise_plus_atmosphere"
-    : "places_place_details_enterprise";
+  const sku: GooglePlacesSku = inferPlaceDetailsSkuFromFieldMask(fieldMask);
 
   if (rateLimitMs > 0) await sleep(rateLimitMs);
 

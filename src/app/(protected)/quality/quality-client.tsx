@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
+import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { HelpTip } from "@/components/help-tip";
 import { PageShell } from "@/components/page-shell";
 import {
@@ -42,11 +43,11 @@ const PHONE_OPTIONS = [
 
 const AI_OPTIONS = [
   { value: "", label: "All AI states" },
-  { value: "not_checked", label: "Not Checked" },
-  { value: "no_site_found", label: "No Site Found" },
-  { value: "weak_site_found", label: "Weak Site Found" },
-  { value: "uncertain", label: "Uncertain" },
-  { value: "mismatch", label: "Mismatch" },
+  { value: "not_checked", label: "AI Not Run" },
+  { value: "no_site_found", label: "AI Run: No Usable Site" },
+  { value: "weak_site_found", label: "AI Run: Weak Site" },
+  { value: "uncertain", label: "AI Run: Uncertain" },
+  { value: "mismatch", label: "AI Run: Mismatch" },
 ];
 
 interface Props {
@@ -279,7 +280,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
                       <input type="checkbox" checked={selected.has(lead.id)} onChange={() => toggleSelected(lead.id)} aria-label={`Select ${lead.name ?? "lead"}`} />
                     </td>
                     <td>
-                      <Link href={`/leads/${lead.id}`} className="link-accent font-medium">{lead.name ?? "Unknown"}</Link>
+                      <Link href={`/leads/${lead.id}`} prefetch={false} className="link-accent font-medium">{lead.name ?? "Unknown"}</Link>
                       <div className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
                         {bucketLabel(lead.quality_bucket)}
                       </div>
@@ -297,7 +298,14 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
                     <td>
                       <span style={websiteFindingStyle(lead)}>{websiteFindingLabel(lead)}</span>
                       <div className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                        AI {Math.round((lead.ai_confidence ?? 0) * 100)}%
+                        <AiVerificationBadge
+                          status={lead.ai_verification_status}
+                          checkedAt={lead.ai_checked_at}
+                          queueStatus={lead.ai_queue_status}
+                          viability={lead.ai_website_viability_status}
+                          confidence={lead.ai_confidence}
+                          showDetail
+                        />
                       </div>
                     </td>
                     <td>
@@ -375,7 +383,7 @@ function websiteFindingLabel(lead: QualityLead): string {
   if (lead.ai_verification_status === "no_site_found" || lead.ai_website_viability_status === "directory_only") return "AI no usable site";
   if (lead.ai_verification_status === "weak_site_found") return `Weak site: ${lead.ai_website_viability_status ?? "unknown"}`;
   if (lead.ai_verification_status === "uncertain" || lead.ai_verification_status === "mismatch") return "Needs review";
-  if (lead.ai_verification_status === "not_checked") return "Needs AI verify";
+  if (lead.ai_verification_status === "not_checked") return "AI not run";
   return lead.website_status;
 }
 

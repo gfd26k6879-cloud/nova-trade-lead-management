@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   estimateMarginalSkuCost,
   estimateSkuCost,
+  getSkuFreeCap,
+  inferTextSearchSkuFromFieldMask,
   type GooglePlacesSku,
 } from "@/lib/google-pricing";
 
@@ -34,5 +36,17 @@ describe("google-pricing", () => {
       1,
     );
     expect(atmosphereMarginal.estimatedCost).toBeCloseTo(0.025, 4);
+  });
+
+  it("uses current free caps for Text Search Pro and Enterprise", async () => {
+    expect(getSkuFreeCap("places_text_search_pro")).toBe(5000);
+    expect(getSkuFreeCap("places_text_search_enterprise")).toBe(1000);
+    expect(estimateSkuCost("places_text_search_pro", 5000)).toBe(0);
+  });
+
+  it("infers Text Search SKU from field mask", async () => {
+    expect(inferTextSearchSkuFromFieldMask("places.id,nextPageToken")).toBe("places_text_search_essentials_ids_only");
+    expect(inferTextSearchSkuFromFieldMask("places.id,places.displayName,places.formattedAddress,places.location")).toBe("places_text_search_pro");
+    expect(inferTextSearchSkuFromFieldMask("places.id,places.websiteUri,places.rating")).toBe("places_text_search_enterprise");
   });
 });

@@ -1,54 +1,66 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { PageShell } from "@/components/page-shell";
 import {
+  getCoverageCellLedgerAction,
+  getCoverageDiscoveryItemListAction,
+  getCoverageMarketSummaryAction,
+  getCoverageProbeCandidatesAction,
+  getCoverageRunProgressAction,
+  getCoverageSelectedRunAction,
+  getCoverageUnitPreviewAction,
   getFailedUnitErrorsAction,
   pauseCrawlRunAction,
+  promoteProbeToLeadHarvestAction,
   resumeCrawlRunAction,
-  stopCrawlRunAction,
   retryFailedUnitsAction,
+  stopCrawlRunAction,
 } from "@/lib/crawl/actions";
 import { refreshStaleUnitsAction } from "@/lib/leads/actions";
+import type { CountryCode, LocationCellType } from "@/lib/geography";
 
-interface ZipProgress {
-  state: string;
-  county: string;
-  zip: string;
-  city: string;
-  total: number;
-  done: number;
-  failed: number;
-  canceled: number;
-  remaining: number;
-  leadsFound: number;
-  apiCalls: number;
+interface MarketCoverageSummary {
+  marketId: string;
+  marketName: string;
+  countryCode: CountryCode;
+  countryLabel: string;
+  adminArea1: string | null;
+  totalCells: number;
+  activeCells: number;
+  discoveredCells: number;
+  totalUnits: number;
+  doneUnits: number;
+  failedUnits: number;
+  openUnits: number;
+  canceledUnits: number;
+  leadsDiscovered: number;
+  activeLeads: number;
   lastRunAt: string | null;
 }
 
-interface CountyCoverage {
-  state: string;
-  county: string;
-  total: number;
-  done: number;
-  failed: number;
-  canceled: number;
-  remaining: number;
-  zipCount: number;
-}
-
-interface StateCoverage {
-  state: string;
-  total: number;
-  done: number;
-  failed: number;
-  canceled: number;
-  remaining: number;
-  countyCount: number;
-  zipCount: number;
+interface LocationCellCoverage {
+  cellId: string;
+  marketId: string;
+  marketName: string;
+  countryCode: CountryCode;
+  cellType: LocationCellType;
+  cellLabel: string;
+  postalCode: string | null;
+  locality: string | null;
+  adminArea1: string | null;
+  adminArea2: string | null;
+  totalUnits: number;
+  doneUnits: number;
+  failedUnits: number;
+  openUnits: number;
+  canceledUnits: number;
+  leadsDiscovered: number;
+  activeLeads: number;
+  lastRunAt: string | null;
 }
 
 interface FailedUnit {
@@ -59,7 +71,10 @@ interface FailedUnit {
 
 interface CrawlRunSummary {
   id: string;
+  name: string | null;
+  scope_label: string | null;
   status: string;
+  discoveryMode: "coverage_probe" | "lead_harvest" | null;
   started_at: string | null;
   created_at: string;
   ended_at: string | null;
@@ -67,6 +82,37 @@ interface CrawlRunSummary {
   discovered_count: number;
   api_calls_used: number;
   last_error: string | null;
+  market_id: string | null;
+}
+
+interface DiscoveryItem {
+  id: string;
+  name: string;
+  scopeLabel: string;
+  status: string;
+  mode: string;
+  discoveryMode: "coverage_probe" | "lead_harvest" | null;
+  marketId: string | null;
+  marketName: string | null;
+  countryCode: CountryCode | null;
+  categories: string[];
+  discoveredCount: number;
+  errorCount: number;
+  apiCallsUsed: number;
+  lastError: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  totalUnits: number;
+  doneUnits: number;
+  failedUnits: number;
+  openUnits: number;
+  runningUnits: number;
+  canceledUnits: number;
+  pagesFetched: number;
+  rawPlacesSeen: number;
+  newPlacesSeen: number;
+  duplicatePlacesSeen: number;
 }
 
 interface CrawlProgress {
@@ -94,6 +140,10 @@ interface CrawlUnitPreview {
   id: string;
   status: string;
   zip: string;
+  market_id: string | null;
+  location_cell_id: string | null;
+  country_code: CountryCode | null;
+  query_location_label: string | null;
   city: string | null;
   county: string | null;
   category: string;
@@ -103,240 +153,330 @@ interface CrawlUnitPreview {
   finished_at: string | null;
   last_error: string | null;
   next_page_token: string | null;
+  max_pages: number;
+  pages_fetched: number;
+  raw_places_seen: number;
+  new_places_seen: number;
+  duplicate_places_seen: number;
+  budget_blocked_at: string | null;
   created_at: string;
 }
 
+interface DiscoveryRunCandidate {
+  placeId: string;
+  name: string | null;
+  address: string | null;
+  phone: string | null;
+  websiteUri: string | null;
+  mapsUri: string | null;
+  categories: string[];
+  rating: number | null;
+  userRatingCount: number | null;
+  businessStatus: string | null;
+  primaryType: string | null;
+  lat: number | null;
+  lng: number | null;
+  completenessScore: number;
+  freshnessScore: number;
+  verificationCoverage: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastObservedAt: string | null;
+  observationCount: number;
+  marketId: string | null;
+  locationCellId: string | null;
+  countryCode: CountryCode | null;
+  queryLocationLabel: string | null;
+  category: string | null;
+  hasLead: boolean;
+  leadId: string | null;
+  leadStatus: string | null;
+  leadIsExcluded: boolean;
+  websiteStatusLabel: "No website" | "Website present";
+  listingStatus: "Active lead" | "Excluded lead" | "Directory candidate";
+}
+
 interface Props {
-  coverage: ZipProgress[];
-  countyCoverage: CountyCoverage[];
-  stateCoverage: StateCoverage[];
+  selectedRunId?: string | null;
+  markets: MarketCoverageSummary[];
+  cells: LocationCellCoverage[];
+  discoveryItems: DiscoveryItem[];
+  loadWarnings: string[];
   run: CrawlRunSummary | null;
   progress: CrawlProgress | null;
   geography: GeographyProgress | null;
   unitPreview: CrawlUnitPreview[];
 }
 
-interface RollupRow {
-  state: string;
-  county?: string;
-  total: number;
-  done: number;
-  failed: number;
-  canceled: number;
-  remaining: number;
-  zipCount: number;
-  countyCount?: number;
-}
+type PanelStatus = "idle" | "loading" | "ready" | "error" | "timeout";
 
-function aggregateStateRollups(rows: ZipProgress[]): RollupRow[] {
-  const byState = new Map<string, RollupRow>();
-  const countySets = new Map<string, Set<string>>();
-  for (const row of rows) {
-    const current = byState.get(row.state) ?? {
-      state: row.state,
-      total: 0,
-      done: 0,
-      failed: 0,
-      canceled: 0,
-      remaining: 0,
-      zipCount: 0,
-      countyCount: 0,
-    };
-    current.total += row.total;
-    current.done += row.done;
-    current.failed += row.failed;
-    current.canceled += row.canceled;
-    current.remaining += row.remaining;
-    current.zipCount += 1;
-    byState.set(row.state, current);
+type CoverageLoadError = "db_statement_timeout" | "transient_db_error" | "coverage_load_timeout" | "coverage_data_unavailable";
 
-    if (!countySets.has(row.state)) countySets.set(row.state, new Set());
-    countySets.get(row.state)!.add(row.county);
-  }
-
-  return Array.from(byState.values())
-    .map((row) => ({ ...row, countyCount: countySets.get(row.state)?.size ?? 0 }))
-    .sort((a, b) => a.state.localeCompare(b.state));
-}
-
-function aggregateCountyRollups(rows: ZipProgress[]): RollupRow[] {
-  const byCounty = new Map<string, RollupRow>();
-  for (const row of rows) {
-    const key = `${row.state}::${row.county}`;
-    const current = byCounty.get(key) ?? {
-      state: row.state,
-      county: row.county,
-      total: 0,
-      done: 0,
-      failed: 0,
-      canceled: 0,
-      remaining: 0,
-      zipCount: 0,
-    };
-    current.total += row.total;
-    current.done += row.done;
-    current.failed += row.failed;
-    current.canceled += row.canceled;
-    current.remaining += row.remaining;
-    current.zipCount += 1;
-    byCounty.set(key, current);
-  }
-
-  return Array.from(byCounty.values()).sort((a, b) => {
-    if (a.state !== b.state) return a.state.localeCompare(b.state);
-    return (a.county ?? "").localeCompare(b.county ?? "");
-  });
-}
-
-export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, progress, geography, unitPreview }: Props) {
+export function CoverageClient({
+  selectedRunId = null,
+  markets: initialMarkets,
+  cells: initialCells,
+  discoveryItems: initialDiscoveryItems,
+  loadWarnings: initialLoadWarnings,
+  run: initialRun,
+  progress: initialProgress,
+  geography: initialGeography,
+  unitPreview: initialUnitPreview,
+}: Props) {
   const router = useRouter();
-  const [filter, setFilter] = useState("");
-  const [incompleteOnly, setIncompleteOnly] = useState(false);
-  const [failedOnly, setFailedOnly] = useState(false);
-  const [ledgerView, setLedgerView] = useState<"all" | "not_started" | "needs_retry">("all");
-  const [selectedCounty, setSelectedCounty] = useState("all");
-  const [expandedStates, setExpandedStates] = useState<string[]>([]);
-  const [expandedCounties, setExpandedCounties] = useState<string[]>([]);
+  const [markets, setMarkets] = useState(initialMarkets);
+  const [cells, setCells] = useState(initialCells);
+  const [discoveryItems, setDiscoveryItems] = useState(initialDiscoveryItems);
+  const [loadWarnings, setLoadWarnings] = useState(initialLoadWarnings);
+  const [run, setRun] = useState(initialRun);
+  const [progress, setProgress] = useState(initialProgress);
+  const [geography, setGeography] = useState(initialGeography);
+  const [unitPreview, setUnitPreview] = useState(initialUnitPreview);
+  const [probeCandidates, setProbeCandidates] = useState<DiscoveryRunCandidate[]>([]);
+  const [discoveryStatus, setDiscoveryStatus] = useState<PanelStatus>("loading");
+  const [discoveryItemsStatus, setDiscoveryItemsStatus] = useState<PanelStatus>("loading");
+  const [marketsStatus, setMarketsStatus] = useState<PanelStatus>("idle");
+  const [cellsStatus, setCellsStatus] = useState<PanelStatus>("idle");
+  const [progressStatus, setProgressStatus] = useState<PanelStatus>("idle");
+  const [unitPreviewStatus, setUnitPreviewStatus] = useState<PanelStatus>("idle");
+  const [probeCandidatesStatus, setProbeCandidatesStatus] = useState<PanelStatus>("idle");
+  const [country, setCountry] = useState("all");
+  const [marketId, setMarketId] = useState("all");
+  const [cellType, setCellType] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [category, setCategory] = useState("all");
+  const [query, setQuery] = useState("");
   const [errors, setErrors] = useState<FailedUnit[]>([]);
   const [showErrors, setShowErrors] = useState(false);
+  const [busy, setBusy] = useState<"pause" | "resume" | "stop" | "retry" | "refresh" | "promote" | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; actionLabel: string; action: () => Promise<void> } | null>(null);
   const [refreshDays, setRefreshDays] = useState(7);
-  const [busy, setBusy] = useState<"pause" | "resume" | "stop" | "retry" | "refresh" | null>(null);
+  const effectiveRunId = run?.id ?? selectedRunId ?? null;
 
-  const filtered = useMemo(() => {
-    const filterValue = filter.trim().toLowerCase();
-    return coverage.filter((z) => {
-      if (selectedCounty !== "all" && z.county !== selectedCounty) return false;
-      if (incompleteOnly && z.remaining === 0) return false;
-      if (failedOnly && z.failed === 0) return false;
-      if (ledgerView === "not_started" && !(z.total > 0 && z.done === 0 && z.failed === 0 && z.canceled === 0)) return false;
-      if (ledgerView === "needs_retry" && z.failed === 0) return false;
-      if (!filterValue) return true;
-      return (
-        z.zip.includes(filterValue) ||
-        z.city.toLowerCase().includes(filterValue) ||
-        z.county.toLowerCase().includes(filterValue) ||
-        z.state.toLowerCase().includes(filterValue)
-      );
-    });
-  }, [coverage, failedOnly, filter, incompleteOnly, ledgerView, selectedCounty]);
+  useEffect(() => {
+    document.title = "Coverage | NoSite Leads";
+  }, []);
 
-  const totalDone = coverage.reduce((s, z) => s + z.done, 0);
-  const totalAll = coverage.reduce((s, z) => s + z.total, 0);
-  const totalFailed = coverage.reduce((s, z) => s + z.failed, 0);
-  const totalCanceled = coverage.reduce((s, z) => s + z.canceled, 0);
-  const pct = totalAll > 0 ? Math.round((totalDone / totalAll) * 100) : 0;
-  const runPct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : pct;
+  const setPanelWarning = useCallback((label: string, loadError?: CoverageLoadError) => {
+    setLoadWarnings((current) => [
+      ...current.filter((warning) => !warning.startsWith(`${label}:`)),
+      ...(loadError ? [`${label}: ${formatCoverageLoadError(loadError)}`] : []),
+    ]);
+  }, []);
+
+  const loadDiscoveryPanel = useCallback(async () => {
+    setDiscoveryStatus("loading");
+    try {
+      const result = await withCoverageClientTimeout(getCoverageSelectedRunAction(selectedRunId));
+      setRun(result.run);
+      setPanelWarning("selected_run", result.loadError);
+      setDiscoveryStatus(statusFromLoadError(result.loadError));
+    } catch {
+      setRun(null);
+      setPanelWarning("selected_run", "coverage_load_timeout");
+      setDiscoveryStatus("timeout");
+    }
+  }, [selectedRunId, setPanelWarning]);
+
+  const loadDiscoveryItemsPanel = useCallback(async () => {
+    setDiscoveryItemsStatus("loading");
+    try {
+      const result = await withCoverageClientTimeout(getCoverageDiscoveryItemListAction(30));
+      setDiscoveryItems(result.discoveryItems);
+      setPanelWarning("discovery_items", result.loadError);
+      setDiscoveryItemsStatus(statusFromLoadError(result.loadError));
+    } catch {
+      setDiscoveryItems([]);
+      setPanelWarning("discovery_items", "coverage_load_timeout");
+      setDiscoveryItemsStatus("timeout");
+    }
+  }, [setPanelWarning]);
+
+  const loadMarketPanel = useCallback(async (runId: string | null) => {
+    setMarketsStatus("loading");
+    try {
+      const result = await withCoverageClientTimeout(getCoverageMarketSummaryAction(runId));
+      setMarkets(result.markets);
+      setPanelWarning("market_summary", result.loadError);
+      setMarketsStatus(statusFromLoadError(result.loadError));
+    } catch {
+      setMarkets([]);
+      setPanelWarning("market_summary", "coverage_load_timeout");
+      setMarketsStatus("timeout");
+    }
+  }, [setPanelWarning]);
+
+  const loadCellPanel = useCallback(async (runId: string | null) => {
+    setCellsStatus("loading");
+    try {
+      const result = await withCoverageClientTimeout(getCoverageCellLedgerAction(runId));
+      setCells(result.cells);
+      setPanelWarning("cell_coverage", result.loadError);
+      setCellsStatus(statusFromLoadError(result.loadError));
+    } catch {
+      setCells([]);
+      setPanelWarning("cell_coverage", "coverage_load_timeout");
+      setCellsStatus("timeout");
+    }
+  }, [setPanelWarning]);
+
+  const loadProgressPanel = useCallback(async (runId: string | null) => {
+    setProgressStatus("loading");
+    try {
+      const result = await withCoverageClientTimeout(getCoverageRunProgressAction(runId));
+      setProgress(result.progress);
+      setGeography(result.geography);
+      setPanelWarning("run_progress", result.loadError);
+      setProgressStatus(statusFromLoadError(result.loadError));
+    } catch {
+      setProgress(null);
+      setGeography(null);
+      setPanelWarning("run_progress", "coverage_load_timeout");
+      setProgressStatus("timeout");
+    }
+  }, [setPanelWarning]);
+
+  const loadUnitPreviewPanel = useCallback(async (runId: string | null) => {
+    setUnitPreviewStatus("loading");
+    try {
+      const result = await withCoverageClientTimeout(getCoverageUnitPreviewAction(runId));
+      setUnitPreview(result.unitPreview);
+      setPanelWarning("unit_preview", result.loadError);
+      setUnitPreviewStatus(statusFromLoadError(result.loadError));
+    } catch {
+      setUnitPreview([]);
+      setPanelWarning("unit_preview", "coverage_load_timeout");
+      setUnitPreviewStatus("timeout");
+    }
+  }, [setPanelWarning]);
+
+  const loadProbeCandidatesPanel = useCallback(async (runId: string | null) => {
+    setProbeCandidatesStatus("loading");
+    try {
+      const result = await withCoverageClientTimeout(getCoverageProbeCandidatesAction(runId));
+      setProbeCandidates(result.candidates);
+      setPanelWarning("probe_candidates", result.loadError);
+      setProbeCandidatesStatus(statusFromLoadError(result.loadError));
+    } catch {
+      setProbeCandidates([]);
+      setPanelWarning("probe_candidates", "coverage_load_timeout");
+      setProbeCandidatesStatus("timeout");
+    }
+  }, [setPanelWarning]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadDiscoveryPanel(), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadDiscoveryPanel]);
+
+  useEffect(() => {
+    if (discoveryStatus === "loading" || discoveryStatus === "idle") return;
+    const itemTimer = window.setTimeout(() => void loadDiscoveryItemsPanel(), 0);
+    const marketTimer = window.setTimeout(() => void loadMarketPanel(effectiveRunId), 150);
+    const cellTimer = window.setTimeout(() => void loadCellPanel(effectiveRunId), 300);
+    const progressTimer = window.setTimeout(() => void loadProgressPanel(effectiveRunId), 450);
+    const unitTimer = window.setTimeout(() => void loadUnitPreviewPanel(effectiveRunId), 600);
+    const candidateTimer = window.setTimeout(() => void loadProbeCandidatesPanel(effectiveRunId), 750);
+    return () => {
+      window.clearTimeout(itemTimer);
+      window.clearTimeout(marketTimer);
+      window.clearTimeout(cellTimer);
+      window.clearTimeout(progressTimer);
+      window.clearTimeout(unitTimer);
+      window.clearTimeout(candidateTimer);
+    };
+  }, [discoveryStatus, effectiveRunId, loadCellPanel, loadDiscoveryItemsPanel, loadMarketPanel, loadProbeCandidatesPanel, loadProgressPanel, loadUnitPreviewPanel]);
+
+  const countries = useMemo(() => Array.from(new Set(markets.map((market) => market.countryCode))).sort(), [markets]);
+  const marketOptions = useMemo(() => markets.filter((market) => country === "all" || market.countryCode === country), [country, markets]);
+  const cellTypes = useMemo(() => Array.from(new Set(cells.map((cell) => cell.cellType))).sort(), [cells]);
+  const categories = useMemo(() => Array.from(new Set(unitPreview.map((unit) => unit.category))).sort(), [unitPreview]);
+
+  const filteredMarkets = marketOptions.filter((market) => marketId === "all" || market.marketId === marketId);
+  const filteredCells = cells.filter((cell) => {
+    if (country !== "all" && cell.countryCode !== country) return false;
+    if (marketId !== "all" && cell.marketId !== marketId) return false;
+    if (cellType !== "all" && cell.cellType !== cellType) return false;
+    if (status === "open" && cell.openUnits === 0) return false;
+    if (status === "failed" && cell.failedUnits === 0) return false;
+    if (status === "complete" && !(cell.totalUnits > 0 && cell.openUnits === 0 && cell.failedUnits === 0)) return false;
+    const needle = query.trim().toLowerCase();
+    if (!needle) return true;
+    return [cell.cellLabel, cell.postalCode, cell.locality, cell.adminArea1, cell.adminArea2, cell.marketName]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(needle));
+  });
+  const visibleCells = filteredCells.slice(0, 500);
+  const hiddenCellCount = Math.max(filteredCells.length - visibleCells.length, 0);
+  const filteredUnits = unitPreview.filter((unit) => {
+    if (marketId !== "all" && unit.market_id !== marketId) return false;
+    if (country !== "all" && unit.country_code !== country) return false;
+    if (category !== "all" && unit.category !== category) return false;
+    if (status !== "all" && status !== "open" && status !== "complete" && unit.status !== status) return false;
+    return true;
+  });
+
+  const totalUnits = filteredMarkets.reduce((sum, market) => sum + market.totalUnits, 0);
+  const doneUnits = filteredMarkets.reduce((sum, market) => sum + market.doneUnits, 0);
+  const failedUnits = filteredMarkets.reduce((sum, market) => sum + market.failedUnits, 0);
+  const openUnits = filteredMarkets.reduce((sum, market) => sum + market.openUnits, 0);
+  const rawCandidateCount = unitPreview.reduce((sum, unit) => sum + unit.raw_places_seen, 0);
+  const newCandidateCount = unitPreview.reduce((sum, unit) => sum + unit.new_places_seen, 0);
+  const duplicateCandidateCount = unitPreview.reduce((sum, unit) => sum + unit.duplicate_places_seen, 0);
+  const pagesFetched = unitPreview.reduce((sum, unit) => sum + unit.pages_fetched, 0);
+  const noWebsiteCandidateCount = probeCandidates.filter((candidate) => !candidate.websiteUri).length;
+  const activeLeadCandidateCount = probeCandidates.filter((candidate) => candidate.hasLead && !candidate.leadIsExcluded).length;
+  const runPct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : totalUnits > 0 ? Math.round((doneUnits / totalUnits) * 100) : 0;
   const runStatus = run?.status ?? null;
-  const isRunning = runStatus === "running";
-  const isQueued = runStatus === "queued";
-  const isPaused = runStatus === "paused";
-  const canStop = isRunning || isQueued || isPaused;
+  const canStop = runStatus === "running" || runStatus === "queued" || runStatus === "paused";
+  const selectedDiscoveryItem = discoveryItems.find((item) => item.id === run?.id) ?? null;
+  const selectedDiscoveryMode = run?.discoveryMode ?? selectedDiscoveryItem?.discoveryMode ?? null;
+  const canPromoteProbe = Boolean(run?.id && run.status === "done" && selectedDiscoveryMode === "coverage_probe");
 
-  const hasCustomFilter = filter.trim().length > 0 || incompleteOnly || failedOnly || ledgerView !== "all" || selectedCounty !== "all";
-
-  const stateRows = useMemo(() => {
-    if (!hasCustomFilter) {
-      return [...stateCoverage]
-        .map((row) => ({
-          state: row.state,
-          total: row.total,
-          done: row.done,
-          failed: row.failed,
-          canceled: row.canceled,
-          remaining: row.remaining,
-          zipCount: row.zipCount,
-          countyCount: row.countyCount,
-        }))
-        .sort((a, b) => a.state.localeCompare(b.state));
+  const handleRunSelect = (value: string) => {
+    if (value === "default") {
+      router.push("/coverage");
+      return;
     }
-    return aggregateStateRollups(filtered);
-  }, [filtered, hasCustomFilter, stateCoverage]);
-
-  const countyRows = useMemo(() => {
-    if (!hasCustomFilter) {
-      return [...countyCoverage]
-        .map((row) => ({
-          state: row.state,
-          county: row.county,
-          total: row.total,
-          done: row.done,
-          failed: row.failed,
-          canceled: row.canceled,
-          remaining: row.remaining,
-          zipCount: row.zipCount,
-        }))
-        .sort((a, b) => {
-          if (a.state !== b.state) return a.state.localeCompare(b.state);
-          return (a.county ?? "").localeCompare(b.county ?? "");
-        });
-    }
-    return aggregateCountyRollups(filtered);
-  }, [countyCoverage, filtered, hasCustomFilter]);
-
-  const availableCounties = useMemo(
-    () => Array.from(new Set(coverage.map((row) => row.county))).sort((a, b) => a.localeCompare(b)),
-    [coverage]
-  );
-
-  const toggleState = (state: string) => {
-    setExpandedStates((previous) =>
-      previous.includes(state) ? previous.filter((item) => item !== state) : [...previous, state]
-    );
-  };
-
-  const toggleCounty = (state: string, county: string) => {
-    const key = `${state}::${county}`;
-    setExpandedCounties((previous) =>
-      previous.includes(key) ? previous.filter((item) => item !== key) : [...previous, key]
-    );
-  };
-
-  const handleRetry = async () => {
-    setBusy("retry");
-    const result = await retryFailedUnitsAction();
-    if ("error" in result) {
-      toast.error(result.error ?? "Error");
-    } else {
-      toast.success(`${result.retriedCount} units queued for retry`);
-    }
-    router.refresh();
-    setBusy(null);
+    router.push(`/coverage?run=${encodeURIComponent(value)}`);
   };
 
   const handlePause = async () => {
+    if (!run?.id) return;
     setBusy("pause");
-    const result = await pauseCrawlRunAction();
-    if ("error" in result) {
-      toast.error(result.error ?? "Unable to pause run");
-    } else {
-      toast.info("Discovery paused");
-    }
+    const result = await pauseCrawlRunAction(run.id);
+    if ("error" in result) toast.error(result.error ?? "Unable to pause run");
+    else toast.info("Discovery paused");
     router.refresh();
     setBusy(null);
   };
 
   const handleResume = async () => {
+    if (!run?.id) return;
     setBusy("resume");
-    const result = await resumeCrawlRunAction();
-    if ("error" in result) {
-      toast.error(result.error ?? "Unable to resume run");
-    } else {
-      toast.success("Discovery resumed");
-    }
+    const result = await resumeCrawlRunAction(run.id);
+    if ("error" in result) toast.error(result.error ?? "Unable to resume run");
+    else toast.success("Discovery resumed");
     router.refresh();
     setBusy(null);
   };
 
   const handleStop = async () => {
-    const confirmed = window.confirm("Stop this discovery run? Unprocessed ZIP/category units will be marked canceled. Completed leads stay saved.");
-    if (!confirmed) return;
+    if (!run?.id) return;
     setBusy("stop");
-    const result = await stopCrawlRunAction();
-    if ("error" in result) {
-      toast.error(result.error ?? "Unable to stop discovery");
-    } else {
-      toast.success(`Discovery stopped. ${result.canceledUnits} queued units canceled.`);
-    }
+    const result = await stopCrawlRunAction(run.id);
+    if ("error" in result) toast.error(result.error ?? "Unable to cancel remaining units");
+    else toast.success(`Remaining discovery units canceled. ${result.canceledUnits} queued units canceled.`);
+    router.refresh();
+    setBusy(null);
+  };
+
+  const handleRetry = async () => {
+    if (!run?.id) return;
+    setBusy("retry");
+    const result = await retryFailedUnitsAction(run.id);
+    if ("error" in result) toast.error(result.error ?? "Unable to retry failed units");
+    else toast.success(`${result.retriedCount} units queued for retry`);
     router.refresh();
     setBusy(null);
   };
@@ -346,8 +486,8 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
       setShowErrors(false);
       return;
     }
-    const data = await getFailedUnitErrorsAction();
-    setErrors(data);
+    if (!run?.id) return;
+    setErrors(await getFailedUnitErrorsAction(run.id));
     setShowErrors(true);
   };
 
@@ -355,462 +495,376 @@ export function CoverageClient({ coverage, countyCoverage, stateCoverage, run, p
     if (!run?.id) return;
     setBusy("refresh");
     const result = await refreshStaleUnitsAction(run.id, refreshDays);
-    if ("error" in result) {
-      toast.error(result.error ?? "Error");
-    } else {
-      toast.success(`${result.count} stale units reset for re-crawl`);
-    }
+    if ("error" in result) toast.error(result.error ?? "Unable to refresh stale units");
+    else toast.success(`${result.count} stale units reset for re-crawl`);
     router.refresh();
+    setBusy(null);
+  };
+
+  const handlePromoteProbe = async () => {
+    if (!run?.id) return;
+    setBusy("promote");
+    const result = await promoteProbeToLeadHarvestAction(run.id);
+    if ("error" in result) {
+      toast.error(result.error ?? "Unable to promote this probe");
+      setBusy(null);
+      return;
+    }
+    toast.success(`Created lead harvest with ${result.unitCount} unit${result.unitCount === 1 ? "" : "s"}.`);
+    router.push(`/coverage?run=${encodeURIComponent(result.runId)}`);
     setBusy(null);
   };
 
   return (
     <PageShell
-      title="Discovery Monitor"
-      description="See exactly what the selected or latest discovery run is doing: ZIP/category work units, progress, failures, and pause/resume controls."
+      title="Coverage"
+      description="Track discovery coverage by country, market, and postal/postcode cell. Colorado ZIP coverage remains available as U.S. ZIP cells."
       stats={[
         { label: "Run Status", value: formatRunStatus(runStatus) },
-        { label: "Units Done", value: `${progress?.done ?? totalDone} / ${progress?.total ?? totalAll}` },
-        { label: "Remaining", value: String((progress?.pending ?? 0) + (progress?.running ?? 0)) },
-        { label: "Failed", value: String(progress?.failed ?? totalFailed) },
+        { label: "Units Done", value: `${progress?.done ?? doneUnits} / ${progress?.total ?? totalUnits}` },
+        { label: "Open Units", value: String((progress?.pending ?? 0) + (progress?.running ?? openUnits)) },
+        { label: "Failed", value: String(progress?.failed ?? failedUnits) },
       ]}
     >
-      <section className="rounded-2xl px-5 py-4" style={{ background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.16)" }}>
-        <p className="text-xs font-semibold" style={{ color: "#2563eb" }}>Run-scoped ledger</p>
-        <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-          These rows describe the current or most recent discovery run, not lifetime ZIP coverage. Use the Scheduler page for background workers and costs.
-        </p>
-      </section>
+      {(discoveryStatus === "loading" || discoveryItemsStatus === "loading" || marketsStatus === "loading" || cellsStatus === "loading" || progressStatus === "loading" || unitPreviewStatus === "loading" || probeCandidatesStatus === "loading") && (
+        <section className="glass rounded-2xl p-4 text-sm" style={{ color: "var(--text-secondary)" }}>
+          Coverage panels are loading. The page shell remains usable while heavy reads finish.
+        </section>
+      )}
 
       <section className="glass rounded-2xl p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h3 className="section-label">Discovery Control</h3>
             <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-              A work unit is one Google Places search for one ZIP code and one business category. Running and pending units below are the backend discovery queue.
+              A work unit is one Google Places search for one market cell and one business category.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-glass text-xs" onClick={() => router.refresh()}>
-              Refresh
-            </button>
-            <Link href="/dashboard" className="btn-primary text-xs">
-              Start New Discovery
-            </Link>
+            <button type="button" className="btn-glass text-xs" onClick={() => router.refresh()}>Refresh</button>
+            <Link href="/dashboard#run-controls" className="btn-primary text-xs">Start New Discovery</Link>
           </div>
         </div>
 
-        {run ? (
+        {discoveryStatus === "loading" ? (
+          <EmptyPanel label="Loading selected discovery item..." />
+        ) : discoveryStatus === "error" || discoveryStatus === "timeout" ? (
+          <RetryPanel
+            label="Coverage discovery item metadata is temporarily unavailable."
+            status={discoveryStatus}
+            onRetry={loadDiscoveryPanel}
+          />
+        ) : run ? (
           <>
+            <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_2fr]">
+              <label className="flex flex-col gap-1">
+                <span className="section-label">Selected discovery item</span>
+                <select className="glass-select" value={run.id} onChange={(event) => handleRunSelect(event.target.value)}>
+                  {!selectedDiscoveryItem && <option value={run.id}>{run.name ?? `Discovery item ${run.id.slice(0, 8)}`} - {formatLabel(run.status)}</option>}
+                  {discoveryItems.map((item) => (
+                    <option key={item.id} value={item.id}>{formatDiscoveryItemLabel(item)}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="rounded-xl p-3 text-sm" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>
+                <p className="font-semibold" style={{ color: "var(--text-primary)" }}>{selectedDiscoveryItem?.name ?? run.name ?? "Selected discovery item"}</p>
+                <p className="mt-1 text-xs">{selectedDiscoveryItem?.scopeLabel ?? run.scope_label ?? "Selected discovery item"} · Counts below are scoped to this discovery item.</p>
+              </div>
+            </div>
+            {(discoveryItemsStatus === "error" || discoveryItemsStatus === "timeout") && (
+              <div className="mt-4">
+                <RetryPanel
+                  label="Discovery item list is temporarily unavailable. The selected item remains usable."
+                  status={discoveryItemsStatus}
+                  onRetry={loadDiscoveryItemsPanel}
+                />
+              </div>
+            )}
             <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-              <Metric label="Status" value={formatRunStatus(run.status)} tone={run.status} />
+              <Metric label="Status" value={formatRunStatus(run.status)} />
               <Metric label="Completion" value={`${runPct}%`} />
               <Metric label="Discovered" value={String(run.discovered_count)} />
               <Metric label="API Calls" value={String(run.api_calls_used)} />
               <Metric label="Categories" value={String(run.categories.length)} />
             </div>
-
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <Metric label="Mode" value={selectedDiscoveryMode === "lead_harvest" ? "Lead harvest" : selectedDiscoveryMode === "coverage_probe" ? "Coverage probe" : "Unknown"} />
+              <Metric label="Pages fetched" value={String(pagesFetched)} />
+              <Metric label="Raw candidates" value={String(rawCandidateCount)} />
+              <Metric label="New directory candidates" value={String(newCandidateCount)} />
+              <Metric label="Duplicates" value={String(duplicateCandidateCount)} />
+            </div>
+            <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.42)", color: "var(--text-secondary)" }}>
+              {selectedDiscoveryMode === "coverage_probe" ? (
+                <p><strong style={{ color: "var(--text-primary)" }}>Coverage probe:</strong> candidates are stored in the directory database (`places_master` + observations), but active sales leads are not created until you run a lead harvest.</p>
+              ) : selectedDiscoveryMode === "lead_harvest" ? (
+                <p><strong style={{ color: "var(--text-primary)" }}>Lead harvest:</strong> this mode creates active leads from Google Places results while still updating the canonical directory database.</p>
+              ) : (
+                <p>This discovery item predates explicit probe/harvest labeling. Inspect the work queue and candidates before rerunning.</p>
+              )}
+            </div>
             <div className="mt-4 h-2.5 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }}>
-              <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${runPct}%`, background: runPct === 100 ? "#166534" : "var(--accent)" }}
-              />
+              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${runPct}%`, background: runPct === 100 ? "#166534" : "var(--accent)" }} />
             </div>
-
             <div className="mt-4 flex flex-wrap items-center gap-2">
-              {isRunning && (
-                <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handlePause}>
-                  {busy === "pause" ? "Pausing..." : "Pause Discovery"}
-                </button>
-              )}
-              {isQueued && (
-                <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handlePause}>
-                  {busy === "pause" ? "Pausing..." : "Pause Discovery"}
-                </button>
-              )}
-              {isPaused && (
-                <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={handleResume}>
-                  {busy === "resume" ? "Resuming..." : "Resume Discovery"}
-                </button>
-              )}
-              {canStop && (
-                <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handleStop}>
-                  {busy === "stop" ? "Stopping..." : "Stop Discovery"}
-                </button>
-              )}
-              {(progress?.failed ?? totalFailed) > 0 && (
-                <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handleRetry}>
-                  {busy === "retry" ? "Retrying..." : `Retry Failed (${progress?.failed ?? totalFailed})`}
-                </button>
-              )}
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-                Started {formatDateTime(run.started_at ?? run.created_at)}
-              </span>
+              {(run.status === "running" || run.status === "queued") && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handlePause}>{busy === "pause" ? "Pausing..." : "Pause Discovery"}</button>}
+              {run.status === "paused" && <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={() => setConfirmAction({
+                title: "Resume this discovery item?",
+                message: `This will resume ${run.name ?? "this discovery item"} and can consume Google Places quota while workers process ${progress?.pending ?? 0} open units.`,
+                actionLabel: "Resume this item",
+                action: handleResume,
+              })}>{busy === "resume" ? "Resuming..." : "Resume this discovery item"}</button>}
+              {canStop && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={() => setConfirmAction({
+                title: "Cancel this item's remaining units?",
+                message: `This will mark ${progress?.pending ?? 0} open units for ${run.name ?? "this discovery item"} as canceled. Completed leads and history stay saved, but queued units will not be processed unless recreated later.`,
+                actionLabel: "Cancel remaining units",
+                action: handleStop,
+              })}>{busy === "stop" ? "Canceling..." : "Cancel this item's remaining units"}</button>}
+              {(progress?.failed ?? failedUnits) > 0 && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handleRetry}>{busy === "retry" ? "Retrying..." : `Retry Failed (${progress?.failed ?? failedUnits})`}</button>}
+              {canPromoteProbe && <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={() => setConfirmAction({
+                title: "Promote probe to capped lead harvest?",
+                message: `This creates a separate lead harvest using the same market, cell, and categories from ${run.name ?? "this probe"}. Test-run cap stays enabled. The original probe and Denver remain unchanged.`,
+                actionLabel: busy === "promote" ? "Creating..." : "Create capped lead harvest",
+                action: handlePromoteProbe,
+              })}>{busy === "promote" ? "Creating harvest..." : "Promote to lead harvest"}</button>}
+              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Started {formatDateTime(run.started_at ?? run.created_at)}</span>
             </div>
-
-            {run.last_error && (
-              <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", color: "#991b1b" }}>
-                {run.last_error}
-              </div>
-            )}
+            {run.last_error && <Alert tone="error" text={run.last_error} />}
           </>
-        ) : (
-          <div className="mt-5 rounded-xl p-5 text-sm" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>
-            No discovery run exists yet. Open Revenue, choose counties/ZIP codes and categories, then start a run.
+        ) : <EmptyPanel label="No discovery run exists yet. Open Revenue, choose markets/cells and categories, then start a run." />}
+        {loadWarnings.length > 0 && (
+          <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#92400e" }}>
+            <p className="font-semibold">Some coverage panels are temporarily unavailable.</p>
+            <p className="mt-1 text-xs">{loadWarnings.join("; ")}</p>
           </div>
         )}
       </section>
 
       <section className="glass rounded-2xl p-6">
         <div className="mb-4">
-          <h3 className="section-label">Run Tally</h3>
-          <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            This separates what already ran from what has not run yet.
-          </p>
+          <h3 className="section-label">Territory Coverage</h3>
+          <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>Filter by country, market, cell type, crawl status, and category.</p>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <Metric label="Done Units" value={String(progress?.done ?? totalDone)} />
-          <Metric label="Running Units" value={String(progress?.running ?? 0)} />
-          <Metric label="Pending Units" value={String(progress?.pending ?? 0)} />
-          <Metric label="Failed Units" value={String(progress?.failed ?? totalFailed)} />
-          <Metric label="Canceled Units" value={String(progress?.canceled ?? totalCanceled)} tone="canceled" />
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <Select label="Country" value={country} onChange={setCountry} options={["all", ...countries]} />
+          <Select label="Market" value={marketId} onChange={setMarketId} options={["all", ...marketOptions.map((market) => market.marketId)]} labels={Object.fromEntries(markets.map((market) => [market.marketId, market.marketName]))} />
+          <Select label="Cell type" value={cellType} onChange={setCellType} options={["all", ...cellTypes]} />
+          <Select label="Status" value={status} onChange={setStatus} options={["all", "open", "failed", "complete", "pending", "running", "done", "canceled"]} />
+          <Select label="Category" value={category} onChange={setCategory} options={["all", ...categories]} />
+          <label className="flex flex-col gap-1">
+            <span className="section-label">Search</span>
+            <input className="glass-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Market, postcode, city" />
+          </label>
         </div>
-        {geography && (
-          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <Metric label="Selected ZIPs" value={String(geography.zipCodesSelected)} />
-            <Metric label="Started ZIPs" value={String(geography.zipCodesStarted)} />
-            <Metric label="Not Started ZIPs" value={String(geography.zipCodesNotStarted)} />
-            <Metric label="Completed ZIPs" value={String(geography.zipCodesCompleted)} />
-            <Metric label="Not Selected ZIPs" value={`${geography.zipCodesNotSelected} / ${geography.activeZipCount}`} />
-          </div>
-        )}
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        {marketsStatus === "loading" ? <EmptyPanel label="Loading market coverage..." /> : marketsStatus === "error" || marketsStatus === "timeout" ? (
+          <RetryPanel label="Market coverage is temporarily unavailable." status={marketsStatus} onRetry={() => loadMarketPanel(effectiveRunId)} />
+        ) : filteredMarkets.length === 0 ? <EmptyPanel label="No markets match the current filters." /> : filteredMarkets.map((market) => (
+          <article key={market.marketId} className="glass rounded-2xl p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>{market.marketName}</h3>
+                <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>{market.countryLabel}{market.adminArea1 ? ` - ${market.adminArea1}` : ""}</p>
+              </div>
+              <span className="rounded-lg px-2 py-1 text-xs" style={{ background: "rgba(255,255,255,0.48)", color: "var(--text-secondary)" }}>{market.discoveredCells}/{market.activeCells} cells</span>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+              <Metric label="Units" value={`${market.doneUnits}/${market.totalUnits}`} />
+              <Metric label="Open" value={String(market.openUnits)} />
+              <Metric label="Failed" value={String(market.failedUnits)} />
+              <Metric label="Leads" value={String(market.activeLeads)} />
+            </div>
+            <p className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>Last activity {formatDateTime(market.lastRunAt)}</p>
+          </article>
+        ))}
       </section>
 
       <section className="glass rounded-2xl p-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="section-label">Backend Work Queue</h3>
+            <h3 className="section-label">Postal / postcode cell ledger</h3>
             <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-              Showing active and next queued work first. This is what the worker will process.
+              {visibleCells.length} of {filteredCells.length} cells shown
+              {hiddenCellCount > 0 ? " - narrow the filters to inspect the remaining cells" : ""}
             </p>
           </div>
-          <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-            {unitPreview.length} units shown
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            {failedUnits > 0 && <button type="button" className="btn-glass text-xs" onClick={handleShowErrors}>{showErrors ? "Hide Errors" : "Show Errors"}</button>}
+            {run?.id && doneUnits > 0 && <><input type="number" className="glass-input w-16 text-xs" value={refreshDays} min={1} onChange={(event) => setRefreshDays(Number(event.target.value))} aria-label="Days threshold" /><button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={handleRefreshStale}>{busy === "refresh" ? "Refreshing..." : "Refresh Stale"}</button></>}
+          </div>
         </div>
-        {unitPreview.length === 0 ? (
-          <EmptyPanel label={run ? "No units found for this run." : "Start a discovery run to create work units."} />
-        ) : (
+        {showErrors && errors.length > 0 && <div className="mb-5 space-y-2">{errors.map((err, index) => <Alert key={`${err.zip}-${err.category}-${index}`} tone="error" text={`${err.zip} / ${err.category}: ${err.last_error || "No error message"}`} />)}</div>}
+        {cellsStatus === "loading" ? <EmptyPanel label="Loading postal / postcode cells..." /> : cellsStatus === "error" || cellsStatus === "timeout" ? (
+          <RetryPanel label="Postal / postcode cell coverage is temporarily unavailable." status={cellsStatus} onRetry={() => loadCellPanel(effectiveRunId)} />
+        ) : filteredCells.length === 0 ? <EmptyPanel label="No cells match the current filters." /> : (
           <div className="overflow-x-auto">
-            <table className="glass-table min-w-[860px]">
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>ZIP</th>
-                  <th>Market</th>
-                  <th>Category</th>
-                  <th>Attempts</th>
-                  <th>Leads</th>
-                  <th>Last Activity</th>
-                  <th>Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {unitPreview.map((unit) => (
-                  <tr key={unit.id}>
-                    <td><StatusPill status={unit.status} /></td>
-                    <td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{unit.zip}</td>
-                    <td>{[unit.city, unit.county].filter(Boolean).join(", ") || "Unknown"}</td>
-                    <td>{unit.category.replace(/_/g, " ")}</td>
-                    <td>{unit.attempt_count}</td>
-                    <td>{unit.discovered_count}</td>
-                    <td>{formatDateTime(unit.started_at ?? unit.finished_at ?? unit.created_at)}</td>
-                    <td className="max-w-72 truncate" title={unit.last_error ?? undefined}>
-                      {unit.last_error ?? (unit.next_page_token ? "More pages queued" : "")}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
+            <table className="glass-table min-w-[1180px]">
+              <thead><tr><th>Market</th><th>Cell</th><th>Type</th><th>Area</th><th>Total</th><th>Done</th><th>Failed</th><th>Open</th><th>Leads</th><th>Last run</th></tr></thead>
+              <tbody>{visibleCells.map((cell) => <tr key={cell.cellId}><td>{cell.marketName}</td><td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{cell.cellLabel}</td><td>{cell.cellType.replace(/_/g, " ")}</td><td>{[cell.locality, cell.adminArea1, cell.countryCode].filter(Boolean).join(", ")}</td><td>{cell.totalUnits}</td><td>{cell.doneUnits}</td><td style={{ color: cell.failedUnits > 0 ? "#991b1b" : undefined }}>{cell.failedUnits}</td><td>{cell.openUnits}</td><td>{cell.activeLeads}</td><td>{formatDateTime(cell.lastRunAt)}</td></tr>)}</tbody>
             </table>
           </div>
         )}
       </section>
 
       <section className="glass rounded-2xl p-6">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <input
-            type="text"
-            placeholder="Filter by state, county, zip, or city..."
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="glass-input min-w-48"
-          />
-          <select
-            aria-label="County filter"
-            className="glass-input text-xs"
-            value={selectedCounty}
-            onChange={(event) => setSelectedCounty(event.target.value)}
-          >
-            <option value="all">All counties</option>
-            {availableCounties.map((county) => (
-              <option key={county} value={county}>
-                {county}
-              </option>
-            ))}
-          </select>
-          <label className="flex items-center gap-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-            <input
-              type="checkbox"
-              checked={incompleteOnly}
-              onChange={(event) => setIncompleteOnly(event.target.checked)}
-            />
-            Incomplete only
-          </label>
-          <label className="flex items-center gap-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-            <input
-              type="checkbox"
-              checked={failedOnly}
-              onChange={(event) => setFailedOnly(event.target.checked)}
-            />
-            Failed only
-          </label>
-          <select
-            aria-label="Coverage ledger filter"
-            className="glass-input text-xs"
-            value={ledgerView}
-            onChange={(event) => setLedgerView(event.target.value as typeof ledgerView)}
-          >
-            <option value="all">All ledger rows</option>
-            <option value="not_started">Not yet searched</option>
-            <option value="needs_retry">Needs retry</option>
-          </select>
-          <div className="flex flex-wrap items-center gap-2">
-            {totalFailed > 0 && (
-              <>
-                <button type="button" className="btn-glass text-xs" onClick={handleShowErrors}>
-                  {showErrors ? "Hide Errors" : "Show Errors"}
-                </button>
-                <button type="button" className="btn-glass text-xs" onClick={handleRetry}>
-                  Retry Failed ({totalFailed})
-                </button>
-              </>
-            )}
-            {run?.id && totalDone > 0 && (
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="number"
-                  className="glass-input w-16 text-xs"
-                  value={refreshDays}
-                  min={1}
-                  onChange={(e) => setRefreshDays(Number(e.target.value))}
-                  aria-label="Days threshold"
-                />
-                <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={handleRefreshStale}>
-                  {busy === "refresh" ? "Refreshing..." : "Refresh Stale"}
-                </button>
-              </div>
-            )}
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="section-label">Directory candidates from this run</h3>
+            <p className="mt-1 max-w-3xl text-xs leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
+              These are canonical Google Places businesses stored for the future listing database. Probe mode stores these candidates without creating active sales leads.
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <Metric label="Shown" value={String(probeCandidates.length)} />
+            <Metric label="No website" value={String(noWebsiteCandidateCount)} />
+            <Metric label="Already leads" value={String(activeLeadCandidateCount)} />
           </div>
         </div>
-
-        {/* Error details */}
-        {showErrors && errors.length > 0 && (
-          <div className="mb-5 space-y-2">
-            {errors.map((err, i) => (
-              <div key={i} className="rounded-xl px-4 py-2.5 text-xs"
-                style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.12)" }}>
-                <span className="font-medium" style={{ color: "#991b1b" }}>{err.zip} / {err.category}</span>
-                <span className="ml-2" style={{ color: "var(--text-secondary)" }}>{err.last_error || "No error message"}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {filtered.length === 0 ? (
-          <div
-            className="rounded-xl p-5 text-center text-sm"
-            style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-tertiary)" }}
-          >
-            {coverage.length === 0
-              ? `No crawl coverage yet.${!run ? " Start a discovery from Revenue." : ""}${runStatus ? ` Current run status: ${formatRunStatus(runStatus)}.` : ""}`
-              : "No matching records for the selected filters."}
-          </div>
+        {probeCandidatesStatus === "loading" ? <EmptyPanel label="Loading directory candidates..." /> : probeCandidatesStatus === "error" || probeCandidatesStatus === "timeout" ? (
+          <RetryPanel label="Directory candidates are temporarily unavailable." status={probeCandidatesStatus} onRetry={() => loadProbeCandidatesPanel(effectiveRunId)} />
+        ) : probeCandidates.length === 0 ? (
+          <EmptyPanel label={run ? "No canonical directory candidates were observed for this run yet." : "Select a discovery item to inspect directory candidates."} />
         ) : (
-          <div className="space-y-3">
-            {stateRows.map((stateRow) => {
-              const stateExpanded = expandedStates.includes(stateRow.state);
-              const statePct = stateRow.total > 0 ? Math.round((stateRow.done / stateRow.total) * 100) : 0;
-              const stateCounties = countyRows.filter((county) => county.state === stateRow.state);
-              return (
-                <div
-                  key={stateRow.state}
-                  className="rounded-xl p-3"
-                  style={{ background: "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.4)" }}
-                >
-                  <button type="button" className="flex w-full items-center justify-between" onClick={() => toggleState(stateRow.state)}>
-                    <div className="text-left">
-                      <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{stateRow.state}</p>
-                      <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-                        {stateRow.countyCount ?? stateCounties.length} counties • {stateRow.zipCount} zip codes
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3 text-xs" style={{ color: "var(--text-secondary)" }}>
-                      <span>{stateRow.done}/{stateRow.total} done</span>
-                      <span>{statePct}%</span>
-                      <span>{stateExpanded ? "Collapse" : "Expand"}</span>
-                    </div>
-                  </button>
-
-                  {stateExpanded && (
-                    <div className="mt-3 space-y-2">
-                      {stateCounties.map((countyRow) => {
-                        const countyName = countyRow.county ?? "Unknown";
-                        const countyKey = `${countyRow.state}::${countyName}`;
-                        const countyExpanded = expandedCounties.includes(countyKey);
-                        const countyPct = countyRow.total > 0 ? Math.round((countyRow.done / countyRow.total) * 100) : 0;
-                        const zipRows = filtered
-                          .filter((zip) => zip.state === countyRow.state && zip.county === countyName)
-                          .sort((a, b) => a.zip.localeCompare(b.zip));
-
-                        return (
-                          <div
-                            key={countyKey}
-                            className="rounded-lg p-3"
-                            style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.45)" }}
-                          >
-                            <button
-                              type="button"
-                              className="flex w-full items-center justify-between"
-                              onClick={() => toggleCounty(countyRow.state, countyName)}
-                            >
-                              <div className="text-left">
-                                <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{countyName}</p>
-                                <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-                                  {countyRow.zipCount} zip codes • {countyRow.failed} failed
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-3 text-xs" style={{ color: "var(--text-secondary)" }}>
-                                <span>{countyRow.done}/{countyRow.total} done</span>
-                                <span>{countyPct}%</span>
-                                <span>{countyExpanded ? "Hide zips" : "Show zips"}</span>
-                              </div>
-                            </button>
-
-                            {countyExpanded && (
-                              <div className="mt-3 overflow-x-auto">
-                                <table className="glass-table">
-                                  <thead>
-                                    <tr>
-                                      <th>ZIP</th>
-                                      <th>City</th>
-                                      <th>Total</th>
-                                      <th>Done</th>
-                                      <th>Failed</th>
-                                      <th>Canceled</th>
-                                      <th>Remaining</th>
-                                      <th>Leads</th>
-                                      <th>API Calls</th>
-                                      <th>Last Run</th>
-                                      <th>Completion</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {zipRows.map((row) => {
-                                      const rowPct = row.total > 0 ? Math.round((row.done / row.total) * 100) : 0;
-                                      return (
-                                        <tr key={`${row.state}-${row.county}-${row.zip}`}>
-                                          <td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{row.zip}</td>
-                                          <td>{row.city}</td>
-                                          <td>{row.total}</td>
-                                          <td>{row.done}</td>
-                                          <td style={{ color: row.failed > 0 ? "#991b1b" : undefined }}>{row.failed}</td>
-                                          <td style={{ color: row.canceled > 0 ? "#b45309" : undefined }}>{row.canceled}</td>
-                                          <td>{row.remaining}</td>
-                                          <td>{row.leadsFound}</td>
-                                          <td>{row.apiCalls}</td>
-                                          <td>{formatDateTime(row.lastRunAt)}</td>
-                                          <td>
-                                            <div className="flex items-center gap-2">
-                                              <div className="h-1.5 w-16 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }}>
-                                                <div
-                                                  className="h-full rounded-full"
-                                                  style={{ width: `${rowPct}%`, background: rowPct === 100 ? "#22c55e" : "var(--accent)" }}
-                                                />
-                                              </div>
-                                              <span className="text-xs">{rowPct}%</span>
-                                            </div>
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+          <div className="overflow-x-auto">
+            <table className="glass-table min-w-[1180px]">
+              <thead><tr><th>Status</th><th>Business</th><th>Website</th><th>Phone</th><th>Rating</th><th>Category</th><th>Location context</th><th>Last seen</th><th>Map</th></tr></thead>
+              <tbody>{probeCandidates.map((candidate) => (
+                <tr key={candidate.placeId}>
+                  <td><StatusPill status={candidate.listingStatus.toLowerCase().replace(/\s+/g, "_")} /></td>
+                  <td>
+                    <div className="font-medium" style={{ color: "var(--text-primary)" }}>{candidate.name ?? "Unnamed business"}</div>
+                    <div className="max-w-80 truncate text-xs" style={{ color: "var(--text-tertiary)" }}>{candidate.address ?? candidate.placeId}</div>
+                  </td>
+                  <td>{candidate.websiteUri ? <a href={candidate.websiteUri} target="_blank" rel="noreferrer" className="underline underline-offset-2">Website</a> : <span style={{ color: "#991b1b" }}>No website</span>}</td>
+                  <td>{candidate.phone ?? "Missing"}</td>
+                  <td>{candidate.rating ? `${candidate.rating.toFixed(1)} (${candidate.userRatingCount ?? 0})` : "Unrated"}</td>
+                  <td>{candidate.category ?? candidate.primaryType ?? candidate.categories[0] ?? "Unknown"}</td>
+                  <td>{candidate.queryLocationLabel ?? [candidate.marketId, candidate.locationCellId, candidate.countryCode].filter(Boolean).join(" / ")}</td>
+                  <td>{formatDateTime(candidate.lastObservedAt ?? candidate.lastSeenAt)}</td>
+                  <td>{candidate.mapsUri ? <a href={candidate.mapsUri} target="_blank" rel="noreferrer" className="underline underline-offset-2">Open</a> : "None"}</td>
+                </tr>
+              ))}</tbody>
+            </table>
           </div>
         )}
       </section>
+
+      <section className="glass rounded-2xl p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div><h3 className="section-label">Backend Work Queue</h3><p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>{filteredUnits.length} units shown</p></div>
+        </div>
+        {unitPreviewStatus === "loading" ? <EmptyPanel label="Loading backend work queue preview..." /> : unitPreviewStatus === "error" || unitPreviewStatus === "timeout" ? (
+          <RetryPanel label="Backend work queue preview is temporarily unavailable." status={unitPreviewStatus} onRetry={() => loadUnitPreviewPanel(effectiveRunId)} />
+        ) : filteredUnits.length === 0 ? <EmptyPanel label={run ? "No units match the current filters." : "Start a discovery run to create work units."} /> : (
+          <div className="overflow-x-auto">
+            <table className="glass-table min-w-[980px]">
+              <thead><tr><th>Status</th><th>Location</th><th>Country</th><th>Category</th><th>Attempts</th><th>Pages</th><th>Raw</th><th>New</th><th>Dupes</th><th>Leads</th><th>Last Activity</th><th>Notes</th></tr></thead>
+              <tbody>{filteredUnits.map((unit) => <tr key={unit.id}><td><StatusPill status={unit.status} /></td><td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{unit.query_location_label ?? unit.zip}</td><td>{unit.country_code ?? "US"}</td><td>{unit.category.replace(/_/g, " ")}</td><td>{unit.attempt_count}</td><td>{unit.pages_fetched}/{unit.max_pages}</td><td>{unit.raw_places_seen}</td><td>{unit.new_places_seen}</td><td>{unit.duplicate_places_seen}</td><td>{unit.discovered_count}</td><td>{formatDateTime(unit.started_at ?? unit.finished_at ?? unit.created_at)}</td><td className="max-w-72 truncate" title={unit.last_error ?? undefined}>{unit.last_error ?? (unit.budget_blocked_at ? "Budget blocked" : unit.next_page_token ? "More pages queued" : "")}</td></tr>)}</tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {progressStatus === "loading" && <section className="glass rounded-2xl p-6"><EmptyPanel label="Loading run progress..." /></section>}
+      {(progressStatus === "error" || progressStatus === "timeout") && <section className="glass rounded-2xl p-6"><RetryPanel label="Run progress is temporarily unavailable." status={progressStatus} onRetry={() => loadProgressPanel(effectiveRunId)} /></section>}
+      {geography && <section className="glass rounded-2xl p-6"><h3 className="section-label">Colorado compatibility</h3><p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>{geography.zipCodesCompleted}/{geography.zipCodesSelected} selected Colorado ZIP-compatible cells completed. {geography.zipCodesNotSelected} active Colorado cells were not selected for this run.</p></section>}
+      {confirmAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+          <div className="w-full max-w-lg rounded-2xl p-6 shadow-2xl" style={{ background: "rgba(255,255,255,0.96)", border: "1px solid rgba(255,255,255,0.65)" }}>
+            <h3 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>{confirmAction.title}</h3>
+            <p className="mt-3 text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>{confirmAction.message}</p>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={() => setConfirmAction(null)}>Keep item unchanged</button>
+              <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={async () => {
+                await confirmAction.action();
+                setConfirmAction(null);
+              }}>{confirmAction.actionLabel}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </PageShell>
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
-      <p className="mt-0.5 text-lg font-semibold capitalize" style={{ color: tone === "paused" || tone === "canceled" ? "#92400e" : tone === "running" ? "#166534" : "var(--text-primary)" }}>
-        {value}
-      </p>
-    </div>
-  );
+function formatDiscoveryItemLabel(item: DiscoveryItem): string {
+  const units = item.totalUnits === 1 ? "1 unit" : `${item.totalUnits} units`;
+  return `${item.name} - ${formatDateTime(item.createdAt)} - ${units} - ${formatLabel(item.status)}`;
 }
 
-function StatusPill({ status }: { status: string }) {
-  const color = status === "running" ? "#166534" : status === "pending" ? "var(--accent)" : status === "failed" ? "#991b1b" : status === "done" ? "#475569" : "#92400e";
-  return (
-    <span className="inline-flex rounded-full px-2.5 py-1 text-xs font-medium capitalize" style={{ background: "rgba(255,255,255,0.55)", border: "1px solid rgba(255,255,255,0.65)", color }}>
-      {status.replace(/_/g, " ")}
-    </span>
-  );
+function Select({ label, value, onChange, options, labels = {} }: { label: string; value: string; onChange: (value: string) => void; options: string[]; labels?: Record<string, string> }) {
+  return <label className="flex flex-col gap-1"><span className="section-label">{label}</span><select className="glass-select" value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{labels[option] ?? formatLabel(option)}</option>)}</select></label>;
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.45)" }}><p className="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>{label}</p><p className="mt-1 text-base font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p></div>;
 }
 
 function EmptyPanel({ label }: { label: string }) {
+  return <div className="rounded-xl p-5 text-sm" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>{label}</div>;
+}
+
+function RetryPanel({ label, status, onRetry }: { label: string; status: PanelStatus; onRetry: () => void }) {
   return (
-    <div className="rounded-xl p-5 text-center text-sm" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-tertiary)" }}>
-      {label}
+    <div className="rounded-xl p-5 text-sm" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.22)", color: "#92400e" }}>
+      <p className="font-semibold">{label}</p>
+      <p className="mt-1 text-xs">Diagnostic: {status === "timeout" ? "coverage_load_timeout" : "coverage_data_unavailable"}</p>
+      <button type="button" className="btn-glass mt-3 text-xs" onClick={onRetry}>Retry this panel</button>
     </div>
   );
 }
 
+function Alert({ text, tone }: { text: string; tone: "error" }) {
+  void tone;
+  return <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", color: "#991b1b" }}>{text}</div>;
+}
+
+function StatusPill({ status }: { status: string }) {
+  return <span className="rounded-full px-2.5 py-1 text-xs font-medium capitalize" style={{ background: statusColor(status).background, color: statusColor(status).color }}>{status.replace(/_/g, " ")}</span>;
+}
+
+function statusColor(status: string) {
+  if (status === "done") return { background: "rgba(22,101,52,0.1)", color: "#166534" };
+  if (status === "failed") return { background: "rgba(239,68,68,0.1)", color: "#991b1b" };
+  if (status === "running") return { background: "rgba(37,99,235,0.1)", color: "#1d4ed8" };
+  if (status === "canceled") return { background: "rgba(180,83,9,0.1)", color: "#92400e" };
+  return { background: "rgba(100,116,139,0.12)", color: "#475569" };
+}
+
 function formatRunStatus(status: string | null): string {
-  if (!status) return "No Run";
-  if (status === "running") return "Running";
-  if (status === "paused") return "Paused";
-  if (status === "done") return "Done";
-  if (status === "error") return "Error";
-  if (status === "canceled") return "Stopped";
-  return status.replace(/_/g, " ");
+  return status ? formatLabel(status) : "No run";
+}
+
+function formatLabel(value: string): string {
+  if (value === "all") return "All";
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function statusFromLoadError(loadError?: CoverageLoadError): PanelStatus {
+  if (!loadError) return "ready";
+  return loadError === "coverage_load_timeout" || loadError === "db_statement_timeout" ? "timeout" : "error";
+}
+
+function formatCoverageLoadError(loadError: CoverageLoadError): string {
+  if (loadError === "db_statement_timeout") return "db_statement_timeout";
+  if (loadError === "transient_db_error") return "transient_db_error";
+  if (loadError === "coverage_load_timeout") return "coverage_load_timeout";
+  return "coverage_data_unavailable";
+}
+
+function withCoverageClientTimeout<T>(promise: Promise<T>, timeoutMs = 11_000): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error("coverage_client_timeout")), timeoutMs);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timeout));
 }
 
 function formatDateTime(value: string | null): string {
-  if (!value) return "Not started";
+  if (!value) return "Never";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "UTC",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZoneName: "short",
-  }).format(date);
+  return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(date);
 }

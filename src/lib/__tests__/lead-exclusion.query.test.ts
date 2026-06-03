@@ -14,12 +14,16 @@ vi.mock("@/lib/db/index", () => {
 
 import {
   clearLeadExclusion,
+  archiveLead,
+  restoreArchivedLead,
+  createManualLead,
   getAllLeadsForRecompute,
   getLeadMapPoints,
   getLeads,
   getNowQueue,
   getQualifiedLeadCount,
   getScoreBandThresholds,
+  recomputeAllLeadQualityScores,
   setLeadExclusion,
   updateLeadQualityScores,
 } from "@/lib/db/queries";
@@ -125,6 +129,16 @@ describe("lead exclusion query behavior", () => {
     expect((await getAllLeadsForRecompute()).map((lead) => lead.id)).toContain(id);
   });
 
+  it("keeps excluded stale leads in the score recompute path", async () => {
+    const id = insertLead(testDb, 150, { score: 15, status: "new", websiteStatus: "none" });
+    await setLeadExclusion(id, "already has website");
+    testDb.prepare(
+      `UPDATE leads SET updated_at = ?, last_quality_scored_at = NULL WHERE id = ?`
+    ).run("2026-05-03T10:00:00.000Z", id);
+
+    expect(await recomputeAllLeadQualityScores(10)).toBe(1);
+  });
+
   it("omits AI-confirmed usable websites from no-website opportunity views", async () => {
     const usableSiteId = insertLead(testDb, 200, { score: 25, status: "new", websiteStatus: "none" });
     const opportunityId = insertLead(testDb, 201, { score: 12, status: "new", websiteStatus: "none" });
@@ -183,5 +197,73 @@ describe("lead exclusion query behavior", () => {
     );
 
     expect(result.points.map((lead) => lead.id).slice(0, 2)).toEqual([noSiteId, weakSiteId]);
+  });
+
+  it("hides archived leads by default and restores them to active views", async () => {
+    const activeId = insertLead(testDb, 400, { score: 12, status: "new", websiteStatus: "none" });
+    const archivedId = insertLead(testDb, 401, { score: 13, status: "new", websiteStatus: "none" });
+
+    expect(await archiveLead(archivedId, "admin-1", "bad candidate")).toBe(1);
+
+    const archivedRow = testDb.prepare(
+      "SELECT archived_at, archived_by_user_id, archive_reason FROM leads WHERE id = ?",
+    ).get(archivedId) as Record<string, unknown>;
+    expect(archivedRow.archived_at).toBeTruthy();
+    expect(archivedRow.archived_by_user_id).toBe("admin-1");
+    expect(archivedRow.archive_reason).toBe("bad candidate");
+
+    expect((await getLeads({ pageSize: 10 })).leads.map((lead) => lead.id)).toContain(activeId);
+    expect((await getLeads({ pageSize: 10 })).leads.map((lead) => lead.id)).not.toContain(archivedId);
+    expect((await getLeads({ archived: "archived", pageSize: 10 })).leads.map((lead) => lead.id)).toEqual([archivedId]);
+    expect((await getLeads({ archived: "all", pageSize: 10 })).leads.map((lead) => lead.id)).toEqual(expect.arrayContaining([activeId, archivedId]));
+
+    expect(await restoreArchivedLead(archivedId)).toBe(1);
+    expect((await getLeads({ pageSize: 10 })).leads.map((lead) => lead.id)).toContain(archivedId);
+  });
+
+  it("creates manual leads with safe defaults", async () => {
+    const lead = await createManualLead({
+      name: "Manual Candidate",
+      businessType: "local_services",
+      phone: "303-555-0100",
+      address: null,
+      websiteStatus: "none",
+      notes: "Added from user flow",
+    });
+
+    const row = testDb.prepare(
+      `SELECT place_id, status, website_status, quality_bucket, enrichment_status, ai_queue_status, notes
+       FROM leads WHERE id = ?`
+    ).get(lead.id) as Record<string, unknown>;
+
+    expect(String(row.place_id)).toMatch(/^manual:/);
+    expect(row.status).toBe("new");
+    expect(row.website_status).toBe("none");
+    expect(row.quality_bucket).toBe("needs_ai_verify");
+    expect(row.enrichment_status).toBe("pending");
+    expect(row.ai_queue_status).toBe("queued");
+    expect(row.notes).toBe("Added from user flow");
+  });
+
+  it("filters leads by assigned researcher markets", async () => {
+    testDb.prepare(
+      `INSERT INTO location_markets (id, name, country_code, admin_area1, status)
+       VALUES ('market-canada', 'Toronto', 'CA', 'ON', 'active')`
+    ).run();
+    testDb.prepare(
+      `INSERT INTO user_market_access (user_id, market_id)
+       VALUES ('researcher-1', 'market-colorado')`
+    ).run();
+    const coloradoId = insertLead(testDb, 500, { score: 10, status: "new", websiteStatus: "none" });
+    const canadaId = insertLead(testDb, 501, { score: 11, status: "new", websiteStatus: "none" });
+    testDb.prepare("UPDATE leads SET market_id = 'market-colorado', country_code = 'US' WHERE id = ?").run(coloradoId);
+    testDb.prepare("UPDATE leads SET market_id = 'market-canada', country_code = 'CA' WHERE id = ?").run(canadaId);
+
+    const scoped = await getLeads({ visibleToUserId: "researcher-1", archived: "all", includeExcluded: true, pageSize: 10 });
+    expect(scoped.leads.map((lead) => lead.id)).toContain(coloradoId);
+    expect(scoped.leads.map((lead) => lead.id)).not.toContain(canadaId);
+
+    const adminCanada = await getLeads({ marketId: "market-canada", archived: "all", includeExcluded: true, pageSize: 10 });
+    expect(adminCanada.leads.map((lead) => lead.id)).toEqual([canadaId]);
   });
 });

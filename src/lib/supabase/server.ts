@@ -4,6 +4,8 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { getSupabaseServerCookieOptions } from "@/lib/supabase/cookies";
 
+type CookieLike = { name: string };
+
 export function isSupabaseAuthConfigured(): boolean {
   return Boolean(
     process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() &&
@@ -43,4 +45,46 @@ export async function createSupabaseServerClient() {
       },
     },
   });
+}
+
+export function isStaleSupabaseAuthError(error: unknown): boolean {
+  const maybe = error as { code?: unknown; message?: unknown; name?: unknown };
+  const code = String(maybe?.code ?? "").toLowerCase();
+  const message = error instanceof Error ? error.message : String(maybe?.message ?? error ?? "");
+  return (
+    code === "refresh_token_not_found" ||
+    /invalid refresh token|refresh token not found|auth session missing/i.test(message)
+  );
+}
+
+export function getSupabaseAuthCookieNames(cookieList: CookieLike[]): string[] {
+  return cookieList
+    .map((cookie) => cookie.name)
+    .filter((name) => name.startsWith("sb-") && name.includes("auth-token"));
+}
+
+export async function clearStaleSupabaseAuthCookies(): Promise<string[]> {
+  const cookieStore = await cookies();
+  const names = getSupabaseAuthCookieNames(cookieStore.getAll());
+  const options = getSupabaseServerCookieOptions();
+
+  for (const name of names) {
+    try {
+      cookieStore.set(name, "", {
+        ...options,
+        expires: new Date(0),
+        maxAge: 0,
+      });
+    } catch {
+      // Server Components cannot mutate cookies; Route Handlers and Server Actions can.
+    }
+
+    try {
+      cookieStore.delete(name);
+    } catch {
+      // Best-effort cleanup only. The caller still treats the session as unauthenticated.
+    }
+  }
+
+  return names;
 }

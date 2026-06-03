@@ -1,9 +1,9 @@
 import type { Lead, LeadFilters } from "@/lib/db/queries";
-import type { AppRole } from "@/lib/permissions";
+import { userCanAccessMarket } from "@/lib/db/queries";
 
 export interface LeadAccessSession {
   userId: string;
-  role: AppRole;
+  role: string;
 }
 
 export interface LeadListRouteParams {
@@ -20,6 +20,7 @@ export function constrainLeadFiltersForSession(session: LeadAccessSession, filte
     assigned: "me",
     assignedToUserId: session.userId,
     includeExcluded: false,
+    visibleToUserId: session.userId,
   };
 }
 
@@ -28,8 +29,7 @@ export function shouldRedirectResearcherLeadList(session: LeadAccessSession, par
   return params.view === "kanban" || params.assigned !== "me" || Boolean(params.owner);
 }
 
-export function canReadLeadForSession(session: LeadAccessSession, lead: Pick<Lead, "assigned_to_user_id">): boolean {
-  void session;
-  void lead;
-  return true;
+export async function canReadLeadForSession(session: LeadAccessSession, lead: Pick<Lead, "market_id">): Promise<boolean> {
+  if (session.role === "admin") return true;
+  return userCanAccessMarket(session.userId, lead.market_id);
 }

@@ -57,9 +57,23 @@ interface Settings {
   google_places_api_key_source: "ui" | "env" | "none";
   google_maps_browser_api_key_configured: boolean;
   google_maps_browser_api_key_source: "ui" | "env" | "none";
+  google_text_search_monthly_cap: number;
+  google_enterprise_monthly_cap: number;
+  google_test_run_call_cap: number;
+  google_auto_pagination_enabled: boolean;
+  google_auto_pagination_min_new_candidates: number;
+  google_auto_pagination_max_duplicate_rate: number;
+  google_default_discovery_mode: "coverage_probe" | "lead_harvest";
+  google_default_pagination_policy: "first_page_only" | "auto_yield_based" | "manual_extra_pages";
 }
 
-export function SettingsClient({ initialSettings }: { initialSettings: Settings }) {
+export function SettingsClient({
+  initialSettings,
+  loadWarning = null,
+}: {
+  initialSettings: Settings;
+  loadWarning?: string | null;
+}) {
   const [settings, setSettings] = useState<Settings>(initialSettings);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
@@ -83,6 +97,10 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
 
   const handleSave = async () => {
     try {
+      if (loadWarning) {
+        setSaveMsg("Settings are temporarily unavailable. Reload before saving changes.");
+        return;
+      }
       let nicheWeights: Record<string, number>;
       try {
         nicheWeights = JSON.parse(nicheText);
@@ -200,6 +218,15 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
 
   return (
     <PageShell title="Settings" description="Configure lead scoring, classification hosts, and budget guardrails.">
+      {loadWarning && (
+        <section className="glass rounded-2xl p-4" style={{ border: "1px solid rgba(239,68,68,0.25)" }}>
+          <p className="section-label">Settings are temporarily unavailable.</p>
+          <p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>
+            Showing safe read-only defaults so this page does not hang. Reload before saving production settings.
+          </p>
+          <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>Diagnostic: {loadWarning}</p>
+        </section>
+      )}
       {/* Rate Limiting & Budget */}
       <section className="glass rounded-2xl p-6">
         <h3 className="section-label">API Controls</h3>
@@ -285,11 +312,33 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <NumberField label="Rate Limit (ms)" value={settings.rate_limit_ms} onChange={(v) => update("rate_limit_ms", v)} />
-          <NumberField label="Max Calls / Day" value={settings.max_calls_per_day} onChange={(v) => update("max_calls_per_day", v)} />
-          <NumberField label="Max Calls / Run" value={settings.max_calls_per_run} onChange={(v) => update("max_calls_per_run", v)} />
+          <NumberField label="Google Calls / Day" value={settings.max_calls_per_day} onChange={(v) => update("max_calls_per_day", v)} />
+          <NumberField label="Google Calls / Run" value={settings.max_calls_per_run} onChange={(v) => update("max_calls_per_run", v)} />
           <NumberField label="Max Monthly Spend ($)" value={settings.max_monthly_api_spend} onChange={(v) => update("max_monthly_api_spend", v)} step={1} />
+          <NumberField label="Text Search Pro / Month" value={settings.google_text_search_monthly_cap} onChange={(v) => update("google_text_search_monthly_cap", v)} />
+          <NumberField label="Enterprise / Month" value={settings.google_enterprise_monthly_cap} onChange={(v) => update("google_enterprise_monthly_cap", v)} />
+          <NumberField label="Test Run Call Cap" value={settings.google_test_run_call_cap} onChange={(v) => update("google_test_run_call_cap", v)} />
+          <NumberField label="Next Page Min New" value={settings.google_auto_pagination_min_new_candidates} onChange={(v) => update("google_auto_pagination_min_new_candidates", v)} />
+          <NumberField label="Max Duplicate Rate" value={settings.google_auto_pagination_max_duplicate_rate} onChange={(v) => update("google_auto_pagination_max_duplicate_rate", v)} step={0.05} />
         </div>
-        <div className="mt-4 flex items-center gap-3">
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <label className="text-sm" style={{ color: "var(--text-secondary)" }}>
+            <span className="mb-1 block text-xs font-medium">Default discovery mode</span>
+            <select className="glass-input w-full" value={settings.google_default_discovery_mode} onChange={(e) => update("google_default_discovery_mode", e.target.value as Settings["google_default_discovery_mode"])}>
+              <option value="coverage_probe">Coverage probe - cheaper</option>
+              <option value="lead_harvest">Lead harvest - richer data</option>
+            </select>
+          </label>
+          <label className="text-sm" style={{ color: "var(--text-secondary)" }}>
+            <span className="mb-1 block text-xs font-medium">Default pagination</span>
+            <select className="glass-input w-full" value={settings.google_default_pagination_policy} onChange={(e) => update("google_default_pagination_policy", e.target.value as Settings["google_default_pagination_policy"])}>
+              <option value="auto_yield_based">Auto yield-based</option>
+              <option value="first_page_only">First page only</option>
+              <option value="manual_extra_pages">Manual extra pages</option>
+            </select>
+          </label>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
             <input
               type="checkbox"
@@ -298,6 +347,15 @@ export function SettingsClient({ initialSettings }: { initialSettings: Settings 
               className="rounded"
             />
             Stop run when budget limit is hit
+          </label>
+          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
+            <input
+              type="checkbox"
+              checked={settings.google_auto_pagination_enabled}
+              onChange={(e) => update("google_auto_pagination_enabled", e.target.checked)}
+              className="rounded"
+            />
+            Allow yield-based next pages
           </label>
           <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
             <input

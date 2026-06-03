@@ -15,7 +15,7 @@ export const PRIMARY_NAV_ITEMS: NavItem[] = [
 export const ADMIN_NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Overview", description: "Revenue, discovery controls, and admin shortcuts." },
   { href: "/fulfillment", label: "Fulfillment", description: "Website and quote requests from researchers.", badge: "fulfillment" },
-  { href: "/coverage", label: "Discovery", description: "Live crawl run status and ZIP/category unit health." },
+  { href: "/coverage", label: "Discovery", description: "Live crawl run status and market/cell unit health." },
   { href: "/scheduler", label: "Scheduler", description: "Background workers, backlogs, and worker controls." },
   { href: "/quality", label: "Quality", description: "AI verification and manual lead quality review." },
   { href: "/leads", label: "All Leads", description: "Full lead database, filters, Kanban, and export." },

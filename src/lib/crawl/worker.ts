@@ -1,13 +1,20 @@
-import { textSearch, type LocationBias, TEXT_SEARCH_FIELD_MASK } from "@/lib/google-places";
+import { PlacesApiError, textSearch, type LocationBias } from "@/lib/google-places";
 import { classifyWebsite } from "@/lib/classify-website";
 import { computeScore } from "@/lib/scoring";
 import { qualifyLead } from "@/lib/qualification";
 import {
-  getActiveCrawlRun,
+  getConfiguredMonthlyCapForSku,
+  getTextSearchFieldMaskForDiscoveryMode,
+  getTextSearchSkuForDiscoveryMode,
+  normalizeDiscoveryMode,
+  normalizePaginationPolicy,
+  shouldFetchNextTextSearchPage,
+} from "@/lib/discovery-budget";
+import {
+  getProcessingCrawlRun,
   leaseNextCrawlUnit,
   markUnitDone,
   markUnitFailed,
-  releaseUnitForBudgetPause,
   incrementCrawlRunCounters,
   updateCrawlRunStatus,
   getCrawlProgress,
@@ -16,23 +23,23 @@ import {
   getSettings,
   getTodayApiCalls,
   getRunApiCalls,
-  getMonthlyFreeTierStatus,
+  getMonthlyBillableEventsForSku,
   getMonthlyApiCost,
   isMonthlySpendLimitReached,
   setRunLastError,
   createAuditLog,
-  updateUnitPageToken,
+  recordUnitPageFetch,
+  markUnitBudgetBlocked,
   API_ENDPOINT_TEXT_SEARCH,
   logApiUsageEvent,
   recordPlaceObservation,
   upsertPlaceMaster,
+  placeMasterExists,
 } from "@/lib/db/queries";
 import { enqueueAiVerificationForLead } from "@/lib/ai/verification-worker";
 import type { GooglePlacesSku } from "@/lib/google-pricing";
 
 const SKIP_BUSINESS_STATUSES = new Set(["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"]);
-const DISCOVERY_SKU: GooglePlacesSku = "places_text_search_enterprise";
-
 export interface ProcessResult {
   status: "processed" | "idle" | "paused" | "done" | "error" | "budget_limit";
   unitId?: string;
@@ -53,14 +60,10 @@ export interface ProcessResult {
 }
 
 export async function processNextUnit(): Promise<ProcessResult> {
-  const run = await getActiveCrawlRun();
+  const run = await getProcessingCrawlRun();
 
   if (!run) {
     return { status: "idle" };
-  }
-
-  if (run.status === "paused") {
-    return { status: "paused" };
   }
 
   const unit = await leaseNextCrawlUnit(run.id);
@@ -75,11 +78,22 @@ export async function processNextUnit(): Promise<ProcessResult> {
   }
 
   const settings = await getSettings();
+  const selection = run.selection_json ?? {};
+  const discoveryMode = normalizeDiscoveryMode(selection.discoveryMode, "lead_harvest");
+  const defaultPaginationPolicy = settings.google_auto_pagination_enabled
+    ? settings.google_default_pagination_policy
+    : "first_page_only";
+  const paginationPolicy = normalizePaginationPolicy(selection.paginationPolicy, defaultPaginationPolicy);
+  const fieldMask = getTextSearchFieldMaskForDiscoveryMode(discoveryMode);
+  const discoverySku = getTextSearchSkuForDiscoveryMode(discoveryMode);
+  const configuredUnitMaxPages = Math.max(1, Math.min(3, Math.floor(Number(unit.max_pages) || 1)));
+  const policyMaxPages = paginationPolicy === "first_page_only" ? 1 : 3;
+  const unitMaxPages = Math.max(configuredUnitMaxPages, policyMaxPages);
 
   if (settings.stop_on_budget_limit) {
-    const budget = await getDiscoveryBudgetLimit(run.id, settings);
+    const budget = await getDiscoveryBudgetLimit(run.id, settings, discoverySku);
     if (budget) {
-      await releaseUnitForBudgetPause(unit.id, budget.error ?? "Budget limit reached.");
+      await markUnitBudgetBlocked(unit.id, budget.error ?? "Budget limit reached.");
       return {
         ...budget,
         unitId: unit.id,
@@ -95,8 +109,8 @@ export async function processNextUnit(): Promise<ProcessResult> {
   let apiCalls = 0;
 
   try {
-    const city = unit.city ?? unit.zip;
-    const query = `${unit.category.replace(/_/g, " ")} near ${city}, CO ${unit.zip}`;
+    const locationLabel = unit.query_location_label ?? unit.city ?? unit.zip;
+    const query = `${unit.category.replace(/_/g, " ")} near ${locationLabel}`;
 
     let locationBias: LocationBias | undefined;
     if (unit.lat && unit.lng) {
@@ -108,12 +122,13 @@ export async function processNextUnit(): Promise<ProcessResult> {
     }
 
     let pageToken: string | undefined = unit.next_page_token ?? undefined;
+    let pagesFetched = Math.max(0, Math.floor(unit.pages_fetched ?? 0));
 
-    do {
+    while (pagesFetched < unitMaxPages) {
       if (settings.stop_on_budget_limit) {
-        const budget = await getDiscoveryBudgetLimit(run.id, settings);
+        const budget = await getDiscoveryBudgetLimit(run.id, settings, discoverySku);
         if (budget) {
-          await releaseUnitForBudgetPause(unit.id, budget.error ?? "Budget limit reached.");
+          await markUnitBudgetBlocked(unit.id, budget.error ?? "Budget limit reached.");
           return {
             ...budget,
             unitId: unit.id,
@@ -132,6 +147,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
         pageToken,
         settings.rate_limit_ms,
         locationBias,
+        { fieldMask },
       );
       apiCalls++;
 
@@ -139,29 +155,41 @@ export async function processNextUnit(): Promise<ProcessResult> {
         crawl_run_id: run.id,
         crawl_unit_id: unit.id,
         endpoint: API_ENDPOINT_TEXT_SEARCH,
-        sku: DISCOVERY_SKU,
-        field_mask: TEXT_SEARCH_FIELD_MASK,
+        sku: discoverySku,
+        field_mask: fieldMask,
         success: true,
         was_cached: false,
         billable_units: 1,
         metadata: {
           zip: unit.zip,
+          marketId: unit.market_id,
+          locationCellId: unit.location_cell_id,
+          countryCode: unit.country_code,
+          queryLocationLabel: unit.query_location_label,
           category: unit.category,
           hasPageToken: Boolean(pageToken),
+          discoveryMode,
+          paginationPolicy,
         },
       });
 
+      let pageRawPlaces = 0;
+      let pageNewPlaces = 0;
+      let pageDuplicatePlaces = 0;
+
       for (const place of result.places) {
+        pageRawPlaces++;
         const placeId = extractPlaceId(place.id);
         if (!placeId) continue;
+        const existedInPlaces = await placeMasterExists(placeId);
 
         await recordPlaceObservation({
           place_id: placeId,
           crawl_run_id: run.id,
           crawl_unit_id: unit.id,
           endpoint: API_ENDPOINT_TEXT_SEARCH,
-          sku: "places_text_search_enterprise",
-          field_mask: TEXT_SEARCH_FIELD_MASK,
+          sku: discoverySku,
+          field_mask: fieldMask,
           raw_json: JSON.stringify(place),
         });
 
@@ -187,6 +215,15 @@ export async function processNextUnit(): Promise<ProcessResult> {
           lng: place.location?.longitude ?? null,
         });
 
+        if (discoveryMode === "coverage_probe") {
+          if (existedInPlaces) {
+            pageDuplicatePlaces++;
+          } else {
+            pageNewPlaces++;
+          }
+          continue;
+        }
+
         if (place.businessStatus && SKIP_BUSINESS_STATUSES.has(place.businessStatus)) {
           continue;
         }
@@ -194,6 +231,9 @@ export async function processNextUnit(): Promise<ProcessResult> {
         const existed = await leadExists(placeId);
         if (existed) {
           leadsSkipped++;
+          pageDuplicatePlaces++;
+        } else {
+          pageNewPlaces++;
         }
 
         const websiteStatus = classifyWebsite(
@@ -244,6 +284,13 @@ export async function processNextUnit(): Promise<ProcessResult> {
           lat: place.location?.latitude ?? null,
           lng: place.location?.longitude ?? null,
           score,
+          market_id: unit.market_id,
+          location_cell_id: unit.location_cell_id,
+          country_code: unit.country_code,
+          admin_area1: deriveAdminArea1(unit.query_location_label),
+          admin_area2: unit.county,
+          locality: unit.city,
+          postal_code: unit.zip,
         });
         if (settings.ai_enabled && settings.ai_auto_verify_enabled && settings.ai_verify_after_discovery) {
           try {
@@ -258,9 +305,22 @@ export async function processNextUnit(): Promise<ProcessResult> {
         if (!existed) leadsFound++;
       }
 
-      pageToken = result.nextPageToken;
-      await updateUnitPageToken(unit.id, pageToken ?? null);
-    } while (pageToken);
+      pagesFetched++;
+      const shouldContinue = shouldFetchNextTextSearchPage({
+        policy: paginationPolicy,
+        pagesFetched,
+        maxPages: unitMaxPages,
+        nextPageToken: result.nextPageToken,
+        rawPlaces: pageRawPlaces,
+        newPlaces: pageNewPlaces,
+        duplicatePlaces: pageDuplicatePlaces,
+        minNewCandidates: settings.google_auto_pagination_min_new_candidates,
+        maxDuplicateRate: settings.google_auto_pagination_max_duplicate_rate,
+      });
+      pageToken = shouldContinue ? result.nextPageToken : undefined;
+      await recordUnitPageFetch(unit.id, pageToken ?? null, pageRawPlaces, pageNewPlaces, pageDuplicatePlaces);
+      if (!pageToken) break;
+    }
 
     await markUnitDone(unit.id, leadsFound);
     await incrementCrawlRunCounters(run.id, leadsFound, 0, apiCalls);
@@ -278,7 +338,39 @@ export async function processNextUnit(): Promise<ProcessResult> {
       progress,
     };
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const googleError = err instanceof PlacesApiError ? err : null;
+    const rawErrorMessage = err instanceof Error ? err.message : String(err);
+    const errorMessage = googleError ? formatPlacesApiErrorForOperator(googleError) : rawErrorMessage;
+    if (googleError || isLikelyBillableGoogleAttemptError(rawErrorMessage)) {
+      try {
+        await logApiUsageEvent({
+          crawl_run_id: run.id,
+          crawl_unit_id: unit.id,
+          endpoint: API_ENDPOINT_TEXT_SEARCH,
+          sku: discoverySku,
+          field_mask: fieldMask,
+          success: false,
+          was_cached: false,
+          billable_units: 1,
+          metadata: {
+            zip: unit.zip,
+            marketId: unit.market_id,
+            locationCellId: unit.location_cell_id,
+            countryCode: unit.country_code,
+            category: unit.category,
+            discoveryMode,
+            paginationPolicy,
+            failedAttempt: true,
+            error: rawErrorMessage.slice(0, 500),
+            googleStatus: googleError?.status,
+            googleErrorBody: googleError?.body?.slice(0, 1000),
+          },
+        });
+      } catch {
+        // Preserve the original worker error path.
+      }
+      apiCalls++;
+    }
     await markUnitFailed(unit.id, errorMessage);
     await incrementCrawlRunCounters(run.id, 0, 1, apiCalls);
 
@@ -300,9 +392,27 @@ function extractPlaceId(raw: string): string | null {
   return raw.startsWith("places/") ? raw.slice(7) : raw;
 }
 
+function deriveAdminArea1(queryLocationLabel: string | null | undefined): string | null {
+  if (!queryLocationLabel) return null;
+  const parts = queryLocationLabel.split(",").map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const candidate = parts[parts.length - 2] ?? "";
+  const token = candidate.split(/\s+/)[0] ?? "";
+  return token.length > 0 ? token : null;
+}
+
+function isLikelyBillableGoogleAttemptError(message: string): boolean {
+  return message.startsWith("Places API error") || message.startsWith("HTTP 429") || message.startsWith("HTTP 5");
+}
+
+function formatPlacesApiErrorForOperator(error: PlacesApiError): string {
+  return `Google Places request failed with status ${error.status}.`;
+}
+
 async function getDiscoveryBudgetLimit(
   runId: string,
   settings: Awaited<ReturnType<typeof getSettings>>,
+  sku: GooglePlacesSku,
 ): Promise<ProcessResult | null> {
   const runCalls = await getRunApiCalls(runId);
   if (runCalls >= settings.max_calls_per_run) {
@@ -324,14 +434,15 @@ async function getDiscoveryBudgetLimit(
     return { status: "budget_limit", error: `Run paused: max calls per day (${settings.max_calls_per_day}) reached` };
   }
 
-  const freeTier = await getMonthlyFreeTierStatus(DISCOVERY_SKU, 1);
-  if (freeTier.wouldExceed) {
-    const message = `Google free-tier cap reached for Text Search (${freeTier.current}/${freeTier.freeCap} monthly calls).`;
+  const monthlyCap = getConfiguredMonthlyCapForSku(settings, sku);
+  const monthlyCalls = await getMonthlyBillableEventsForSku(sku);
+  if (monthlyCap !== null && monthlyCalls + 1 > monthlyCap) {
+    const message = `Google free-safe cap reached for ${sku} (${monthlyCalls}/${monthlyCap} monthly calls).`;
     await pauseRunForBudgetLimit(runId, message, {
-      reason: "monthly_text_search_free_cap",
-      sku: DISCOVERY_SKU,
-      currentCalls: freeTier.current,
-      freeCap: freeTier.freeCap,
+      reason: "monthly_google_places_free_safe_cap",
+      sku,
+      currentCalls: monthlyCalls,
+      monthlyCap,
     });
     return { status: "budget_limit", error: `Run paused: ${message}` };
   }

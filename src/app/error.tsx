@@ -1,5 +1,7 @@
 "use client";
 
+const USER_SAFE_ERROR_MESSAGE = "We hit a temporary issue loading this page. Try again in a moment.";
+
 export default function Error({
   error,
   reset,
@@ -22,7 +24,7 @@ export default function Error({
         </div>
         <h2 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>Something went wrong</h2>
         <p className="mt-2 text-sm" style={{ color: "var(--text-tertiary)" }}>
-          {error.message || "An unexpected error occurred."}
+          {USER_SAFE_ERROR_MESSAGE}
         </p>
         {error.digest && (
           <p className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>

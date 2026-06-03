@@ -3,11 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { HelpTip } from "@/components/help-tip";
+import { ManualLeadModal } from "@/components/manual-lead-modal";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
 import { claimLeadAction } from "@/lib/leads/actions";
 import { getBusinessTypeLabel } from "@/lib/business-types";
+import { getAiVerificationDisplay } from "@/lib/ai-verification-display";
 import type { Lead, LeadMapPoint, LeadMapZipCoverage } from "@/lib/db/queries";
 import { buildGoogleMapsScriptUrl, GOOGLE_MAPS_SCRIPT_ID, hasGoogleMapsBrowserKey } from "@/lib/google-maps";
 import type { AppRole } from "@/lib/permissions";
@@ -15,6 +18,7 @@ import type { ScoreBandThresholds } from "@/lib/score-bands";
 
 type ExplorerView = "cards" | "table";
 type GoogleMapsLoadState = "loading" | "ready" | "error";
+type MapFetchState = "idle" | "loading" | "ready" | "error" | "timeout";
 
 type GoogleLatLngLiteral = { lat: number; lng: number };
 
@@ -27,17 +31,17 @@ interface GoogleMap {
   panTo(point: GoogleLatLngLiteral): void;
 }
 
-interface GoogleOverlay {
+interface GoogleCircle {
   setMap(map: GoogleMap | null): void;
-}
-
-interface GoogleMarker extends GoogleOverlay {
   addListener(eventName: string, handler: () => void): GoogleMapsListener;
 }
 
-interface GoogleCircle extends GoogleOverlay {
+interface GoogleAdvancedMarker {
+  map: GoogleMap | null;
   addListener(eventName: string, handler: () => void): GoogleMapsListener;
 }
+
+type GoogleOverlay = GoogleCircle | GoogleAdvancedMarker;
 
 interface GoogleLatLngBounds {
   extend(point: GoogleLatLngLiteral): void;
@@ -47,13 +51,15 @@ interface GoogleLatLngBounds {
 interface GoogleMapsNamespace {
   maps: {
     Map: new (element: HTMLElement, options: Record<string, unknown>) => GoogleMap;
-    Marker: new (options: Record<string, unknown>) => GoogleMarker;
     Circle: new (options: Record<string, unknown>) => GoogleCircle;
     LatLngBounds: new () => GoogleLatLngBounds;
     Size: new (width: number, height: number) => unknown;
     Point: new (x: number, y: number) => unknown;
     SymbolPath: { CIRCLE: number };
     event: { clearInstanceListeners(target: object): void };
+    marker: {
+      AdvancedMarkerElement: new (options: Record<string, unknown>) => GoogleAdvancedMarker;
+    };
   };
 }
 
@@ -88,6 +94,9 @@ interface Props {
     maxLng?: number;
     category?: string;
     businessType?: string;
+    countryCode?: string;
+    marketId?: string;
+    locationCellId?: string;
     assigned?: string;
     qualityBucket?: string;
     aiVerificationStatus?: string;
@@ -133,6 +142,7 @@ const GEO_PRESETS = [
   { value: "colorado_springs", label: "Colorado Springs" },
 ];
 const MAP_LIST_LIMIT = 80;
+const MAP_FETCH_TIMEOUT_MS = 10_000;
 const QUICK_FILTERS: Array<{
   label: string;
   description: string;
@@ -180,6 +190,17 @@ export function ExploreClient({
   const [zip, setZip] = useState(filters.zip ?? "");
   const [busyLeadId, setBusyLeadId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [manualLeadOpen, setManualLeadOpen] = useState(false);
+  const [mapReloadToken, setMapReloadToken] = useState(0);
+  const [mapFetchState, setMapFetchState] = useState<MapFetchState>(filters.map === "open" ? "loading" : "idle");
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [mapData, setMapData] = useState({
+    points: mapPoints,
+    totalMapped,
+    mapPointLimit,
+    zipCoverage,
+    googleMapsApiKey,
+  });
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(mapPoints[0]?.id ?? leads[0]?.id ?? null);
 
   const page = filters.page ?? 1;
@@ -187,9 +208,11 @@ export function ExploreClient({
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const view = normalizeView(filters.view);
   const mapOpen = filters.map === "open";
-  const selectedMapPoint = mapPoints.find((lead) => lead.id === selectedLeadId) ?? mapPoints[0] ?? null;
-  const zipCoverageWithLeadCounts = useMemo(() => mergeZipCoverageWithMapPoints(zipCoverage, mapPoints), [zipCoverage, mapPoints]);
-  const visibleMapList = useMemo(() => mapPoints.slice(0, MAP_LIST_LIMIT), [mapPoints]);
+  const mapDrawerRef = useRef<HTMLDivElement | null>(null);
+  const searchParamsString = searchParams.toString();
+  const selectedMapPoint = mapData.points.find((lead) => lead.id === selectedLeadId) ?? mapData.points[0] ?? null;
+  const zipCoverageWithLeadCounts = useMemo(() => mergeZipCoverageWithMapPoints(mapData.zipCoverage, mapData.points), [mapData.zipCoverage, mapData.points]);
+  const visibleMapList = useMemo(() => mapData.points.slice(0, MAP_LIST_LIMIT), [mapData.points]);
   const pageUnclaimed = leads.filter((lead) => !lead.assigned_to_user_id).length;
   const pageMapped = leads.filter((lead) => typeof lead.lat === "number" && typeof lead.lng === "number").length;
   const stats = [
@@ -233,6 +256,82 @@ export function ExploreClient({
     pushFilters({ zip: nextZip });
   }, [pushFilters]);
 
+  const retryMap = useCallback(() => {
+    setMapReloadToken((value) => value + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!mapOpen) return;
+    const scrollId = window.setTimeout(() => {
+      mapDrawerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      mapDrawerRef.current?.focus({ preventScroll: true });
+    }, 150);
+    return () => window.clearTimeout(scrollId);
+  }, [mapOpen]);
+
+  useEffect(() => {
+    if (!mapOpen) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const loadingStateId = window.setTimeout(() => {
+      if (controller.signal.aborted) return;
+      setMapFetchState("loading");
+      setMapError(null);
+    }, 0);
+    const timeoutId = window.setTimeout(() => controller.abort(), MAP_FETCH_TIMEOUT_MS);
+    const params = new URLSearchParams(searchParamsString);
+    params.set("limit", "200");
+    params.delete("includeTotal");
+
+    fetch(`/api/explore/map?${params.toString()}`, { signal: controller.signal })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(typeof payload.error === "string" ? payload.error : "Map data is temporarily unavailable.");
+        }
+        return payload as {
+          points?: LeadMapPoint[];
+          totalMapped?: number;
+          zipCoverage?: LeadMapZipCoverage[];
+          mapPointLimit?: number;
+          googleMapsApiKey?: string | null;
+        };
+      })
+      .then((payload) => {
+        const nextPoints = payload.points ?? [];
+        setMapData({
+          points: nextPoints,
+          totalMapped: Number(payload.totalMapped ?? nextPoints.length),
+          mapPointLimit: Number(payload.mapPointLimit ?? 200),
+          zipCoverage: payload.zipCoverage ?? [],
+          googleMapsApiKey: payload.googleMapsApiKey ?? null,
+        });
+        setSelectedLeadId(nextPoints[0]?.id ?? leads[0]?.id ?? null);
+        setMapFetchState("ready");
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) {
+          setMapFetchState("timeout");
+          setMapError("Map data is taking too long. The lead list is still usable.");
+          return;
+        }
+        setMapFetchState("error");
+        setMapError(error instanceof Error ? error.message : "Map data is temporarily unavailable.");
+      })
+      .finally(() => {
+        window.clearTimeout(loadingStateId);
+        window.clearTimeout(timeoutId);
+      });
+
+    return () => {
+      window.clearTimeout(loadingStateId);
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [leads, mapOpen, mapReloadToken, searchParamsString]);
+
   return (
     <PageShell
       title="Lead Explorer"
@@ -264,16 +363,30 @@ export function ExploreClient({
                 <input className="glass-input w-36" value={city} onChange={(event) => setCity(event.target.value)} placeholder="Denver" />
               </label>
               <label className="flex flex-col gap-1">
-                <span className="section-label">ZIP</span>
-                <input className="glass-input w-28" value={zip} onChange={(event) => setZip(event.target.value)} placeholder="80202" />
+                <span className="section-label">Postal / postcode</span>
+                <input className="glass-input w-36" value={zip} onChange={(event) => setZip(event.target.value)} placeholder="80202, M5V, SW1A" />
               </label>
               <button type="submit" className="btn-primary text-sm">Apply</button>
             </form>
 
             <div className="flex flex-wrap gap-2 lg:ml-auto">
+              {currentUser.role === "admin" && (
+                <button type="button" className="btn-primary text-sm" onClick={() => setManualLeadOpen(true)}>
+                  Add Lead
+                </button>
+              )}
               <SegmentButton active={mapOpen} onClick={() => pushFilters({ map: mapOpen ? null : "open" })}>
                 {mapOpen ? "Hide map" : "Show map"}
               </SegmentButton>
+              {mapOpen && (
+                <span className="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium" style={{ background: "rgba(79,70,229,0.1)", color: "var(--accent)" }}>
+                  {mapFetchState === "loading" && "Map loading"}
+                  {mapFetchState === "ready" && `${mapData.points.length} shown / ${mapData.totalMapped} mapped`}
+                  {mapFetchState === "error" && "Map error - retry"}
+                  {mapFetchState === "timeout" && "Map taking too long - retry"}
+                  {mapFetchState === "idle" && "Map ready to open"}
+                </span>
+              )}
               <SegmentButton active={view === "cards"} onClick={() => pushFilters({ view: "cards" })}>Cards</SegmentButton>
               <SegmentButton active={view === "table"} onClick={() => pushFilters({ view: "table" })}>Table</SegmentButton>
             </div>
@@ -326,7 +439,7 @@ export function ExploreClient({
               <span className="section-label">AI verification</span>
               <select className="glass-select" value={filters.aiVerificationStatus ?? ""} onChange={(event) => pushFilters({ aiVerificationStatus: event.target.value })}>
                 <option value="">All AI states</option>
-                {AI_OPTIONS.filter(Boolean).map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}
+                {AI_OPTIONS.filter(Boolean).map((status) => <option key={status} value={status}>{getAiVerificationDisplay({ status }).label}</option>)}
               </select>
             </label>
           </div>
@@ -422,23 +535,27 @@ export function ExploreClient({
       </section>
 
       {mapOpen && (
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.65fr)]">
+        <section id="explore-map-drawer" ref={mapDrawerRef} tabIndex={-1} className="grid scroll-mt-24 gap-5 outline-none xl:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.65fr)]">
           <LeadMap
-            points={mapPoints}
+            points={mapData.points}
             zipCoverage={zipCoverageWithLeadCounts}
             total={total}
-            totalMapped={totalMapped}
-            mapPointLimit={mapPointLimit}
+            totalMapped={mapData.totalMapped}
+            mapPointLimit={mapData.mapPointLimit}
             selectedLeadId={selectedMapPoint?.id ?? null}
-            googleMapsApiKey={googleMapsApiKey}
+            googleMapsApiKey={mapData.googleMapsApiKey}
+            mapState={mapFetchState}
+            mapError={mapError}
             onSelect={setSelectedLeadId}
             onZipSelect={selectMapZip}
+            onRetry={retryMap}
+            onHide={() => pushFilters({ map: null })}
           />
           <MapSidePanel
             points={visibleMapList}
             selectedPoint={selectedMapPoint}
             selectedLeadId={selectedMapPoint?.id ?? null}
-            totalMapped={totalMapped}
+            totalMapped={mapData.totalMapped}
             listLimit={MAP_LIST_LIMIT}
             currentUserId={currentUser.userId}
             scoreThresholds={scoreThresholds}
@@ -481,6 +598,8 @@ export function ExploreClient({
           </button>
         </div>
       )}
+
+      <ManualLeadModal open={manualLeadOpen} onClose={() => setManualLeadOpen(false)} />
     </PageShell>
   );
 }
@@ -493,8 +612,12 @@ function LeadMap({
   mapPointLimit,
   selectedLeadId,
   googleMapsApiKey,
+  mapState,
+  mapError,
   onSelect,
   onZipSelect,
+  onRetry,
+  onHide,
 }: {
   points: LeadMapPoint[];
   zipCoverage: LeadMapZipCoverage[];
@@ -503,8 +626,12 @@ function LeadMap({
   mapPointLimit: number;
   selectedLeadId: string | null;
   googleMapsApiKey: string | null;
+  mapState: MapFetchState;
+  mapError: string | null;
   onSelect: (leadId: string) => void;
   onZipSelect: (zip: string) => void;
+  onRetry: () => void;
+  onHide: () => void;
 }) {
   const [showCoverage, setShowCoverage] = useState(true);
   const [googleResetToken, setGoogleResetToken] = useState(0);
@@ -523,10 +650,10 @@ function LeadMap({
         <div>
           <div className="flex items-center gap-2">
             <h3 className="section-label">Map drawer</h3>
-            <HelpTip>Google Maps loads only while this drawer is open. It uses stored lead and ZIP coordinates; this view does not call Places, Geocoding, Routes, or Map Tiles APIs from the server.</HelpTip>
+            <HelpTip>Google Maps loads only while this drawer is open. It uses stored lead and postal/postcode cell coordinates; this view does not call Places, Geocoding, Routes, or Map Tiles APIs from the server.</HelpTip>
           </div>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            Pan and zoom the real map, click a marker to inspect a lead, or click a ZIP coverage circle to filter the list.
+            Pan and zoom the real map, click a marker to inspect a lead, or click a coverage cell to filter the list.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -534,7 +661,7 @@ function LeadMap({
             {points.length} shown / {totalMapped} mapped
           </span>
           <button type="button" className={`btn-glass px-3 py-1.5 text-xs ${showCoverage ? "nav-link-active" : ""}`} onClick={() => setShowCoverage((value) => !value)}>
-            ZIP coverage
+            Cell coverage
           </button>
           <button type="button" className="btn-glass px-3 py-1.5 text-xs" onClick={resetMap}>
             Reset view
@@ -542,13 +669,33 @@ function LeadMap({
         </div>
       </div>
 
-      {!googleMapsEnabled && (
+      {mapState === "loading" && (
+        <MapLoadState
+          title="Loading map data..."
+          detail="The drawer is open while map points load. The lead list below remains usable."
+          onRetry={onRetry}
+          onHide={onHide}
+          retryLabel="Retry map"
+        />
+      )}
+
+      {(mapState === "timeout" || mapState === "error") && (
+        <MapLoadState
+          title={mapState === "timeout" ? "Map data is taking too long" : "Map data could not load"}
+          detail={mapError ?? "The map failed to load. The lead list below remains usable."}
+          onRetry={onRetry}
+          onHide={onHide}
+          retryLabel="Retry map"
+        />
+      )}
+
+      {mapState === "ready" && !googleMapsEnabled && (
         <div className="rounded-xl p-6 text-sm" style={{ background: "rgba(255,255,255,0.46)", color: "var(--text-secondary)" }}>
           Google Maps is not configured for this environment. Add the browser key in Settings or Vercel, then reopen the drawer.
         </div>
       )}
 
-      {googleMapsEnabled && (
+      {mapState === "ready" && googleMapsEnabled && (
         <GoogleLeadMap
           apiKey={googleMapsApiKey ?? ""}
           points={points}
@@ -560,18 +707,19 @@ function LeadMap({
           onZipSelect={onZipSelect}
         />
       )}
-      {googleMapsEnabled && points.length === 0 && (
+      {mapState === "ready" && googleMapsEnabled && points.length === 0 && (
         <p className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.46)", color: "var(--text-tertiary)" }}>
           {total > 0
             ? `${missingCoordinates} matching leads do not have stored coordinates. The list below still shows matching businesses.`
             : "No leads match the current filters."}
         </p>
       )}
-      {hasMore && (
+      {mapState === "ready" && hasMore && (
         <p className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.46)", color: "var(--text-tertiary)" }}>
           Showing top {mapPointLimit} mapped leads by current sort. Narrow filters to inspect more on the map.
         </p>
       )}
+      {mapState === "ready" && (
       <div className="mt-3 flex flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.44)", color: "var(--text-secondary)" }}>
         <LegendDot color="#e2e8f0" label={`Not started ${coverageSummary.notStarted}`} />
         <LegendDot color="#f59e0b" label={`Partial ${coverageSummary.partial}`} />
@@ -580,6 +728,32 @@ function LeadMap({
         <LegendDot color="#dc2626" label="No site" />
         <LegendDot color="#ea580c" label="Broken" />
         <LegendDot color="#4f46e5" label="Weak/basic" />
+      </div>
+      )}
+    </div>
+  );
+}
+
+function MapLoadState({
+  title,
+  detail,
+  retryLabel,
+  onRetry,
+  onHide,
+}: {
+  title: string;
+  detail: string;
+  retryLabel: string;
+  onRetry: () => void;
+  onHide: () => void;
+}) {
+  return (
+    <div className="rounded-xl p-6 text-sm" style={{ background: "rgba(255,255,255,0.5)", color: "var(--text-secondary)" }}>
+      <h4 className="font-semibold" style={{ color: "var(--text-primary)" }}>{title}</h4>
+      <p className="mt-2">{detail}</p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button type="button" className="btn-primary text-sm" onClick={onRetry}>{retryLabel}</button>
+        <button type="button" className="btn-glass text-sm" onClick={onHide}>Hide map</button>
       </div>
     </div>
   );
@@ -687,21 +861,13 @@ function GoogleLeadMap({
         nextOverlays.push(circle);
 
         if (zip.leadCount > 0 || zip.scrapeStatus !== "not_started") {
-          const label = new maps.Marker({
-            icon: {
-              path: maps.SymbolPath.CIRCLE,
-              scale: 12,
-              fillColor: googleZipFillColor(zip),
-              fillOpacity: 0.9,
-              strokeColor: "#ffffff",
-              strokeWeight: 2,
-            },
-            label: {
-              text: zip.zip,
+          const label = new maps.marker.AdvancedMarkerElement({
+            content: createMapPin({
+              label: zip.zip,
+              background: googleZipFillColor(zip),
               color: zip.scrapeStatus === "complete" ? "#ffffff" : "#334155",
-              fontSize: "10px",
-              fontWeight: "700",
-            },
+              scale: 1.35,
+            }),
             map,
             position,
             title: `${zip.zip} ${zip.city}: ${formatLabel(zip.scrapeStatus)}, ${zip.leadCount} mapped leads in this view`,
@@ -719,20 +885,13 @@ function GoogleLeadMap({
       bounds.extend(position);
       hasBounds = true;
 
-      const marker = new maps.Marker({
-        icon: {
-          path: maps.SymbolPath.CIRCLE,
-          scale: active ? 10 : 7,
-          fillColor: active ? "#4f46e5" : markerColor(point),
-          fillOpacity: 0.96,
-          strokeColor: "#ffffff",
-          strokeWeight: active ? 3 : 2,
-        },
-        label: index < 99
-          ? { text: String(index + 1), color: "#ffffff", fontSize: "10px", fontWeight: "700" }
-          : undefined,
+      const marker = new maps.marker.AdvancedMarkerElement({
+        content: createMapPin({
+          label: index < 99 ? String(index + 1) : undefined,
+          background: active ? "#4f46e5" : markerColor(point),
+          scale: active ? 1.2 : 1,
+        }),
         map,
-        optimized: true,
         position,
         title: `${point.name ?? "Unknown business"} - ${formatLabel(point.website_status)}`,
         zIndex: active ? 1000 : 100 + index,
@@ -767,12 +926,12 @@ function GoogleLeadMap({
         </div>
       )}
       <div className="absolute left-4 top-4 z-20 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.88)", color: "var(--text-secondary)" }}>
-        {points.length} shown / {zipCoverage.length} ZIPs
+        {points.length} shown / {zipCoverage.length} cells
       </div>
       <div className="absolute bottom-4 left-4 z-20 flex max-w-[calc(100%-2rem)] flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.88)", color: "var(--text-secondary)" }}>
         <LegendDot color="#e2e8f0" label="Not started" />
-        <LegendDot color="#f59e0b" label="Partial ZIP" />
-        <LegendDot color="#0f766e" label="Covered ZIP" />
+        <LegendDot color="#f59e0b" label="Partial cell" />
+        <LegendDot color="#0f766e" label="Covered cell" />
         <span className="mx-1 h-4 w-px bg-slate-300/70" />
         <LegendDot color="#dc2626" label="No site" />
         <LegendDot color="#ea580c" label="Broken" />
@@ -893,7 +1052,7 @@ function MapPointCard({
     <article className="rounded-xl border bg-white/45 p-4" style={{ borderColor: "rgba(255,255,255,0.55)" }}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <Link href={`/leads/${point.id}`} className="link-accent block break-words font-semibold leading-snug">
+          <Link href={`/leads/${point.id}`} prefetch={false} className="link-accent block break-words font-semibold leading-snug">
             {point.name ?? "Unknown business"}
           </Link>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{point.address ?? "No address"}</p>
@@ -904,7 +1063,13 @@ function MapPointCard({
       <div className="mt-3 flex flex-wrap gap-2">
         <Badge label={formatLabel(point.website_status)} style={websiteBadgeStyle(point.website_status)} />
         <Badge label={formatLabel(point.quality_bucket)} />
-        <Badge label={formatLabel(point.ai_verification_status)} />
+        <AiVerificationBadge
+          status={point.ai_verification_status}
+          checkedAt={point.ai_checked_at}
+          queueStatus={point.ai_queue_status}
+          viability={point.ai_website_viability_status}
+          compact
+        />
         <Badge label={point.rating ? `${point.rating.toFixed(1)} rating` : "No rating"} />
         <Badge label={`${point.review_count ?? 0} reviews`} />
         <Badge label={formatMoney(point.estimated_deal_value)} />
@@ -912,7 +1077,7 @@ function MapPointCard({
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
         <OwnerPill label={owner} mine={point.assigned_to_user_id === currentUserId} />
-        <Link href={`/leads/${point.id}`} className="btn-glass ml-auto text-sm">Details</Link>
+        <Link href={`/leads/${point.id}`} prefetch={false} className="btn-glass ml-auto text-sm">Details</Link>
         {!point.assigned_to_user_id && (
           <button type="button" className="btn-primary text-sm" disabled={busy} onClick={() => onClaim(point.id)}>
             {busy ? "Claiming..." : "Claim"}
@@ -950,7 +1115,7 @@ function LeadCard({
     <article className="glass rounded-2xl p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <Link href={`/leads/${lead.id}`} className="link-accent block break-words font-semibold leading-snug">
+          <Link href={`/leads/${lead.id}`} prefetch={false} className="link-accent block break-words font-semibold leading-snug">
             {lead.name ?? "Unknown business"}
           </Link>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{lead.address ?? "No address"}</p>
@@ -965,7 +1130,13 @@ function LeadCard({
       <div className="mt-3 flex flex-wrap gap-2">
         <Badge label={formatLabel(lead.website_status)} style={websiteBadgeStyle(lead.website_status)} />
         <Badge label={formatLabel(lead.quality_bucket)} />
-        <Badge label={formatLabel(lead.ai_verification_status)} />
+        <AiVerificationBadge
+          status={lead.ai_verification_status}
+          checkedAt={lead.ai_checked_at}
+          queueStatus={lead.ai_queue_status}
+          viability={lead.ai_website_viability_status}
+          compact
+        />
         <Badge label={lead.rating ? `${lead.rating.toFixed(1)} rating` : "No rating"} />
         <Badge label={`${lead.review_count ?? 0} reviews`} />
         <Badge label={formatMoney(lead.estimated_deal_value)} />
@@ -973,7 +1144,7 @@ function LeadCard({
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
         <OwnerPill label={owner} mine={lead.assigned_to_user_id === currentUserId} />
-        <Link href={`/leads/${lead.id}`} className="btn-glass ml-auto text-sm">Details</Link>
+        <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass ml-auto text-sm">Details</Link>
         {!lead.assigned_to_user_id && (
           <button type="button" className="btn-primary text-sm" disabled={busy} onClick={() => onClaim(lead.id)}>
             {busy ? "Claiming..." : "Claim"}
@@ -1019,13 +1190,22 @@ function LeadTable({
             {leads.map((lead) => (
               <tr key={lead.id}>
                 <td>
-                  <Link href={`/leads/${lead.id}`} className="link-accent font-medium">{lead.name ?? "Unknown"}</Link>
+                  <Link href={`/leads/${lead.id}`} prefetch={false} className="link-accent font-medium">{lead.name ?? "Unknown"}</Link>
                   <div className="text-xs" style={{ color: "var(--text-tertiary)" }}>{getBusinessTypeLabel(lead.business_type)}</div>
                 </td>
                 <td>{formatPlace(lead.address)}</td>
                 <td><span style={websiteBadgeStyle(lead.website_status)}>{formatLabel(lead.website_status)}</span></td>
                 <td>{formatLabel(lead.quality_bucket)}</td>
-                <td>{formatLabel(lead.ai_verification_status)}</td>
+                <td>
+                  <AiVerificationBadge
+                    status={lead.ai_verification_status}
+                    checkedAt={lead.ai_checked_at}
+                    queueStatus={lead.ai_queue_status}
+                    viability={lead.ai_website_viability_status}
+                    confidence={lead.ai_confidence}
+                    showDetail
+                  />
+                </td>
                 <td>{lead.review_count ?? 0}</td>
                 <td><ScoreBandBadge score={lead.score} thresholds={scoreThresholds} compact /></td>
                 <td>{ownerLabel(lead, currentUserId)}</td>
@@ -1035,7 +1215,7 @@ function LeadTable({
                       {busyLeadId === lead.id ? "Claiming..." : "Claim"}
                     </button>
                   ) : (
-                    <Link href={`/leads/${lead.id}`} className="btn-glass px-3 py-1.5 text-xs">Details</Link>
+                    <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass px-3 py-1.5 text-xs">Details</Link>
                   )}
                 </td>
               </tr>
@@ -1129,9 +1309,38 @@ function loadGoogleMaps(apiKey: string): Promise<GoogleMapsNamespace> {
 function clearGoogleOverlays(overlays: GoogleOverlay[], maps: GoogleMapsNamespace["maps"]): void {
   for (const overlay of overlays) {
     maps.event.clearInstanceListeners(overlay);
-    overlay.setMap(null);
+    if ("setMap" in overlay) overlay.setMap(null);
+    else overlay.map = null;
   }
   overlays.length = 0;
+}
+
+function createMapPin({
+  label,
+  background,
+  color = "#ffffff",
+  scale = 1,
+}: {
+  label?: string;
+  background: string;
+  color?: string;
+  scale?: number;
+}): HTMLElement {
+  const marker = document.createElement("div");
+  marker.textContent = label ?? "";
+  marker.style.width = `${Math.round(18 * scale)}px`;
+  marker.style.height = `${Math.round(18 * scale)}px`;
+  marker.style.borderRadius = "999px";
+  marker.style.display = "grid";
+  marker.style.placeItems = "center";
+  marker.style.background = background;
+  marker.style.color = color;
+  marker.style.border = "2px solid #ffffff";
+  marker.style.boxShadow = "0 5px 14px rgba(15,23,42,0.22)";
+  marker.style.fontSize = "10px";
+  marker.style.fontWeight = "700";
+  marker.style.lineHeight = "1";
+  return marker;
 }
 
 function getGoogleMapCenter(points: LeadMapPoint[], zipCoverage: LeadMapZipCoverage[]): GoogleLatLngLiteral {

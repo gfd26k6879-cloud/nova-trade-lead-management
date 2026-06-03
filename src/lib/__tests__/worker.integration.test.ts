@@ -19,13 +19,27 @@ vi.mock("@/lib/db/index", () => {
   };
 });
 
-vi.mock("@/lib/google-places", () => ({
-  textSearch: vi.fn(),
-  TEXT_SEARCH_FIELD_MASK: "places.id",
-}));
+vi.mock("@/lib/google-places", () => {
+  class PlacesApiError extends Error {
+    constructor(
+      public readonly status: number,
+      public readonly body: string,
+      message = `Places API error ${status}: ${body}`,
+    ) {
+      super(message);
+      this.name = "PlacesApiError";
+    }
+  }
+  return {
+    textSearch: vi.fn(),
+    PlacesApiError,
+    TEXT_SEARCH_FIELD_MASK: "places.id,places.displayName,places.websiteUri,places.rating",
+    TEXT_SEARCH_PRO_FIELD_MASK: "places.id,places.displayName,places.formattedAddress,places.location",
+  };
+});
 
 import { processNextUnit } from "@/lib/crawl/worker";
-import { textSearch } from "@/lib/google-places";
+import { PlacesApiError, textSearch } from "@/lib/google-places";
 import { createCrawlUnitsForSelection } from "@/lib/db/queries";
 
 const mockTextSearch = textSearch as ReturnType<typeof vi.fn>;
@@ -33,7 +47,7 @@ const mockTextSearch = textSearch as ReturnType<typeof vi.fn>;
 beforeEach(() => {
   testDb = createTestDb();
   seedTestZip(testDb);
-  vi.clearAllMocks();
+  mockTextSearch.mockReset();
 });
 
 afterEach(() => {
@@ -44,6 +58,18 @@ describe("crawl worker integration", () => {
   it("returns idle when no active run exists", async () => {
     const result = await processNextUnit();
     expect(result.status).toBe("idle");
+  });
+
+  it("ignores paused discovery items", async () => {
+    const runId = seedTestRun(testDb, { status: "paused" });
+    seedTestUnit(testDb, { runId });
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("idle");
+    expect(mockTextSearch).not.toHaveBeenCalled();
+    const unit = testDb.prepare("SELECT status FROM crawl_units WHERE id = 'unit-1'").get() as { status: string };
+    expect(unit.status).toBe("pending");
   });
 
   it("processes a unit and creates leads", async () => {
@@ -80,9 +106,9 @@ describe("crawl worker integration", () => {
     expect(row.ai_input_hash).toBeTruthy();
   });
 
-  it("resumes from saved page token", async () => {
+  it("resumes from saved page token when a unit has remaining page budget", async () => {
     const runId = seedTestRun(testDb);
-    seedTestUnit(testDb, { runId, nextPageToken: "saved-token-123" });
+    seedTestUnit(testDb, { runId, nextPageToken: "saved-token-123", maxPages: 3, pagesFetched: 1 });
 
     const place = makePlaceResult();
     mockTextSearch.mockResolvedValueOnce(mockTextSearchResponse([place]));
@@ -152,7 +178,7 @@ describe("crawl worker integration", () => {
     expect(unit.started_at).toBeNull();
   });
 
-  it("pauses before exceeding the monthly Text Search free tier", async () => {
+  it("pauses before exceeding the monthly Text Search free-safe cap", async () => {
     const runId = seedTestRun(testDb);
     testDb.prepare("UPDATE settings SET max_calls_per_day = 2000, max_calls_per_run = 2000").run();
     seedTestUnit(testDb, { runId });
@@ -162,14 +188,14 @@ describe("crawl worker integration", () => {
        VALUES (?, 'places.searchText', 'places_text_search_enterprise', 1, 0, 1, ?)`,
     );
 
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 900; i++) {
       insert.run(`usage-${i}`, now);
     }
 
     const result = await processNextUnit();
 
     expect(result.status).toBe("budget_limit");
-    expect(result.error).toContain("free-tier cap reached");
+    expect(result.error).toContain("free-safe cap reached");
     expect(mockTextSearch).not.toHaveBeenCalled();
 
     const run = testDb.prepare("SELECT status FROM crawl_runs WHERE id = ?").get(runId) as { status: string };
@@ -210,7 +236,7 @@ describe("crawl worker integration", () => {
     expect(unit.last_error).toContain("API quota exceeded");
   });
 
-  it("follows nextPageToken for pagination", async () => {
+  it("does not follow nextPageToken by default", async () => {
     const runId = seedTestRun(testDb);
     seedTestUnit(testDb, { runId });
 
@@ -224,12 +250,86 @@ describe("crawl worker integration", () => {
     const result = await processNextUnit();
 
     expect(result.status).toBe("processed");
-    expect(result.leadsFound).toBe(2);
+    expect(result.leadsFound).toBe(1);
+    expect(result.apiCalls).toBe(1);
+    expect(mockTextSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows nextPageToken when pagination policy permits extra pages", async () => {
+    const runId = seedTestRun(testDb);
+    testDb.prepare(
+      "UPDATE crawl_runs SET selection_json = ? WHERE id = ?",
+    ).run(JSON.stringify({ discoveryMode: "lead_harvest", paginationPolicy: "manual_extra_pages" }), runId);
+    seedTestUnit(testDb, { runId, maxPages: 3 });
+
+    const page1Places = Array.from({ length: 6 }, (_, index) => makePlaceResult({ id: `places/page1-biz-${index}` }));
+    const page2Place = makePlaceResult({ id: "places/page2-biz" });
+
+    mockTextSearch
+      .mockResolvedValueOnce(mockTextSearchResponse(page1Places, "page2-token"))
+      .mockResolvedValueOnce(mockTextSearchResponse([page2Place]));
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("processed");
     expect(result.apiCalls).toBe(2);
     expect(mockTextSearch).toHaveBeenCalledTimes(2);
 
     const secondCallArgs = mockTextSearch.mock.calls[1];
     expect(secondCallArgs[1]).toBe("page2-token");
+  });
+
+  it("records multi-page coverage probes without creating active leads", async () => {
+    const runId = seedTestRun(testDb);
+    testDb.prepare(
+      "UPDATE crawl_runs SET selection_json = ? WHERE id = ?",
+    ).run(JSON.stringify({ discoveryMode: "coverage_probe", paginationPolicy: "manual_extra_pages" }), runId);
+    seedTestUnit(testDb, { runId, maxPages: 3 });
+
+    const page1Places = Array.from({ length: 6 }, (_, index) => makePlaceResult({ id: `places/probe-page1-${index}` }));
+    const page2Place = makePlaceResult({ id: "places/probe-page2" });
+
+    mockTextSearch
+      .mockResolvedValueOnce(mockTextSearchResponse(page1Places, "page2-token"))
+      .mockResolvedValueOnce(mockTextSearchResponse([page2Place]));
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("processed");
+    expect(result.apiCalls).toBe(2);
+    expect(mockTextSearch).toHaveBeenCalledTimes(2);
+
+    const leadCount = testDb.prepare("SELECT COUNT(*) AS count FROM leads").get() as { count: number };
+    const placeCount = testDb.prepare("SELECT COUNT(*) AS count FROM places_master").get() as { count: number };
+    expect(leadCount.count).toBe(0);
+    expect(placeCount.count).toBe(7);
+  });
+
+  it("logs failed Google attempts as billable and stores an operator-safe unit error", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestUnit(testDb, { runId });
+    const rawErrorBody = JSON.stringify({
+      error: {
+        code: 400,
+        message: "Request parameters for paging requests must match the initial SearchText request.",
+        status: "INVALID_ARGUMENT",
+      },
+    });
+    mockTextSearch.mockRejectedValueOnce(new PlacesApiError(400, rawErrorBody));
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("Google Places request failed with status 400.");
+
+    const unit = testDb.prepare("SELECT status, last_error FROM crawl_units WHERE id = 'unit-1'").get() as Record<string, unknown>;
+    expect(unit.status).toBe("failed");
+    expect(unit.last_error).toBe("Google Places request failed with status 400.");
+
+    const usage = testDb.prepare("SELECT success, billable_units, metadata FROM api_usage_events WHERE crawl_unit_id = 'unit-1'").get() as Record<string, unknown>;
+    expect(usage.success).toBe(0);
+    expect(usage.billable_units).toBe(1);
+    expect(String(usage.metadata)).toContain("INVALID_ARGUMENT");
   });
 
   it("keeps worker flow unchanged with planner-selected units", async () => {

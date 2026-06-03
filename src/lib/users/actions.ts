@@ -5,7 +5,7 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-import { buildAuthCallbackUrl, resolveCanonicalAppUrl } from "@/lib/app-url";
+import { buildPasswordRecoveryUrl, resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
   createAppUserForAuthUser,
   listAppUsers,
@@ -15,7 +15,13 @@ import {
   type AppUserStatus,
 } from "@/lib/app-users";
 import { requirePermission } from "@/lib/auth";
-import { createAuditLog, ensureDbReady } from "@/lib/db/queries";
+import {
+  createAuditLog,
+  ensureDbReady,
+  listLocationMarkets,
+  listUserMarketAccessForUsers,
+  replaceUserMarketAccess,
+} from "@/lib/db/queries";
 import { isAppRole, type AppRole } from "@/lib/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -31,10 +37,27 @@ const updateUserTeamSchema = z.object({
   teamLabel: z.string().trim().max(120).nullable().optional(),
 });
 
+const updateUserMarketsSchema = z.object({
+  marketIds: z.array(z.string().trim().min(1)).max(100),
+});
+
 export async function listUsersAction() {
   await requirePermission("users:manage");
   await ensureDbReady();
   return listAppUsers();
+}
+
+export async function listTerritoryMarketsAction() {
+  await requirePermission("users:manage");
+  await ensureDbReady();
+  return listLocationMarkets();
+}
+
+export async function listUserMarketAccessAction(userIds: string[]) {
+  await requirePermission("users:manage");
+  await ensureDbReady();
+  const uniqueUserIds = Array.from(new Set(userIds.map((id) => id.trim()).filter(Boolean)));
+  return listUserMarketAccessForUsers(uniqueUserIds);
 }
 
 export async function createUserAction(input: { email: string; displayName?: string; role?: AppRole }) {
@@ -126,6 +149,22 @@ export async function updateUserTeamAction(userId: string, input: { isTeamLead?:
   return { success: true, user };
 }
 
+export async function updateUserMarketAccessAction(userId: string, input: { marketIds: string[] }) {
+  const session = await requirePermission("users:manage");
+  await ensureDbReady();
+  const parsed = updateUserMarketsSchema.safeParse(input);
+  if (!parsed.success) return { error: "Invalid territory selection." };
+  const access = await replaceUserMarketAccess(userId, parsed.data.marketIds, session.userId);
+  await createAuditLog("app_user_market_access_updated", "app_user", userId, {
+    marketIds: parsed.data.marketIds,
+  });
+  revalidatePath("/users");
+  revalidatePath("/leads");
+  revalidatePath("/explore");
+  revalidatePath("/queue");
+  return { success: true, access };
+}
+
 export async function resetUserPasswordAction(userId: string) {
   await requirePermission("users:manage");
   await ensureDbReady();
@@ -156,7 +195,7 @@ async function sendPasswordSetupEmail(email: string): Promise<{ error: string | 
 
   const supabase = createSupabaseAdminClient();
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: buildAuthCallbackUrl("/reset-password", appUrl),
+    redirectTo: buildPasswordRecoveryUrl("/reset-password", appUrl),
   });
   return { error: error?.message ?? null };
 }

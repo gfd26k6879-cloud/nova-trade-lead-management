@@ -45,6 +45,7 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
   const activeWorkers = operations.health.workers.filter((worker) => worker.enabled).length;
   const queueDepth = operations.health.workers.reduce((sum, worker) => sum + worker.queueDepth, 0);
   const blockedWorkers = operations.health.workers.filter((worker) => worker.enabled && worker.warning).length;
+  const authWarnings = operations.health.auth?.warnings ?? [];
 
   const refresh = async () => {
     const next = await getSchedulerOperationsAction();
@@ -123,6 +124,26 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
         </div>
       </section>
 
+      {operations.health.database.staleClientReads.length > 0 && (
+        <section className="rounded-2xl p-4 text-sm" style={{ background: "rgba(245,158,11,0.12)", color: "#92400e", border: "1px solid rgba(245,158,11,0.22)" }}>
+          <div className="font-semibold">Database reads may be stalled</div>
+          <p className="mt-1">
+            {operations.health.database.staleClientReads.length} active ClientRead query
+            {operations.health.database.staleClientReads.length === 1 ? "" : "ies"} older than 60 seconds. Public health can still be green while protected pages wait on these reads.
+          </p>
+        </section>
+      )}
+
+      {authWarnings.length > 0 && (
+        <section className="rounded-2xl p-4 text-sm" style={{ background: "rgba(239,68,68,0.10)", color: "#991b1b", border: "1px solid rgba(239,68,68,0.22)" }}>
+          <div className="font-semibold">Auth recovery configuration needs attention</div>
+          <p className="mt-1">{authWarnings.join(" ")}</p>
+          {operations.health.auth?.callbackUrl && (
+            <p className="mt-1 text-xs">Expected callback URL: {operations.health.auth.callbackUrl}</p>
+          )}
+        </section>
+      )}
+
       {activeTab === "overview" && (
         <section className="space-y-5">
           <section className="glass rounded-2xl p-6">
@@ -161,7 +182,7 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
                 ["Status", titleCase(operations.activeDiscovery.status)],
                 ["Done", operations.activeDiscovery.progress ? formatNumber(operations.activeDiscovery.progress.done) : "0"],
                 ["Remaining", operations.activeDiscovery.progress ? formatNumber(operations.activeDiscovery.progress.pending + operations.activeDiscovery.progress.running) : "0"],
-                ["ZIPs searched", operations.activeDiscovery.geography ? `${formatNumber(operations.activeDiscovery.geography.zipCodesCompleted)} / ${formatNumber(operations.activeDiscovery.geography.zipCodesSelected)}` : "0 / 0"],
+                ["Coverage cells searched", operations.activeDiscovery.geography ? `${formatNumber(operations.activeDiscovery.geography.zipCodesCompleted)} / ${formatNumber(operations.activeDiscovery.geography.zipCodesSelected)}` : "0 / 0"],
               ]}
             />
             <BacklogPanel

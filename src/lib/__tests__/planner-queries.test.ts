@@ -14,12 +14,18 @@ vi.mock("@/lib/db/index", () => {
 
 import {
   cancelCrawlRun,
+  createCrawlRun,
+  createCrawlUnitsForCells,
   createCrawlUnitsForSelection,
+  getActiveCrawlRun,
   getCrawlProgress,
+  getProcessingCrawlRun,
+  listDiscoveryItems,
   getCoverageByCounty,
   getCoverageByState,
   getLeadMapZipCoverage,
   getRunGeographyProgress,
+  getMarketCoverageSummary,
   getZipCoverageStatus,
 } from "@/lib/db/queries";
 
@@ -45,6 +51,80 @@ describe("state county zip planner queries", () => {
     ).all(runId) as Array<{ zip: string }>;
 
     expect(rows.map((row) => row.zip)).toEqual(["80123", "80202"]);
+  });
+
+  it("treats paused runs as visible discovery items but not processing runs", async () => {
+    const pausedRunId = seedTestRun(testDb, { id: "paused-run", status: "paused" });
+    await createCrawlUnitsForSelection(pausedRunId, ["dentist"], ["80202"]);
+
+    const processing = await getProcessingCrawlRun();
+    const visible = await getActiveCrawlRun();
+    const items = await listDiscoveryItems();
+
+    expect(processing).toBeNull();
+    expect(visible?.id).toBe(pausedRunId);
+    expect(items[0]).toMatchObject({
+      id: pausedRunId,
+      status: "paused",
+      totalUnits: 1,
+      openUnits: 1,
+    });
+  });
+
+  it("lists latest discovery items with unit counts after limiting runs", async () => {
+    const olderRun = seedTestRun(testDb, { id: "older-run", status: "done" });
+    const newerRun = seedTestRun(testDb, { id: "newer-run", status: "paused" });
+    testDb.prepare("UPDATE crawl_runs SET created_at = '2026-02-23T00:00:00.000Z' WHERE id = ?").run(olderRun);
+    testDb.prepare("UPDATE crawl_runs SET created_at = '2026-02-25T00:00:00.000Z' WHERE id = ?").run(newerRun);
+    await createCrawlUnitsForSelection(olderRun, ["dentist"], ["80202"]);
+    await createCrawlUnitsForSelection(newerRun, ["dentist", "plumber"], ["80202"]);
+    testDb.prepare("UPDATE crawl_units SET status = 'done' WHERE crawl_run_id = ?").run(olderRun);
+    testDb.prepare("UPDATE crawl_units SET status = 'failed' WHERE crawl_run_id = ? AND category = 'plumber'").run(newerRun);
+
+    const items = await listDiscoveryItems(1);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: newerRun,
+      status: "paused",
+      totalUnits: 2,
+      failedUnits: 1,
+      openUnits: 1,
+    });
+  });
+
+  it("creates crawl units for selected international location cells", async () => {
+    testDb.prepare(
+      `INSERT INTO location_markets (id, name, country_code, admin_area1, locality, status)
+       VALUES ('market-toronto', 'Toronto', 'CA', 'ON', 'Toronto', 'active')`
+    ).run();
+    testDb.prepare(
+      `INSERT INTO location_cells (
+        id, market_id, country_code, admin_area1, locality, postal_code, postal_code_normalized,
+        cell_type, cell_label, lat, lng, is_active
+       ) VALUES ('cell-ca-toronto-m5v', 'market-toronto', 'CA', 'Ontario', 'Toronto', 'M5V', 'M5V',
+        'postal_fsa', 'Toronto ON M5V', 43.64, -79.39, 1)`
+    ).run();
+    const run = await createCrawlRun(["dentist"], {
+      marketId: "market-toronto",
+      selection: { marketId: "market-toronto", cellIds: ["cell-ca-toronto-m5v"] },
+    });
+
+    const created = await createCrawlUnitsForCells(run.id, ["dentist", "accountant"], ["cell-ca-toronto-m5v"]);
+    expect(created).toBe(2);
+
+    const rows = testDb.prepare(
+      "SELECT market_id, location_cell_id, country_code, zip, query_location_label FROM crawl_units WHERE crawl_run_id = ? ORDER BY category"
+    ).all(run.id) as Array<Record<string, unknown>>;
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      market_id: "market-toronto",
+      location_cell_id: "cell-ca-toronto-m5v",
+      country_code: "CA",
+      zip: "M5V",
+      query_location_label: "Toronto, Ontario, M5V, Canada",
+    });
   });
 
   it("aggregates coverage by county and state correctly", async () => {
@@ -172,6 +252,20 @@ describe("state county zip planner queries", () => {
       leadCount: 0,
       totalUnits: 0,
       scrapeStatus: "not_started",
+    });
+  });
+
+  it("rolls coverage up by market and location cell", async () => {
+    const runId = seedTestRun(testDb);
+    await createCrawlUnitsForSelection(runId, ["dentist"], ["80202"]);
+    testDb.prepare("UPDATE crawl_units SET status = 'done', discovered_count = 3 WHERE crawl_run_id = ?").run(runId);
+
+    const markets = await getMarketCoverageSummary(runId);
+    expect(markets.find((market) => market.marketId === "market-colorado")).toMatchObject({
+      marketName: "Colorado",
+      countryCode: "US",
+      doneUnits: 1,
+      leadsDiscovered: 3,
     });
   });
 });

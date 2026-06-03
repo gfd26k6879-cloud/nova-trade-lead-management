@@ -11,5 +11,6 @@ export function buildGoogleMapsScriptUrl(apiKey: string, callbackName: string): 
   url.searchParams.set("loading", "async");
   url.searchParams.set("callback", callbackName);
   url.searchParams.set("auth_referrer_policy", "origin");
+  url.searchParams.set("libraries", "marker");
   return url.toString();
 }

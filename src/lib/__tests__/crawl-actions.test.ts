@@ -1,0 +1,341 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import Database from "better-sqlite3";
+import { createTestDb, seedTestRun, seedTestUnit, seedTestZip } from "./test-helpers";
+
+let testDb: Database.Database;
+
+const dbIndexMocks = vi.hoisted(() => ({
+  isDbStatementTimeoutError: vi.fn((error: unknown) => (error as { code?: string }).code === "57014"),
+  isTransientDbError: vi.fn(() => false),
+  withDbStatementTimeout: vi.fn((_timeoutMs: number, fn: () => Promise<unknown>) => fn()),
+}));
+
+vi.mock("@/lib/auth", () => ({
+  requirePermission: vi.fn(() => Promise.resolve({ userId: "admin-1", email: "admin@example.com", role: "admin" })),
+}));
+
+vi.mock("@/lib/db/index", () => {
+  return {
+    getDb: () => testDb,
+    generateId: () => crypto.randomUUID(),
+    nowISO: () => new Date().toISOString(),
+    isDbStatementTimeoutError: dbIndexMocks.isDbStatementTimeoutError,
+    isTransientDbError: dbIndexMocks.isTransientDbError,
+    withDbStatementTimeout: dbIndexMocks.withDbStatementTimeout,
+  };
+});
+
+import {
+  getCoverageCellLedgerAction,
+  getCoverageDiscoveryItemListAction,
+  getCoverageDiscoveryItemsAction,
+  getCoverageProbeCandidatesAction,
+  getCoverageSelectedRunAction,
+  getDashboardAnalyticsAction,
+  getDashboardStatsAction,
+  promoteProbeToLeadHarvestAction,
+  resumeCrawlRunAction,
+  retryFailedUnitsAction,
+  startCrawlRunAction,
+  stopCrawlRunAction,
+} from "@/lib/crawl/actions";
+
+beforeEach(() => {
+  testDb = createTestDb();
+  seedTestZip(testDb, "80202", "Denver", 39.75, -104.99, "Denver");
+  dbIndexMocks.isDbStatementTimeoutError.mockImplementation((error: unknown) => (error as { code?: string }).code === "57014");
+  dbIndexMocks.isTransientDbError.mockReturnValue(false);
+  dbIndexMocks.withDbStatementTimeout.mockImplementation((_timeoutMs: number, fn: () => Promise<unknown>) => fn());
+});
+
+afterEach(() => {
+  testDb.close();
+});
+
+describe("crawl discovery item actions", () => {
+  it("starts a new discovery item when only a paused item exists", async () => {
+    seedTestRun(testDb, { id: "paused-run", status: "paused" });
+
+    const result = await startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    });
+
+    expect("error" in result).toBe(false);
+    const rows = testDb.prepare("SELECT id, status FROM crawl_runs ORDER BY created_at ASC").all() as Array<{ id: string; status: string }>;
+    expect(rows).toEqual(expect.arrayContaining([
+      { id: "paused-run", status: "paused" },
+      expect.objectContaining({ status: "running" }),
+    ]));
+  });
+
+  it("blocks a new discovery item while another item is processing", async () => {
+    seedTestRun(testDb, { id: "running-run", status: "running" });
+
+    const result = await startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    });
+
+    expect("error" in result ? result.error : "").toContain("already processing");
+  });
+
+  it("does not resume a paused item while another item is processing", async () => {
+    seedTestRun(testDb, { id: "paused-run", status: "paused" });
+    seedTestRun(testDb, { id: "running-run", status: "running" });
+
+    const result = await resumeCrawlRunAction("paused-run");
+
+    expect("error" in result ? result.error : "").toContain("already processing");
+    const paused = testDb.prepare("SELECT status FROM crawl_runs WHERE id = 'paused-run'").get() as { status: string };
+    expect(paused.status).toBe("paused");
+  });
+
+  it("cancels remaining units only for the selected discovery item", async () => {
+    seedTestRun(testDb, { id: "paused-run", status: "paused" });
+    seedTestRun(testDb, { id: "other-run", status: "paused" });
+    seedTestUnit(testDb, { id: "paused-unit", runId: "paused-run" });
+    seedTestUnit(testDb, { id: "other-unit", runId: "other-run" });
+
+    const result = await stopCrawlRunAction("paused-run");
+
+    expect("error" in result).toBe(false);
+    expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'paused-unit'").get()).toMatchObject({ status: "canceled" });
+    expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'other-unit'").get()).toMatchObject({ status: "pending" });
+  });
+
+  it("retries failed units only for the selected discovery item", async () => {
+    seedTestRun(testDb, { id: "paused-run", status: "paused" });
+    seedTestRun(testDb, { id: "other-run", status: "paused" });
+    seedTestUnit(testDb, { id: "paused-unit", runId: "paused-run" });
+    seedTestUnit(testDb, { id: "other-unit", runId: "other-run" });
+    testDb.prepare("UPDATE crawl_units SET status = 'failed'").run();
+
+    const result = await retryFailedUnitsAction("paused-run");
+
+    expect(result).toMatchObject({ retriedCount: 1 });
+    expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'paused-unit'").get()).toMatchObject({ status: "pending" });
+    expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'other-unit'").get()).toMatchObject({ status: "failed" });
+  });
+
+  it("loads selected discovery item metadata without mutating the run", async () => {
+    seedTestRun(testDb, { id: "paused-run", status: "paused" });
+    seedTestUnit(testDb, { id: "paused-unit", runId: "paused-run" });
+
+    const result = await getCoverageSelectedRunAction("paused-run");
+
+    expect(result.loadError).toBeUndefined();
+    expect(result.run).toMatchObject({ id: "paused-run", status: "paused" });
+    expect(testDb.prepare("SELECT status FROM crawl_runs WHERE id = 'paused-run'").get()).toMatchObject({ status: "paused" });
+  });
+
+  it("loads discovery item list separately from selected run metadata", async () => {
+    seedTestRun(testDb, { id: "paused-run", status: "paused" });
+    seedTestUnit(testDb, { id: "paused-unit", runId: "paused-run" });
+
+    const result = await getCoverageDiscoveryItemListAction(30);
+
+    expect(result.loadError).toBeUndefined();
+    expect(result.discoveryItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "paused-run", status: "paused" }),
+    ]));
+  });
+
+  it("loads discovery item list when run name and scope label are missing", async () => {
+    seedTestRun(testDb, { id: "unnamed-run", status: "done" });
+    seedTestUnit(testDb, { id: "unnamed-unit", runId: "unnamed-run" });
+    testDb.prepare("UPDATE crawl_runs SET name = NULL, scope_label = NULL, categories = ? WHERE id = ?")
+      .run(JSON.stringify(["dentist"]), "unnamed-run");
+
+    const result = await getCoverageDiscoveryItemListAction(30);
+
+    expect(result.loadError).toBeUndefined();
+    expect(result.discoveryItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "unnamed-run",
+        name: expect.stringContaining("discovery"),
+        categories: ["dentist"],
+      }),
+    ]));
+  });
+
+  it("returns selected discovery item even if the discovery item list action times out separately", async () => {
+    seedTestRun(testDb, { id: "paused-run", status: "paused" });
+    const timeout = Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" });
+    dbIndexMocks.withDbStatementTimeout.mockRejectedValueOnce(timeout);
+
+    const listResult = await getCoverageDiscoveryItemListAction(30);
+    const selectedResult = await getCoverageSelectedRunAction("paused-run");
+
+    expect(listResult).toEqual({ discoveryItems: [], loadError: "db_statement_timeout" });
+    expect(selectedResult.run).toMatchObject({ id: "paused-run", status: "paused" });
+  });
+
+  it("keeps legacy combined coverage metadata action available", async () => {
+    seedTestRun(testDb, { id: "paused-run", status: "paused" });
+    seedTestUnit(testDb, { id: "paused-unit", runId: "paused-run" });
+
+    const result = await getCoverageDiscoveryItemsAction("paused-run");
+
+    expect(result.loadError).toBeUndefined();
+    expect(result.run).toMatchObject({ id: "paused-run", status: "paused" });
+    expect(result.discoveryItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "paused-run", status: "paused" }),
+    ]));
+  });
+
+  it("loads canonical directory candidates for a completed coverage probe", async () => {
+    seedTestRun(testDb, { id: "probe-run", status: "done" });
+    seedTestUnit(testDb, { id: "probe-unit", runId: "probe-run" });
+    testDb.prepare("UPDATE crawl_units SET status = 'done', pages_fetched = 3, raw_places_seen = 60, new_places_seen = 60 WHERE id = 'probe-unit'").run();
+    testDb.prepare(
+      `INSERT INTO places_master (
+        place_id, name, address, website_uri, maps_uri, categories, rating, user_rating_count,
+        business_status, primary_type, lat, lng, completeness_score, freshness_score
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "directory-place-1",
+      "Directory Dentist",
+      "123 Directory St, Denver, CO 80202",
+      null,
+      "https://maps.example/directory-place-1",
+      JSON.stringify(["dentist"]),
+      4.7,
+      42,
+      "OPERATIONAL",
+      "dentist",
+      39.75,
+      -104.99,
+      0.6,
+      1,
+    );
+    testDb.prepare(
+      `INSERT INTO place_observations (
+        id, place_id, crawl_run_id, crawl_unit_id, endpoint, sku, field_mask, raw_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "observation-1",
+      "directory-place-1",
+      "probe-run",
+      "probe-unit",
+      "places.searchText",
+      "places_text_search_pro",
+      "places.id",
+      JSON.stringify({ id: "places/directory-place-1" }),
+    );
+
+    const result = await getCoverageProbeCandidatesAction("probe-run");
+
+    expect(result.loadError).toBeUndefined();
+    expect(result.candidates).toEqual([
+      expect.objectContaining({
+        placeId: "directory-place-1",
+        name: "Directory Dentist",
+        marketId: "market-colorado",
+        locationCellId: "cell-us-co-80202",
+        category: "dentist",
+        hasLead: false,
+        websiteStatusLabel: "No website",
+        listingStatus: "Directory candidate",
+      }),
+    ]);
+  });
+
+  it("promotes a completed coverage probe into a separate capped lead harvest", async () => {
+    seedTestRun(testDb, { id: "probe-run", status: "done" });
+    seedTestUnit(testDb, { id: "probe-unit", runId: "probe-run" });
+    testDb.prepare(
+      "UPDATE crawl_runs SET market_id = ?, selection_json = ? WHERE id = ?",
+    ).run(
+      "market-colorado",
+      JSON.stringify({
+        marketId: "market-colorado",
+        cellIds: ["cell-us-co-80202"],
+        categories: ["dentist"],
+        source: "market_cells",
+        discoveryMode: "coverage_probe",
+        paginationPolicy: "auto_yield_based",
+        testRun: true,
+      }),
+      "probe-run",
+    );
+    testDb.prepare("UPDATE crawl_units SET status = 'done' WHERE id = 'probe-unit'").run();
+
+    const result = await promoteProbeToLeadHarvestAction("probe-run");
+
+    expect("error" in result).toBe(false);
+    const newRunId = "runId" in result ? result.runId : null;
+    expect(newRunId).toBeTruthy();
+    expect(newRunId).not.toBe("probe-run");
+    expect(testDb.prepare("SELECT status FROM crawl_runs WHERE id = 'probe-run'").get()).toMatchObject({ status: "done" });
+
+    const harvestRun = testDb.prepare("SELECT market_id, selection_json FROM crawl_runs WHERE id = ?").get(newRunId) as Record<string, unknown>;
+    expect(harvestRun.market_id).toBe("market-colorado");
+    const selection = JSON.parse(String(harvestRun.selection_json));
+    expect(selection).toMatchObject({
+      marketId: "market-colorado",
+      cellIds: ["cell-us-co-80202"],
+      categories: ["dentist"],
+      source: "promoted_probe",
+      discoveryMode: "lead_harvest",
+      paginationPolicy: "auto_yield_based",
+      testRun: true,
+      promotedFromRunId: "probe-run",
+    });
+    expect(testDb.prepare("SELECT COUNT(*) AS count FROM crawl_units WHERE crawl_run_id = ?").get(newRunId)).toMatchObject({ count: 1 });
+  });
+
+  it("returns a fallback cell ledger result when the coverage read times out", async () => {
+    const timeout = Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" });
+    dbIndexMocks.withDbStatementTimeout.mockRejectedValueOnce(timeout);
+
+    const result = await getCoverageCellLedgerAction("paused-run");
+
+    expect(result).toEqual({ cells: [], loadError: "db_statement_timeout" });
+  });
+
+  it("logs dashboard stats subquery timings", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await getDashboardStatsAction();
+
+    expect(infoSpy).toHaveBeenCalledWith("route_timing", expect.objectContaining({
+      route: "action:getDashboardStatsAction:core_base",
+      status: 200,
+    }));
+    expect(infoSpy).toHaveBeenCalledWith("route_timing", expect.objectContaining({
+      route: "action:getDashboardStatsAction:settings",
+      status: 200,
+    }));
+    expect(infoSpy).not.toHaveBeenCalledWith("route_timing", expect.objectContaining({
+      route: "action:getDashboardStatsAction:monthly_api_usage",
+    }));
+    infoSpy.mockRestore();
+  });
+
+  it("logs dashboard analytics timings separately from core stats", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await getDashboardAnalyticsAction();
+
+    expect(infoSpy).toHaveBeenCalledWith("route_timing", expect.objectContaining({
+      route: "action:getDashboardAnalyticsAction:monthly_api_usage",
+      status: 200,
+    }));
+    expect(infoSpy).toHaveBeenCalledWith("route_timing", expect.objectContaining({
+      route: "action:getDashboardAnalyticsAction:scheduler_health",
+      status: 200,
+    }));
+    infoSpy.mockRestore();
+  });
+});

@@ -28,9 +28,9 @@ export async function updatePasswordAction(formData: FormData) {
   }
 
   const supabase = await createSupabaseServerClient();
-  const { data } = await supabase.auth.getUser();
+  const { data, error: userError } = await supabase.auth.getUser();
 
-  if (!data.user) {
+  if (userError || !data.user) {
     redirect("/forgot-password?error=expired_link");
   }
 
@@ -41,6 +41,8 @@ export async function updatePasswordAction(formData: FormData) {
   if (error) {
     redirect(`/reset-password?error=${encodeURIComponent(error.message)}`);
   }
+
+  await supabase.auth.signOut({ scope: "global" });
 
   redirect("/login?reset=success");
 }

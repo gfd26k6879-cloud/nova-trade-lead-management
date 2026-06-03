@@ -29,6 +29,9 @@ function insertUser(userId: string, email: string, displayName: string) {
     `INSERT INTO app_users (id, user_id, email, display_name, role, status, created_at, updated_at)
      VALUES (?, ?, ?, ?, 'researcher', 'active', '2026-05-15T10:00:00.000Z', '2026-05-15T10:00:00.000Z')`
   ).run(`app-${userId}`, userId, email, displayName);
+  testDb.prepare(
+    "INSERT OR IGNORE INTO user_market_access (user_id, market_id) VALUES (?, 'market-colorado')"
+  ).run(userId);
 }
 
 function insertLead(input: {
@@ -47,12 +50,12 @@ function insertLead(input: {
       id, place_id, name, address, phone, categories, website_status, score, status,
       business_type, qualification_status, quality_bucket, ai_verification_status,
       ai_website_viability_status, ai_queue_status, sales_priority_score, lead_quality_score,
-      assigned_to_user_id, reminder_date, discovered_at, created_at, updated_at
+      assigned_to_user_id, reminder_date, market_id, country_code, location_cell_id, postal_code, discovered_at, created_at, updated_at
     ) VALUES (
       ?, ?, ?, '123 Main St, Denver, CO 80202', '303-555-0100', '["plumber"]', ?, 20, 'new',
       'plumbing', 'qualified', ?, ?,
       ?, 'verified', ?, ?,
-      ?, ?, '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z'
+      ?, ?, 'market-colorado', 'US', 'cell-us-co-80202', '80202', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z'
     )`
   ).run(
     input.id,

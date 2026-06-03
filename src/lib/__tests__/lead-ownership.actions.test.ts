@@ -10,6 +10,7 @@ const queryMocks = vi.hoisted(() => ({
   getLeadById: vi.fn(),
   updateLeadStatus: vi.fn(),
   updateLeadNotes: vi.fn(),
+  updateLeadFacts: vi.fn(),
   updateLeadReminder: vi.fn(),
   createLeadNote: vi.fn(),
   getLeadNotes: vi.fn(),
@@ -17,6 +18,11 @@ const queryMocks = vi.hoisted(() => ({
   claimLeadForUser: vi.fn(),
   setLeadExclusion: vi.fn(),
   clearLeadExclusion: vi.fn(),
+  archiveLead: vi.fn(),
+  restoreArchivedLead: vi.fn(),
+  bulkArchiveLeads: vi.fn(),
+  bulkRestoreArchivedLeads: vi.fn(),
+  createManualLead: vi.fn(),
   updateLeadTimestamp: vi.fn(),
   createOutreachEvent: vi.fn(),
   getOutreachEvents: vi.fn(),
@@ -31,6 +37,7 @@ const queryMocks = vi.hoisted(() => ({
   getAiVerificationCandidates: vi.fn(),
   getQualityAiVerificationCandidates: vi.fn(),
   getAiWebsiteViabilityRepairLeads: vi.fn(),
+  applyManualWebsiteCorrection: vi.fn(),
   applyAiFoundWebsite: vi.fn(),
   markLeadBrokenSiteOpportunity: vi.fn(),
   markLeadManualReview: vi.fn(),
@@ -43,13 +50,14 @@ const queryMocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
   refreshStaleUnits: vi.fn(),
   updateCrawlRunStatus: vi.fn(),
+  userCanAccessMarket: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requirePermission: authMocks.requirePermission }));
 vi.mock("@/lib/db/queries", () => queryMocks);
 
-import { logOutreachEventAction, updateLeadStatusAction } from "@/lib/leads/actions";
+import { archiveLeadAction, createManualLeadAction, logOutreachEventAction, restoreArchivedLeadAction, updateLeadStatusAction } from "@/lib/leads/actions";
 
 const baseLead = {
   id: "lead-1",
@@ -62,6 +70,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   queryMocks.ensureDbReady.mockResolvedValue(undefined);
   queryMocks.createAuditLog.mockResolvedValue(undefined);
+  queryMocks.userCanAccessMarket.mockResolvedValue(true);
 });
 
 describe("lead ownership server actions", () => {
@@ -98,5 +107,56 @@ describe("lead ownership server actions", () => {
 
     expect(result).toEqual({ error: "Taken by two@example.com." });
     expect(queryMocks.createOutreachEvent).not.toHaveBeenCalled();
+  });
+
+  it("archives leads with an audit event", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    queryMocks.getLeadById.mockResolvedValue(baseLead);
+    queryMocks.archiveLead.mockResolvedValue(1);
+
+    const result = await archiveLeadAction("lead-1", "duplicate candidate");
+
+    expect(result).toEqual({ success: true });
+    expect(queryMocks.archiveLead).toHaveBeenCalledWith("lead-1", "admin-1", "duplicate candidate");
+    expect(queryMocks.createAuditLog).toHaveBeenCalledWith("lead_archived", "lead", "lead-1", { reason: "duplicate candidate" });
+  });
+
+  it("restores archived leads with an audit event", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    queryMocks.getLeadById.mockResolvedValue({ ...baseLead, archived_at: "2026-06-02T20:17:00.000Z" });
+    queryMocks.restoreArchivedLead.mockResolvedValue(1);
+
+    const result = await restoreArchivedLeadAction("lead-1");
+
+    expect(result).toEqual({ success: true });
+    expect(queryMocks.restoreArchivedLead).toHaveBeenCalledWith("lead-1");
+    expect(queryMocks.createAuditLog).toHaveBeenCalledWith("lead_restored", "lead", "lead-1", {});
+  });
+
+  it("creates manual leads through the admin action", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    queryMocks.createManualLead.mockResolvedValue({ id: "lead-manual", name: "Manual Candidate" });
+
+    const result = await createManualLeadAction({
+      name: "Manual Candidate",
+      businessType: "local_services",
+      phone: "303-555-0100",
+      websiteStatus: "none",
+    });
+
+    expect(result).toMatchObject({ success: true, lead: { id: "lead-manual" } });
+    expect(queryMocks.createManualLead).toHaveBeenCalledWith({
+      name: "Manual Candidate",
+      businessType: "local_services",
+      phone: "303-555-0100",
+      address: null,
+      websiteStatus: "none",
+      notes: null,
+    });
+    expect(queryMocks.createAuditLog).toHaveBeenCalledWith("manual_lead_created", "lead", "lead-manual", {
+      businessType: "local_services",
+      websiteStatus: "none",
+      actorUserId: "admin-1",
+    });
   });
 });

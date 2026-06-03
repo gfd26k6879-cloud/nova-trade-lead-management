@@ -1,15 +1,28 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { requirePermission } from "@/lib/auth";
-import { ensureDbReady, getTeamBoardSummary } from "@/lib/db/queries";
+import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
+import { ensureDbReady, getTeamBoardSummary, type TeamBoardSummary } from "@/lib/db/queries";
 import { PageShell } from "@/components/page-shell";
+import { startRouteTiming } from "@/lib/route-timing";
 
 export const metadata: Metadata = { title: "Team Board | NoSite Leads" };
 
 export default async function TeamBoardPage() {
+  const logRouteTiming = startRouteTiming("/team");
   await requirePermission("view:workspace");
-  await ensureDbReady();
-  const summary = await getTeamBoardSummary();
+  let summary: TeamBoardSummary;
+  try {
+    summary = await withDbStatementTimeout(10_000, async () => {
+      await ensureDbReady();
+      return getTeamBoardSummary();
+    });
+    logRouteTiming(200);
+  } catch (error) {
+    const reason = routeFailureReason(error);
+    logRouteTiming(503, { reason });
+    return <TeamUnavailable reason={reason} />;
+  }
   const contacts7d = summary.members.reduce((sum, member) => sum + member.contacts_7d, 0);
   const claimed = summary.members.reduce((sum, member) => sum + member.claimed_active, 0);
   const fulfillmentOpen = summary.members.reduce((sum, member) => sum + member.fulfillment_open, 0);
@@ -93,7 +106,7 @@ export default async function TeamBoardPage() {
               style={{ background: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.5)" }}
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <Link className="link-accent font-medium" href={`/leads/${activity.lead_id}`}>
+                <Link className="link-accent font-medium" href={`/leads/${activity.lead_id}`} prefetch={false}>
                   {activity.lead_name ?? "Unknown lead"}
                 </Link>
                 <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
@@ -108,6 +121,40 @@ export default async function TeamBoardPage() {
               )}
             </article>
           ))}
+        </div>
+      </section>
+    </PageShell>
+  );
+}
+
+function routeFailureReason(error: unknown): string {
+  if (isDbStatementTimeoutError(error)) return "db_statement_timeout";
+  if (isTransientDbError(error)) return "transient_db_error";
+  return "team_load_error";
+}
+
+function TeamUnavailable({ reason }: { reason: string }) {
+  return (
+    <PageShell
+      title="Team Board"
+      description="See ownership, follow-ups, and recent outreach across the team."
+      stats={[
+        { label: "Claimed Active", value: "0" },
+        { label: "Unclaimed Ready", value: "0" },
+        { label: "Overdue Follow-ups", value: "0" },
+        { label: "Contacts 7 Days", value: "0" },
+        { label: "Steve Queue", value: "0" },
+      ]}
+    >
+      <section className="glass rounded-2xl p-6">
+        <p className="section-label">Team board is taking too long to load.</p>
+        <p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>
+          Team workload data is temporarily unavailable, but the rest of the workspace can still be used.
+        </p>
+        <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>Diagnostic: {reason}</p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Link href="/team" className="btn-primary text-sm">Retry Team Board</Link>
+          <Link href="/dashboard" className="btn-glass text-sm">Open Dashboard</Link>
         </div>
       </section>
     </PageShell>

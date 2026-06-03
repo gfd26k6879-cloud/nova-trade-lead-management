@@ -1,50 +1,31 @@
 import type { Metadata } from "next";
 import { requirePermission } from "@/lib/auth";
-import {
-  ensureDbReady,
-  getActiveCrawlRun,
-  getCoverageByZip,
-  getCoverageByCounty,
-  getCoverageByState,
-  getCrawlProgress,
-  getCrawlUnitPreview,
-  getLatestCrawlRun,
-  getRunGeographyProgress,
-} from "@/lib/db/queries";
+import { startRouteTiming } from "@/lib/route-timing";
 import { CoverageClient } from "./coverage-client";
 
-export const metadata: Metadata = { title: "Discovery Monitor | NoSite Leads" };
+export const metadata: Metadata = { title: "Coverage | NoSite Leads" };
 
-export default async function CoveragePage() {
+type CoverageSearchParams = { run?: string | string[] };
+
+export default async function CoveragePage({ searchParams }: { searchParams?: CoverageSearchParams | Promise<CoverageSearchParams> }) {
+  const logRouteTiming = startRouteTiming("/coverage");
   await requirePermission("crawl:manage");
-  await ensureDbReady();
-  const run = (await getActiveCrawlRun()) ?? (await getLatestCrawlRun());
-  const coverage = run ? await getCoverageByZip(run.id) : [];
-  const countyCoverage = run ? await getCoverageByCounty(run.id) : [];
-  const stateCoverage = run ? await getCoverageByState(run.id) : [];
-  const progress = run ? await getCrawlProgress(run.id) : null;
-  const unitPreview = run ? await getCrawlUnitPreview(run.id, 80) : [];
-  const geography = run ? await getRunGeographyProgress(run.id) : null;
+  const params = await Promise.resolve(searchParams ?? {});
+  const selectedRunId = Array.isArray(params.run) ? params.run[0] : params.run ?? null;
+  logRouteTiming(200, { mode: "fast_shell" });
 
   return (
     <CoverageClient
-      coverage={coverage}
-      countyCoverage={countyCoverage}
-      stateCoverage={stateCoverage}
-      run={run ? {
-        id: run.id,
-        status: run.status,
-        started_at: run.started_at,
-        created_at: run.created_at,
-        ended_at: run.ended_at,
-        categories: run.categories,
-        discovered_count: run.discovered_count,
-        api_calls_used: run.api_calls_used,
-        last_error: run.last_error,
-      } : null}
-      progress={progress}
-      geography={geography}
-      unitPreview={unitPreview}
+      key={selectedRunId ?? "default"}
+      selectedRunId={selectedRunId}
+      markets={[]}
+      cells={[]}
+      discoveryItems={[]}
+      loadWarnings={[]}
+      run={null}
+      progress={null}
+      geography={null}
+      unitPreview={[]}
     />
   );
 }

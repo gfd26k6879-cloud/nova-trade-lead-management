@@ -3,10 +3,13 @@
 import { redirect } from "next/navigation";
 
 import { isAuthConfigured } from "@/lib/auth";
+import { startRouteTiming } from "@/lib/route-timing";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export async function loginAction(formData: FormData) {
+  const logRouteTiming = startRouteTiming("/login");
   if (!(await isAuthConfigured())) {
+    logRouteTiming(500, { reason: "missing_auth_config" });
     redirect("/login?error=missing_config");
   }
 
@@ -14,6 +17,7 @@ export async function loginAction(formData: FormData) {
   const password = formData.get("password");
 
   if (typeof email !== "string" || typeof password !== "string") {
+    logRouteTiming(400, { reason: "invalid_form" });
     redirect("/login?error=invalid_credentials");
   }
 
@@ -24,9 +28,11 @@ export async function loginAction(formData: FormData) {
   });
 
   if (error) {
+    logRouteTiming(401, { reason: "invalid_credentials" });
     redirect("/login?error=invalid_credentials");
   }
 
+  logRouteTiming(307, { result: "success" });
   redirect("/queue");
 }
 

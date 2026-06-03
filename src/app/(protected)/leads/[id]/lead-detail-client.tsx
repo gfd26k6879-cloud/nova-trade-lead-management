@@ -3,18 +3,23 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
 import { createAdminRequestAction } from "@/lib/admin-requests/actions";
 import { getScoreBandStyle, resolveScoreBand, type ScoreBandThresholds } from "@/lib/score-bands";
 import { getBusinessTypeLabel } from "@/lib/business-types";
+import { getAiVerificationDisplay } from "@/lib/ai-verification-display";
 import {
   updateLeadStatusAction,
   updateLeadNotesAction,
   updateLeadReminderAction,
   excludeLeadAction,
   restoreExcludedLeadAction,
+  archiveLeadAction,
+  restoreArchivedLeadAction,
   logOutreachEventAction,
+  manualWebsiteCorrectionAction,
   markLeadRepliedAction,
   markMeetingBookedAction,
   generateOutreachPackageAction,
@@ -24,8 +29,10 @@ import {
   applyAiRecommendationAction,
   repairLeadAiWebsiteViabilityAction,
   addLeadNoteAction,
+  saveLeadWorkUpdateAction,
   claimLeadAction,
   unclaimLeadAction,
+  updateLeadFactsAction,
   markLeadQualityBucketAction,
   updateLeadPhoneVerificationStatusAction,
   queueLeadAiArtifactAction,
@@ -57,6 +64,9 @@ interface Lead {
   is_excluded: boolean;
   exclusion_reason: string | null;
   excluded_at: string | null;
+  archived_at: string | null;
+  archived_by_user_id: string | null;
+  archive_reason: string | null;
   selling_niche: string | null;
   business_type: string;
   win_probability_score: number;
@@ -222,6 +232,22 @@ const STATUS_OPTIONS = ["new", "verified", "contacted", "preview_sent", "meeting
 const CHANNEL_OPTIONS = ["call", "text", "email", "walkin", "other"];
 const OUTCOME_OPTIONS = ["not_reached", "left_voicemail", "contacted", "decision_maker_reached", "demo_sent", "meeting_set", "follow_up_needed", "not_interested", "quoted", "closed_won", "closed_lost"];
 type AiApplyAction = "update_website" | "exclude_has_website" | "mark_broken_site_opportunity" | "mark_manual_review";
+type WebsiteCorrectionResolution = "official_website_found" | "weak_or_basic_site" | "social_or_directory_only" | "remove_website";
+type WorkUpdateAction = "research_note" | "called" | "left_voicemail" | "follow_up" | "not_interested" | "done";
+const WEBSITE_CORRECTION_OPTIONS: Array<{ value: WebsiteCorrectionResolution; label: string; help: string }> = [
+  { value: "official_website_found", label: "Official website found", help: "Remove from no-site sales queues but keep the directory record." },
+  { value: "weak_or_basic_site", label: "Weak/basic site", help: "Keep as a website-improvement opportunity." },
+  { value: "social_or_directory_only", label: "Social/directory only", help: "Keep as a no-site style opportunity with evidence attached." },
+  { value: "remove_website", label: "Remove website", help: "Clear an incorrect website URL from the record." },
+];
+const WORK_UPDATE_OPTIONS: Array<{ value: WorkUpdateAction; label: string }> = [
+  { value: "research_note", label: "Research note" },
+  { value: "called", label: "Called" },
+  { value: "left_voicemail", label: "Left voicemail" },
+  { value: "follow_up", label: "Follow up" },
+  { value: "not_interested", label: "Not interested" },
+  { value: "done", label: "Done" },
+];
 
 const channelBadgeStyle = (ch: string): React.CSSProperties => {
   const colors: Record<string, { bg: string; color: string }> = {
@@ -282,6 +308,11 @@ export function LeadDetailClient({
   const [excludedAt, setExcludedAt] = useState(lead.excluded_at);
   const [exclusionReason, setExclusionReason] = useState(lead.exclusion_reason ?? "");
   const [exclusionLoading, setExclusionLoading] = useState(false);
+  const [archivedAt, setArchivedAt] = useState(lead.archived_at);
+  const [archiveReason, setArchiveReason] = useState(lead.archive_reason ?? "");
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const [pendingArchiveReason, setPendingArchiveReason] = useState("");
   const [events, setEvents] = useState(initialEvents);
   const [adminRequests, setAdminRequests] = useState(initialAdminRequests);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
@@ -304,6 +335,24 @@ export function LeadDetailClient({
   const [aiFalsePositiveReason, setAiFalsePositiveReason] = useState(lead.ai_false_positive_reason ?? "");
   const [aiReviewerNotes, setAiReviewerNotes] = useState(lead.ai_reviewer_notes ?? "");
   const [aiFeedbackLoading, setAiFeedbackLoading] = useState(false);
+  const [websiteCorrectionUrl, setWebsiteCorrectionUrl] = useState(lead.ai_corrected_website_url ?? lead.website_uri ?? "");
+  const [websiteCorrectionResolution, setWebsiteCorrectionResolution] = useState<WebsiteCorrectionResolution>("official_website_found");
+  const [websiteCorrectionNotes, setWebsiteCorrectionNotes] = useState("");
+  const [websiteCorrectionLoading, setWebsiteCorrectionLoading] = useState(false);
+  const [factName, setFactName] = useState(lead.name ?? "");
+  const [factPhone, setFactPhone] = useState(lead.phone ?? "");
+  const [factAddress, setFactAddress] = useState(lead.address ?? "");
+  const [factWebsiteUrl, setFactWebsiteUrl] = useState(lead.website_uri ?? "");
+  const [factBusinessType, setFactBusinessType] = useState(lead.business_type ?? "");
+  const [factPrimaryType, setFactPrimaryType] = useState(lead.primary_type ?? "");
+  const [factStatus, setFactStatus] = useState(lead.status);
+  const [factNotes, setFactNotes] = useState(lead.notes ?? "");
+  const [factsLoading, setFactsLoading] = useState(false);
+  const [workAction, setWorkAction] = useState<WorkUpdateAction>("research_note");
+  const [workNote, setWorkNote] = useState("");
+  const [workFollowUpAt, setWorkFollowUpAt] = useState("");
+  const [workNextStep, setWorkNextStep] = useState("");
+  const [workLoading, setWorkLoading] = useState(false);
 
   // Log event form
   const [eventChannel, setEventChannel] = useState("call");
@@ -334,6 +383,118 @@ export function LeadDetailClient({
   const flash = (msg: string) => {
     setSaveMsg(msg);
     setTimeout(() => setSaveMsg(null), 2500);
+  };
+
+  const handleManualWebsiteCorrection = async () => {
+    if (!canEditLead) {
+      flash(isClaimedByOther ? "Taken by another researcher." : "Claim this lead before updating it.");
+      return;
+    }
+    setWebsiteCorrectionLoading(true);
+    try {
+      const result = await manualWebsiteCorrectionAction(lead.id, {
+        websiteUrl: websiteCorrectionUrl,
+        resolution: websiteCorrectionResolution,
+        notes: websiteCorrectionNotes,
+      }) as { error?: string; lead?: Lead };
+      if (result?.error) {
+        flash(result.error);
+        return;
+      }
+      if (result?.lead) {
+        setFactWebsiteUrl(result.lead.website_uri ?? "");
+        setWebsiteCorrectionUrl(result.lead.website_uri ?? "");
+        setAiFeedbackStatus(result.lead.ai_website_feedback_status ?? "uncertain");
+        setAiCorrectedWebsiteUrl(result.lead.ai_corrected_website_url ?? "");
+        setAiFalsePositiveReason(result.lead.ai_false_positive_reason ?? "");
+        setQualityBucket(result.lead.quality_bucket);
+        setIsExcluded(result.lead.is_excluded);
+        setExcludedAt(result.lead.excluded_at);
+        setExclusionReason(result.lead.exclusion_reason ?? "");
+      }
+      setWebsiteCorrectionNotes("");
+      flash("Website correction saved.");
+      router.refresh();
+    } finally {
+      setWebsiteCorrectionLoading(false);
+    }
+  };
+
+  const handleSaveLeadFacts = async () => {
+    if (!canEditLead) {
+      flash(isClaimedByOther ? "Taken by another researcher." : "Claim this lead before editing facts.");
+      return;
+    }
+    setFactsLoading(true);
+    try {
+      const result = await updateLeadFactsAction(lead.id, {
+        name: factName,
+        phone: factPhone,
+        address: factAddress,
+        websiteUrl: factWebsiteUrl,
+        businessType: factBusinessType,
+        primaryType: factPrimaryType,
+        status: factStatus,
+        notes: factNotes,
+      }) as { error?: string; lead?: Lead };
+      if (result?.error) {
+        flash(result.error);
+        return;
+      }
+      if (result?.lead) {
+        setFactName(result.lead.name ?? "");
+        setFactPhone(result.lead.phone ?? "");
+        setFactAddress(result.lead.address ?? "");
+        setFactBusinessType(result.lead.business_type ?? "");
+        setFactPrimaryType(result.lead.primary_type ?? "");
+        setStatus(result.lead.status);
+        setNotes(result.lead.notes ?? "");
+        setFactStatus(result.lead.status);
+        setFactNotes(result.lead.notes ?? "");
+        setFactWebsiteUrl(result.lead.website_uri ?? "");
+        setWebsiteCorrectionUrl(result.lead.website_uri ?? websiteCorrectionUrl);
+        setQualityBucket(result.lead.quality_bucket);
+      }
+      flash("Lead facts saved.");
+      router.refresh();
+    } finally {
+      setFactsLoading(false);
+    }
+  };
+
+  const handleSaveWorkUpdate = async () => {
+    if (!canEditLead) {
+      flash(isClaimedByOther ? "Taken by another researcher." : "Claim this lead before adding a work update.");
+      return;
+    }
+    setWorkLoading(true);
+    try {
+      const result = await saveLeadWorkUpdateAction(lead.id, {
+        action: workAction,
+        note: workNote,
+        followUpAt: workFollowUpAt,
+        nextStep: workNextStep,
+      }) as { error?: string; success?: boolean };
+      if (result?.error) {
+        flash(result.error);
+        return;
+      }
+      if (workFollowUpAt) {
+        setReminder(workFollowUpAt);
+      }
+      if (workAction === "done") {
+        setStatus("verified");
+        setFactStatus("verified");
+        setReminder("");
+      }
+      setWorkNote("");
+      setWorkFollowUpAt("");
+      setWorkNextStep("");
+      flash("Work update saved.");
+      router.refresh();
+    } finally {
+      setWorkLoading(false);
+    }
   };
 
   const handleStatusChange = async (s: string) => {
@@ -415,6 +576,79 @@ export function LeadDetailClient({
       flash("Unable to restore lead");
     } finally {
       setExclusionLoading(false);
+    }
+  };
+
+  const handleArchiveLead = async () => {
+    if (!isAdmin) {
+      flash("Only admins can archive leads");
+      return;
+    }
+    const trimmedReason = archiveReason.trim();
+    if (trimmedReason.length < 5) {
+      flash("Archive reason must be at least 5 characters");
+      return;
+    }
+    setPendingArchiveReason(trimmedReason);
+    setArchiveConfirmOpen(true);
+  };
+
+  const confirmArchiveLead = async () => {
+    if (!isAdmin) {
+      flash("Only admins can archive leads");
+      return;
+    }
+    if (archivedAt) {
+      setArchiveConfirmOpen(false);
+      return;
+    }
+    const trimmedReason = pendingArchiveReason.trim();
+    if (trimmedReason.length < 5) {
+      flash("Archive reason must be at least 5 characters");
+      return;
+    }
+    setArchiveLoading(true);
+    try {
+      const result = await archiveLeadAction(lead.id, trimmedReason);
+      if ("error" in result) {
+        flash(result.error ?? "Unable to archive lead");
+        return;
+      }
+      setArchivedAt(new Date().toISOString());
+      setArchiveReason(trimmedReason);
+      setPendingArchiveReason("");
+      setArchiveConfirmOpen(false);
+      router.refresh();
+      flash("Lead archived");
+    } catch {
+      flash("Unable to archive lead");
+    } finally {
+      setArchiveLoading(false);
+    }
+  };
+
+  const handleRestoreArchivedLead = async () => {
+    if (!isAdmin) {
+      flash("Only admins can restore archived leads");
+      return;
+    }
+    setArchiveLoading(true);
+    try {
+      const result = await restoreArchivedLeadAction(lead.id);
+      if ("error" in result) {
+        flash(result.error ?? "Unable to restore lead");
+        return;
+      }
+      setArchivedAt(null);
+      setArchiveReason("");
+      setPendingArchiveReason("");
+      setArchiveConfirmOpen(false);
+      router.refresh();
+      flash("Lead restored to active inventory");
+    } catch {
+      flash("Unable to restore lead");
+    } finally {
+      setArchiveLoading(false);
     }
   };
 
@@ -698,7 +932,7 @@ export function LeadDetailClient({
       return;
     }
     setAssignedToUserId(assignedToUserId === currentUser.userId ? null : currentUser.userId);
-    flash(assignedToUserId === currentUser.userId ? "Lead unclaimed" : "Lead claimed");
+    flash(assignedToUserId === currentUser.userId ? "Lead ownership released" : "Lead claimed");
   };
 
   const handlePhoneVerificationStatus = async (nextStatus: string) => {
@@ -736,10 +970,18 @@ export function LeadDetailClient({
   };
 
   const foundAiWebsite = aiVerification?.found_website_url ?? lead.ai_found_website_url;
+  const currentAiStatus = aiVerification?.status ?? lead.ai_verification_status;
+  const currentAiCheckedAt = aiVerification?.created_at ?? lead.ai_checked_at;
   const currentViability = aiVerification?.website_viability_status ?? lead.ai_website_viability_status;
   const currentHealth = aiVerification?.website_health_json ?? lead.ai_website_health;
   const currentViabilityReason = aiVerification?.website_viability_reason;
-  const hasUsableAiWebsite = (aiVerification?.status ?? lead.ai_verification_status) === "site_found" && currentViability === "usable";
+  const aiStatusDisplay = getAiVerificationDisplay({
+    status: currentAiStatus,
+    checkedAt: currentAiCheckedAt,
+    queueStatus: lead.ai_queue_status,
+    viability: currentViability,
+  });
+  const hasUsableAiWebsite = currentAiStatus === "site_found" && currentViability === "usable";
   const hasBrokenSiteOpportunity = currentViability === "broken" || currentViability === "parked" || currentViability === "placeholder";
   const assignedLabel = assignedToUserId === currentUser.userId
     ? "Assigned to you"
@@ -778,6 +1020,7 @@ export function LeadDetailClient({
         { label: "Website", value: lead.website_status },
         { label: "Quality", value: `${Math.round(lead.lead_quality_score)}%` },
         { label: "Win Prob.", value: `${Math.round(lead.win_probability_score)}%` },
+        { label: "AI", value: aiStatusDisplay.label },
         { label: "Qualification", value: lead.qualification_status.replace(/_/g, " ") },
       ]}
     >
@@ -792,8 +1035,17 @@ export function LeadDetailClient({
             {currentUser.role}
           </span>
           <button type="button" className="btn-glass text-xs" onClick={handleClaimToggle}>
-            {assignedToUserId === currentUser.userId ? "Unclaim" : assignedLabel === "Unassigned" ? "Claim" : assignedLabel}
+            {assignedToUserId === currentUser.userId ? "Unclaim lead" : assignedLabel === "Unassigned" ? "Claim" : assignedLabel}
           </button>
+          {archivedAt && (
+            <span
+              className="rounded-md border px-2 py-0.5 text-xs font-semibold"
+              style={{ background: "rgba(15,23,42,0.1)", borderColor: "rgba(15,23,42,0.2)", color: "#0f172a" }}
+              title={archiveReason || "Archived from active inventory"}
+            >
+              Archived
+            </span>
+          )}
           {isExcluded && (
             <span
               className="rounded-md border px-2 py-0.5 text-xs font-semibold"
@@ -836,7 +1088,7 @@ export function LeadDetailClient({
               <button type="button" className="btn-primary text-sm" onClick={handleClaimToggle}>Claim</button>
             )}
             {isClaimedByCurrentUser && (
-              <button type="button" className="btn-glass text-sm" onClick={handleClaimToggle}>Release lead</button>
+              <button type="button" className="btn-glass text-sm" onClick={handleClaimToggle}>Release ownership</button>
             )}
             {lead.phone && <a className="btn-primary text-sm" href={`tel:${lead.phone.replace(/[^\d+]/g, "")}`}>Call</a>}
             {lead.phone && <a className="btn-glass text-sm" href={`sms:${lead.phone.replace(/[^\d+]/g, "")}`}>Text</a>}
@@ -881,7 +1133,8 @@ export function LeadDetailClient({
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <CallSheetField label="Website finding" value={websiteFinding} />
-          <CallSheetField label="Confidence" value={`${Math.round((aiVerification?.confidence ?? lead.ai_confidence) * 100)}%`} />
+          <CallSheetField label="AI verification" value={aiStatusDisplay.label} />
+          <CallSheetField label="Confidence" value={aiStatusDisplay.hasRun ? `${Math.round((aiVerification?.confidence ?? lead.ai_confidence) * 100)}%` : "Not run"} />
           <CallSheetField label="Phone" value={`${lead.phone ?? "No phone"} (${formatLabel(phoneVerificationStatus)})`} />
           <CallSheetField label="Offer" value={formatLabel(lead.recommended_offer)} />
           <CallSheetField label="Pitch angle" value={lead.quality_reason ?? "Use the verified website gap and local review volume."} />
@@ -987,6 +1240,176 @@ export function LeadDetailClient({
           </div>
         </article>
 
+        {/* Operator workflow */}
+        <article className="glass rounded-2xl p-6 lg:col-span-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="section-label">Operator Workflow</h3>
+              <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+                Correct lead facts, fix website status, and log the next work step without using the advanced AI/outreach panels.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {(factWebsiteUrl || lead.website_uri) && (
+                <a className="btn-glass text-xs" href={factWebsiteUrl || lead.website_uri || "#"} target="_blank" rel="noopener noreferrer">Open website</a>
+              )}
+              {lead.maps_uri && (
+                <a className="btn-glass text-xs" href={lead.maps_uri} target="_blank" rel="noopener noreferrer">Open Maps</a>
+              )}
+              {!isClaimedByOther && (
+                <button type="button" className="btn-glass text-xs" onClick={handleClaimToggle}>
+                  {isClaimedByCurrentUser ? "Release ownership" : "Claim / assign to me"}
+                </button>
+              )}
+              {!canEditLead && (
+                <span className="rounded-full px-3 py-2 text-xs font-semibold" style={{ background: "rgba(245,158,11,0.14)", color: "#b45309" }}>
+                  {isClaimedByOther ? "Taken by another researcher" : "Claim this lead to edit"}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-3">
+            <section className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.52)" }}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Website correction</h4>
+                  <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                    Paste the website once and choose how it should affect the no-site workflow.
+                  </p>
+                </div>
+                {factWebsiteUrl || lead.website_uri ? (
+                  <a className="btn-glass text-xs" href={factWebsiteUrl || lead.website_uri || "#"} target="_blank" rel="noopener noreferrer">Open website</a>
+                ) : (
+                  <span className="rounded-lg px-2 py-1 text-xs" style={{ background: "rgba(239,68,68,0.1)", color: "#dc2626" }}>No website</span>
+                )}
+              </div>
+              <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                Website URL
+                <input
+                  className="glass-input mt-2 w-full"
+                  value={websiteCorrectionUrl}
+                  onChange={(e) => setWebsiteCorrectionUrl(e.target.value)}
+                  placeholder="https://business.com"
+                  disabled={!canEditLead || websiteCorrectionLoading}
+                />
+              </label>
+              <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                Correction type
+                <select
+                  className="glass-select mt-2 w-full"
+                  value={websiteCorrectionResolution}
+                  onChange={(e) => setWebsiteCorrectionResolution(e.target.value as WebsiteCorrectionResolution)}
+                  disabled={!canEditLead || websiteCorrectionLoading}
+                >
+                  {WEBSITE_CORRECTION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                {WEBSITE_CORRECTION_OPTIONS.find((option) => option.value === websiteCorrectionResolution)?.help}
+              </p>
+              <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                Notes
+                <textarea
+                  className="glass-input mt-2 min-h-[84px] w-full"
+                  value={websiteCorrectionNotes}
+                  onChange={(e) => setWebsiteCorrectionNotes(e.target.value)}
+                  placeholder="Where did you find it? Any caveats?"
+                  disabled={!canEditLead || websiteCorrectionLoading}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn-primary mt-4 w-full"
+                onClick={handleManualWebsiteCorrection}
+                disabled={!canEditLead || websiteCorrectionLoading || (websiteCorrectionResolution !== "remove_website" && !websiteCorrectionUrl.trim())}
+              >
+                {websiteCorrectionLoading ? "Saving..." : "Save website correction"}
+              </button>
+            </section>
+
+            <section className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.52)" }}>
+              <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Edit business info</h4>
+              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                Human-owned facts are editable. Scores and AI fields update through correction actions.
+              </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                  Business name
+                  <input className="glass-input mt-2 w-full" value={factName} onChange={(e) => setFactName(e.target.value)} disabled={!canEditLead || factsLoading} />
+                </label>
+                <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                  Phone
+                  <input className="glass-input mt-2 w-full" value={factPhone} onChange={(e) => setFactPhone(e.target.value)} disabled={!canEditLead || factsLoading} />
+                </label>
+                <label className="text-xs font-semibold uppercase tracking-[0.16em] sm:col-span-2 xl:col-span-1" style={{ color: "var(--text-tertiary)" }}>
+                  Address
+                  <input className="glass-input mt-2 w-full" value={factAddress} onChange={(e) => setFactAddress(e.target.value)} disabled={!canEditLead || factsLoading} />
+                </label>
+                <label className="text-xs font-semibold uppercase tracking-[0.16em] sm:col-span-2 xl:col-span-1" style={{ color: "var(--text-tertiary)" }}>
+                  Website
+                  <input className="glass-input mt-2 w-full" value={factWebsiteUrl} onChange={(e) => setFactWebsiteUrl(e.target.value)} placeholder="https://..." disabled={!canEditLead || factsLoading} />
+                </label>
+                <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                  Business type
+                  <input className="glass-input mt-2 w-full" value={factBusinessType} onChange={(e) => setFactBusinessType(e.target.value)} disabled={!canEditLead || factsLoading} />
+                </label>
+                <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                  Primary category
+                  <input className="glass-input mt-2 w-full" value={factPrimaryType} onChange={(e) => setFactPrimaryType(e.target.value)} disabled={!canEditLead || factsLoading} />
+                </label>
+                <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                  Status
+                  <select className="glass-select mt-2 w-full" value={factStatus} onChange={(e) => setFactStatus(e.target.value)} disabled={!canEditLead || factsLoading}>
+                    {STATUS_OPTIONS.filter((s) => isAdmin || (s !== "closed_won" && s !== "closed_lost")).map((s) => (
+                      <option key={s} value={s}>{formatLabel(s)}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs font-semibold uppercase tracking-[0.16em] sm:col-span-2 xl:col-span-1" style={{ color: "var(--text-tertiary)" }}>
+                  Internal notes
+                  <textarea className="glass-input mt-2 min-h-[84px] w-full" value={factNotes} onChange={(e) => setFactNotes(e.target.value)} disabled={!canEditLead || factsLoading} />
+                </label>
+              </div>
+              <button type="button" className="btn-primary mt-4 w-full" onClick={handleSaveLeadFacts} disabled={!canEditLead || factsLoading || !factName.trim()}>
+                {factsLoading ? "Saving..." : "Save business info"}
+              </button>
+            </section>
+
+            <section className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.52)" }}>
+              <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Work update</h4>
+              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                One composer for notes, calls, follow-ups, and simple workflow state.
+              </p>
+              <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                Action
+                <select className="glass-select mt-2 w-full" value={workAction} onChange={(e) => setWorkAction(e.target.value as WorkUpdateAction)} disabled={!canEditLead || workLoading}>
+                  {WORK_UPDATE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                Note
+                <textarea className="glass-input mt-2 min-h-[112px] w-full" value={workNote} onChange={(e) => setWorkNote(e.target.value)} placeholder="What changed? What should the next person know?" disabled={!canEditLead || workLoading} />
+              </label>
+              <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                Follow-up date
+                <input className="glass-input mt-2 w-full" type="date" value={workFollowUpAt} onChange={(e) => setWorkFollowUpAt(e.target.value)} disabled={!canEditLead || workLoading} />
+              </label>
+              <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                Next step
+                <input className="glass-input mt-2 w-full" value={workNextStep} onChange={(e) => setWorkNextStep(e.target.value)} placeholder="Call owner, verify website, send preview..." disabled={!canEditLead || workLoading} />
+              </label>
+              <button type="button" className="btn-primary mt-4 w-full" onClick={handleSaveWorkUpdate} disabled={!canEditLead || workLoading || (!workNote.trim() && !workFollowUpAt && !workNextStep && workAction === "research_note")}>
+                {workLoading ? "Saving..." : "Save work update"}
+              </button>
+            </section>
+          </div>
+        </article>
+
         {/* AI verification */}
         <article className="glass rounded-2xl p-6 lg:col-span-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1012,12 +1435,16 @@ export function LeadDetailClient({
           <div className="mt-4 grid gap-4 lg:grid-cols-4">
             <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
               <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Status</span>
-              <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-                {aiVerification?.status?.replace(/_/g, " ") ?? lead.ai_verification_status.replace(/_/g, " ")}
-              </p>
-              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                Confidence: {Math.round((aiVerification?.confidence ?? lead.ai_confidence) * 100)}%
-              </p>
+              <div className="mt-1">
+                <AiVerificationBadge
+                  status={currentAiStatus}
+                  checkedAt={currentAiCheckedAt}
+                  queueStatus={lead.ai_queue_status}
+                  viability={currentViability}
+                  confidence={aiVerification?.confidence ?? lead.ai_confidence}
+                  showDetail
+                />
+              </div>
             </div>
             <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
               <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Found Website</span>
@@ -1124,9 +1551,9 @@ export function LeadDetailClient({
           <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.42)" }}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h4 className="section-label">AI Accuracy Feedback</h4>
+                <h4 className="section-label">Advanced AI Accuracy Feedback</h4>
                 <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                  Mark wrong website findings here so scoring and manual review stay honest.
+                  Use this for AI metadata only. Use Website correction above when the actual lead website should change.
                 </p>
               </div>
               {lead.ai_feedback_at && (
@@ -1331,6 +1758,57 @@ export function LeadDetailClient({
                 {exclusionReason && <span className="ml-2">Reason: {exclusionReason}</span>}
               </div>
             )}
+            <div className="mt-5 border-t pt-4" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
+              <div className="flex items-center justify-between">
+                <h3 className="section-label">Lead Archive</h3>
+                {archivedAt && (
+                  <span className="text-xs font-medium" style={{ color: "#0f172a" }}>
+                    Archived
+                  </span>
+                )}
+              </div>
+              <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                Archive removes this lead from active inventory without deleting notes, outreach history, demos, or AI artifacts.
+              </p>
+              <label htmlFor="archive-reason" className="section-label mt-3 block">Archive reason</label>
+              <textarea
+                id="archive-reason"
+                name="archiveReason"
+                aria-describedby="archive-reason-help"
+                className="glass-input mt-2 w-full text-xs"
+                rows={3}
+                placeholder="Reason for archiving (for example: duplicate, bad data, not useful for current campaign)"
+                value={archiveReason}
+                onChange={(e) => setArchiveReason(e.target.value)}
+              />
+              <p id="archive-reason-help" className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                Enter at least 5 characters to enable Archive Lead.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-glass text-xs"
+                  disabled={archiveLoading || Boolean(archivedAt) || archiveReason.trim().length < 5}
+                  onClick={handleArchiveLead}
+                >
+                  {archiveLoading && !archivedAt ? "Archiving..." : "Archive active lead"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-glass text-xs"
+                  disabled={archiveLoading || !archivedAt}
+                  onClick={handleRestoreArchivedLead}
+                >
+                  {archiveLoading && archivedAt ? "Restoring..." : "Restore to active inventory"}
+                </button>
+              </div>
+              {archivedAt && (
+                <div className="mt-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(15,23,42,0.08)", color: "#0f172a" }}>
+                  <span>Archived on: {new Date(archivedAt).toLocaleString()}</span>
+                  {archiveReason && <span className="ml-2">Reason: {archiveReason}</span>}
+                </div>
+              )}
+            </div>
           </div>
           )}
 
@@ -1622,7 +2100,66 @@ export function LeadDetailClient({
           ))}
         </div>
       </section>
+      <ArchiveConfirmDialog
+        open={archiveConfirmOpen}
+        leadName={lead.name ?? "Unknown Business"}
+        reason={pendingArchiveReason}
+        loading={archiveLoading}
+        onCancel={() => {
+          if (!archiveLoading) setArchiveConfirmOpen(false);
+        }}
+        onConfirm={confirmArchiveLead}
+      />
     </PageShell>
+  );
+}
+
+export function ArchiveConfirmDialog({
+  open,
+  leadName,
+  reason,
+  loading,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  leadName: string;
+  reason: string;
+  loading: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4 py-8">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="archive-confirm-title"
+        className="glass-heavy w-full max-w-md rounded-2xl p-6 shadow-2xl"
+        style={{ border: "1px solid rgba(255,255,255,0.55)" }}
+      >
+        <h2 id="archive-confirm-title" className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
+          Archive lead?
+        </h2>
+        <p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>
+          This removes <strong>{leadName}</strong> from active inventory without deleting notes, outreach history, demos, or AI artifacts.
+        </p>
+        <div className="mt-4 rounded-xl px-3 py-2 text-sm" style={{ background: "rgba(255,255,255,0.5)", color: "var(--text-secondary)" }}>
+          <span className="section-label block">Reason</span>
+          <span>{reason}</span>
+        </div>
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button type="button" className="btn-glass text-sm" disabled={loading} onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="btn-primary text-sm" disabled={loading} onClick={onConfirm}>
+            {loading ? "Archiving..." : "Archive lead"}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 

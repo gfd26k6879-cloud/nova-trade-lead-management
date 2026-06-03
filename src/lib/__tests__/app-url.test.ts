@@ -22,6 +22,8 @@ describe("app URL helpers", () => {
   });
 
   it("builds encoded Supabase auth callback URLs", () => {
+    expect(buildAuthCallbackUrl("/reset-password", "https://lead-generation-orcin.vercel.app"))
+      .toBe("https://lead-generation-orcin.vercel.app/auth/callback?next=%2Freset-password");
     expect(buildAuthCallbackUrl("/reset-password", "https://example.com"))
       .toBe("https://example.com/auth/callback?next=%2Freset-password");
   });

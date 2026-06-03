@@ -3,6 +3,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { HelpTip } from "@/components/help-tip";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
@@ -72,8 +73,8 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
   const releaseLead = async (leadId: string) => {
     setBusyLeadId(leadId);
     const result = await unclaimLeadAction(leadId);
-    if ("error" in result) flash(result.error ?? "Unable to release lead");
-    else flash("Lead released");
+    if ("error" in result) flash(result.error ?? "Unable to release ownership");
+    else flash("Lead ownership released");
     router.refresh();
     setBusyLeadId(null);
   };
@@ -286,6 +287,7 @@ function LeadActionCard({
         <div className="min-w-0">
           <Link
             href={`/leads/${lead.id}`}
+            prefetch={false}
             className={`${prominent ? "text-lg" : "text-base"} link-accent block break-words font-semibold leading-snug`}
           >
             {lead.name ?? "Unknown business"}
@@ -304,6 +306,14 @@ function LeadActionCard({
           <div className="flex flex-wrap gap-2">
             <MetaChip label={lead.phone ?? "No phone"} />
             <MetaChip label={lead.website_status.replace(/_/g, " ")} />
+            <AiVerificationBadge
+              status={lead.ai_verification_status}
+              checkedAt={lead.ai_checked_at}
+              queueStatus={lead.ai_queue_status}
+              viability={lead.ai_website_viability_status}
+              confidence={lead.ai_confidence}
+              compact
+            />
             <MetaChip label={lead.rating ? `${lead.rating.toFixed(1)} rating` : "No rating"} />
             <MetaChip label={`${lead.review_count ?? 0} reviews`} />
             {lead.reminder_date && <MetaChip label={`Follow-up ${formatDate(lead.reminder_date)}`} />}
@@ -321,11 +331,11 @@ function LeadActionCard({
           {isMine && (
             <ActionWithHelp help="Removes your ownership and returns the lead to the unclaimed pool.">
               <button type="button" className="btn-glass flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onRelease(lead.id)}>
-                Release
+                Release ownership
               </button>
             </ActionWithHelp>
           )}
-          <Link href={`/leads/${lead.id}`} className="btn-glass flex-1 text-sm sm:flex-none">Open</Link>
+          <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass flex-1 text-sm sm:flex-none">Open</Link>
           {isMine && (
             <ActionWithHelp help="Records what happened and keeps follow-ups visible to the team.">
               <button type="button" className="btn-glass flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onOpenLogSheet(lead, "call")}>

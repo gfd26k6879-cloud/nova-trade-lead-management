@@ -3,7 +3,12 @@ import "server-only";
 import { ensureAppUserForAuthUser } from "@/lib/app-users";
 import { setAuditActor } from "@/lib/audit-context";
 import { hasPermission, type AppRole, type Permission } from "@/lib/permissions";
-import { createSupabaseServerClient, isSupabaseAuthConfigured } from "@/lib/supabase/server";
+import {
+  clearStaleSupabaseAuthCookies,
+  createSupabaseServerClient,
+  isStaleSupabaseAuthError,
+  isSupabaseAuthConfigured,
+} from "@/lib/supabase/server";
 
 export class UnauthorizedError extends Error {
   status = 401;
@@ -51,7 +56,14 @@ export async function getSession(options: { allowInactive?: boolean } = {}): Pro
   const { data, error } = await supabase.auth.getUser();
   const user = data.user;
 
-  if (error || !user?.id || !user.email) return null;
+  if (error) {
+    if (isStaleSupabaseAuthError(error)) {
+      await clearStaleSupabaseAuthCookies();
+    }
+    return null;
+  }
+
+  if (!user?.id || !user.email) return null;
 
   const profile = await ensureAppUserForAuthUser(user.id, user.email);
   if (profile.status !== "active" || !profile.role) {

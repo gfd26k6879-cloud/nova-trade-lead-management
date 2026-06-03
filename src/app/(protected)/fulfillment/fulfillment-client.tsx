@@ -105,14 +105,14 @@ function FulfillmentCard({
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <Link className="link-accent block break-words text-lg font-semibold" href={`/leads/${request.lead_id}`}>
+          <Link className="link-accent block break-words text-lg font-semibold" href={`/leads/${request.lead_id}`} prefetch={false}>
             {request.lead_name ?? "Unknown business"}
           </Link>
           <p className="mt-1 text-xs uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>
             {requestLabel(request.request_type)} · {statusLabel(request.status)} · {request.priority}
           </p>
         </div>
-        <Link href={`/leads/${request.lead_id}`} className="btn-glass text-sm">Open Lead</Link>
+        <Link href={`/leads/${request.lead_id}`} prefetch={false} className="btn-glass text-sm">Open Lead</Link>
       </div>
 
       <div className="mt-4 grid gap-2 sm:grid-cols-2">

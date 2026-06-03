@@ -99,6 +99,8 @@ Manual steps:
 
 ```bash
 DATABASE_URL=
+POSTGRES_MAX_CONNECTIONS=1
+NEXT_PUBLIC_APP_URL=https://lead-generation-orcin.vercel.app
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
@@ -106,6 +108,7 @@ NOSITE_BOOTSTRAP_ADMIN_EMAIL=
 NOSITE_ENCRYPTION_SECRET=
 NOSITE_SESSION_SECRET=
 WORKER_CRON_SECRET=
+WORKER_ROUTE_TIMEOUT_MS=45000
 GOOGLE_PLACES_API_KEY=
 NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY=
 OPENAI_API_KEY=
@@ -115,12 +118,45 @@ OPENAI_AI_COST_RESERVATION_USD=0.05
 
 Redeploy after any environment variable change.
 
+`NEXT_PUBLIC_APP_URL` is required in Production because password setup and reset
+links are generated server-side. Set it to the canonical production origin:
+`https://lead-generation-orcin.vercel.app`. In Supabase Auth, set the Site URL
+to the same origin and allow `https://lead-generation-orcin.vercel.app/auth/callback`
+as a redirect URL.
+
 `NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` is optional and only enables the Explorer's
 manual Google map switch. It must be a browser-restricted Maps JavaScript API key
 with HTTP referrer restrictions for the production and preview domains, plus a
 low quota/budget in Google Cloud. Do not reuse `GOOGLE_PLACES_API_KEY` here. The
 Explorer does not request Places, Geocoding, Routes, or Map Tiles libraries from
 this browser map.
+
+### Google Places cost guardrails
+
+The app has internal Google Places caps, but Google Cloud quotas and billing
+alerts are still required as the external safety net. Configure both before
+starting Canada, U.K., or broad Colorado discovery.
+
+Default app caps for the max-free posture:
+
+- Text Search Pro: `4,900` calls/month.
+- Enterprise Places SKUs: `900` calls/month.
+- Google calls/day: `300`.
+- Google calls/run: `500`.
+- Test run cap: `50`.
+
+Recommended Google Cloud setup:
+
+1. Restrict `GOOGLE_PLACES_API_KEY` to the server-side Places API only.
+2. Restrict `NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` by HTTP referrer and Maps
+   JavaScript API only.
+3. Set Google Cloud quota caps at or below the app caps where the console allows
+   it.
+4. Add billing budget alerts below the free-safe threshold. Budget alerts are
+   notification-only; they do not hard-stop usage.
+5. Use Dashboard discovery in `Coverage probe` mode first. Switch to
+   `Lead harvest` only for cells/categories whose probe yield justifies richer
+   lead data.
 
 Preview deployments should either point at a dedicated staging Supabase project
 with the same required variables or be treated as build-only. Do not point PR
@@ -135,6 +171,18 @@ At minimum, production and any usable preview environment need:
 - `NOSITE_ENCRYPTION_SECRET`
 - `NOSITE_SESSION_SECRET`
 - `WORKER_CRON_SECRET` or Supabase Vault `worker_cron_secret`
+
+### Admin password recovery
+
+Use the app's `/forgot-password` page for normal password resets. Supabase
+recovery links are one-time-use; after the first click, later clicks can show
+`One-time token not found` or an expired-link message.
+
+If the admin is locked out and app-generated reset links still fail after the
+env and Supabase Auth URL settings above are confirmed, use Supabase Dashboard
+as the emergency path: set a temporary password for `masihation@gmail.com`,
+sign in, and immediately change the password. Do not use dashboard-generated
+reset emails as the normal recovery path.
 
 ## 6. Supabase Cron Scheduler
 

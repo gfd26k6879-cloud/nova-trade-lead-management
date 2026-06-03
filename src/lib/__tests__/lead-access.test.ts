@@ -1,4 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const dbMocks = vi.hoisted(() => ({
+  userCanAccessMarket: vi.fn(),
+}));
+
+vi.mock("@/lib/db/queries", () => ({
+  userCanAccessMarket: dbMocks.userCanAccessMarket,
+}));
 
 import {
   canReadLeadForSession,
@@ -10,7 +18,7 @@ describe("lead access boundaries", () => {
   const researcher = { userId: "researcher-1", role: "researcher" as const };
   const admin = { userId: "admin-1", role: "admin" as const };
 
-  it("forces researcher lead filters to the signed-in user's owned leads", () => {
+  it("forces researcher lead filters to owned leads and assigned markets", () => {
     const filters = constrainLeadFiltersForSession(researcher, {
       assigned: "unassigned",
       assignedToUserId: "other-user",
@@ -23,6 +31,7 @@ describe("lead access boundaries", () => {
       assignedToUserId: "researcher-1",
       includeExcluded: false,
       search: "plumber",
+      visibleToUserId: "researcher-1",
     });
   });
 
@@ -40,10 +49,17 @@ describe("lead access boundaries", () => {
     expect(shouldRedirectResearcherLeadList(admin, { owner: "researcher-2", view: "kanban" })).toBe(false);
   });
 
-  it("lets researchers read lead details across the shared inventory", () => {
-    expect(canReadLeadForSession(researcher, { assigned_to_user_id: null })).toBe(true);
-    expect(canReadLeadForSession(researcher, { assigned_to_user_id: "researcher-1" })).toBe(true);
-    expect(canReadLeadForSession(researcher, { assigned_to_user_id: "other-user" })).toBe(true);
-    expect(canReadLeadForSession(admin, { assigned_to_user_id: "other-user" })).toBe(true);
+  it("allows admins to read all lead details", async () => {
+    await expect(canReadLeadForSession(admin, { market_id: "market-canada" })).resolves.toBe(true);
+    expect(dbMocks.userCanAccessMarket).not.toHaveBeenCalled();
+  });
+
+  it("allows researchers only inside assigned markets", async () => {
+    dbMocks.userCanAccessMarket.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await expect(canReadLeadForSession(researcher, { market_id: "market-colorado" })).resolves.toBe(true);
+    await expect(canReadLeadForSession(researcher, { market_id: "market-uk" })).resolves.toBe(false);
+    expect(dbMocks.userCanAccessMarket).toHaveBeenCalledWith("researcher-1", "market-colorado");
+    expect(dbMocks.userCanAccessMarket).toHaveBeenCalledWith("researcher-1", "market-uk");
   });
 });

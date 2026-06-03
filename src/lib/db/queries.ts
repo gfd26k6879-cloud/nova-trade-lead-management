@@ -26,6 +26,16 @@ import {
   getSchedulerWorkerMetadata,
   type SchedulerWorkerName,
 } from "@/lib/scheduler/worker-metadata";
+import {
+  COUNTRY_LABELS,
+  buildCellLabel,
+  buildQueryLocationLabel,
+  defaultCellTypeForCountry,
+  normalizeCountryCode,
+  normalizePostalCode,
+  type CountryCode,
+  type LocationCellType,
+} from "@/lib/geography";
 
 // ─── Types ───
 
@@ -48,11 +58,21 @@ export interface Lead {
   primary_type: string | null;
   lat: number | null;
   lng: number | null;
+  market_id: string | null;
+  location_cell_id: string | null;
+  country_code: CountryCode | null;
+  admin_area1: string | null;
+  admin_area2: string | null;
+  locality: string | null;
+  postal_code: string | null;
   score: number;
   status: string;
   is_excluded: boolean;
   exclusion_reason: string | null;
   excluded_at: string | null;
+  archived_at: string | null;
+  archived_by_user_id: string | null;
+  archive_reason: string | null;
   selling_niche: string | null;
   business_type: BusinessType;
   win_probability_score: number;
@@ -364,6 +384,11 @@ export interface CrawlRun {
   mode: string;
   status: string;
   categories: string[];
+  market_id: string | null;
+  selection_json: Record<string, unknown> | null;
+  name: string | null;
+  scope_label: string | null;
+  created_by_user_id: string | null;
   started_at: string | null;
   ended_at: string | null;
   discovered_count: number;
@@ -372,16 +397,91 @@ export interface CrawlRun {
   api_calls_used: number;
   last_error: string | null;
   created_at: string;
+  updated_at: string;
+}
+
+export interface DiscoveryItemSummary {
+  id: string;
+  name: string;
+  scopeLabel: string;
+  status: string;
+  mode: string;
+  discoveryMode: "coverage_probe" | "lead_harvest" | null;
+  marketId: string | null;
+  marketName: string | null;
+  countryCode: CountryCode | null;
+  categories: string[];
+  discoveredCount: number;
+  errorCount: number;
+  apiCallsUsed: number;
+  lastError: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  totalUnits: number;
+  doneUnits: number;
+  failedUnits: number;
+  openUnits: number;
+  runningUnits: number;
+  canceledUnits: number;
+  pagesFetched: number;
+  rawPlacesSeen: number;
+  newPlacesSeen: number;
+  duplicatePlacesSeen: number;
+}
+
+export interface DiscoveryRunCandidate {
+  placeId: string;
+  name: string | null;
+  address: string | null;
+  phone: string | null;
+  websiteUri: string | null;
+  mapsUri: string | null;
+  categories: string[];
+  rating: number | null;
+  userRatingCount: number | null;
+  businessStatus: string | null;
+  primaryType: string | null;
+  lat: number | null;
+  lng: number | null;
+  completenessScore: number;
+  freshnessScore: number;
+  verificationCoverage: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastObservedAt: string | null;
+  observationCount: number;
+  marketId: string | null;
+  locationCellId: string | null;
+  countryCode: CountryCode | null;
+  queryLocationLabel: string | null;
+  category: string | null;
+  hasLead: boolean;
+  leadId: string | null;
+  leadStatus: string | null;
+  leadIsExcluded: boolean;
+  websiteStatusLabel: "No website" | "Website present";
+  listingStatus: "Active lead" | "Excluded lead" | "Directory candidate";
 }
 
 export interface CrawlUnit {
   id: string;
   crawl_run_id: string;
   zip: string;
+  market_id: string | null;
+  location_cell_id: string | null;
+  country_code: CountryCode | null;
+  query_location_label: string | null;
   category: string;
   keyword: string | null;
   status: string;
   next_page_token: string | null;
+  max_pages: number;
+  pages_fetched: number;
+  raw_places_seen: number;
+  new_places_seen: number;
+  duplicate_places_seen: number;
+  budget_blocked_at: string | null;
   attempt_count: number;
   discovered_count: number;
   started_at: string | null;
@@ -389,6 +489,7 @@ export interface CrawlUnit {
   last_error: string | null;
   created_at: string;
   city: string | null;
+  county: string | null;
   lat: number | null;
   lng: number | null;
 }
@@ -406,6 +507,10 @@ export interface CrawlUnitPreview {
   id: string;
   status: string;
   zip: string;
+  market_id: string | null;
+  location_cell_id: string | null;
+  country_code: CountryCode | null;
+  query_location_label: string | null;
   city: string | null;
   county: string | null;
   category: string;
@@ -415,6 +520,12 @@ export interface CrawlUnitPreview {
   finished_at: string | null;
   last_error: string | null;
   next_page_token: string | null;
+  max_pages: number;
+  pages_fetched: number;
+  raw_places_seen: number;
+  new_places_seen: number;
+  duplicate_places_seen: number;
+  budget_blocked_at: string | null;
   created_at: string;
 }
 
@@ -468,6 +579,108 @@ export interface Settings {
   google_places_api_key_source: "ui" | "env" | "none";
   google_maps_browser_api_key_configured: boolean;
   google_maps_browser_api_key_source: "ui" | "env" | "none";
+  google_text_search_monthly_cap: number;
+  google_enterprise_monthly_cap: number;
+  google_test_run_call_cap: number;
+  google_auto_pagination_enabled: boolean;
+  google_auto_pagination_min_new_candidates: number;
+  google_auto_pagination_max_duplicate_rate: number;
+  google_default_discovery_mode: "coverage_probe" | "lead_harvest";
+  google_default_pagination_policy: "first_page_only" | "auto_yield_based" | "manual_extra_pages";
+}
+
+export interface LocationMarket {
+  id: string;
+  name: string;
+  country_code: CountryCode;
+  admin_area1: string | null;
+  admin_area2: string | null;
+  locality: string | null;
+  status: "active" | "paused" | "archived";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LocationCell {
+  id: string;
+  market_id: string;
+  market_name?: string | null;
+  country_code: CountryCode;
+  admin_area1: string | null;
+  admin_area2: string | null;
+  locality: string | null;
+  postal_code: string | null;
+  postal_code_normalized: string | null;
+  cell_type: LocationCellType;
+  cell_label: string;
+  lat: number | null;
+  lng: number | null;
+  radius_meters: number | null;
+  is_active: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserMarketAccess {
+  user_id: string;
+  market_id: string;
+  market_name: string;
+  country_code: CountryCode;
+  admin_area1: string | null;
+}
+
+export interface PlannerMarketOption {
+  id: string;
+  name: string;
+  country_code: CountryCode;
+  admin_area1: string | null;
+  locality: string | null;
+  cellCount: number;
+  activeCellCount: number;
+}
+
+export interface PlannerCellOption extends LocationCell {
+  coverage: ZipCoverageStatus;
+}
+
+export interface MarketCoverageSummary {
+  marketId: string;
+  marketName: string;
+  countryCode: CountryCode;
+  countryLabel: string;
+  adminArea1: string | null;
+  totalCells: number;
+  activeCells: number;
+  discoveredCells: number;
+  totalUnits: number;
+  doneUnits: number;
+  failedUnits: number;
+  openUnits: number;
+  canceledUnits: number;
+  leadsDiscovered: number;
+  activeLeads: number;
+  lastRunAt: string | null;
+}
+
+export interface LocationCellCoverage {
+  cellId: string;
+  marketId: string;
+  marketName: string;
+  countryCode: CountryCode;
+  cellType: LocationCellType;
+  cellLabel: string;
+  postalCode: string | null;
+  locality: string | null;
+  adminArea1: string | null;
+  adminArea2: string | null;
+  totalUnits: number;
+  doneUnits: number;
+  failedUnits: number;
+  openUnits: number;
+  canceledUnits: number;
+  leadsDiscovered: number;
+  activeLeads: number;
+  lastRunAt: string | null;
 }
 
 export interface AiLeadVerification {
@@ -627,8 +840,13 @@ export interface LeadFilters {
   phoneVerificationStatus?: PhoneVerificationStatus | string;
   aiVerificationStatus?: AiVerificationStatus | string;
   includeExcluded?: boolean;
+  archived?: "active" | "archived" | "all";
   assigned?: "me" | "unassigned" | "any";
   assignedToUserId?: string;
+  marketId?: string;
+  countryCode?: CountryCode | string;
+  locationCellId?: string;
+  visibleToUserId?: string;
   sortBy?: string;
   sortDir?: "asc" | "desc";
   page?: number;
@@ -648,7 +866,9 @@ export interface LeadMapPoint {
   score: number;
   quality_bucket: QualityBucket;
   ai_verification_status: AiVerificationStatus;
+  ai_checked_at: string | null;
   ai_website_viability_status: WebsiteViabilityStatus | null;
+  ai_queue_status: AiQueueStatus;
   estimated_deal_value: number;
   assigned_to_user_id: string | null;
   assigned_user_email: string | null;
@@ -656,7 +876,7 @@ export interface LeadMapPoint {
 }
 
 export type { SchedulerWorkerName } from "@/lib/scheduler/worker-metadata";
-export type SchedulerRunStatus = "running" | "processed" | "idle" | "disabled" | "budget_limit" | "error";
+export type SchedulerRunStatus = "running" | "processed" | "idle" | "disabled" | "budget_limit" | "error" | "interrupted";
 
 export interface WorkerRun {
   id: string;
@@ -703,6 +923,26 @@ export interface SchedulerHealth {
     verifiedLeadsPerDollar: number | null;
     readyToCallLeadsPerDollar: number | null;
   };
+  database: {
+    staleClientReads: DbActivityWarning[];
+  };
+  auth: AuthRecoveryDiagnostics;
+}
+
+export interface AuthRecoveryDiagnostics {
+  appUrlConfigured: boolean;
+  supabaseUrlConfigured: boolean;
+  callbackUrl: string | null;
+  warnings: string[];
+}
+
+export interface DbActivityWarning {
+  pid: number;
+  state: string;
+  waitEventType: string | null;
+  waitEvent: string | null;
+  ageSeconds: number;
+  query: string;
 }
 
 export interface SchedulerStatusCounts {
@@ -840,6 +1080,33 @@ export interface LeadAiFeedbackInput {
   correctedWebsiteUrl?: string | null;
   falsePositiveReason?: string | null;
   reviewerNotes?: string | null;
+}
+
+export type ManualWebsiteCorrectionResolution =
+  | "official_website_found"
+  | "weak_or_basic_site"
+  | "social_or_directory_only"
+  | "remove_website";
+
+export interface ManualWebsiteCorrectionInput {
+  websiteUrl: string | null;
+  websiteStatus: WebsiteStatus;
+  resolution: ManualWebsiteCorrectionResolution;
+  notes?: string | null;
+  actorUserId?: string | null;
+}
+
+export interface LeadFactsInput {
+  name?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  websiteUrl?: string | null;
+  websiteStatus?: WebsiteStatus | null;
+  businessType?: string | null;
+  primaryType?: string | null;
+  status?: string | null;
+  notes?: string | null;
+  actorUserId?: string | null;
 }
 
 export interface QualityLead extends QueueLead {
@@ -1158,6 +1425,9 @@ export async function ensureDbReady(): Promise<void>{
       if (shouldSeedZipCodesAtRuntime()) {
         await seedZipCodes();
       }
+      if (shouldRunRuntimeGeographyBackfill()) {
+        await ensureGeographyBackfill();
+      }
     })();
   }
   await dbReadyPromise;
@@ -1169,6 +1439,17 @@ function shouldRunRuntimePostgresRepairs(): boolean {
 
 function shouldSeedZipCodesAtRuntime(): boolean {
   return !process.env.DATABASE_URL?.trim() || process.env.NOSITE_RUNTIME_ZIP_SEED === "1";
+}
+
+export function shouldRunRuntimeGeographyBackfillForEnv(databaseUrl?: string, runtimeBackfillFlag?: string): boolean {
+  return !databaseUrl?.trim() || runtimeBackfillFlag === "1";
+}
+
+function shouldRunRuntimeGeographyBackfill(): boolean {
+  return shouldRunRuntimeGeographyBackfillForEnv(
+    process.env.DATABASE_URL,
+    process.env.NOSITE_RUNTIME_GEOGRAPHY_BACKFILL,
+  );
 }
 
 async function ensureRuntimePostgresRepairs(): Promise<void> {
@@ -1240,6 +1521,7 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
     "REVOKE ALL ON TABLE lead_notes, admin_requests FROM anon, authenticated",
     "CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_retry_ready ON lead_ai_artifacts(status, next_retry_at, created_at) WHERE status = 'queued'",
     "CREATE INDEX IF NOT EXISTS idx_leads_ai_queue_ready ON leads(ai_queue_status, ai_next_retry_at, sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at) WHERE ai_queue_status = 'queued'",
+    "CREATE INDEX IF NOT EXISTS idx_leads_score_recompute_stale ON leads(updated_at DESC, last_quality_scored_at)",
   ];
 
   for (const statement of statements) {
@@ -1381,6 +1663,19 @@ export async function getSettings(): Promise<Settings>{
     google_places_api_key_source: row.google_places_api_key_encrypted ? "ui" : process.env.GOOGLE_PLACES_API_KEY ? "env" : "none",
     google_maps_browser_api_key_configured: !!row.google_maps_browser_api_key_encrypted || !!process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY,
     google_maps_browser_api_key_source: row.google_maps_browser_api_key_encrypted ? "ui" : process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY ? "env" : "none",
+    google_text_search_monthly_cap: Math.max(1, Math.floor((row.google_text_search_monthly_cap as number) ?? 4900)),
+    google_enterprise_monthly_cap: Math.max(1, Math.floor((row.google_enterprise_monthly_cap as number) ?? 900)),
+    google_test_run_call_cap: Math.max(1, Math.floor((row.google_test_run_call_cap as number) ?? 50)),
+    google_auto_pagination_enabled: ((row.google_auto_pagination_enabled as number) ?? 1) === 1,
+    google_auto_pagination_min_new_candidates: Math.max(1, Math.floor((row.google_auto_pagination_min_new_candidates as number) ?? 6)),
+    google_auto_pagination_max_duplicate_rate: Math.max(0, Math.min(1, Number((row.google_auto_pagination_max_duplicate_rate as number) ?? 0.6))),
+    google_default_discovery_mode: row.google_default_discovery_mode === "lead_harvest" ? "lead_harvest" : "coverage_probe",
+    google_default_pagination_policy:
+      row.google_default_pagination_policy === "first_page_only"
+        ? "first_page_only"
+        : row.google_default_pagination_policy === "manual_extra_pages"
+          ? "manual_extra_pages"
+          : "auto_yield_based",
   };
 }
 
@@ -1521,6 +1816,42 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
     updates.push("scheduler_score_recompute_enabled = ?");
     values.push(settings.scheduler_score_recompute_enabled ? 1 : 0);
   }
+  if (settings.google_text_search_monthly_cap !== undefined) {
+    updates.push("google_text_search_monthly_cap = ?");
+    values.push(Math.max(1, Math.floor(settings.google_text_search_monthly_cap)));
+  }
+  if (settings.google_enterprise_monthly_cap !== undefined) {
+    updates.push("google_enterprise_monthly_cap = ?");
+    values.push(Math.max(1, Math.floor(settings.google_enterprise_monthly_cap)));
+  }
+  if (settings.google_test_run_call_cap !== undefined) {
+    updates.push("google_test_run_call_cap = ?");
+    values.push(Math.max(1, Math.floor(settings.google_test_run_call_cap)));
+  }
+  if (settings.google_auto_pagination_enabled !== undefined) {
+    updates.push("google_auto_pagination_enabled = ?");
+    values.push(settings.google_auto_pagination_enabled ? 1 : 0);
+  }
+  if (settings.google_auto_pagination_min_new_candidates !== undefined) {
+    updates.push("google_auto_pagination_min_new_candidates = ?");
+    values.push(Math.max(1, Math.floor(settings.google_auto_pagination_min_new_candidates)));
+  }
+  if (settings.google_auto_pagination_max_duplicate_rate !== undefined) {
+    updates.push("google_auto_pagination_max_duplicate_rate = ?");
+    values.push(Math.max(0, Math.min(1, settings.google_auto_pagination_max_duplicate_rate)));
+  }
+  if (settings.google_default_discovery_mode !== undefined) {
+    updates.push("google_default_discovery_mode = ?");
+    values.push(settings.google_default_discovery_mode === "lead_harvest" ? "lead_harvest" : "coverage_probe");
+  }
+  if (settings.google_default_pagination_policy !== undefined) {
+    updates.push("google_default_pagination_policy = ?");
+    values.push(
+      settings.google_default_pagination_policy === "first_page_only" || settings.google_default_pagination_policy === "manual_extra_pages"
+        ? settings.google_default_pagination_policy
+        : "auto_yield_based",
+    );
+  }
   if (
     "openai_api_key_configured" in settings ||
     "openai_api_key_source" in settings ||
@@ -1547,6 +1878,8 @@ export function isSchedulerWorkerEnabled(settings: Settings, workerName: Schedul
   if (workerName === "artifact") return settings.scheduler_artifact_enabled;
   return settings.scheduler_score_recompute_enabled;
 }
+
+const STALE_WORKER_RUN_ERROR = "Worker run interrupted or timed out before completion.";
 
 export async function startWorkerRun(workerName: SchedulerWorkerName, triggerSource: string): Promise<WorkerRun> {
   const db = await getDb();
@@ -1576,6 +1909,57 @@ export async function completeWorkerRun(
   ).run(status, httpStatus, JSON.stringify(result), error ?? null, nowISO(), id);
 }
 
+export async function markStaleWorkerRunsInterrupted(ttlMinutes = 15, batchSize = 25): Promise<number> {
+  const db = await getDb();
+  const safeTtlMinutes = Math.max(1, Math.min(24 * 60, Math.floor(ttlMinutes)));
+  const safeBatchSize = Math.max(1, Math.min(100, Math.floor(batchSize)));
+  const cutoff = new Date(Date.now() - safeTtlMinutes * 60 * 1000).toISOString();
+  const completedAt = nowISO();
+  const resultJson = JSON.stringify({ status: "interrupted", error: STALE_WORKER_RUN_ERROR, ttlMinutes: safeTtlMinutes });
+
+  if (process.env.DATABASE_URL?.trim()) {
+    const result = await db.prepare(
+      `WITH stale AS (
+         SELECT id
+         FROM worker_runs
+         WHERE status = 'running'
+           AND started_at < ?
+         ORDER BY started_at ASC
+         LIMIT ?
+         FOR UPDATE SKIP LOCKED
+       )
+       UPDATE worker_runs
+       SET status = 'interrupted',
+           http_status = COALESCE(http_status, 599),
+           result_json = ?,
+           error = COALESCE(error, ?),
+           completed_at = ?
+       WHERE id IN (SELECT id FROM stale)`
+    ).run(cutoff, safeBatchSize, resultJson, STALE_WORKER_RUN_ERROR, completedAt);
+    return result.changes;
+  }
+
+  const result = await db.prepare(
+    `UPDATE worker_runs
+     SET status = 'interrupted',
+         http_status = COALESCE(http_status, 599),
+         result_json = ?,
+         error = COALESCE(error, ?),
+         completed_at = ?
+     WHERE status = 'running'
+       AND started_at < ?
+       AND id IN (
+         SELECT id
+         FROM worker_runs
+         WHERE status = 'running'
+           AND started_at < ?
+         ORDER BY started_at ASC
+         LIMIT ?
+       )`
+  ).run(resultJson, STALE_WORKER_RUN_ERROR, completedAt, cutoff, cutoff, safeBatchSize);
+  return result.changes;
+}
+
 export async function getWorkerRunById(id: string): Promise<WorkerRun | null> {
   const db = await getDb();
   const row = await db.prepare("SELECT * FROM worker_runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
@@ -1593,9 +1977,11 @@ export async function getSchedulerHealth(): Promise<SchedulerHealth> {
 }
 
 async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
+  await markStaleWorkerRunsInterrupted();
   const settings = await getSettings();
   const aiQueue = await getAiQueueStats();
   const budget = await getAiBudgetStatus(settings, 0);
+  const staleClientReads = await getStaleClientReadQueries(60);
   const db = await getDb();
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
@@ -1604,7 +1990,7 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
   const enrichmentStatusRows = await db.prepare(
     `SELECT enrichment_status as status, COUNT(*) as count
      FROM leads
-     WHERE score > 0 AND COALESCE(is_excluded, 0) = 0
+     WHERE score > 0 AND COALESCE(is_excluded, 0) = 0 AND archived_at IS NULL
      GROUP BY enrichment_status`
   ).all() as Array<{ status: string; count: number }>;
   const artifactStatusRows = await db.prepare(
@@ -1613,7 +1999,7 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
      GROUP BY status`
   ).all() as Array<{ status: string; count: number }>;
   const enrichmentRow = await db.prepare(
-    "SELECT COUNT(*) as count FROM leads WHERE enrichment_status = 'pending' AND score > 0 AND COALESCE(is_excluded, 0) = 0"
+    "SELECT COUNT(*) as count FROM leads WHERE enrichment_status = 'pending' AND score > 0 AND COALESCE(is_excluded, 0) = 0 AND archived_at IS NULL"
   ).get() as { count: number };
   const artifactRow = await db.prepare(
     "SELECT COUNT(*) as count FROM lead_ai_artifacts WHERE status IN ('queued','running')"
@@ -1621,10 +2007,11 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
   const staleScoreRow = await db.prepare(
     `SELECT COUNT(*) as count
      FROM leads
-     WHERE last_quality_scored_at IS NULL OR julianday(updated_at) > julianday(last_quality_scored_at)`
+     WHERE archived_at IS NULL
+       AND (last_quality_scored_at IS NULL OR julianday(updated_at) > julianday(last_quality_scored_at))`
   ).get() as { count: number };
   const readyRow = await db.prepare(
-    "SELECT COUNT(*) as count FROM leads WHERE COALESCE(is_excluded, 0) = 0 AND quality_bucket IN ('ready_to_call','broken_site_opportunity')"
+    "SELECT COUNT(*) as count FROM leads WHERE COALESCE(is_excluded, 0) = 0 AND archived_at IS NULL AND quality_bucket IN ('ready_to_call','broken_site_opportunity')"
   ).get() as { count: number };
 
   const workers: Array<{ workerName: SchedulerWorkerName; label: string; queueDepth: number; cadenceMinutes: number }> =
@@ -1689,7 +2076,7 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
       db.prepare(
         `SELECT COUNT(*) as count
          FROM worker_runs
-         WHERE worker_name = ? AND status IN ('error','budget_limit') AND started_at >= datetime(?)`
+         WHERE worker_name = ? AND status IN ('error','budget_limit','interrupted') AND started_at >= datetime(?)`
       ).get(worker.workerName, since24h) as Promise<{ count: number }>,
       db.prepare(
         `SELECT COUNT(*) as count
@@ -1726,10 +2113,14 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
       verifiedLeadsPerDollar: verifiedPerDollar,
       readyToCallLeadsPerDollar: readyPerDollar,
     },
+    database: {
+      staleClientReads,
+    },
+    auth: buildAuthRecoveryDiagnostics(),
   };
 }
 
-function buildSchedulerHealthFallback(error: string): SchedulerHealth {
+export function buildSchedulerHealthFallback(error: string): SchedulerHealth {
   return {
     workers: SCHEDULER_WORKER_METADATA.map((worker) => ({
       workerName: worker.workerName,
@@ -1760,7 +2151,67 @@ function buildSchedulerHealthFallback(error: string): SchedulerHealth {
       verifiedLeadsPerDollar: null,
       readyToCallLeadsPerDollar: null,
     },
+    database: {
+      staleClientReads: [],
+    },
+    auth: buildAuthRecoveryDiagnostics(),
   };
+}
+
+function buildAuthRecoveryDiagnostics(): AuthRecoveryDiagnostics {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/+$/, "") ?? "";
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ?? "";
+  const warnings: string[] = [];
+
+  if (!appUrl) {
+    warnings.push("NEXT_PUBLIC_APP_URL is missing. Password reset links cannot be generated safely in production.");
+  }
+  if (!supabaseUrl) {
+    warnings.push("NEXT_PUBLIC_SUPABASE_URL is missing. Supabase Auth cannot validate sessions.");
+  }
+
+  return {
+    appUrlConfigured: Boolean(appUrl),
+    supabaseUrlConfigured: Boolean(supabaseUrl),
+    callbackUrl: appUrl ? `${appUrl}/auth/callback` : null,
+    warnings,
+  };
+}
+
+export async function getStaleClientReadQueries(thresholdSeconds = 60): Promise<DbActivityWarning[]> {
+  if (!process.env.DATABASE_URL?.trim()) return [];
+  const safeThreshold = Math.max(1, Math.min(3600, Math.floor(thresholdSeconds)));
+  try {
+    const db = await getDb();
+    const rows = await db.prepare(
+      `SELECT
+         pid,
+         state,
+         wait_event_type as "waitEventType",
+         wait_event as "waitEvent",
+         EXTRACT(EPOCH FROM (now() - query_start)) as "ageSeconds",
+         LEFT(query, 500) as query
+       FROM pg_stat_activity
+       WHERE datname = current_database()
+         AND state = 'active'
+         AND wait_event = 'ClientRead'
+         AND query_start IS NOT NULL
+         AND query_start < now() - (?::int * interval '1 second')
+       ORDER BY query_start ASC
+       LIMIT 20`
+    ).all(safeThreshold) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      pid: Number(row.pid ?? 0),
+      state: String(row.state ?? "active"),
+      waitEventType: (row.waitEventType as string | null) ?? (row.wait_event_type as string | null) ?? null,
+      waitEvent: (row.waitEvent as string | null) ?? (row.wait_event as string | null) ?? null,
+      ageSeconds: Number(row.ageSeconds ?? row.age_seconds ?? 0),
+      query: String(row.query ?? ""),
+    }));
+  } catch (error) {
+    console.error("Failed to inspect pg_stat_activity", error);
+    return [];
+  }
 }
 
 async function getLatestWorkerRun(workerName: SchedulerWorkerName): Promise<WorkerRun | null> {
@@ -1814,7 +2265,7 @@ function normalizeSchedulerWorkerName(value: unknown): SchedulerWorkerName {
 }
 
 function normalizeSchedulerRunStatus(value: unknown): SchedulerRunStatus {
-  if (value === "processed" || value === "idle" || value === "disabled" || value === "budget_limit" || value === "error") return value;
+  if (value === "processed" || value === "idle" || value === "disabled" || value === "budget_limit" || value === "interrupted" || value === "error") return value;
   return "running";
 }
 
@@ -1830,7 +2281,11 @@ function buildSchedulerWarning(
   if ((workerName === "ai_verification" || workerName === "artifact") && !settings.openai_api_key_configured) return "OpenAI API key is missing.";
   if ((workerName === "crawl" || workerName === "enrichment") && !settings.google_places_api_key_configured) return "Google Places API key is missing.";
   if (!lastRun) return "No worker run recorded yet.";
-  if (lastRun.status === "error" || lastRun.status === "budget_limit") return lastRun.error ?? "Last worker run failed.";
+  if (lastRun.status === "error" || lastRun.status === "budget_limit" || lastRun.status === "interrupted") {
+    if (lastRun.error?.includes("Worker exceeded internal timeout")) return "Last worker hit the internal timeout before Vercel could kill the function.";
+    if (/statement timeout/i.test(lastRun.error ?? "")) return "Last worker hit the database statement timeout.";
+    return lastRun.error ?? "Last worker run failed.";
+  }
   if (errors24h > 0) return `${errors24h} worker errors in the last 24 hours.`;
   return null;
 }
@@ -1921,8 +2376,8 @@ async function getSchedulerOperationsSummaryInternal(): Promise<SchedulerOperati
   };
 }
 
-async function buildSchedulerOperationsFallback(error: string): Promise<SchedulerOperationsSummary> {
-  const health = await getSchedulerHealth();
+export function buildSchedulerOperationsFallback(error: string): SchedulerOperationsSummary {
+  const health = buildSchedulerHealthFallback(error);
   const emptyUsage = toSchedulerApiUsageWindow(emptyApiUsageSummary());
   const emptyCounts = emptySchedulerStatusCounts();
   return {
@@ -1989,7 +2444,8 @@ async function getSchedulerLeadBacklogSummary(): Promise<SchedulerLeadBacklogSum
        COALESCE(SUM(CASE WHEN quality_bucket = 'not_a_fit' THEN 1 ELSE 0 END), 0) as not_fit,
        COALESCE(SUM(CASE WHEN ai_verification_status = 'site_found' AND ai_website_viability_status = 'usable' THEN 1 ELSE 0 END), 0) as usable_site_found,
        COALESCE(SUM(CASE WHEN ai_verification_status = 'no_site_found' OR ai_website_viability_status = 'directory_only' THEN 1 ELSE 0 END), 0) as no_site_verified
-     FROM leads`
+     FROM leads
+     WHERE archived_at IS NULL`
   ).get() as Record<string, number>;
   const [websiteStatus, qualityBuckets] = await Promise.all([
     getSchedulerBreakdown("website_status"),
@@ -2017,7 +2473,7 @@ async function getSchedulerEnrichmentBacklogSummary(): Promise<SchedulerStatusCo
   const rows = await db.prepare(
     `SELECT enrichment_status as status, COUNT(*) as count
      FROM leads
-     WHERE score > 0 AND COALESCE(is_excluded, 0) = 0
+     WHERE score > 0 AND COALESCE(is_excluded, 0) = 0 AND archived_at IS NULL
      GROUP BY enrichment_status`
   ).all() as Array<{ status: string; count: number }>;
 
@@ -2053,6 +2509,7 @@ async function getSchedulerArtifactTypeBacklog(type: LeadAiArtifactType): Promis
     `SELECT COUNT(*) as count
      FROM leads l
      WHERE COALESCE(l.is_excluded, 0) = 0
+       AND l.archived_at IS NULL
        AND l.status NOT IN ('closed_won','closed_lost')
        AND NOT EXISTS (
          SELECT 1
@@ -2076,12 +2533,14 @@ async function getSchedulerScoreBacklogSummary(): Promise<SchedulerStatusCounts>
   const staleRow = await db.prepare(
     `SELECT COUNT(*) as count
      FROM leads
-     WHERE last_quality_scored_at IS NULL OR julianday(updated_at) > julianday(last_quality_scored_at)`
+     WHERE archived_at IS NULL
+       AND (last_quality_scored_at IS NULL OR julianday(updated_at) > julianday(last_quality_scored_at))`
   ).get() as { count: number };
   const freshRow = await db.prepare(
     `SELECT COUNT(*) as count
      FROM leads
-     WHERE last_quality_scored_at IS NOT NULL AND julianday(updated_at) <= julianday(last_quality_scored_at)`
+     WHERE archived_at IS NULL
+       AND last_quality_scored_at IS NOT NULL AND julianday(updated_at) <= julianday(last_quality_scored_at)`
   ).get() as { count: number };
 
   return {
@@ -2099,6 +2558,7 @@ async function getSchedulerBreakdown(column: "website_status" | "quality_bucket"
   const rows = await db.prepare(
     `SELECT COALESCE(${column}, 'unknown') as key, COUNT(*) as count
      FROM leads
+     WHERE archived_at IS NULL
      GROUP BY COALESCE(${column}, 'unknown')
      ORDER BY count DESC, key ASC`
   ).all() as Array<{ key: string; count: number }>;
@@ -2290,6 +2750,503 @@ function isDuplicateColumnError(error: unknown): boolean {
 
 // ─── Zip Codes ───
 
+export const COLORADO_MARKET_ID = "market-colorado";
+
+const STARTER_MARKETS = [
+  { id: "market-toronto", name: "Toronto", countryCode: "CA", adminArea1: "ON", locality: "Toronto" },
+  { id: "market-vancouver", name: "Vancouver", countryCode: "CA", adminArea1: "BC", locality: "Vancouver" },
+  { id: "market-london-gb", name: "London", countryCode: "GB", adminArea1: "England", locality: "London" },
+] as const;
+
+const STARTER_LOCATION_CELLS = [
+  { id: "cell-ca-toronto-m5v", marketId: "market-toronto", countryCode: "CA", adminArea1: "ON", locality: "Toronto", postalCode: "M5V", cellType: "postal_fsa", label: "Toronto, ON M5V", lat: 43.644, lng: -79.389, radiusMeters: 3000 },
+  { id: "cell-ca-toronto-m4w", marketId: "market-toronto", countryCode: "CA", adminArea1: "ON", locality: "Toronto", postalCode: "M4W", cellType: "postal_fsa", label: "Toronto, ON M4W", lat: 43.679, lng: -79.384, radiusMeters: 3000 },
+  { id: "cell-ca-toronto-m6j", marketId: "market-toronto", countryCode: "CA", adminArea1: "ON", locality: "Toronto", postalCode: "M6J", cellType: "postal_fsa", label: "Toronto, ON M6J", lat: 43.647, lng: -79.419, radiusMeters: 3000 },
+  { id: "cell-ca-vancouver-v6b", marketId: "market-vancouver", countryCode: "CA", adminArea1: "BC", locality: "Vancouver", postalCode: "V6B", cellType: "postal_fsa", label: "Vancouver, BC V6B", lat: 49.279, lng: -123.114, radiusMeters: 3000 },
+  { id: "cell-ca-vancouver-v5k", marketId: "market-vancouver", countryCode: "CA", adminArea1: "BC", locality: "Vancouver", postalCode: "V5K", cellType: "postal_fsa", label: "Vancouver, BC V5K", lat: 49.281, lng: -123.041, radiusMeters: 3000 },
+  { id: "cell-ca-vancouver-v6e", marketId: "market-vancouver", countryCode: "CA", adminArea1: "BC", locality: "Vancouver", postalCode: "V6E", cellType: "postal_fsa", label: "Vancouver, BC V6E", lat: 49.287, lng: -123.126, radiusMeters: 3000 },
+  { id: "cell-gb-london-sw1a", marketId: "market-london-gb", countryCode: "GB", adminArea1: "England", locality: "London", postalCode: "SW1A", cellType: "postcode_outward", label: "London SW1A", lat: 51.501, lng: -0.142, radiusMeters: 2500 },
+  { id: "cell-gb-london-ec1", marketId: "market-london-gb", countryCode: "GB", adminArea1: "England", locality: "London", postalCode: "EC1", cellType: "postcode_outward", label: "London EC1", lat: 51.523, lng: -0.101, radiusMeters: 2500 },
+  { id: "cell-gb-london-w1", marketId: "market-london-gb", countryCode: "GB", adminArea1: "England", locality: "London", postalCode: "W1", cellType: "postcode_outward", label: "London W1", lat: 51.514, lng: -0.143, radiusMeters: 2500 },
+] as const;
+
+export async function ensureGeographyBackfill(): Promise<void> {
+  const db = await getDb();
+  const now = nowISO();
+  await db.prepare(
+    `INSERT INTO location_markets (id, name, country_code, admin_area1, status, created_at, updated_at)
+     VALUES (?, 'Colorado', 'US', 'CO', 'active', ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name,
+       country_code = excluded.country_code,
+       admin_area1 = excluded.admin_area1,
+       status = excluded.status,
+       updated_at = excluded.updated_at`
+  ).run(COLORADO_MARKET_ID, now, now);
+
+  const insertMarket = db.prepare(
+    `INSERT INTO location_markets (id, name, country_code, admin_area1, locality, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name,
+       country_code = excluded.country_code,
+       admin_area1 = excluded.admin_area1,
+       locality = excluded.locality,
+       status = excluded.status,
+       updated_at = excluded.updated_at`
+  );
+  for (const market of STARTER_MARKETS) {
+    await insertMarket.run(market.id, market.name, market.countryCode, market.adminArea1, market.locality, now, now);
+  }
+
+  const insertStarterCell = db.prepare(
+    `INSERT INTO location_cells (
+       id, market_id, country_code, admin_area1, locality,
+       postal_code, postal_code_normalized, cell_type, cell_label, lat, lng, radius_meters, is_active, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       country_code = excluded.country_code,
+       admin_area1 = excluded.admin_area1,
+       locality = excluded.locality,
+       postal_code = excluded.postal_code,
+       postal_code_normalized = excluded.postal_code_normalized,
+       cell_type = excluded.cell_type,
+       cell_label = excluded.cell_label,
+       lat = excluded.lat,
+       lng = excluded.lng,
+       radius_meters = excluded.radius_meters,
+       is_active = excluded.is_active,
+       updated_at = excluded.updated_at`
+  );
+  for (const cell of STARTER_LOCATION_CELLS) {
+    await insertStarterCell.run(
+      cell.id,
+      cell.marketId,
+      cell.countryCode,
+      cell.adminArea1,
+      cell.locality,
+      cell.postalCode,
+      normalizePostalCode(cell.countryCode, cell.postalCode),
+      cell.cellType,
+      cell.label,
+      cell.lat,
+      cell.lng,
+      cell.radiusMeters,
+      now,
+      now,
+    );
+  }
+
+  const zips = await db.prepare(
+    "SELECT zip, city, state, county, lat, lng, is_active FROM zip_codes WHERE is_active = 1"
+  ).all<ZipCode>();
+  const insertCell = db.prepare(
+    `INSERT INTO location_cells (
+       id, market_id, country_code, admin_area1, admin_area2, locality,
+       postal_code, postal_code_normalized, cell_type, cell_label, lat, lng, is_active, created_at, updated_at
+     ) VALUES (?, ?, 'US', ?, ?, ?, ?, ?, 'zip', ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       admin_area2 = excluded.admin_area2,
+       locality = excluded.locality,
+       lat = excluded.lat,
+       lng = excluded.lng,
+       is_active = excluded.is_active,
+       updated_at = excluded.updated_at`
+  );
+  for (const zip of zips) {
+    await insertCell.run(
+      coloradoCellId(zip.zip),
+      COLORADO_MARKET_ID,
+      zip.state,
+      zip.county,
+      zip.city,
+      zip.zip,
+      zip.zip,
+      `${zip.city} ${zip.state} ${zip.zip}`,
+      zip.lat,
+      zip.lng,
+      zip.is_active,
+      now,
+      now,
+    );
+  }
+
+  await db.prepare(
+    `UPDATE leads
+     SET country_code = COALESCE(country_code, 'US'),
+         admin_area1 = COALESCE(admin_area1, 'CO'),
+         market_id = COALESCE(market_id, ?)
+     WHERE market_id IS NULL OR country_code IS NULL`
+  ).run(COLORADO_MARKET_ID);
+  await db.prepare(
+    `UPDATE leads
+     SET postal_code = COALESCE(postal_code, (
+           SELECT z.zip FROM zip_codes z WHERE leads.address LIKE '%' || z.zip || '%' LIMIT 1
+         )),
+         location_cell_id = COALESCE(location_cell_id, (
+           SELECT 'cell-us-co-' || z.zip FROM zip_codes z WHERE leads.address LIKE '%' || z.zip || '%' LIMIT 1
+         )),
+         locality = COALESCE(locality, (
+           SELECT z.city FROM zip_codes z WHERE leads.address LIKE '%' || z.zip || '%' LIMIT 1
+         )),
+         admin_area2 = COALESCE(admin_area2, (
+           SELECT z.county FROM zip_codes z WHERE leads.address LIKE '%' || z.zip || '%' LIMIT 1
+         ))
+     WHERE market_id = ?`
+  ).run(COLORADO_MARKET_ID);
+  await db.prepare(
+    `UPDATE crawl_units
+     SET market_id = COALESCE(market_id, ?),
+         location_cell_id = COALESCE(location_cell_id, 'cell-us-co-' || zip),
+         country_code = COALESCE(country_code, 'US'),
+         query_location_label = COALESCE(query_location_label, (
+           SELECT z.city || ', ' || z.state || ' ' || z.zip || ', United States'
+           FROM zip_codes z
+           WHERE z.zip = crawl_units.zip
+           LIMIT 1
+         ))
+     WHERE market_id IS NULL OR location_cell_id IS NULL OR country_code IS NULL OR query_location_label IS NULL`
+  ).run(COLORADO_MARKET_ID);
+  await db.prepare(
+    `UPDATE crawl_runs
+     SET market_id = COALESCE(market_id, ?),
+         selection_json = COALESCE(selection_json, ?)
+     WHERE market_id IS NULL`
+  ).run(COLORADO_MARKET_ID, JSON.stringify({ countryCode: "US", marketId: COLORADO_MARKET_ID, source: "legacy_colorado" }));
+  await db.prepare(
+    `INSERT INTO user_market_access (user_id, market_id, created_by_user_id)
+     SELECT user_id, ?, NULL
+     FROM app_users
+     WHERE role = 'researcher' AND status = 'active'
+     ON CONFLICT(user_id, market_id) DO NOTHING`
+  ).run(COLORADO_MARKET_ID);
+}
+
+export async function listLocationMarkets(includeArchived = false): Promise<LocationMarket[]> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT *
+     FROM location_markets
+     ${includeArchived ? "" : "WHERE status <> 'archived'"}
+     ORDER BY country_code, name`
+  ).all<Record<string, unknown>>();
+  return rows.map(parseLocationMarketRow);
+}
+
+export async function getPlannerMarkets(): Promise<PlannerMarketOption[]> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT
+       m.id,
+       m.name,
+       m.country_code,
+       m.admin_area1,
+       m.locality,
+       COUNT(c.id) as cellCount,
+       COALESCE(SUM(CASE WHEN c.is_active = 1 THEN 1 ELSE 0 END), 0) as activeCellCount
+     FROM location_markets m
+     LEFT JOIN location_cells c ON c.market_id = m.id
+     WHERE m.status = 'active'
+     GROUP BY m.id, m.name, m.country_code, m.admin_area1, m.locality
+     ORDER BY m.country_code, m.name`
+  ).all<Record<string, unknown>>();
+  return rows.map((row) => ({
+    id: String(row.id),
+    name: String(row.name),
+    country_code: normalizeCountryCode(row.country_code),
+    admin_area1: row.admin_area1 ? String(row.admin_area1) : null,
+    locality: row.locality ? String(row.locality) : null,
+    cellCount: Number(row.cellCount ?? row.cellcount ?? 0),
+    activeCellCount: Number(row.activeCellCount ?? row.activecellcount ?? 0),
+  }));
+}
+
+export async function getLocationCells(marketId: string): Promise<LocationCell[]> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT c.*, m.name as market_name
+     FROM location_cells c
+     LEFT JOIN location_markets m ON m.id = c.market_id
+     WHERE c.market_id = ?
+     ORDER BY c.country_code, c.cell_type, c.cell_label`
+  ).all<Record<string, unknown>>(marketId);
+  return rows.map(parseLocationCellRow);
+}
+
+export async function getPlannerCells(marketId: string, categories: readonly string[] = []): Promise<PlannerCellOption[]> {
+  const cells = await getLocationCells(marketId);
+  return Promise.all(cells.filter((cell) => cell.is_active === 1).map(async (cell) => ({
+    ...cell,
+    coverage: await getCellCoverageStatus(cell.id, categories),
+  })));
+}
+
+export async function getCellCoverageStatus(cellId: string, categories?: readonly string[]): Promise<ZipCoverageStatus> {
+  const db = await getDb();
+  const normalizedCategories = Array.from(new Set((categories ?? []).map((category) => category.trim()).filter(Boolean)));
+  if (normalizedCategories.length === 0) {
+    const row = await db.prepare(
+      `SELECT
+         COUNT(*) as total,
+         SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done,
+         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+       FROM crawl_units
+       WHERE location_cell_id = ?`
+    ).get(cellId) as { total: number | null; done: number | null; failed: number | null };
+    const total = Number(row.total ?? 0);
+    const done = Number(row.done ?? 0);
+    const failed = Number(row.failed ?? 0);
+    return { zip: cellId, total, done, failed, remaining: Math.max(total - done - failed, 0), completed: total > 0 && done === total };
+  }
+  const placeholders = normalizedCategories.map(() => "?").join(", ");
+  const rows = await db.prepare(
+    `SELECT category,
+       MAX(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as has_done,
+       MAX(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as has_failed
+     FROM crawl_units
+     WHERE location_cell_id = ? AND category IN (${placeholders})
+     GROUP BY category`
+  ).all(cellId, ...normalizedCategories) as Array<{ category: string; has_done: number; has_failed: number }>;
+  const byCategory = new Map(rows.map((row) => [row.category, row]));
+  let done = 0;
+  let failed = 0;
+  for (const category of normalizedCategories) {
+    const row = byCategory.get(category);
+    if (row?.has_done) done++;
+    else if (row?.has_failed) failed++;
+  }
+  return { zip: cellId, total: normalizedCategories.length, done, failed, remaining: Math.max(normalizedCategories.length - done - failed, 0), completed: normalizedCategories.length > 0 && done === normalizedCategories.length };
+}
+
+export async function replaceUserMarketAccess(userId: string, marketIds: string[], actorUserId?: string | null): Promise<UserMarketAccess[]> {
+  const db = await getDb();
+  const uniqueMarketIds = Array.from(new Set(marketIds.map((id) => id.trim()).filter(Boolean)));
+  await db.prepare("DELETE FROM user_market_access WHERE user_id = ?").run(userId);
+  const insert = db.prepare(
+    "INSERT INTO user_market_access (user_id, market_id, created_by_user_id, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, market_id) DO NOTHING"
+  );
+  const now = nowISO();
+  for (const marketId of uniqueMarketIds) {
+    await insert.run(userId, marketId, actorUserId ?? null, now);
+  }
+  return listUserMarketAccess(userId);
+}
+
+export async function listUserMarketAccess(userId: string): Promise<UserMarketAccess[]> {
+  const trimmedUserId = userId.trim();
+  if (!trimmedUserId) return [];
+  const accessByUser = await listUserMarketAccessForUsers([trimmedUserId]);
+  return accessByUser[trimmedUserId] ?? [];
+}
+
+export async function listUserMarketAccessForUsers(userIds: string[]): Promise<Record<string, UserMarketAccess[]>> {
+  const db = await getDb();
+  const uniqueUserIds = Array.from(new Set(userIds.map((id) => id.trim()).filter(Boolean)));
+  const accessByUser: Record<string, UserMarketAccess[]> = Object.fromEntries(uniqueUserIds.map((id) => [id, []]));
+  if (uniqueUserIds.length === 0) return accessByUser;
+
+  const placeholders = uniqueUserIds.map(() => "?").join(", ");
+  const rows = await db.prepare(
+    `SELECT uma.user_id, uma.market_id, m.name as market_name, m.country_code, m.admin_area1
+     FROM user_market_access uma
+     INNER JOIN location_markets m ON m.id = uma.market_id
+     WHERE uma.user_id IN (${placeholders})
+     ORDER BY uma.user_id, m.country_code, m.name`
+  ).all<Record<string, unknown>>(...uniqueUserIds);
+
+  for (const row of rows) {
+    const access: UserMarketAccess = {
+      user_id: String(row.user_id),
+      market_id: String(row.market_id),
+      market_name: String(row.market_name),
+      country_code: normalizeCountryCode(row.country_code),
+      admin_area1: row.admin_area1 ? String(row.admin_area1) : null,
+    };
+    if (!accessByUser[access.user_id]) accessByUser[access.user_id] = [];
+    accessByUser[access.user_id].push(access);
+  }
+
+  return accessByUser;
+}
+
+export async function userCanAccessMarket(userId: string, marketId: string | null | undefined): Promise<boolean> {
+  if (!marketId) return false;
+  const db = await getDb();
+  const row = await db.prepare(
+    "SELECT 1 FROM user_market_access WHERE user_id = ? AND market_id = ? LIMIT 1"
+  ).get(userId, marketId);
+  return Boolean(row);
+}
+
+export async function getMarketCoverageSummary(runId?: string): Promise<MarketCoverageSummary[]> {
+  const db = await getDb();
+  const runFilter = runId ? "AND cu.crawl_run_id = ?" : "";
+  const rows = await db.prepare(
+    `SELECT
+       m.id as marketId,
+       m.name as marketName,
+       m.country_code as countryCode,
+       m.admin_area1 as adminArea1,
+       COUNT(DISTINCT c.id) as totalCells,
+       COALESCE(SUM(CASE WHEN c.is_active = 1 THEN 1 ELSE 0 END), 0) as activeCells,
+       COUNT(DISTINCT CASE WHEN cu.status = 'done' THEN c.id END) as discoveredCells,
+       COUNT(cu.id) as totalUnits,
+       COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) as doneUnits,
+       COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) as failedUnits,
+       COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) as openUnits,
+       COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) as canceledUnits,
+       COALESCE(SUM(cu.discovered_count), 0) as leadsDiscovered,
+       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.market_id = m.id), 0) as activeLeads,
+       MAX(COALESCE(cu.finished_at, cu.started_at, cu.created_at)) as lastRunAt
+     FROM location_markets m
+     LEFT JOIN location_cells c ON c.market_id = m.id
+     LEFT JOIN crawl_units cu ON cu.location_cell_id = c.id ${runFilter}
+     WHERE m.status <> 'archived'
+     GROUP BY m.id, m.name, m.country_code, m.admin_area1
+     ORDER BY m.country_code, m.name`
+  ).all(...(runId ? [runId] : [])) as Array<Record<string, unknown>>;
+  return rows.map(normalizeMarketCoverageSummary);
+}
+
+export async function getLocationCellCoverage(runId?: string): Promise<LocationCellCoverage[]> {
+  const db = await getDb();
+  const runFilter = runId ? "AND cu.crawl_run_id = ?" : "";
+  const rows = await db.prepare(
+    `SELECT
+       c.id as cellId,
+       c.market_id as marketId,
+       m.name as marketName,
+       c.country_code as countryCode,
+       c.cell_type as cellType,
+       c.cell_label as cellLabel,
+       c.postal_code as postalCode,
+       c.locality,
+       c.admin_area1 as adminArea1,
+       c.admin_area2 as adminArea2,
+       COUNT(cu.id) as totalUnits,
+       COALESCE(SUM(CASE WHEN cu.status = 'done' THEN 1 ELSE 0 END), 0) as doneUnits,
+       COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) as failedUnits,
+       COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) as openUnits,
+       COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) as canceledUnits,
+       COALESCE(SUM(cu.discovered_count), 0) as leadsDiscovered,
+       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.location_cell_id = c.id), 0) as activeLeads,
+       MAX(COALESCE(cu.finished_at, cu.started_at, cu.created_at)) as lastRunAt
+     FROM location_cells c
+     INNER JOIN location_markets m ON m.id = c.market_id
+     LEFT JOIN crawl_units cu ON cu.location_cell_id = c.id ${runFilter}
+     WHERE c.is_active = 1
+     GROUP BY c.id, c.market_id, m.name, m.country_code, c.country_code, c.cell_type, c.cell_label, c.postal_code, c.locality, c.admin_area1, c.admin_area2
+     ORDER BY m.country_code, m.name, c.cell_type, c.cell_label`
+  ).all(...(runId ? [runId] : [])) as Array<Record<string, unknown>>;
+  return rows.map(normalizeLocationCellCoverage);
+}
+
+function coloradoCellId(zip: string): string {
+  return `cell-us-co-${zip}`;
+}
+
+function parseLocationMarketRow(row: Record<string, unknown>): LocationMarket {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    country_code: normalizeCountryCode(row.country_code),
+    admin_area1: row.admin_area1 ? String(row.admin_area1) : null,
+    admin_area2: row.admin_area2 ? String(row.admin_area2) : null,
+    locality: row.locality ? String(row.locality) : null,
+    status: row.status === "paused" || row.status === "archived" ? row.status : "active",
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  };
+}
+
+function parseLocationCellRow(row: Record<string, unknown>): LocationCell {
+  const countryCode = normalizeCountryCode(row.country_code);
+  const cellType = normalizeLocationCellType(row.cell_type, countryCode);
+  return {
+    id: String(row.id),
+    market_id: String(row.market_id),
+    market_name: row.market_name ? String(row.market_name) : null,
+    country_code: countryCode,
+    admin_area1: row.admin_area1 ? String(row.admin_area1) : null,
+    admin_area2: row.admin_area2 ? String(row.admin_area2) : null,
+    locality: row.locality ? String(row.locality) : null,
+    postal_code: row.postal_code ? String(row.postal_code) : null,
+    postal_code_normalized: row.postal_code_normalized ? String(row.postal_code_normalized) : null,
+    cell_type: cellType,
+    cell_label: String(row.cell_label ?? buildCellLabel({ countryCode, cellType })),
+    lat: row.lat == null ? null : Number(row.lat),
+    lng: row.lng == null ? null : Number(row.lng),
+    radius_meters: row.radius_meters == null ? null : Number(row.radius_meters),
+    is_active: Number(row.is_active ?? 0),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  };
+}
+
+function normalizeLocationCellType(value: unknown, countryCode: CountryCode): LocationCellType {
+  const normalized = String(value ?? "").trim();
+  const allowed: LocationCellType[] = [
+    "zip",
+    "postal_fsa",
+    "postcode_area",
+    "postcode_outward",
+    "city",
+    "county",
+    "province",
+    "region",
+    "custom_market",
+  ];
+  return allowed.includes(normalized as LocationCellType)
+    ? normalized as LocationCellType
+    : defaultCellTypeForCountry(countryCode);
+}
+
+function normalizeMarketCoverageSummary(row: Record<string, unknown>): MarketCoverageSummary {
+  const countryCode = normalizeCountryCode(row.countryCode ?? row.countrycode);
+  return {
+    marketId: String(row.marketId ?? row.marketid),
+    marketName: String(row.marketName ?? row.marketname),
+    countryCode,
+    countryLabel: COUNTRY_LABELS[countryCode],
+    adminArea1: (row.adminArea1 ?? row.adminarea1) ? String(row.adminArea1 ?? row.adminarea1) : null,
+    totalCells: Number(row.totalCells ?? row.totalcells ?? 0),
+    activeCells: Number(row.activeCells ?? row.activecells ?? 0),
+    discoveredCells: Number(row.discoveredCells ?? row.discoveredcells ?? 0),
+    totalUnits: Number(row.totalUnits ?? row.totalunits ?? 0),
+    doneUnits: Number(row.doneUnits ?? row.doneunits ?? 0),
+    failedUnits: Number(row.failedUnits ?? row.failedunits ?? 0),
+    openUnits: Number(row.openUnits ?? row.openunits ?? 0),
+    canceledUnits: Number(row.canceledUnits ?? row.canceledunits ?? 0),
+    leadsDiscovered: Number(row.leadsDiscovered ?? row.leadsdiscovered ?? 0),
+    activeLeads: Number(row.activeLeads ?? row.activeleads ?? 0),
+    lastRunAt: (row.lastRunAt ?? row.lastrunat) ? String(row.lastRunAt ?? row.lastrunat) : null,
+  };
+}
+
+function normalizeLocationCellCoverage(row: Record<string, unknown>): LocationCellCoverage {
+  const countryCode = normalizeCountryCode(row.countryCode ?? row.countrycode);
+  return {
+    cellId: String(row.cellId ?? row.cellid),
+    marketId: String(row.marketId ?? row.marketid),
+    marketName: String(row.marketName ?? row.marketname),
+    countryCode,
+    cellType: normalizeLocationCellType(row.cellType ?? row.celltype, countryCode),
+    cellLabel: String(row.cellLabel ?? row.celllabel),
+    postalCode: (row.postalCode ?? row.postalcode) ? String(row.postalCode ?? row.postalcode) : null,
+    locality: row.locality ? String(row.locality) : null,
+    adminArea1: (row.adminArea1 ?? row.adminarea1) ? String(row.adminArea1 ?? row.adminarea1) : null,
+    adminArea2: (row.adminArea2 ?? row.adminarea2) ? String(row.adminArea2 ?? row.adminarea2) : null,
+    totalUnits: Number(row.totalUnits ?? row.totalunits ?? 0),
+    doneUnits: Number(row.doneUnits ?? row.doneunits ?? 0),
+    failedUnits: Number(row.failedUnits ?? row.failedunits ?? 0),
+    openUnits: Number(row.openUnits ?? row.openunits ?? 0),
+    canceledUnits: Number(row.canceledUnits ?? row.canceledunits ?? 0),
+    leadsDiscovered: Number(row.leadsDiscovered ?? row.leadsdiscovered ?? 0),
+    activeLeads: Number(row.activeLeads ?? row.activeleads ?? 0),
+    lastRunAt: (row.lastRunAt ?? row.lastrunat) ? String(row.lastRunAt ?? row.lastrunat) : null,
+  };
+}
+
 export async function getActiveZipCodes(): Promise<ZipCode[]>{
   const db = await getDb();
   return await db.prepare("SELECT * FROM zip_codes WHERE is_active = 1 ORDER BY zip").all() as ZipCode[];
@@ -2397,45 +3354,221 @@ export async function getZipCoverageStatus(zip: string, categories?: readonly st
 
 // ─── Crawl Runs ───
 
-export async function createCrawlRun(categories: string[]): Promise<CrawlRun>{
+export async function createCrawlRun(
+  categories: string[],
+  options: {
+    marketId?: string | null;
+    selection?: Record<string, unknown> | null;
+    name?: string | null;
+    scopeLabel?: string | null;
+    createdByUserId?: string | null;
+  } = {},
+): Promise<CrawlRun>{
   const db = await getDb();
   const id = generateId();
   const now = nowISO();
 
   await db.prepare(
-    `INSERT INTO crawl_runs (id, mode, status, categories, started_at, created_at) VALUES (?, 'coverage', 'running', ?, ?, ?)`
-  ).run(id, JSON.stringify(categories), now, now);
+    `INSERT INTO crawl_runs (
+       id, mode, status, categories, market_id, selection_json, name, scope_label,
+       created_by_user_id, started_at, created_at, updated_at
+     )
+     VALUES (?, 'coverage', 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    JSON.stringify(categories),
+    options.marketId ?? null,
+    options.selection ? JSON.stringify(options.selection) : null,
+    normalizeNullableText(options.name),
+    normalizeNullableText(options.scopeLabel),
+    normalizeNullableText(options.createdByUserId),
+    now,
+    now,
+    now,
+  );
 
   return (await getCrawlRun(id))!;
+}
+
+function parseCrawlRunRow(row: Record<string, unknown>): CrawlRun {
+  return {
+    ...row,
+    categories: safeParseJson<string[]>(row.categories, []),
+    selection_json: safeParseJson<Record<string, unknown> | null>(row.selection_json, null),
+    name: (row.name as string | null) ?? null,
+    scope_label: (row.scope_label as string | null) ?? null,
+    created_by_user_id: (row.created_by_user_id as string | null) ?? null,
+    started_at: normalizeNullableDateText(row.started_at),
+    ended_at: normalizeNullableDateText(row.ended_at),
+    created_at: normalizeDateText(row.created_at),
+    updated_at: normalizeDateText(row.updated_at),
+  } as unknown as CrawlRun;
 }
 
 export async function getCrawlRun(id: string): Promise<CrawlRun | null>{
   const db = await getDb();
   const row = await db.prepare("SELECT * FROM crawl_runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
   if (!row) return null;
-  return { ...row, categories: safeParseJson<string[]>(row.categories, []) } as unknown as CrawlRun;
+  return parseCrawlRunRow(row);
+}
+
+export async function getProcessingCrawlRun(): Promise<CrawlRun | null>{
+  const db = await getDb();
+  const row = await db.prepare("SELECT * FROM crawl_runs WHERE status IN ('running', 'queued') ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return parseCrawlRunRow(row);
 }
 
 export async function getActiveCrawlRun(): Promise<CrawlRun | null>{
+  return getDefaultVisibleCrawlRun();
+}
+
+export async function getDefaultVisibleCrawlRun(): Promise<CrawlRun | null>{
+  const processing = await getProcessingCrawlRun();
+  if (processing) return processing;
+  return getLatestCrawlRun();
+}
+
+export async function getSelectedOrDefaultVisibleCrawlRun(runId?: string | null): Promise<CrawlRun | null>{
+  const cleanRunId = normalizeNullableText(runId);
+  if (cleanRunId) return getCrawlRun(cleanRunId);
+  return getDefaultVisibleCrawlRun();
+}
+
+export async function getLatestPausedCrawlRun(): Promise<CrawlRun | null>{
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM crawl_runs WHERE status IN ('running', 'queued', 'paused') ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+  const row = await db.prepare("SELECT * FROM crawl_runs WHERE status = 'paused' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
   if (!row) return null;
-  return { ...row, categories: safeParseJson<string[]>(row.categories, []) } as unknown as CrawlRun;
+  return parseCrawlRunRow(row);
 }
 
 export async function getLatestCrawlRun(): Promise<CrawlRun | null>{
   const db = await getDb();
   const row = await db.prepare("SELECT * FROM crawl_runs ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
   if (!row) return null;
-  return { ...row, categories: safeParseJson<string[]>(row.categories, []) } as unknown as CrawlRun;
+  return parseCrawlRunRow(row);
+}
+
+export async function listDiscoveryItems(limit = 12): Promise<DiscoveryItemSummary[]> {
+  const db = await getDb();
+  const boundedLimit = Math.max(1, Math.min(Math.floor(limit), 50));
+  const rows = await db.prepare(
+    `WITH latest_runs AS (
+       SELECT *
+       FROM crawl_runs
+       ORDER BY created_at DESC
+       LIMIT ?
+     ),
+     unit_counts AS (
+       SELECT
+         crawl_run_id,
+         COUNT(*) as total_units,
+         SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done_units,
+         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_units,
+         SUM(CASE WHEN status IN ('pending','retry_wait') THEN 1 ELSE 0 END) as open_units,
+         SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running_units,
+         SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END) as canceled_units,
+         SUM(COALESCE(pages_fetched, 0)) as pages_fetched,
+         SUM(COALESCE(raw_places_seen, 0)) as raw_places_seen,
+         SUM(COALESCE(new_places_seen, 0)) as new_places_seen,
+         SUM(COALESCE(duplicate_places_seen, 0)) as duplicate_places_seen
+       FROM crawl_units
+       WHERE crawl_run_id IN (SELECT id FROM latest_runs)
+       GROUP BY crawl_run_id
+     )
+     SELECT
+       cr.id,
+       cr.mode,
+       cr.status,
+       cr.categories,
+       cr.selection_json,
+       cr.market_id,
+       cr.name,
+       cr.scope_label,
+       cr.discovered_count,
+       cr.error_count,
+       cr.api_calls_used,
+       cr.last_error,
+       cr.created_at,
+       cr.started_at,
+       cr.ended_at,
+       lm.name as market_name,
+       lm.country_code,
+       COALESCE(uc.total_units, 0) as total_units,
+       COALESCE(uc.done_units, 0) as done_units,
+       COALESCE(uc.failed_units, 0) as failed_units,
+       COALESCE(uc.open_units, 0) as open_units,
+       COALESCE(uc.running_units, 0) as running_units,
+       COALESCE(uc.canceled_units, 0) as canceled_units,
+       COALESCE(uc.pages_fetched, 0) as pages_fetched,
+       COALESCE(uc.raw_places_seen, 0) as raw_places_seen,
+       COALESCE(uc.new_places_seen, 0) as new_places_seen,
+       COALESCE(uc.duplicate_places_seen, 0) as duplicate_places_seen
+     FROM latest_runs cr
+     LEFT JOIN location_markets lm ON lm.id = cr.market_id
+     LEFT JOIN unit_counts uc ON uc.crawl_run_id = cr.id
+     ORDER BY cr.created_at DESC
+     `
+  ).all(boundedLimit) as Array<Record<string, unknown>>;
+
+  return rows.map((row) => {
+    const categories = safeParseJson<string[]>(row.categories, []);
+    const selection = safeParseJson<Record<string, unknown> | null>(row.selection_json, null);
+    const createdAt = normalizeDateText(row.created_at);
+    const marketName = (row.market_name as string | null) ?? null;
+    const countryCode = (row.country_code as CountryCode | null) ?? null;
+    return {
+      id: row.id as string,
+      name: normalizeNullableText(row.name as string | null) ?? buildDiscoveryItemName(marketName, createdAt),
+      scopeLabel: normalizeNullableText(row.scope_label as string | null) ?? buildDiscoveryScopeLabel(marketName, countryCode),
+      status: row.status as string,
+      mode: row.mode as string,
+      discoveryMode: normalizeDiscoveryModeFromSelection(selection),
+      marketId: (row.market_id as string | null) ?? null,
+      marketName,
+      countryCode,
+      categories,
+      discoveredCount: Number(row.discovered_count) || 0,
+      errorCount: Number(row.error_count) || 0,
+      apiCallsUsed: Number(row.api_calls_used) || 0,
+      lastError: (row.last_error as string | null) ?? null,
+      createdAt,
+      startedAt: normalizeNullableDateText(row.started_at),
+      endedAt: normalizeNullableDateText(row.ended_at),
+      totalUnits: Number(row.total_units) || 0,
+      doneUnits: Number(row.done_units) || 0,
+      failedUnits: Number(row.failed_units) || 0,
+      openUnits: Number(row.open_units) || 0,
+      runningUnits: Number(row.running_units) || 0,
+      canceledUnits: Number(row.canceled_units) || 0,
+      pagesFetched: Number(row.pages_fetched) || 0,
+      rawPlacesSeen: Number(row.raw_places_seen) || 0,
+      newPlacesSeen: Number(row.new_places_seen) || 0,
+      duplicatePlacesSeen: Number(row.duplicate_places_seen) || 0,
+    };
+  });
+}
+
+function normalizeDiscoveryModeFromSelection(selection: Record<string, unknown> | null): "coverage_probe" | "lead_harvest" | null {
+  const value = selection?.discoveryMode;
+  return value === "coverage_probe" || value === "lead_harvest" ? value : null;
+}
+
+function buildDiscoveryItemName(marketName: string | null, createdAt: string): string {
+  const date = createdAt ? createdAt.slice(0, 10) : "unscheduled";
+  return `${marketName ?? "Discovery"} discovery - ${date}`;
+}
+
+function buildDiscoveryScopeLabel(marketName: string | null, countryCode: CountryCode | null): string {
+  return [marketName, countryCode].filter(Boolean).join(" / ") || "Unscoped discovery";
 }
 
 export async function updateCrawlRunStatus(id: string, status: string): Promise<void>{
   const db = await getDb();
   const updates: Record<string, unknown> = { status };
   if (status === "done" || status === "error" || status === "canceled") updates.ended_at = nowISO();
-  await db.prepare("UPDATE crawl_runs SET status = ?, ended_at = COALESCE(?, ended_at) WHERE id = ?")
-    .run(status, updates.ended_at ?? null, id);
+  await db.prepare("UPDATE crawl_runs SET status = ?, ended_at = COALESCE(?, ended_at), updated_at = ? WHERE id = ?")
+    .run(status, updates.ended_at ?? null, nowISO(), id);
 }
 
 export async function cancelCrawlRun(runId: string, reason = "Stopped by user"): Promise<{ canceledUnits: number }> {
@@ -2454,9 +3587,10 @@ export async function cancelCrawlRun(runId: string, reason = "Stopped by user"):
     `UPDATE crawl_runs
      SET status = 'canceled',
          ended_at = ?,
-         last_error = ?
+         last_error = ?,
+         updated_at = ?
      WHERE id = ?`
-  ).run(now, reason, runId);
+  ).run(now, reason, now, runId);
 
   return { canceledUnits: result.changes };
 }
@@ -2470,19 +3604,39 @@ export async function incrementCrawlRunCounters(id: string, discovered: number, 
 
 // ─── Crawl Units ───
 
-export async function createCrawlUnits(runId: string, categories: string[]): Promise<number>{
+export async function createCrawlUnits(runId: string, categories: string[], options: { maxPages?: number } = {}): Promise<number>{
   const db = await getDb();
   const zips = await getActiveZipCodes();
+  const maxPages = Math.max(1, Math.min(3, Math.floor(options.maxPages ?? 1)));
 
   const insert = await db.prepare(
-    `INSERT INTO crawl_units (id, crawl_run_id, zip, category, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)`
+    `INSERT INTO crawl_units (
+      id, crawl_run_id, zip, market_id, location_cell_id, country_code, query_location_label,
+      category, status, max_pages, created_at
+    ) VALUES (?, ?, ?, ?, ?, 'US', ?, ?, 'pending', ?, ?)`
   );
 
   const now = nowISO();
   let count = 0;
   for (const zip of zips) {
     for (const category of categories) {
-      await insert.run(generateId(), runId, zip.zip, category, now);
+      await insert.run(
+        generateId(),
+        runId,
+        zip.zip,
+        COLORADO_MARKET_ID,
+        coloradoCellId(zip.zip),
+        buildQueryLocationLabel({
+          countryCode: "US",
+          adminArea1: zip.state,
+          locality: zip.city,
+          postalCode: zip.zip,
+          cellType: "zip",
+        }),
+        category,
+        maxPages,
+        now,
+      );
       count++;
     }
   }
@@ -2490,8 +3644,9 @@ export async function createCrawlUnits(runId: string, categories: string[]): Pro
   return count;
 }
 
-export async function createCrawlUnitsForSelection(runId: string, categories: string[], zipCodes: string[]): Promise<number>{
+export async function createCrawlUnitsForSelection(runId: string, categories: string[], zipCodes: string[], options: { maxPages?: number } = {}): Promise<number>{
   const db = await getDb();
+  const maxPages = Math.max(1, Math.min(3, Math.floor(options.maxPages ?? 1)));
   const normalizedCategories = Array.from(
     new Set(categories.map((category) => category.trim()).filter((category) => category.length > 0))
   );
@@ -2505,29 +3660,103 @@ export async function createCrawlUnitsForSelection(runId: string, categories: st
 
   const placeholders = normalizedZipCodes.map(() => "?").join(", ");
   const activeZips = await db.prepare(
-    `SELECT zip
+    `SELECT zip, city, state, county, lat, lng, is_active
      FROM zip_codes
      WHERE is_active = 1 AND zip IN (${placeholders})
      ORDER BY zip`
-  ).all(...normalizedZipCodes) as Array<{ zip: string }>;
+  ).all(...normalizedZipCodes) as ZipCode[];
 
   if (activeZips.length === 0) {
     return 0;
   }
 
   const insert = await db.prepare(
-    `INSERT INTO crawl_units (id, crawl_run_id, zip, category, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)`
+    `INSERT INTO crawl_units (
+      id, crawl_run_id, zip, market_id, location_cell_id, country_code, query_location_label,
+      category, status, max_pages, created_at
+    ) VALUES (?, ?, ?, ?, ?, 'US', ?, ?, 'pending', ?, ?)`
   );
 
   const now = nowISO();
   let count = 0;
-  for (const { zip } of activeZips) {
+  for (const zip of activeZips) {
     for (const category of normalizedCategories) {
-      await insert.run(generateId(), runId, zip, category, now);
+      await insert.run(
+        generateId(),
+        runId,
+        zip.zip,
+        COLORADO_MARKET_ID,
+        coloradoCellId(zip.zip),
+        buildQueryLocationLabel({
+          countryCode: "US",
+          adminArea1: zip.state,
+          locality: zip.city,
+          postalCode: zip.zip,
+          cellType: "zip",
+        }),
+        category,
+        maxPages,
+        now,
+      );
       count++;
     }
   }
 
+  return count;
+}
+
+export async function createCrawlUnitsForCells(runId: string, categories: string[], cellIds: string[], options: { maxPages?: number } = {}): Promise<number>{
+  const db = await getDb();
+  const maxPages = Math.max(1, Math.min(3, Math.floor(options.maxPages ?? 1)));
+  const normalizedCategories = Array.from(new Set(categories.map((category) => category.trim()).filter(Boolean)));
+  const normalizedCellIds = Array.from(new Set(cellIds.map((id) => id.trim()).filter(Boolean)));
+  if (normalizedCategories.length === 0 || normalizedCellIds.length === 0) return 0;
+
+  const placeholders = normalizedCellIds.map(() => "?").join(", ");
+  const cells = await db.prepare(
+    `SELECT c.*, m.name as market_name
+     FROM location_cells c
+     INNER JOIN location_markets m ON m.id = c.market_id
+     WHERE c.is_active = 1 AND c.id IN (${placeholders})
+     ORDER BY m.country_code, m.name, c.cell_label`
+  ).all(...normalizedCellIds) as Array<Record<string, unknown>>;
+  const normalizedCells = cells.map(parseLocationCellRow);
+  if (normalizedCells.length === 0) return 0;
+
+  const insert = await db.prepare(
+    `INSERT INTO crawl_units (
+      id, crawl_run_id, zip, market_id, location_cell_id, country_code, query_location_label,
+      category, status, max_pages, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
+  );
+  const now = nowISO();
+  let count = 0;
+  for (const cell of normalizedCells) {
+    const zipCompat = cell.postal_code_normalized ?? cell.postal_code ?? cell.id;
+    const queryLocationLabel = buildQueryLocationLabel({
+      countryCode: cell.country_code,
+      adminArea1: cell.admin_area1,
+      adminArea2: cell.admin_area2,
+      locality: cell.locality,
+      postalCode: cell.postal_code_normalized ?? cell.postal_code,
+      cellType: cell.cell_type,
+    });
+    for (const category of normalizedCategories) {
+      await insert.run(
+        generateId(),
+        runId,
+        zipCompat,
+        cell.market_id,
+        cell.id,
+        cell.country_code,
+        queryLocationLabel,
+        category,
+        maxPages,
+        now,
+      );
+      count++;
+    }
+  }
   return count;
 }
 
@@ -2541,16 +3770,22 @@ export async function getNextPendingUnit(runId: string): Promise<CrawlUnit | nul
   ).run(runId);
 
   const row = await db.prepare(
-    `SELECT cu.*, z.city, z.lat, z.lng
+    `SELECT cu.*,
+       COALESCE(c.locality, z.city) as city,
+       COALESCE(c.admin_area2, z.county) as county,
+       COALESCE(c.lat, z.lat) as lat,
+       COALESCE(c.lng, z.lng) as lng
      FROM crawl_units cu
+     LEFT JOIN location_cells c ON c.id = cu.location_cell_id
      LEFT JOIN zip_codes z ON cu.zip = z.zip
      WHERE cu.crawl_run_id = ? AND cu.status = 'pending'
      ORDER BY
        CASE
-         WHEN z.county = 'Denver' THEN 0
-         WHEN z.city = 'Denver' THEN 1
+         WHEN COALESCE(c.admin_area2, z.county) = 'Denver' THEN 0
+         WHEN COALESCE(c.locality, z.city) = 'Denver' THEN 1
          ELSE 2
        END,
+       COALESCE(c.cell_label, cu.zip) ASC,
        cu.zip ASC,
        cu.category ASC,
        cu.created_at ASC
@@ -2576,14 +3811,16 @@ export async function leaseNextCrawlUnit(runId: string): Promise<CrawlUnit | nul
      WHERE id = (
        SELECT cu.id
        FROM crawl_units cu
+       LEFT JOIN location_cells c ON c.id = cu.location_cell_id
        LEFT JOIN zip_codes z ON cu.zip = z.zip
        WHERE cu.crawl_run_id = ? AND cu.status = 'pending'
        ORDER BY
          CASE
-           WHEN z.county = 'Denver' THEN 0
-           WHEN z.city = 'Denver' THEN 1
+           WHEN COALESCE(c.admin_area2, z.county) = 'Denver' THEN 0
+           WHEN COALESCE(c.locality, z.city) = 'Denver' THEN 1
            ELSE 2
          END,
+         COALESCE(c.cell_label, cu.zip) ASC,
          cu.zip ASC,
          cu.category ASC,
          cu.created_at ASC
@@ -2596,8 +3833,13 @@ export async function leaseNextCrawlUnit(runId: string): Promise<CrawlUnit | nul
   if (!leased) return null;
 
   const row = await db.prepare(
-    `SELECT cu.*, z.city, z.lat, z.lng
+    `SELECT cu.*,
+       COALESCE(c.locality, z.city) as city,
+       COALESCE(c.admin_area2, z.county) as county,
+       COALESCE(c.lat, z.lat) as lat,
+       COALESCE(c.lng, z.lng) as lng
      FROM crawl_units cu
+     LEFT JOIN location_cells c ON c.id = cu.location_cell_id
      LEFT JOIN zip_codes z ON cu.zip = z.zip
      WHERE cu.id = ?`
   ).get(leased.id) as CrawlUnit | undefined;
@@ -2642,6 +3884,43 @@ export async function updateUnitPageToken(unitId: string, token: string | null):
   await db.prepare("UPDATE crawl_units SET next_page_token = ? WHERE id = ?").run(token, unitId);
 }
 
+export async function recordUnitPageFetch(
+  unitId: string,
+  token: string | null,
+  rawPlaces: number,
+  newPlaces: number,
+  duplicatePlaces: number,
+): Promise<void>{
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE crawl_units
+     SET next_page_token = ?,
+         pages_fetched = pages_fetched + 1,
+         raw_places_seen = raw_places_seen + ?,
+         new_places_seen = new_places_seen + ?,
+         duplicate_places_seen = duplicate_places_seen + ?
+     WHERE id = ?`
+  ).run(
+    token,
+    Math.max(0, Math.floor(rawPlaces)),
+    Math.max(0, Math.floor(newPlaces)),
+    Math.max(0, Math.floor(duplicatePlaces)),
+    unitId,
+  );
+}
+
+export async function markUnitBudgetBlocked(unitId: string, error: string): Promise<void> {
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE crawl_units
+     SET status = 'pending',
+         started_at = NULL,
+         last_error = ?,
+         budget_blocked_at = ?
+     WHERE id = ? AND status = 'running'`
+  ).run(error.slice(0, 1000), nowISO(), unitId);
+}
+
 export async function retryFailedUnits(runId: string): Promise<number>{
   const db = await getDb();
   const result = await db.prepare(
@@ -2677,8 +3956,12 @@ export async function getCrawlUnitPreview(runId: string, limit = 80): Promise<Cr
        cu.id,
        cu.status,
        cu.zip,
-       z.city,
-       z.county,
+       cu.market_id,
+       cu.location_cell_id,
+       cu.country_code,
+       cu.query_location_label,
+       COALESCE(c.locality, z.city) as city,
+       COALESCE(c.admin_area2, z.county) as county,
        cu.category,
        cu.attempt_count,
        cu.discovered_count,
@@ -2686,8 +3969,15 @@ export async function getCrawlUnitPreview(runId: string, limit = 80): Promise<Cr
        cu.finished_at,
        cu.last_error,
        cu.next_page_token,
+       cu.max_pages,
+       cu.pages_fetched,
+       cu.raw_places_seen,
+       cu.new_places_seen,
+       cu.duplicate_places_seen,
+       cu.budget_blocked_at,
        cu.created_at
      FROM crawl_units cu
+     LEFT JOIN location_cells c ON c.id = cu.location_cell_id
      LEFT JOIN zip_codes z ON cu.zip = z.zip
      WHERE cu.crawl_run_id = ?
      ORDER BY
@@ -2711,6 +4001,105 @@ export async function getCrawlUnitPreview(runId: string, limit = 80): Promise<Cr
     attempt_count: Number(row.attempt_count) || 0,
     discovered_count: Number(row.discovered_count) || 0,
   }));
+}
+
+export async function getDiscoveryRunCandidates(runId: string, limit = 100): Promise<DiscoveryRunCandidate[]> {
+  const db = await getDb();
+  const boundedLimit = Math.max(1, Math.min(Math.floor(limit), 200));
+  const rows = await db.prepare(
+    `WITH run_observations AS (
+       SELECT
+         po.place_id,
+         MAX(po.observed_at) as last_observed_at,
+         COUNT(*) as observation_count,
+         MAX(cu.market_id) as market_id,
+         MAX(cu.location_cell_id) as location_cell_id,
+         MAX(cu.country_code) as country_code,
+         MAX(cu.query_location_label) as query_location_label,
+         MAX(cu.category) as category
+       FROM place_observations po
+       LEFT JOIN crawl_units cu ON cu.id = po.crawl_unit_id
+       WHERE po.crawl_run_id = ?
+       GROUP BY po.place_id
+     )
+     SELECT
+       pm.place_id,
+       pm.name,
+       pm.address,
+       pm.phone,
+       pm.website_uri,
+       pm.maps_uri,
+       pm.categories,
+       pm.rating,
+       pm.user_rating_count,
+       pm.business_status,
+       pm.primary_type,
+       pm.lat,
+       pm.lng,
+       pm.completeness_score,
+       pm.freshness_score,
+       pm.verification_coverage,
+       pm.first_seen_at,
+       pm.last_seen_at,
+       ro.last_observed_at,
+       ro.observation_count,
+       ro.market_id,
+       ro.location_cell_id,
+       ro.country_code,
+       ro.query_location_label,
+       ro.category,
+       l.id as lead_id,
+       l.status as lead_status,
+       l.is_excluded as lead_is_excluded
+     FROM run_observations ro
+     INNER JOIN places_master pm ON pm.place_id = ro.place_id
+     LEFT JOIN leads l ON l.place_id = pm.place_id
+     ORDER BY
+       CASE WHEN l.id IS NULL THEN 0 ELSE 1 END,
+       CASE WHEN pm.website_uri IS NULL OR pm.website_uri = '' THEN 0 ELSE 1 END,
+       pm.user_rating_count DESC,
+       pm.rating DESC,
+       pm.name ASC
+     LIMIT ?`
+  ).all(runId, boundedLimit) as Array<Record<string, unknown>>;
+
+  return rows.map((row) => {
+    const hasLead = Boolean(row.lead_id);
+    const leadIsExcluded = Boolean(Number(row.lead_is_excluded) || row.lead_is_excluded === true);
+    return {
+      placeId: row.place_id as string,
+      name: normalizeNullableText(row.name as string | null),
+      address: normalizeNullableText(row.address as string | null),
+      phone: normalizeNullableText(row.phone as string | null),
+      websiteUri: normalizeNullableText(row.website_uri as string | null),
+      mapsUri: normalizeNullableText(row.maps_uri as string | null),
+      categories: safeParseJson<string[]>(row.categories, []),
+      rating: row.rating === null || row.rating === undefined ? null : Number(row.rating),
+      userRatingCount: row.user_rating_count === null || row.user_rating_count === undefined ? null : Number(row.user_rating_count),
+      businessStatus: normalizeNullableText(row.business_status as string | null),
+      primaryType: normalizeNullableText(row.primary_type as string | null),
+      lat: row.lat === null || row.lat === undefined ? null : Number(row.lat),
+      lng: row.lng === null || row.lng === undefined ? null : Number(row.lng),
+      completenessScore: Number(row.completeness_score) || 0,
+      freshnessScore: Number(row.freshness_score) || 0,
+      verificationCoverage: Number(row.verification_coverage) || 0,
+      firstSeenAt: normalizeDateText(row.first_seen_at),
+      lastSeenAt: normalizeDateText(row.last_seen_at),
+      lastObservedAt: normalizeNullableDateText(row.last_observed_at),
+      observationCount: Number(row.observation_count) || 0,
+      marketId: normalizeNullableText(row.market_id as string | null),
+      locationCellId: normalizeNullableText(row.location_cell_id as string | null),
+      countryCode: (row.country_code as CountryCode | null) ?? null,
+      queryLocationLabel: normalizeNullableText(row.query_location_label as string | null),
+      category: normalizeNullableText(row.category as string | null),
+      hasLead,
+      leadId: normalizeNullableText(row.lead_id as string | null),
+      leadStatus: normalizeNullableText(row.lead_status as string | null),
+      leadIsExcluded,
+      websiteStatusLabel: normalizeNullableText(row.website_uri as string | null) ? "Website present" : "No website",
+      listingStatus: hasLead ? (leadIsExcluded ? "Excluded lead" : "Active lead") : "Directory candidate",
+    };
+  });
 }
 
 export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
@@ -2764,31 +4153,37 @@ export async function getLeadMapZipCoverage(): Promise<LeadMapZipCoverage[]> {
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT
-       z.zip,
-       z.city,
-       z.state,
-       z.county,
-       z.lat,
-       z.lng
-     FROM zip_codes z
-     WHERE z.is_active = 1
-       AND z.lat IS NOT NULL
-       AND z.lng IS NOT NULL
-     ORDER BY z.zip`
+       c.id,
+       c.postal_code_normalized,
+       c.postal_code,
+       c.cell_label,
+       c.locality,
+       c.admin_area1,
+       c.admin_area2,
+       c.lat,
+       c.lng
+     FROM location_cells c
+     WHERE c.is_active = 1
+       AND c.lat IS NOT NULL
+       AND c.lng IS NOT NULL
+     ORDER BY c.country_code, c.postal_code_normalized, c.cell_label`
   ).all() as Array<{
-    zip: string;
-    city: string;
-    state: string;
-    county: string;
+    id: string;
+    postal_code_normalized: string | null;
+    postal_code: string | null;
+    cell_label: string;
+    locality: string | null;
+    admin_area1: string | null;
+    admin_area2: string | null;
     lat: number;
     lng: number;
   }>;
 
   return rows.map((row) => ({
-    zip: row.zip,
-    city: row.city,
-    state: row.state,
-    county: row.county,
+    zip: row.postal_code_normalized ?? row.postal_code ?? row.cell_label ?? row.id,
+    city: row.locality ?? row.cell_label,
+    state: row.admin_area1 ?? "",
+    county: row.admin_area2 ?? "",
     lat: Number(row.lat),
     lng: Number(row.lng),
     leadCount: 0,
@@ -2915,8 +4310,15 @@ export async function upsertLead(data: {
   has_opening_hours?: boolean;
   primary_type?: string | null;
   lat?: number | null;
-  lng?: number | null;
-  score?: number;
+    lng?: number | null;
+    score?: number;
+    market_id?: string | null;
+    location_cell_id?: string | null;
+    country_code?: CountryCode | string | null;
+    admin_area1?: string | null;
+    admin_area2?: string | null;
+    locality?: string | null;
+    postal_code?: string | null;
   selling_niche?: string | null;
   business_type?: BusinessType | null;
   qualification_status?: QualificationStatus;
@@ -2955,7 +4357,15 @@ export async function upsertLead(data: {
         maps_uri = COALESCE(?, maps_uri), business_status = COALESCE(?, business_status),
         price_level = COALESCE(?, price_level), photo_count = COALESCE(?, photo_count),
         has_opening_hours = COALESCE(?, has_opening_hours), primary_type = COALESCE(?, primary_type),
-        lat = COALESCE(?, lat), lng = COALESCE(?, lng), score = COALESCE(?, score),
+        lat = COALESCE(?, lat), lng = COALESCE(?, lng),
+        market_id = COALESCE(?, market_id),
+        location_cell_id = COALESCE(?, location_cell_id),
+        country_code = COALESCE(?, country_code),
+        admin_area1 = COALESCE(?, admin_area1),
+        admin_area2 = COALESCE(?, admin_area2),
+        locality = COALESCE(?, locality),
+        postal_code = COALESCE(?, postal_code),
+        score = COALESCE(?, score),
         selling_niche = COALESCE(?, selling_niche),
         business_type = COALESCE(?, business_type),
         qualification_status = COALESCE(?, qualification_status),
@@ -2977,6 +4387,13 @@ export async function upsertLead(data: {
       data.price_level ?? null, data.photo_count ?? null,
       data.has_opening_hours != null ? (data.has_opening_hours ? 1 : 0) : null,
       data.primary_type ?? null, data.lat ?? null, data.lng ?? null,
+      data.market_id ?? null,
+      data.location_cell_id ?? null,
+      data.country_code ? normalizeCountryCode(data.country_code) : null,
+      data.admin_area1 ?? null,
+      data.admin_area2 ?? null,
+      data.locality ?? null,
+      data.postal_code ?? null,
       data.score ?? null,
       data.selling_niche ?? qualification.sellingNiche,
       businessType,
@@ -3000,10 +4417,11 @@ export async function upsertLead(data: {
     `INSERT INTO leads (id, place_id, name, address, phone, categories, rating, review_count,
       website_uri, website_status, maps_uri, business_status, price_level,
       photo_count, has_opening_hours, primary_type, lat, lng,
+      market_id, location_cell_id, country_code, admin_area1, admin_area2, locality, postal_code,
       score, selling_niche, business_type, qualification_status, disqualification_reason, website_verified_at,
       contactability_score, estimated_deal_value, is_excluded, exclusion_reason, excluded_at,
       discovered_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id, data.place_id, data.name ?? null, data.address ?? null, data.phone ?? null,
     JSON.stringify(categories), data.rating ?? null, data.review_count ?? null,
@@ -3012,6 +4430,13 @@ export async function upsertLead(data: {
     data.price_level ?? null, data.photo_count ?? 0,
     data.has_opening_hours ? 1 : 0, data.primary_type ?? null,
     data.lat ?? null, data.lng ?? null,
+    data.market_id ?? null,
+    data.location_cell_id ?? null,
+    data.country_code ? normalizeCountryCode(data.country_code) : null,
+    data.admin_area1 ?? null,
+    data.admin_area2 ?? null,
+    data.locality ?? null,
+    data.postal_code ?? null,
     data.score ?? 0,
     data.selling_niche ?? qualification.sellingNiche,
     businessType,
@@ -3027,6 +4452,53 @@ export async function upsertLead(data: {
   );
   await updateLeadQualityScores(id);
   return id;
+}
+
+export interface ManualLeadInput {
+  name: string;
+  businessType: BusinessType | string;
+  phone?: string | null;
+  address?: string | null;
+  websiteStatus?: WebsiteStatus | string;
+  notes?: string | null;
+}
+
+export async function createManualLead(input: ManualLeadInput): Promise<Lead> {
+  const websiteStatus = normalizeWebsiteStatus(input.websiteStatus);
+  const id = await upsertLead({
+    place_id: `manual:${generateId()}`,
+    name: input.name,
+    address: input.address ?? null,
+    phone: input.phone ?? null,
+    categories: [],
+    website_status: websiteStatus,
+    score: 0,
+    business_type: input.businessType as BusinessType,
+    qualification_status: "needs_verification",
+    is_excluded: false,
+  });
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE leads
+     SET status = 'new',
+         quality_bucket = 'needs_ai_verify',
+         enrichment_status = 'pending',
+         ai_verification_status = 'not_checked',
+         ai_queue_status = CASE WHEN website_status = 'none' THEN 'queued' ELSE ai_queue_status END,
+         notes = ?,
+         archived_at = NULL,
+         archived_by_user_id = NULL,
+         archive_reason = NULL,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(input.notes?.trim() || null, nowISO(), id);
+  const lead = await getLeadById(id);
+  if (!lead) throw new Error("Manual lead was created but could not be loaded.");
+  return lead;
+}
+
+function normalizeWebsiteStatus(value: unknown): WebsiteStatus {
+  return value === "social" || value === "basic" || value === "custom" ? value : "none";
 }
 
 export async function leadExists(placeId: string): Promise<boolean>{
@@ -3048,7 +4520,7 @@ const LEAD_ALLOWED_SORT = [
   "name",
   "created_at",
 ];
-const SCORE_ELIGIBLE_CONDITION = "COALESCE(is_excluded, 0) = 0";
+const SCORE_ELIGIBLE_CONDITION = "COALESCE(is_excluded, 0) = 0 AND archived_at IS NULL";
 const NO_WEBSITE_OPPORTUNITY_STATUSES = new Set(["none", "social", "basic"]);
 const EXCLUDED_STATUS_FILTER = "excluded";
 export const API_ENDPOINT_TEXT_SEARCH = "places.searchText";
@@ -3088,6 +4560,12 @@ function buildLeadFilterWhere(filters: LeadFilters): { where: string; params: un
   const conditions: string[] = [];
   const params: unknown[] = [];
 
+  if (filters.archived === "archived") {
+    conditions.push("l.archived_at IS NOT NULL");
+  } else if (filters.archived !== "all") {
+    conditions.push("l.archived_at IS NULL");
+  }
+
   if (filters.status === EXCLUDED_STATUS_FILTER) {
     conditions.push("COALESCE(l.is_excluded, 0) = 1");
   } else {
@@ -3121,8 +4599,24 @@ function buildLeadFilterWhere(filters: LeadFilters): { where: string; params: un
     params.push(`%${filters.city}%`);
   }
   if (filters.zip) {
-    conditions.push("l.address LIKE ?");
-    params.push(`%${filters.zip}%`);
+    conditions.push("(l.postal_code = ? OR l.address LIKE ?)");
+    params.push(filters.zip, `%${filters.zip}%`);
+  }
+  if (filters.marketId) {
+    conditions.push("l.market_id = ?");
+    params.push(filters.marketId);
+  }
+  if (filters.countryCode) {
+    conditions.push("l.country_code = ?");
+    params.push(normalizeCountryCode(filters.countryCode));
+  }
+  if (filters.locationCellId) {
+    conditions.push("l.location_cell_id = ?");
+    params.push(filters.locationCellId);
+  }
+  if (filters.visibleToUserId) {
+    conditions.push("l.market_id IN (SELECT market_id FROM user_market_access WHERE user_id = ?)");
+    params.push(filters.visibleToUserId);
   }
   if (filters.minLat != null) {
     conditions.push("l.lat IS NOT NULL AND l.lat >= ?");
@@ -3292,7 +4786,9 @@ export async function getLeadMapPoints(
        l.score,
        l.quality_bucket,
        l.ai_verification_status,
+       l.ai_checked_at,
        l.ai_website_viability_status,
+       l.ai_queue_status,
        l.estimated_deal_value,
        l.assigned_to_user_id,
        au.email as assigned_user_email,
@@ -3319,7 +4815,9 @@ export async function getLeadMapPoints(
       score: Number(row.score ?? 0),
       quality_bucket: ((row.quality_bucket as QualityBucket | null) ?? "needs_ai_verify"),
       ai_verification_status: ((row.ai_verification_status as AiVerificationStatus | null) ?? "not_checked"),
+      ai_checked_at: (row.ai_checked_at as string | null) ?? null,
       ai_website_viability_status: (row.ai_website_viability_status as WebsiteViabilityStatus | null) ?? null,
+      ai_queue_status: normalizeAiQueueStatus(row.ai_queue_status),
       estimated_deal_value: Number(row.estimated_deal_value ?? 0),
       assigned_to_user_id: (row.assigned_to_user_id as string | null) ?? null,
       assigned_user_email: (row.assigned_user_email as string | null) ?? null,
@@ -3346,15 +4844,17 @@ export async function getLeadsForExport(filters: LeadFilters = {}, limit = 50000
   return rows.map(parseLeadRow);
 }
 
-export async function getBusinessTypeCounts(): Promise<BusinessTypeCount[]>{
+export async function getBusinessTypeCounts(filters: LeadFilters = {}): Promise<BusinessTypeCount[]>{
   const db = await getDb();
+  const { where, params } = buildLeadFilterWhere({ ...filters, businessType: undefined, page: undefined, pageSize: undefined });
   const rows = await db.prepare(
-    `SELECT COALESCE(business_type, 'local_services') as business_type,
+    `SELECT COALESCE(l.business_type, 'local_services') as business_type,
             COUNT(*) as total,
-            SUM(CASE WHEN COALESCE(is_excluded, 0) = 0 THEN 1 ELSE 0 END) as active
-     FROM leads
-     GROUP BY COALESCE(business_type, 'local_services')`
-  ).all() as Array<{ business_type: string; total: number; active: number }>;
+            SUM(CASE WHEN COALESCE(is_excluded, 0) = 0 AND archived_at IS NULL THEN 1 ELSE 0 END) as active
+     FROM leads l
+     ${where}
+     GROUP BY COALESCE(l.business_type, 'local_services')`
+  ).all(...params) as Array<{ business_type: string; total: number; active: number }>;
 
   const byType = new Map(rows.map((row) => [row.business_type, row]));
   return BUSINESS_TYPE_OPTIONS.map((option) => {
@@ -3543,6 +5043,83 @@ export async function updateLeadNotes(id: string, notes: string): Promise<void>{
   await db.prepare("UPDATE leads SET notes = ?, updated_at = ? WHERE id = ?").run(notes, nowISO(), id);
 }
 
+export async function updateLeadFacts(id: string, input: LeadFactsInput): Promise<Lead | null> {
+  const current = await getLeadById(id);
+  if (!current) {
+    return null;
+  }
+
+  const db = await getDb();
+  const now = nowISO();
+  const leadUpdates: string[] = [];
+  const leadValues: unknown[] = [];
+  const placeUpdates: string[] = [];
+  const placeValues: unknown[] = [];
+
+  const setLead = (column: string, value: unknown) => {
+    leadUpdates.push(`${column} = ?`);
+    leadValues.push(value);
+  };
+
+  const setPlace = (column: string, value: unknown) => {
+    placeUpdates.push(`${column} = ?`);
+    placeValues.push(value);
+  };
+
+  if (input.name !== undefined) {
+    setLead("name", input.name);
+    setPlace("name", input.name);
+  }
+  if (input.phone !== undefined) {
+    setLead("phone", input.phone);
+    setPlace("phone", input.phone);
+  }
+  if (input.address !== undefined) {
+    setLead("address", input.address);
+    setPlace("address", input.address);
+  }
+  if (input.primaryType !== undefined) {
+    setLead("primary_type", input.primaryType);
+    setPlace("primary_type", input.primaryType);
+  }
+  if (input.businessType !== undefined) {
+    setLead("business_type", input.businessType);
+  }
+  if (input.status !== undefined) {
+    setLead("status", input.status);
+  }
+  if (input.notes !== undefined) {
+    setLead("notes", input.notes);
+  }
+  if (input.websiteUrl !== undefined) {
+    const nextWebsiteStatus = input.websiteStatus ?? (input.websiteUrl ? "custom" : "none");
+    setLead("website_uri", input.websiteUrl);
+    setLead("website_status", nextWebsiteStatus);
+    setLead("website_verified_at", input.websiteUrl ? now : null);
+    setPlace("website_uri", input.websiteUrl);
+  }
+
+  if (leadUpdates.length === 0) {
+    return current;
+  }
+
+  setLead("updated_at", now);
+  leadValues.push(id);
+
+  await db.prepare(`UPDATE leads SET ${leadUpdates.join(", ")} WHERE id = ?`).run(...leadValues);
+
+  if (current.place_id && placeUpdates.length > 0) {
+    placeUpdates.push("updated_at = ?");
+    placeValues.push(now, current.place_id);
+    await db
+      .prepare(`UPDATE places_master SET ${placeUpdates.join(", ")} WHERE place_id = ?`)
+      .run(...placeValues);
+  }
+
+  await updateLeadQualityScores(id, input.actorUserId ?? null);
+  return getLeadById(id);
+}
+
 export async function createLeadNote(leadId: string, authorUserId: string, body: string): Promise<LeadNote> {
   const db = await getDb();
   const id = generateId();
@@ -3631,6 +5208,73 @@ export async function clearLeadExclusion(id: string): Promise<number>{
   ).run(nowISO(), id);
   await updateLeadQualityScores(id);
   return result.changes;
+}
+
+export async function archiveLead(id: string, userId: string, reason: string): Promise<number> {
+  const db = await getDb();
+  const now = nowISO();
+  const result = await db.prepare(
+    `UPDATE leads
+     SET archived_at = ?,
+         archived_by_user_id = ?,
+         archive_reason = ?,
+         updated_at = ?
+     WHERE id = ?
+       AND archived_at IS NULL`
+  ).run(now, userId, reason, now, id);
+  return result.changes;
+}
+
+export async function restoreArchivedLead(id: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.prepare(
+    `UPDATE leads
+     SET archived_at = NULL,
+         archived_by_user_id = NULL,
+         archive_reason = NULL,
+         updated_at = ?
+     WHERE id = ?
+       AND archived_at IS NOT NULL`
+  ).run(nowISO(), id);
+  if (result.changes > 0) await updateLeadQualityScores(id);
+  return result.changes;
+}
+
+export async function bulkArchiveLeads(ids: string[], userId: string, reason: string): Promise<number> {
+  const safeIds = uniqueIds(ids);
+  if (safeIds.length === 0) return 0;
+  const db = await getDb();
+  const now = nowISO();
+  const result = await db.prepare(
+    `UPDATE leads
+     SET archived_at = ?,
+         archived_by_user_id = ?,
+         archive_reason = ?,
+         updated_at = ?
+     WHERE id IN (${safeIds.map(() => "?").join(",")})
+       AND archived_at IS NULL`
+  ).run(now, userId, reason, now, ...safeIds);
+  return result.changes;
+}
+
+export async function bulkRestoreArchivedLeads(ids: string[]): Promise<number> {
+  const safeIds = uniqueIds(ids);
+  if (safeIds.length === 0) return 0;
+  const db = await getDb();
+  const result = await db.prepare(
+    `UPDATE leads
+     SET archived_at = NULL,
+         archived_by_user_id = NULL,
+         archive_reason = NULL,
+         updated_at = ?
+     WHERE id IN (${safeIds.map(() => "?").join(",")})
+       AND archived_at IS NOT NULL`
+  ).run(nowISO(), ...safeIds);
+  return result.changes;
+}
+
+function uniqueIds(ids: string[]): string[] {
+  return Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean))).slice(0, 500);
 }
 
 // ─── AI Verification ───
@@ -4153,6 +5797,7 @@ export async function getNextAiVerificationJob(maxAttempts = 3): Promise<Lead | 
        AND (ai_next_retry_at IS NULL OR ai_next_retry_at <= ?)
        AND ai_attempt_count < ?
        AND COALESCE(is_excluded, 0) = 0
+       AND archived_at IS NULL
        AND status NOT IN ('closed_won','closed_lost')
        AND COALESCE(business_status, '') NOT IN ('CLOSED_PERMANENTLY','CLOSED_TEMPORARILY')
      ORDER BY
@@ -4193,6 +5838,7 @@ export async function leaseNextAiVerificationJob(maxAttempts = 3): Promise<Lead 
          AND (ai_next_retry_at IS NULL OR ai_next_retry_at <= ?)
          AND ai_attempt_count < ?
          AND COALESCE(is_excluded, 0) = 0
+         AND archived_at IS NULL
          AND status NOT IN ('closed_won','closed_lost')
          AND COALESCE(business_status, '') NOT IN ('CLOSED_PERMANENTLY','CLOSED_TEMPORARILY')
        ORDER BY
@@ -4216,6 +5862,7 @@ export async function getAiVerificationBackfillCandidates(limit = 10000): Promis
      FROM leads
      WHERE ai_queue_status NOT IN ('queued','running')
        AND COALESCE(is_excluded, 0) = 0
+       AND archived_at IS NULL
        AND status NOT IN ('closed_won','closed_lost')
        AND COALESCE(business_status, '') NOT IN ('CLOSED_PERMANENTLY','CLOSED_TEMPORARILY')
      ORDER BY sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at ASC
@@ -4229,6 +5876,7 @@ export async function getAiQueueStats(): Promise<AiQueueStats> {
   const rows = await db.prepare(
     `SELECT COALESCE(ai_queue_status, 'not_checked') as status, COUNT(*) as count
      FROM leads
+     WHERE archived_at IS NULL
      GROUP BY COALESCE(ai_queue_status, 'not_checked')`
   ).all() as Array<{ status: string; count: number }>;
   const stats: AiQueueStats = { notChecked: 0, queued: 0, running: 0, verified: 0, error: 0, total: 0 };
@@ -4255,6 +5903,7 @@ export async function getAiVerificationCandidates(limit: number, businessType?: 
     "l.status IN ('new', 'verified', 'contacted')",
     "l.score > 0",
     "COALESCE(l.is_excluded, 0) = 0",
+    "l.archived_at IS NULL",
   ];
   const params: unknown[] = [];
   if (businessType) {
@@ -4293,6 +5942,128 @@ export async function applyAiFoundWebsite(leadId: string, websiteUrl: string): P
   ).run(websiteUrl, now, now, leadId);
   await updateLeadQualityScores(leadId);
   return result.changes;
+}
+
+export async function applyManualWebsiteCorrection(
+  leadId: string,
+  input: ManualWebsiteCorrectionInput,
+): Promise<Lead | null> {
+  const current = await getLeadById(leadId);
+  if (!current) {
+    return null;
+  }
+
+  const db = await getDb();
+  const now = nowISO();
+  const notes = input.notes?.trim() || null;
+  const correctionReason = notes ?? "Manual website correction";
+  const websiteUrl = input.resolution === "remove_website" ? null : input.websiteUrl;
+  const baseValues = [
+    websiteUrl,
+    input.resolution === "remove_website" ? "none" : input.websiteStatus,
+    input.resolution === "remove_website" ? null : now,
+    input.resolution === "remove_website" ? null : websiteUrl,
+    correctionReason,
+    notes,
+    now,
+  ];
+
+  if (input.resolution === "official_website_found") {
+    await db.prepare(
+      `UPDATE leads SET
+        website_uri = ?,
+        website_status = ?,
+        website_verified_at = ?,
+        ai_website_feedback_status = 'incorrect',
+        ai_corrected_website_url = ?,
+        ai_false_positive_reason = ?,
+        ai_reviewer_notes = ?,
+        ai_feedback_at = ?,
+        is_excluded = 1,
+        exclusion_reason = 'Manual correction: official website found',
+        excluded_at = COALESCE(excluded_at, ?),
+        qualification_status = 'disqualified',
+        disqualification_reason = 'Manual correction: official website found',
+        quality_bucket = 'not_a_fit',
+        ai_recommendation = 'exclude',
+        score = 0,
+        win_probability_score = 0,
+        updated_at = ?
+       WHERE id = ?`
+    ).run(...baseValues, now, now, leadId);
+  } else if (input.resolution === "weak_or_basic_site") {
+    await db.prepare(
+      `UPDATE leads SET
+        website_uri = ?,
+        website_status = 'basic',
+        website_verified_at = ?,
+        ai_website_feedback_status = 'incorrect',
+        ai_corrected_website_url = ?,
+        ai_false_positive_reason = ?,
+        ai_reviewer_notes = ?,
+        ai_feedback_at = ?,
+        is_excluded = 0,
+        exclusion_reason = NULL,
+        excluded_at = NULL,
+        qualification_status = CASE WHEN qualification_status = 'disqualified' THEN 'needs_verification' ELSE qualification_status END,
+        disqualification_reason = NULL,
+        quality_bucket = 'broken_site_opportunity',
+        ai_recommendation = 'prioritize',
+        updated_at = ?
+       WHERE id = ?`
+    ).run(websiteUrl, now, websiteUrl, correctionReason, notes, now, now, leadId);
+  } else if (input.resolution === "social_or_directory_only") {
+    await db.prepare(
+      `UPDATE leads SET
+        website_uri = ?,
+        website_status = ?,
+        website_verified_at = ?,
+        ai_website_feedback_status = 'correct',
+        ai_corrected_website_url = ?,
+        ai_false_positive_reason = ?,
+        ai_reviewer_notes = ?,
+        ai_feedback_at = ?,
+        is_excluded = 0,
+        exclusion_reason = NULL,
+        excluded_at = NULL,
+        qualification_status = CASE WHEN qualification_status = 'disqualified' THEN 'needs_verification' ELSE qualification_status END,
+        disqualification_reason = NULL,
+        quality_bucket = 'needs_manual_review',
+        ai_recommendation = 'manual_review',
+        updated_at = ?
+       WHERE id = ?`
+    ).run(...baseValues, now, leadId);
+  } else {
+    await db.prepare(
+      `UPDATE leads SET
+        website_uri = NULL,
+        website_status = 'none',
+        website_verified_at = NULL,
+        ai_website_feedback_status = 'incorrect',
+        ai_corrected_website_url = NULL,
+        ai_false_positive_reason = ?,
+        ai_reviewer_notes = ?,
+        ai_feedback_at = ?,
+        is_excluded = 0,
+        exclusion_reason = NULL,
+        excluded_at = NULL,
+        qualification_status = CASE WHEN qualification_status = 'disqualified' THEN 'needs_verification' ELSE qualification_status END,
+        disqualification_reason = NULL,
+        quality_bucket = 'needs_ai_verify',
+        ai_recommendation = 'manual_review',
+        updated_at = ?
+       WHERE id = ?`
+    ).run(correctionReason, notes, now, now, leadId);
+  }
+
+  if (current.place_id) {
+    await db
+      .prepare("UPDATE places_master SET website_uri = ?, updated_at = ? WHERE place_id = ?")
+      .run(websiteUrl, now, current.place_id);
+  }
+
+  await updateLeadQualityScores(leadId, input.actorUserId ?? null);
+  return getLeadById(leadId);
 }
 
 export async function updateLeadQualityScores(leadId: string, actorUserId?: string | null): Promise<void>{
@@ -4498,7 +6269,15 @@ function isWeakWebsiteViability(status: WebsiteViabilityStatus | null): boolean 
 export async function recomputeAllLeadQualityScores(limit = 100000): Promise<number>{
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(100000, Math.floor(limit)));
-  const rows = await db.prepare("SELECT id FROM leads ORDER BY updated_at DESC LIMIT ?").all(safeLimit) as Array<{ id: string }>;
+  const rows = await db.prepare(
+    `SELECT id
+     FROM leads
+     WHERE archived_at IS NULL
+       AND (last_quality_scored_at IS NULL
+        OR julianday(updated_at) > julianday(last_quality_scored_at))
+     ORDER BY updated_at DESC
+     LIMIT ?`
+  ).all(safeLimit) as Array<{ id: string }>;
   for (const row of rows) {
     await updateLeadQualityScores(row.id);
   }
@@ -4642,6 +6421,7 @@ export async function getAiWebsiteViabilityRepairLeads(limit = 50): Promise<Lead
 function buildQualityWhere(filters: QualityFilters = {}): { where: string; params: unknown[] } {
   const conditions = [
     "COALESCE(l.is_excluded, 0) = 0",
+    "l.archived_at IS NULL",
     "l.website_status IN ('none', 'social', 'basic')",
     noUsableAiWebsiteCondition("l"),
     "l.qualification_status IN ('qualified', 'needs_verification')",
@@ -4723,7 +6503,41 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
   const offset = (page - 1) * pageSize;
   const countRow = await db.prepare(`SELECT COUNT(*) as count FROM leads l ${where}`).get(...params) as { count: number };
   const rows = await db.prepare(
-    `SELECT l.*,
+    `SELECT
+       l.id,
+       l.place_id,
+       l.name,
+       l.address,
+       l.phone,
+       l.website_uri,
+       l.website_status,
+       l.categories,
+       l.business_type,
+       l.status,
+       l.score,
+       l.is_excluded,
+       l.archived_at,
+       l.quality_bucket,
+       l.lead_quality_score,
+       l.easy_build_score,
+       l.cash_speed_score,
+       l.contactability_score,
+       l.estimated_deal_value,
+       l.recommended_offer,
+       l.next_best_action,
+       l.quality_reason,
+       l.phone_verification_status,
+       l.ai_verification_status,
+       l.ai_checked_at,
+       l.ai_queue_status,
+       l.ai_website_viability_status,
+       l.ai_confidence,
+       l.ai_found_website_url,
+       l.qualification_status,
+       l.enrichment_status,
+       l.discovered_at,
+       l.updated_at,
+       l.assigned_to_user_id,
        au.email as assigned_user_email,
        au.display_name as assigned_user_display_name,
        (
@@ -4790,6 +6604,7 @@ export async function getQualityAiVerificationCandidates(input: {
     "l.qualification_status IN ('qualified', 'needs_verification')",
     "l.score > 0",
     "COALESCE(l.is_excluded, 0) = 0",
+    "l.archived_at IS NULL",
   ];
   const params: unknown[] = [];
   if (input.businessType) {
@@ -4823,8 +6638,18 @@ function parseLeadRow(row: Record<string, unknown>): Lead {
     has_opening_hours: (row.has_opening_hours as number) === 1,
     photo_count: (row.photo_count as number) ?? 0,
     is_excluded: ((row.is_excluded as number) ?? 0) === 1,
+    market_id: (row.market_id as string | null) ?? null,
+    location_cell_id: (row.location_cell_id as string | null) ?? null,
+    country_code: row.country_code ? normalizeCountryCode(row.country_code) : null,
+    admin_area1: (row.admin_area1 as string | null) ?? null,
+    admin_area2: (row.admin_area2 as string | null) ?? null,
+    locality: (row.locality as string | null) ?? null,
+    postal_code: (row.postal_code as string | null) ?? null,
     exclusion_reason: (row.exclusion_reason as string | null) ?? null,
     excluded_at: (row.excluded_at as string | null) ?? null,
+    archived_at: (row.archived_at as string | null) ?? null,
+    archived_by_user_id: (row.archived_by_user_id as string | null) ?? null,
+    archive_reason: (row.archive_reason as string | null) ?? null,
     selling_niche: (row.selling_niche as string | null) ?? null,
     business_type: ((row.business_type as BusinessType | null) ?? "local_services"),
     win_probability_score: (row.win_probability_score as number | null) ?? 0,
@@ -4991,6 +6816,18 @@ function normalizeNullableText(value: string | null | undefined): string | null 
   return clean.length > 0 ? clean : null;
 }
 
+function normalizeDateText(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "";
+  return String(value);
+}
+
+function normalizeNullableDateText(value: unknown): string | null {
+  const normalized = normalizeDateText(value);
+  return normalized.length > 0 ? normalized : null;
+}
+
 // ─── Dashboard Stats ───
 
 export async function getRunGeographyProgress(runId: string): Promise<GeographyProgress>{
@@ -5072,6 +6909,9 @@ export async function getRunGeographyProgress(runId: string): Promise<GeographyP
 export async function getDashboardStats(): Promise<{
   runStatus: string;
   runId: string | null;
+  processingRunStatus: string;
+  processingRunId: string | null;
+  discoveryItems: DiscoveryItemSummary[];
   leadsTotal: number;
   leadsToday: number;
   failedUnits: number;
@@ -5088,7 +6928,11 @@ export async function getDashboardStats(): Promise<{
   aiQueueStats: AiQueueStats;
 }> {
   const db = await getDb();
-  const activeRun = await getActiveCrawlRun();
+  const [visibleRun, processingRun, discoveryItems] = await Promise.all([
+    getDefaultVisibleCrawlRun(),
+    getProcessingCrawlRun(),
+    Promise.resolve([] as DiscoveryItemSummary[]),
+  ]);
 
   const leadsTotal = ((await db.prepare("SELECT COUNT(*) as c FROM leads").get()) as { c: number }).c;
   const today = new Date().toISOString().slice(0, 10);
@@ -5108,16 +6952,19 @@ export async function getDashboardStats(): Promise<{
     countiesCompleted: 0,
   };
 
-  if (activeRun) {
-    const prog = await getCrawlProgress(activeRun.id);
+  if (visibleRun) {
+    const prog = await getCrawlProgress(visibleRun.id);
     progress = prog;
     failedUnits = prog.failed;
-    geographyProgress = await getRunGeographyProgress(activeRun.id);
+    geographyProgress = await getRunGeographyProgress(visibleRun.id);
   }
 
   return {
-    runStatus: activeRun?.status ?? "idle",
-    runId: activeRun?.id ?? null,
+    runStatus: visibleRun?.status ?? "idle",
+    runId: visibleRun?.id ?? null,
+    processingRunStatus: processingRun?.status ?? "idle",
+    processingRunId: processingRun?.id ?? null,
+    discoveryItems,
     leadsTotal,
     leadsToday,
     failedUnits,
@@ -5141,10 +6988,9 @@ export async function getTodayApiCalls(): Promise<number>{
   const db = await getDb();
   const today = startOfToday();
   const usageRow = await db.prepare(
-    `SELECT COUNT(*) as total
+    `SELECT COALESCE(SUM(billable_units), 0) as total
      FROM api_usage_events
-     WHERE success = 1
-       AND COALESCE(was_cached, 0) = 0
+     WHERE COALESCE(was_cached, 0) = 0
        AND created_at >= ?`
   ).get(today) as { total: number };
   const usageTotal = Number(usageRow.total) || 0;
@@ -5160,10 +7006,9 @@ export async function getTodayApiCalls(): Promise<number>{
 export async function getRunApiCalls(runId: string): Promise<number>{
   const db = await getDb();
   const usageRow = await db.prepare(
-    `SELECT COUNT(*) as total
+    `SELECT COALESCE(SUM(billable_units), 0) as total
      FROM api_usage_events
      WHERE crawl_run_id = ?
-       AND success = 1
        AND COALESCE(was_cached, 0) = 0`
   ).get(runId) as { total: number } | undefined;
   const usageTotal = Number(usageRow?.total) || 0;
@@ -5180,9 +7025,9 @@ export async function getRunApiUsageSummary(runId: string): Promise<ApiUsageSumm
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT endpoint,
-            COUNT(*) as calls,
+            COALESCE(SUM(billable_units), 0) as calls,
             COALESCE(SUM(estimated_cost), 0) as cost,
-            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN 1 ELSE 0 END), 0) as atmosphere_calls,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN billable_units ELSE 0 END), 0) as atmosphere_calls,
             COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN estimated_cost ELSE 0 END), 0) as atmosphere_cost
      FROM api_usage_events
      WHERE crawl_run_id = ?
@@ -5238,9 +7083,9 @@ export async function getMonthlyApiUsageSummary(): Promise<ApiUsageSummary>{
   const monthStart = startOfCurrentMonth();
   const rows = await db.prepare(
     `SELECT endpoint,
-            COUNT(*) as calls,
+            COALESCE(SUM(billable_units), 0) as calls,
             COALESCE(SUM(estimated_cost), 0) as cost,
-            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN 1 ELSE 0 END), 0) as atmosphere_calls,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN billable_units ELSE 0 END), 0) as atmosphere_calls,
             COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN estimated_cost ELSE 0 END), 0) as atmosphere_cost
      FROM api_usage_events
      WHERE success = 1
@@ -5303,7 +7148,7 @@ export async function isMonthlySpendLimitReached(limit: number): Promise<boolean
 export async function getRunAtmosphereEnrichmentCalls(runId: string): Promise<number>{
   const db = await getDb();
   const row = await db.prepare(
-    `SELECT COUNT(*) as total
+    `SELECT COALESCE(SUM(billable_units), 0) as total
      FROM api_usage_events
      WHERE crawl_run_id = ?
        AND endpoint = ?
@@ -5317,7 +7162,7 @@ export async function getRunAtmosphereEnrichmentCalls(runId: string): Promise<nu
 export async function getRunEnrichmentCalls(runId: string): Promise<number>{
   const db = await getDb();
   const row = await db.prepare(
-    `SELECT COUNT(*) as total
+    `SELECT COALESCE(SUM(billable_units), 0) as total
      FROM api_usage_events
      WHERE crawl_run_id = ?
        AND endpoint = ?
@@ -5331,10 +7176,9 @@ export async function getMonthlyBillableEventsForSku(sku: GooglePlacesSku): Prom
   const db = await getDb();
   const monthStart = startOfCurrentMonth();
   const row = await db.prepare(
-    `SELECT COUNT(*) as total
+    `SELECT COALESCE(SUM(billable_units), 0) as total
      FROM api_usage_events
      WHERE sku = ?
-       AND success = 1
        AND COALESCE(was_cached, 0) = 0
        AND created_at >= ?`
   ).get(sku, monthStart) as { total: number };
@@ -5830,6 +7674,12 @@ export async function recordPlaceObservation(input: PlaceObservationInput): Prom
     input.observed_at ?? nowISO(),
     nowISO(),
   );
+}
+
+export async function placeMasterExists(placeId: string): Promise<boolean>{
+  const db = await getDb();
+  const row = await db.prepare("SELECT 1 as exists_flag FROM places_master WHERE place_id = ? LIMIT 1").get(placeId) as { exists_flag: number } | undefined;
+  return !!row;
 }
 
 export async function upsertPlaceMaster(input: PlaceMasterUpsertInput): Promise<void>{
@@ -6463,7 +8313,7 @@ export async function updateLeadTimestamp(id: string, field: string, value: stri
 
 export async function getNowQueue(
   limit = 25,
-  options: { assignedToUserId?: string; unassignedOnly?: boolean } = {},
+  options: { assignedToUserId?: string; unassignedOnly?: boolean; visibleToUserId?: string } = {},
 ): Promise<QueueLead[]>{
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
@@ -6476,6 +8326,10 @@ export async function getNowQueue(
   }
   if (options.unassignedOnly) {
     assignmentConditions.push(leadUnassignedCondition("assigned_to_user_id"));
+  }
+  if (options.visibleToUserId) {
+    assignmentConditions.push("market_id IN (SELECT market_id FROM user_market_access WHERE user_id = ?)");
+    assignmentParams.push(options.visibleToUserId);
   }
   const assignmentWhere = assignmentConditions.length > 0 ? `AND ${assignmentConditions.join(" AND ")}` : "";
 
@@ -6495,6 +8349,7 @@ export async function getNowQueue(
         )
         AND score > 0
         AND ${SCORE_ELIGIBLE_CONDITION}
+        AND archived_at IS NULL
         ${assignmentWhere}
       ORDER BY ${leadWebsiteNeedRankExpression("leads")} DESC, sales_priority_score DESC, lead_quality_score DESC, score DESC
       LIMIT ?
@@ -6663,14 +8518,19 @@ export async function getNowQueue(
   }));
 }
 
-export async function getResearcherWorkbench(userId: string): Promise<ResearcherWorkbench> {
+export async function getResearcherWorkbench(userId: string, options: { viewerRole?: string } = {}): Promise<ResearcherWorkbench> {
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const visibleToUserId = options.viewerRole === "admin" ? undefined : userId;
   const [myLeads, unclaimedLeads] = await Promise.all([
-    getNowQueue(25, { assignedToUserId: userId }),
-    getNowQueue(25, { unassignedOnly: true }),
+    getNowQueue(25, { assignedToUserId: userId, visibleToUserId }),
+    getNowQueue(25, { unassignedOnly: true, visibleToUserId }),
   ]);
+  const marketCondition = visibleToUserId
+    ? "AND l.market_id IN (SELECT market_id FROM user_market_access WHERE user_id = ?)"
+    : "";
+  const marketParams = visibleToUserId ? [visibleToUserId] : [];
 
   const summaryRow = await db.prepare(
     `SELECT
@@ -6678,8 +8538,10 @@ export async function getResearcherWorkbench(userId: string): Promise<Researcher
        COALESCE(SUM(CASE WHEN l.assigned_to_user_id = ? AND l.reminder_date IS NOT NULL AND l.reminder_date <= ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as due_today,
        COALESCE(SUM(CASE WHEN ${leadUnassignedCondition("l.assigned_to_user_id")} AND l.quality_bucket IN ('ready_to_call','broken_site_opportunity') AND l.status IN ('new','verified','contacted') THEN 1 ELSE 0 END), 0) as best_unclaimed
      FROM leads l
-     WHERE COALESCE(l.is_excluded, 0) = 0`
-  ).get(userId, userId, today) as Record<string, unknown>;
+     WHERE COALESCE(l.is_excluded, 0) = 0
+       AND l.archived_at IS NULL
+       ${marketCondition}`
+  ).get(userId, userId, today, ...marketParams) as Record<string, unknown>;
   const contactRow = await db.prepare(
     "SELECT COUNT(*) as count FROM outreach_events WHERE actor_user_id = ? AND created_at >= ?"
   ).get(userId, weekAgo) as { count: number } | undefined;
@@ -6743,7 +8605,7 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
        ), 0) as quote_requests_open
      FROM app_users au
      LEFT JOIN app_users tl ON tl.user_id = au.team_lead_user_id
-     LEFT JOIN leads l ON l.assigned_to_user_id = au.user_id AND COALESCE(l.is_excluded, 0) = 0
+     LEFT JOIN leads l ON l.assigned_to_user_id = au.user_id AND COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL
      WHERE au.status = 'active'
      GROUP BY au.user_id, au.email, au.display_name, au.role, au.is_team_lead, au.team_lead_user_id, au.team_label, tl.email, tl.display_name
      ORDER BY au.role ASC, au.is_team_lead DESC, au.email ASC`
@@ -6753,6 +8615,7 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
     `SELECT COUNT(*) as count
      FROM leads
      WHERE COALESCE(is_excluded, 0) = 0
+       AND archived_at IS NULL
        AND ${leadUnassignedCondition("assigned_to_user_id")}
        AND quality_bucket IN ('ready_to_call','broken_site_opportunity')
        AND status IN ('new','verified','contacted')`
@@ -6761,6 +8624,7 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
     `SELECT COUNT(*) as count
      FROM leads
      WHERE COALESCE(is_excluded, 0) = 0
+       AND archived_at IS NULL
        AND reminder_date IS NOT NULL
        AND reminder_date <= ?
        AND status NOT IN ('closed_won','closed_lost')`
@@ -6935,27 +8799,27 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
   const aiVerificationWindow = dateWindow("av.created_at", range);
   const runWindow = dateWindow("cr.created_at", range);
 
-  const totalDiscovered = await countRows(db, "leads l", leadWindow);
-  const activeLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0");
-  const qualifiedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.qualification_status = 'qualified'");
+  const totalDiscovered = await countRows(db, "leads l", leadWindow, "l.archived_at IS NULL");
+  const activeLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL");
+  const qualifiedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status = 'qualified'");
   const queueCandidates = await countRows(
     db,
     "leads l",
     leadWindow,
-    `COALESCE(l.is_excluded, 0) = 0 AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")} AND l.qualification_status IN ('qualified','needs_verification') AND l.status IN ('new','verified','contacted') AND l.score > 0`,
+    `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")} AND l.qualification_status IN ('qualified','needs_verification') AND l.status IN ('new','verified','contacted') AND l.score > 0`,
   );
-  const excludedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 1");
+  const excludedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 1 AND l.archived_at IS NULL");
   const demosCreated = await countRows(db, "demos d", demoWindow);
   const contactedLeads = await countDistinctRows(db, "outreach_events oe", "oe.lead_id", outreachWindow);
-  const replies = await countRows(db, "leads l", replyWindow, "l.first_reply_at IS NOT NULL");
-  const meetings = await countRows(db, "leads l", meetingWindow, "l.meeting_booked_at IS NOT NULL");
-  const closedWon = await countRows(db, "leads l", statusWindow, "l.status = 'closed_won'");
-  const closedLost = await countRows(db, "leads l", statusWindow, "l.status = 'closed_lost'");
+  const replies = await countRows(db, "leads l", replyWindow, "l.first_reply_at IS NOT NULL AND l.archived_at IS NULL");
+  const meetings = await countRows(db, "leads l", meetingWindow, "l.meeting_booked_at IS NOT NULL AND l.archived_at IS NULL");
+  const closedWon = await countRows(db, "leads l", statusWindow, "l.status = 'closed_won' AND l.archived_at IS NULL");
+  const closedLost = await countRows(db, "leads l", statusWindow, "l.status = 'closed_lost' AND l.archived_at IS NULL");
 
   const economicsRow = await db.prepare(
-    `SELECT COALESCE(SUM(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.qualification_status IN ('qualified','needs_verification') THEN l.estimated_deal_value ELSE 0 END), 0) as pipeline_value,
-            COALESCE(AVG(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.estimated_deal_value > 0 THEN l.estimated_deal_value END), 0) as average_deal_value
-     FROM leads l ${whereFromWindow(leadWindow)}`
+    `SELECT COALESCE(SUM(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status IN ('qualified','needs_verification') THEN l.estimated_deal_value ELSE 0 END), 0) as pipeline_value,
+            COALESCE(AVG(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.estimated_deal_value > 0 THEN l.estimated_deal_value END), 0) as average_deal_value
+     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL")}`
   ).get(...leadWindow.params) as { pipeline_value: number; average_deal_value: number };
 
   const apiRow = await db.prepare(
@@ -6995,14 +8859,14 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
        COALESCE(SUM(CASE WHEN l.ai_verification_status = 'no_site_found' OR l.ai_website_viability_status = 'directory_only' THEN 1 ELSE 0 END), 0) as ai_no_site,
        COALESCE(SUM(CASE WHEN l.ai_verification_status = 'site_found' AND l.ai_website_viability_status = 'usable' THEN 1 ELSE 0 END), 0) as usable_site_found,
        COALESCE(SUM(CASE WHEN l.quality_bucket = 'broken_site_opportunity' OR l.ai_website_viability_status IN ('broken','parked','placeholder') THEN 1 ELSE 0 END), 0) as broken_site_found
-     FROM leads l ${whereFromWindow(leadWindow)}`
+     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL")}`
   ).get(...leadWindow.params) as Record<string, number>;
   const qualityPipelineRows = await getQualityValueRows(
     db,
     `SELECT COALESCE(l.quality_bucket, 'needs_ai_verify') as key,
             COUNT(*) as count,
-            COALESCE(SUM(CASE WHEN COALESCE(l.is_excluded, 0) = 0 THEN l.estimated_deal_value ELSE 0 END), 0) as value
-     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0")}
+            COALESCE(SUM(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL THEN l.estimated_deal_value ELSE 0 END), 0) as value
+     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL")}
      GROUP BY COALESCE(l.quality_bucket, 'needs_ai_verify')
      ORDER BY value DESC, count DESC`,
     leadWindow.params,
@@ -7013,7 +8877,7 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     `SELECT COALESCE(l.business_type, 'local_services') as key,
             COUNT(*) as count,
             COALESCE(SUM(l.estimated_deal_value), 0) as value
-     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.quality_bucket = 'ready_to_call'")}
+     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.quality_bucket = 'ready_to_call'")}
      GROUP BY COALESCE(l.business_type, 'local_services')
      ORDER BY count DESC, value DESC
      LIMIT 8`,
@@ -7025,7 +8889,7 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     `SELECT COALESCE(l.business_type, 'local_services') as key,
             COUNT(*) as count,
             COALESCE(SUM(l.estimated_deal_value), 0) as value
-     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.quality_bucket IN ('ready_to_call','broken_site_opportunity')")}
+     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.quality_bucket IN ('ready_to_call','broken_site_opportunity')")}
      GROUP BY COALESCE(l.business_type, 'local_services')
      ORDER BY value DESC, count DESC
      LIMIT 8`,
@@ -7045,7 +8909,7 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     db,
     "leads l",
     { clause: "", params: [] },
-    "COALESCE(l.is_excluded, 0) = 0 AND l.enrichment_status = 'pending' AND l.score > 0",
+    "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.enrichment_status = 'pending' AND l.score > 0",
   );
 
   return {
@@ -7140,7 +9004,7 @@ async function getStatisticsBusinessTypes(db: DbClient, range: ResolvedStatistic
             COALESCE(AVG(l.score), 0) as average_score,
             COALESCE(AVG(CASE WHEN l.estimated_deal_value > 0 THEN l.estimated_deal_value END), 0) as average_deal_value,
             COALESCE(SUM(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.qualification_status IN ('qualified','needs_verification') THEN l.estimated_deal_value ELSE 0 END), 0) as pipeline_value
-     FROM leads l ${whereFromWindow(leadWindow)}
+     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL")}
      GROUP BY COALESCE(l.business_type, 'local_services')`
   ).all(...leadWindow.params) as Array<Record<string, unknown>>;
 

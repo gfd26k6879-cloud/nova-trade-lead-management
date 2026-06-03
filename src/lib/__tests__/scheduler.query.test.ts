@@ -17,8 +17,10 @@ import {
   getCoverageByZip,
   getSchedulerOperationsSummary,
   getSchedulerHealth,
+  markStaleWorkerRunsInterrupted,
   getSettings,
   isSchedulerWorkerEnabled,
+  recomputeAllLeadQualityScores,
   startWorkerRun,
   updateLeadAiFeedback,
   updateSettings,
@@ -82,6 +84,54 @@ describe("scheduler v2 query behavior", () => {
     expect(worker?.lastRun?.status).toBe("processed");
     expect(worker?.lastRun?.result_json).toMatchObject({ leadId: "lead-1" });
     expect(worker?.errors24h).toBe(0);
+  });
+
+  it("marks stale worker runs interrupted without touching fresh runs", async () => {
+    testDb.prepare(
+      `INSERT INTO worker_runs (id, worker_name, status, trigger_source, started_at, created_at)
+       VALUES (?, ?, 'running', 'cron', ?, ?)`
+    ).run("stale-run", "score_recompute", "2000-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z");
+    testDb.prepare(
+      `INSERT INTO worker_runs (id, worker_name, status, trigger_source, started_at, created_at)
+       VALUES (?, ?, 'running', 'cron', ?, ?)`
+    ).run("fresh-run", "score_recompute", new Date().toISOString(), new Date().toISOString());
+
+    expect(await markStaleWorkerRunsInterrupted(15)).toBe(1);
+
+    const stale = testDb.prepare("SELECT status, http_status, error, completed_at FROM worker_runs WHERE id = 'stale-run'").get() as Record<string, unknown>;
+    const fresh = testDb.prepare("SELECT status, completed_at FROM worker_runs WHERE id = 'fresh-run'").get() as Record<string, unknown>;
+    expect(stale.status).toBe("interrupted");
+    expect(stale.http_status).toBe(599);
+    expect(stale.error).toBe("Worker run interrupted or timed out before completion.");
+    expect(stale.completed_at).toBeTruthy();
+    expect(fresh.status).toBe("running");
+    expect(fresh.completed_at).toBeNull();
+  });
+
+  it("counts interrupted worker runs as scheduler errors", async () => {
+    const now = new Date().toISOString();
+    testDb.prepare(
+      `INSERT INTO worker_runs (id, worker_name, status, trigger_source, http_status, error, started_at, completed_at, created_at)
+       VALUES (?, ?, 'interrupted', 'cron', 599, ?, ?, ?, ?)`
+    ).run("interrupted-run", "score_recompute", "Worker run interrupted or timed out before completion.", now, now, now);
+
+    const health = await getSchedulerHealth();
+    const worker = health.workers.find((item) => item.workerName === "score_recompute");
+    expect(worker?.lastRun?.status).toBe("interrupted");
+    expect(worker?.errors24h).toBe(1);
+  });
+
+  it("recomputes only stale lead quality scores", async () => {
+    insertLead("stale-score");
+    insertLead("fresh-score");
+    testDb.prepare(
+      `UPDATE leads SET updated_at = ?, last_quality_scored_at = ? WHERE id = ?`
+    ).run("2026-05-03T10:00:00.000Z", "2026-05-02T10:00:00.000Z", "stale-score");
+    testDb.prepare(
+      `UPDATE leads SET updated_at = ?, last_quality_scored_at = ? WHERE id = ?`
+    ).run("2026-05-01T10:00:00.000Z", "2026-05-02T10:00:00.000Z", "fresh-score");
+
+    expect(await recomputeAllLeadQualityScores(100)).toBe(1);
   });
 
   it("builds scheduler operations summary with zero-data cost and backlog defaults", async () => {

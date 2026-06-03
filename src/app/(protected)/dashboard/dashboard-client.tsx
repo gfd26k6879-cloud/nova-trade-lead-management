@@ -9,14 +9,19 @@ import { HelpTip } from "@/components/help-tip";
 import { LocationScopePicker, type LocationScopeValue } from "@/components/location-scope-picker";
 import {
   startCrawlRunAction,
+  estimateDiscoveryRunAction,
   pauseCrawlRunAction,
   resumeCrawlRunAction,
   stopCrawlRunAction,
   retryFailedUnitsAction,
+  getDiscoveryItemsAction,
+  getDashboardAnalyticsAction,
   getDashboardStatsAction,
+  getDashboardSummaryPanelsAction,
 } from "@/lib/crawl/actions";
 import { queueMissingAiVerificationsAction } from "@/lib/leads/actions";
 import type { AdminFulfillmentSummary, AdminRequest, StatisticsSummary, TeamBoardSummary } from "@/lib/db/queries";
+import type { DiscoveryBudgetEstimate, DiscoveryMode, PaginationPolicy } from "@/lib/discovery-budget";
 
 const CATEGORY_OPTIONS = [
   "dentist", "lawyer", "hvac", "plumber", "electrician", "roofing",
@@ -32,6 +37,45 @@ interface ConversionMetrics {
   replyRate: number;
   meetingRate: number;
   medianHoursToContact: number | null;
+}
+
+function DiscoveryMiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.45)" }}>
+      <p className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>{label}</p>
+      <p className="mt-1 font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
+    </div>
+  );
+}
+
+function formatDiscoveryItemLabel(item: DiscoveryItem): string {
+  const created = formatDateTime(item.createdAt);
+  const units = item.totalUnits === 1 ? "1 unit" : `${item.totalUnits} units`;
+  return `${item.name} · ${created} · ${units} · ${item.status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}`;
+}
+
+function formatDiscoveryMode(mode: DiscoveryItem["discoveryMode"]): string {
+  if (mode === "coverage_probe") return "coverage probe";
+  if (mode === "lead_harvest") return "lead harvest";
+  return "legacy discovery";
+}
+
+function DiscoveryStatusBadge({ status }: { status: string }) {
+  const color = discoveryStatusColor(status);
+  return (
+    <span className="rounded-full px-2.5 py-1 text-xs font-medium capitalize" style={{ background: color.background, color: color.color }}>
+      {status.replace(/_/g, " ")}
+    </span>
+  );
+}
+
+function discoveryStatusColor(status: string) {
+  if (status === "running" || status === "queued") return { background: "rgba(37,99,235,0.1)", color: "#1d4ed8" };
+  if (status === "paused") return { background: "rgba(245,158,11,0.12)", color: "#92400e" };
+  if (status === "done") return { background: "rgba(22,101,52,0.1)", color: "#166534" };
+  if (status === "error" || status === "failed") return { background: "rgba(239,68,68,0.1)", color: "#991b1b" };
+  if (status === "canceled") return { background: "rgba(100,116,139,0.14)", color: "#475569" };
+  return { background: "rgba(100,116,139,0.12)", color: "#475569" };
 }
 
 interface AiQueueStats {
@@ -92,6 +136,9 @@ interface SchedulerHealth {
 interface DashboardStats {
   runStatus: string;
   runId: string | null;
+  processingRunStatus: string;
+  processingRunId: string | null;
+  discoveryItems: DiscoveryItem[];
   leadsTotal: number;
   leadsToday: number;
   failedUnits: number;
@@ -124,6 +171,60 @@ interface DashboardStats {
   countiesCompleted: number;
   aiQueueStats: AiQueueStats;
   schedulerHealth: SchedulerHealth;
+  googleDiscoveryDefaults: {
+    discoveryMode: DiscoveryMode;
+    paginationPolicy: PaginationPolicy;
+    testRunCallCap: number;
+  };
+}
+
+type DashboardCoreStatus = "loadingCore" | "ready" | "degraded" | "error";
+type DashboardPanelStatus = "loading" | "ready" | "error";
+
+function dashboardLoadReasonLabel(reason: string | null): string | null {
+  if (reason === "db_statement_timeout") return "Database reads timed out before dashboard stats loaded.";
+  if (reason === "transient_db_error") return "The database connection was temporarily unavailable.";
+  if (reason === "dashboard_stats_unavailable") return "Dashboard stats are temporarily unavailable.";
+  return null;
+}
+
+function panelLoadReasonLabel(reason: string | undefined, fallback: string): string {
+  if (reason === "db_statement_timeout") return "This panel is taking too long. Retry this panel.";
+  if (reason === "transient_db_error") return "The database connection was temporarily unavailable. Retry this panel.";
+  if (reason === "discovery_items_unavailable") return "Discovery items are temporarily unavailable. Retry this panel.";
+  if (reason === "summary_panels_unavailable") return "Optional dashboard panels are temporarily unavailable. Retry this panel.";
+  if (reason === "dashboard_stats_unavailable") return "Dashboard analytics are temporarily unavailable. Retry this panel.";
+  return fallback;
+}
+
+interface DiscoveryItem {
+  id: string;
+  name: string;
+  scopeLabel: string;
+  status: string;
+  mode: string;
+  discoveryMode: "coverage_probe" | "lead_harvest" | null;
+  marketId: string | null;
+  marketName: string | null;
+  countryCode: string | null;
+  categories: string[];
+  discoveredCount: number;
+  errorCount: number;
+  apiCallsUsed: number;
+  lastError: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  totalUnits: number;
+  doneUnits: number;
+  failedUnits: number;
+  openUnits: number;
+  runningUnits: number;
+  canceledUnits: number;
+  pagesFetched: number;
+  rawPlacesSeen: number;
+  newPlacesSeen: number;
+  duplicatePlacesSeen: number;
 }
 
 export function DashboardClient({
@@ -138,9 +239,25 @@ export function DashboardClient({
   fulfillmentSummary: AdminFulfillmentSummary;
 }) {
   const [stats, setStats] = useState<DashboardStats>(initialStats);
+  const [currentTeamSummary, setCurrentTeamSummary] = useState(teamSummary);
+  const [currentWeeklyStats, setCurrentWeeklyStats] = useState(weeklyStats);
+  const [currentFulfillmentSummary, setCurrentFulfillmentSummary] = useState(fulfillmentSummary);
+  const [summaryPanelStatus, setSummaryPanelStatus] = useState<DashboardPanelStatus>("loading");
+  const [summaryPanelError, setSummaryPanelError] = useState<string | null>(null);
+  const [analyticsPanelStatus, setAnalyticsPanelStatus] = useState<DashboardPanelStatus>("loading");
+  const [analyticsPanelError, setAnalyticsPanelError] = useState<string | null>(null);
+  const [discoveryItems, setDiscoveryItems] = useState<DiscoveryItem[]>(initialStats.discoveryItems);
+  const [discoveryItemsStatus, setDiscoveryItemsStatus] = useState<DashboardPanelStatus>("loading");
+  const [discoveryItemsError, setDiscoveryItemsError] = useState<string | null>(null);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([...CATEGORY_OPTIONS]);
   const [locationScope, setLocationScope] = useState<LocationScopeValue>({ state: "CO", counties: [], zipCodes: [] });
-  const [isProcessing, setIsProcessing] = useState(stats.runStatus === "running");
+  const [discoveryMode, setDiscoveryMode] = useState<DiscoveryMode>(initialStats.googleDiscoveryDefaults.discoveryMode);
+  const [paginationPolicy, setPaginationPolicy] = useState<PaginationPolicy>(initialStats.googleDiscoveryDefaults.paginationPolicy);
+  const [isTestRun, setIsTestRun] = useState(false);
+  const [budgetEstimate, setBudgetEstimate] = useState<DiscoveryBudgetEstimate | null>(null);
+  const [budgetEstimateStatus, setBudgetEstimateStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [budgetEstimateError, setBudgetEstimateError] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(stats.processingRunStatus === "running");
   const [loading, setLoading] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; action: () => Promise<void> } | null>(null);
@@ -152,13 +269,179 @@ export function DashboardClient({
   const [aiBackfillLoading, setAiBackfillLoading] = useState(false);
   const [pollError, setPollError] = useState<string | null>(null);
   const aiRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const coreAutoRetryRef = useRef(false);
+  const analyticsAutoRetryRef = useRef(false);
+  const summaryAutoRetryRef = useRef(false);
+  const [coreRetryNonce, setCoreRetryNonce] = useState(0);
+  const [analyticsRetryNonce, setAnalyticsRetryNonce] = useState(0);
+  const [summaryRetryNonce, setSummaryRetryNonce] = useState(0);
+  const [coreStatus, setCoreStatus] = useState<DashboardCoreStatus>("loadingCore");
+  const [coreError, setCoreError] = useState<string | null>(null);
+
+  useEffect(() => {
+    document.title = "Revenue Dashboard | NoSite Leads";
+  }, []);
+
+  const loadCoreStats = useCallback(async () => {
+    setCoreStatus("loadingCore");
+    setCoreError(null);
+    const timeout = window.setTimeout(() => {
+      setCoreStatus("degraded");
+      setCoreError("This panel is taking too long. Retry this panel.");
+    }, 10_000);
+    try {
+      const s = await getDashboardStatsAction();
+      window.clearTimeout(timeout);
+      setStats(s);
+      setIsProcessing(s.processingRunStatus === "running");
+      if (s.discoveryItems.length > 0) setDiscoveryItems(s.discoveryItems);
+      const loadReason = dashboardLoadReasonLabel(s.lastError);
+      if (loadReason) {
+        setCoreStatus("degraded");
+        setCoreError(loadReason);
+        if (!coreAutoRetryRef.current) {
+          coreAutoRetryRef.current = true;
+          window.setTimeout(() => setCoreRetryNonce((value) => value + 1), 1_000);
+        }
+      } else {
+        coreAutoRetryRef.current = false;
+        setCoreStatus("ready");
+        setCoreError(null);
+      }
+      setPollError(null);
+    } catch (error) {
+      window.clearTimeout(timeout);
+      setCoreStatus("error");
+      setCoreError(error instanceof Error ? error.message : "Dashboard stats could not be loaded.");
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadCoreStats(), 0);
+    return () => window.clearTimeout(timer);
+  }, [coreRetryNonce, loadCoreStats]);
+
+  const loadAnalyticsPanel = useCallback(async () => {
+    setAnalyticsPanelStatus("loading");
+    setAnalyticsPanelError(null);
+    const timeout = window.setTimeout(() => {
+      setAnalyticsPanelStatus("error");
+      setAnalyticsPanelError("This panel is taking too long. Retry this panel.");
+    }, 10_000);
+    try {
+      const result = await getDashboardAnalyticsAction();
+      window.clearTimeout(timeout);
+      const { loadError, ...analytics } = result;
+      if (loadError) {
+        setAnalyticsPanelStatus("error");
+        setAnalyticsPanelError(panelLoadReasonLabel(loadError, "Dashboard analytics are temporarily unavailable. Retry this panel."));
+        if (!analyticsAutoRetryRef.current) {
+          analyticsAutoRetryRef.current = true;
+          window.setTimeout(() => setAnalyticsRetryNonce((value) => value + 1), 1_000);
+        }
+        return;
+      }
+      setStats((current) => ({ ...current, ...analytics }));
+      analyticsAutoRetryRef.current = false;
+      setAnalyticsPanelStatus("ready");
+      setAnalyticsPanelError(null);
+    } catch (error) {
+      window.clearTimeout(timeout);
+      setAnalyticsPanelStatus("error");
+      setAnalyticsPanelError(error instanceof Error ? error.message : "Dashboard analytics could not be loaded.");
+    }
+  }, []);
+
+  const loadSummaryPanels = useCallback(async () => {
+    setSummaryPanelStatus("loading");
+    setSummaryPanelError(null);
+    const timeout = window.setTimeout(() => {
+      setSummaryPanelError("This panel is taking too long. Retry this panel.");
+      setSummaryPanelStatus("error");
+    }, 10_000);
+    try {
+      const result = await getDashboardSummaryPanelsAction();
+      window.clearTimeout(timeout);
+      setCurrentTeamSummary(result.teamSummary);
+      setCurrentWeeklyStats(result.weeklyStats);
+      setCurrentFulfillmentSummary(result.fulfillmentSummary);
+      if (result.loadError) {
+        setSummaryPanelError(panelLoadReasonLabel(result.loadError, "Optional dashboard panels unavailable. Retry this panel."));
+        setSummaryPanelStatus("error");
+        if (!summaryAutoRetryRef.current) {
+          summaryAutoRetryRef.current = true;
+          window.setTimeout(() => setSummaryRetryNonce((value) => value + 1), 1_000);
+        }
+      } else {
+        summaryAutoRetryRef.current = false;
+        setSummaryPanelError(null);
+        setSummaryPanelStatus("ready");
+      }
+    } catch (error) {
+      window.clearTimeout(timeout);
+      setSummaryPanelError(error instanceof Error ? error.message : "Optional dashboard panels could not be loaded.");
+      setSummaryPanelStatus("error");
+    }
+  }, []);
+
+  const loadDiscoveryItems = useCallback(async () => {
+    setDiscoveryItemsStatus("loading");
+    setDiscoveryItemsError(null);
+    const timeout = window.setTimeout(() => {
+      setDiscoveryItemsStatus("error");
+      setDiscoveryItemsError("This panel is taking too long. Retry this panel.");
+    }, 10_000);
+    try {
+      const result = await getDiscoveryItemsAction();
+      window.clearTimeout(timeout);
+      setDiscoveryItems(result.items);
+      if (result.loadError) {
+        setDiscoveryItemsStatus("error");
+        setDiscoveryItemsError(panelLoadReasonLabel(result.loadError, "Discovery items are temporarily unavailable. Retry this panel."));
+      } else {
+        setDiscoveryItemsStatus("ready");
+        setDiscoveryItemsError(null);
+      }
+    } catch (error) {
+      window.clearTimeout(timeout);
+      setDiscoveryItemsStatus("error");
+      setDiscoveryItemsError(error instanceof Error ? error.message : "Discovery items could not be loaded.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (coreStatus === "loadingCore") return;
+    const analyticsTimer = window.setTimeout(() => void loadAnalyticsPanel(), 0);
+    const summaryTimer = window.setTimeout(() => void loadSummaryPanels(), 250);
+    const discoveryItemsTimer = window.setTimeout(() => void loadDiscoveryItems(), 500);
+    return () => {
+      window.clearTimeout(analyticsTimer);
+      window.clearTimeout(summaryTimer);
+      window.clearTimeout(discoveryItemsTimer);
+    };
+  }, [coreStatus, loadAnalyticsPanel, loadDiscoveryItems, loadSummaryPanels]);
+
+  useEffect(() => {
+    if (analyticsRetryNonce === 0) return;
+    const timer = window.setTimeout(() => void loadAnalyticsPanel(), 0);
+    return () => window.clearTimeout(timer);
+  }, [analyticsRetryNonce, loadAnalyticsPanel]);
+
+  useEffect(() => {
+    if (summaryRetryNonce === 0) return;
+    const timer = window.setTimeout(() => void loadSummaryPanels(), 0);
+    return () => window.clearTimeout(timer);
+  }, [summaryRetryNonce, loadSummaryPanels]);
 
   const refreshStats = useCallback(async () => {
     try {
       const s = await getDashboardStatsAction();
       setStats(s);
+      const loadReason = dashboardLoadReasonLabel(s.lastError);
+      setCoreStatus(loadReason ? "degraded" : "ready");
+      setCoreError(loadReason);
       setPollError(null);
-      if (s.runStatus !== "running") {
+      if (s.processingRunStatus !== "running") {
         setIsProcessing(false);
       }
     } catch (error) {
@@ -201,19 +484,70 @@ export function DashboardClient({
     }
   }, [isProcessing, pollProcess]);
 
+  const buildDiscoveryPayload = useCallback(() => (
+    locationScope.marketId && locationScope.cellIds?.length
+      ? {
+          marketId: locationScope.marketId,
+          cellIds: locationScope.cellIds,
+          categories: selectedCategories,
+          discoveryMode,
+          paginationPolicy,
+          testRun: isTestRun,
+        }
+      : {
+          state: locationScope.state,
+          counties: locationScope.counties,
+          zipCodes: locationScope.zipCodes,
+          categories: selectedCategories,
+          discoveryMode,
+          paginationPolicy,
+          testRun: isTestRun,
+        }
+  ), [discoveryMode, isTestRun, locationScope, paginationPolicy, selectedCategories]);
+
+  useEffect(() => {
+    const selectedCells = locationScope.cellIds?.length ?? locationScope.zipCodes.length;
+    if (selectedCells === 0 || selectedCategories.length === 0) {
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      if (!active) return;
+      setBudgetEstimateStatus("loading");
+      setBudgetEstimateError(null);
+      estimateDiscoveryRunAction(buildDiscoveryPayload())
+        .then((result) => {
+          if (!active) return;
+          if ("error" in result) {
+            setBudgetEstimate(null);
+            setBudgetEstimateError(result.error);
+            setBudgetEstimateStatus("error");
+          } else {
+            setBudgetEstimate(result);
+            setBudgetEstimateStatus("ready");
+          }
+        })
+        .catch((error) => {
+          if (!active) return;
+          setBudgetEstimate(null);
+          setBudgetEstimateError(error instanceof Error ? error.message : "Unable to estimate Google Places usage.");
+          setBudgetEstimateStatus("error");
+        });
+    }, 0);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [buildDiscoveryPayload, locationScope.cellIds?.length, locationScope.zipCodes.length, selectedCategories.length]);
+
   const handleStart = async () => {
     setLoading(true);
-    const result = await startCrawlRunAction({
-      state: locationScope.state,
-      counties: locationScope.counties,
-      zipCodes: locationScope.zipCodes,
-      categories: selectedCategories,
-    });
+    const result = await startCrawlRunAction(buildDiscoveryPayload());
     if ("error" in result) {
       toast.error(result.error ?? "Unknown error");
     } else {
       toast.success(
-        `Started crawl: ${result.unitCount} units across ${result.selectedZipCount} zips in ${result.selectedCountyCount} counties`
+        `Started crawl: ${result.unitCount} units across ${result.selectedCellCount} location cells`
       );
       setIsProcessing(true);
     }
@@ -221,45 +555,49 @@ export function DashboardClient({
     setLoading(false);
   };
 
-  const handlePause = async () => {
+  const handlePause = async (runId?: string | null) => {
     setLoading(true);
-    await pauseCrawlRunAction();
+    const result = await pauseCrawlRunAction(runId ?? undefined);
+    if ("error" in result) toast.error(result.error ?? "Unable to pause discovery item");
+    else toast.info("Discovery item paused");
     setIsProcessing(false);
-    toast.info("Run paused");
     await refreshStats();
     setLoading(false);
   };
 
-  const handleResume = async () => {
+  const handleResume = async (runId?: string | null) => {
     setLoading(true);
-    await resumeCrawlRunAction();
-    setIsProcessing(true);
-    toast.info("Run resumed");
-    await refreshStats();
-    setLoading(false);
-  };
-
-  const handleStop = async () => {
-    setLoading(true);
-    const result = await stopCrawlRunAction();
+    const result = await resumeCrawlRunAction(runId ?? undefined);
     if ("error" in result) {
-      toast.error(result.error ?? "Unable to stop discovery");
+      toast.error(result.error ?? "Unable to resume discovery item");
     } else {
-      setIsProcessing(false);
-      toast.success(`Discovery stopped. ${result.canceledUnits} queued units canceled.`);
+      setIsProcessing(true);
+      toast.info("Discovery item resumed");
     }
     await refreshStats();
     setLoading(false);
   };
 
-  const handleRetry = async () => {
+  const handleStop = async (runId?: string | null) => {
     setLoading(true);
-    const result = await retryFailedUnitsAction();
+    const result = await stopCrawlRunAction(runId ?? undefined);
+    if ("error" in result) {
+      toast.error(result.error ?? "Unable to cancel remaining units");
+    } else {
+      setIsProcessing(false);
+      toast.success(`Remaining discovery units canceled. ${result.canceledUnits} queued units canceled.`);
+    }
+    await refreshStats();
+    setLoading(false);
+  };
+
+  const handleRetry = async (runId?: string | null) => {
+    setLoading(true);
+    const result = await retryFailedUnitsAction(runId ?? undefined);
     if ("error" in result) {
       toast.error(result.error ?? "Unknown error");
     } else {
       toast.success(`Retrying ${result.retriedCount} failed units`);
-      setIsProcessing(true);
     }
     await refreshStats();
     setLoading(false);
@@ -360,34 +698,111 @@ export function DashboardClient({
     );
   };
 
-  const isRunning = stats.runStatus === "running";
-  const isQueued = stats.runStatus === "queued";
-  const isPaused = stats.runStatus === "paused";
-  const canStop = isRunning || isQueued || isPaused;
-  const isIdle = !isRunning && !isQueued && !isPaused;
+  const isRunning = stats.processingRunStatus === "running";
+  const isQueued = stats.processingRunStatus === "queued";
+  const isIdle = !isRunning && !isQueued;
+  const activeRunLabel = isRunning ? "running" : isQueued ? "queued" : "idle";
+  const visibleRun = discoveryItems.find((item) => item.id === stats.runId) ?? null;
+  const pausedDiscoveryItems = discoveryItems.filter((item) => item.status === "paused");
+  const selectedCellCount = locationScope.cellIds?.length ?? locationScope.zipCodes.length;
+  const selectedMarketLabel = locationScope.marketId || locationScope.state || "No market";
+  const estimatedUnitCount = selectedCellCount * selectedCategories.length;
+  const hasEstimateSelection = selectedCellCount > 0 && selectedCategories.length > 0;
+  const activeBudgetEstimate = hasEstimateSelection ? budgetEstimate : null;
+  const activeBudgetEstimateStatus = hasEstimateSelection ? budgetEstimateStatus : "idle";
+  const activeBudgetEstimateError = hasEstimateSelection ? budgetEstimateError : null;
   const progress = stats.progress;
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
   const activeWorkerCount = stats.schedulerHealth.workers.filter((worker) => worker.enabled).length;
   const pausedWorkerCount = stats.schedulerHealth.workers.length - activeWorkerCount;
   const backgroundQueueDepth = stats.schedulerHealth.workers.reduce((sum, worker) => sum + worker.queueDepth, 0);
   const workerIssueCount = stats.schedulerHealth.workers.filter((worker) => worker.enabled && worker.warning).length;
-  const contactsThisWeek = teamSummary.members.reduce((sum, member) => sum + member.contacts_7d, 0);
-  const claimedActive = teamSummary.members.reduce((sum, member) => sum + member.claimed_active, 0);
+  const contactsThisWeek = currentTeamSummary.members.reduce((sum, member) => sum + member.contacts_7d, 0);
+  const claimedActive = currentTeamSummary.members.reduce((sum, member) => sum + member.claimed_active, 0);
+  const openStartConfirmation = () => setConfirmAction({
+    title: "Start discovery run?",
+    message: `Market: ${selectedMarketLabel}. Cells selected: ${selectedCellCount}. Categories selected: ${selectedCategories.length}. Estimated crawl units: ${estimatedUnitCount}. Google calls: ${activeBudgetEstimate?.estimatedSearchCalls ?? "unknown"} max. Mode: ${discoveryMode.replace(/_/g, " ")}.`,
+    action: handleStart,
+  });
+  const applyTestRunPreset = () => {
+    setLocationScope({
+      state: "CO",
+      counties: [],
+      zipCodes: [],
+      marketId: "market-toronto",
+      cellIds: ["cell-ca-toronto-m5v"],
+    });
+    setSelectedCategories(["dentist"]);
+    setDiscoveryMode("coverage_probe");
+    setPaginationPolicy("auto_yield_based");
+    setIsTestRun(true);
+    setShowCategories(true);
+  };
 
   return (
     <PageShell
       title="Revenue Dashboard"
       description="Track pipeline, follow-ups, team accountability, and the work most likely to turn into paid clients."
       stats={[
-        { label: "Pipeline", value: formatCurrency(weeklyStats.economics.pipelineValue), hint: "last 7 days" },
+        { label: "Pipeline", value: formatCurrency(currentWeeklyStats.economics.pipelineValue), hint: "last 7 days" },
         { label: "Contacts This Week", value: String(contactsThisWeek) },
-        { label: "Meetings", value: String(weeklyStats.kpis.meetings), hint: "last 7 days" },
-        { label: "Won / Lost", value: `${weeklyStats.kpis.closedWon} / ${weeklyStats.kpis.closedLost}`, hint: "last 7 days" },
-        { label: "Overdue Follow-ups", value: String(teamSummary.overdueFollowUps) },
-        { label: "Unclaimed Ready", value: String(teamSummary.unassignedReady) },
-        { label: "Steve Queue", value: String(fulfillmentSummary.openTotal), hint: "website + quote" },
+        { label: "Meetings", value: String(currentWeeklyStats.kpis.meetings), hint: "last 7 days" },
+        { label: "Won / Lost", value: `${currentWeeklyStats.kpis.closedWon} / ${currentWeeklyStats.kpis.closedLost}`, hint: "last 7 days" },
+        { label: "Overdue Follow-ups", value: String(currentTeamSummary.overdueFollowUps) },
+        { label: "Unclaimed Ready", value: String(currentTeamSummary.unassignedReady) },
+        { label: "Steve Queue", value: String(currentFulfillmentSummary.openTotal), hint: "website + quote" },
       ]}
     >
+      {coreStatus !== "ready" && (
+        <section className="rounded-2xl px-5 py-4" style={{ background: coreStatus === "loadingCore" ? "rgba(255,255,255,0.38)" : "rgba(245, 158, 11, 0.1)", border: "1px solid rgba(255,255,255,0.5)" }}>
+          <p className="text-xs font-semibold" style={{ color: coreStatus === "loadingCore" ? "var(--text-primary)" : "#b45309" }}>
+            {coreStatus === "loadingCore" ? "Dashboard data is loading" : "Dashboard data is temporarily degraded"}
+          </p>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+            {coreStatus === "loadingCore"
+              ? "Dashboard data is loading; discovery controls will appear when ready."
+              : coreError ?? "This panel is taking too long. Retry this panel."}
+          </p>
+          {coreStatus !== "loadingCore" && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="btn-primary text-sm" onClick={loadCoreStats}>Retry this panel</button>
+              <Link href="/coverage" className="btn-glass text-sm">Open Coverage</Link>
+              <Link href="/queue" className="btn-glass text-sm">Open Workbench</Link>
+              <Link href="/scheduler" className="btn-glass text-sm">Open Scheduler</Link>
+            </div>
+          )}
+        </section>
+      )}
+      {summaryPanelStatus !== "ready" && (
+        <section className="rounded-2xl px-5 py-4" style={{ background: summaryPanelStatus === "error" ? "rgba(245, 158, 11, 0.1)" : "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}>
+          <p className="text-xs font-semibold" style={{ color: summaryPanelStatus === "error" ? "#b45309" : "var(--text-primary)" }}>
+            {summaryPanelStatus === "loading" ? "Loading optional dashboard panels" : "Optional dashboard panels unavailable"}
+          </p>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+            {summaryPanelStatus === "loading"
+              ? "Core discovery operations are available while team, statistics, and fulfillment summaries load in the background."
+              : summaryPanelError ?? "Team, statistics, and fulfillment summaries did not finish loading."}
+          </p>
+          {summaryPanelStatus === "error" && (
+            <button type="button" className="btn-glass mt-3 text-xs" onClick={loadSummaryPanels}>Retry this panel</button>
+          )}
+        </section>
+      )}
+      {analyticsPanelStatus !== "ready" && (
+        <section className="rounded-2xl px-5 py-4" style={{ background: analyticsPanelStatus === "error" ? "rgba(245, 158, 11, 0.1)" : "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}>
+          <p className="text-xs font-semibold" style={{ color: analyticsPanelStatus === "error" ? "#b45309" : "var(--text-primary)" }}>
+            {analyticsPanelStatus === "loading" ? "Loading dashboard analytics" : "Dashboard analytics unavailable"}
+          </p>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+            {analyticsPanelStatus === "loading"
+              ? "Run controls are available while cost, conversion, and scheduler analytics load separately."
+              : analyticsPanelError ?? "Cost, conversion, and scheduler analytics did not finish loading."}
+          </p>
+          {analyticsPanelStatus === "error" && (
+            <button type="button" className="btn-glass mt-3 text-xs" onClick={loadAnalyticsPanel}>Retry this panel</button>
+          )}
+        </section>
+      )}
       <section className="glass rounded-2xl p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -399,17 +814,17 @@ export function DashboardClient({
           <Link href="/fulfillment" className="btn-primary text-sm">Open Fulfillment</Link>
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <AttentionCard label="Website requests" value={fulfillmentSummary.openWebsiteRequests} href="/fulfillment?type=website_request" cta="Design queue" />
-          <AttentionCard label="Quote requests" value={fulfillmentSummary.openQuoteRequests} href="/fulfillment?type=quote_request" cta="Price leads" />
-          <AttentionCard label="Waiting on researcher" value={fulfillmentSummary.waitingOnResearcher} href="/fulfillment?status=waiting_on_researcher" cta="Unblock" />
-          <AttentionCard label="Overdue requests" value={fulfillmentSummary.overdueRequests} href="/fulfillment?status=open" cta="Review today" />
+          <AttentionCard label="Website requests" value={currentFulfillmentSummary.openWebsiteRequests} href="/fulfillment?type=website_request" cta="Design queue" />
+          <AttentionCard label="Quote requests" value={currentFulfillmentSummary.openQuoteRequests} href="/fulfillment?type=quote_request" cta="Price leads" />
+          <AttentionCard label="Waiting on researcher" value={currentFulfillmentSummary.waitingOnResearcher} href="/fulfillment?status=waiting_on_researcher" cta="Unblock" />
+          <AttentionCard label="Overdue requests" value={currentFulfillmentSummary.overdueRequests} href="/fulfillment?status=open" cta="Review today" />
         </div>
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          {fulfillmentSummary.latestRequests.length === 0 ? (
+          {currentFulfillmentSummary.latestRequests.length === 0 ? (
             <p className="rounded-xl p-4 text-sm lg:col-span-2" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
               No website or quote requests are waiting on Steve.
             </p>
-          ) : fulfillmentSummary.latestRequests.slice(0, 4).map((request) => (
+          ) : currentFulfillmentSummary.latestRequests.slice(0, 4).map((request) => (
             <FulfillmentMiniCard key={request.id} request={request} />
           ))}
         </div>
@@ -427,8 +842,8 @@ export function DashboardClient({
             <Link href="/queue" className="btn-primary text-sm">Open Workbench</Link>
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <AttentionCard label="Overdue follow-ups" value={teamSummary.overdueFollowUps} href="/team" cta="Review owners" />
-            <AttentionCard label="Unclaimed ready leads" value={teamSummary.unassignedReady} href="/leads?assigned=unassigned" cta="Assign or claim" />
+            <AttentionCard label="Overdue follow-ups" value={currentTeamSummary.overdueFollowUps} href="/team" cta="Review owners" />
+            <AttentionCard label="Unclaimed ready leads" value={currentTeamSummary.unassignedReady} href="/leads?assigned=unassigned" cta="Assign or claim" />
             <AttentionCard label="Needs follow-up" value={stats.needsFollowUp} href="/leads?status=contacted" cta="Open leads" />
             <AttentionCard label="Claimed active" value={claimedActive} href="/team" cta="Team board" />
           </div>
@@ -445,11 +860,11 @@ export function DashboardClient({
             <Link href="/team" className="btn-glass text-sm">Open Team Board</Link>
           </div>
           <div className="mt-4 space-y-3">
-            {teamSummary.latestActivity.length === 0 ? (
+            {currentTeamSummary.latestActivity.length === 0 ? (
               <p className="rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
                 No outreach activity has been logged yet.
               </p>
-            ) : teamSummary.latestActivity.slice(0, 5).map((activity) => (
+            ) : currentTeamSummary.latestActivity.slice(0, 5).map((activity) => (
               <ActivityRow key={activity.id} activity={activity} />
             ))}
           </div>
@@ -466,13 +881,13 @@ export function DashboardClient({
           </div>
           <Link href="/team" className="btn-glass text-sm">Open full board</Link>
         </div>
-        {teamSummary.members.length === 0 ? (
+        {currentTeamSummary.members.length === 0 ? (
           <p className="rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
             No active team members yet.
           </p>
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {teamSummary.members.map((member) => (
+            {currentTeamSummary.members.map((member) => (
               <TeamMemberCard key={member.user_id} member={member} />
             ))}
           </div>
@@ -489,7 +904,7 @@ export function DashboardClient({
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span style={{ color: "var(--text-tertiary)" }}>
-              {isRunning ? "Running" : isQueued ? "Queued" : isPaused ? "Paused" : "Idle"} · {backgroundQueueDepth.toLocaleString()} queued
+              {isRunning ? "Running" : isQueued ? "Queued" : "Idle"} · {backgroundQueueDepth.toLocaleString()} queued
             </span>
             <span className="btn-glass text-sm">Expand operations</span>
           </div>
@@ -526,36 +941,31 @@ export function DashboardClient({
           <div>
             <h3 className="section-label">Discovery Workflow</h3>
             <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-              Start here when you want new businesses. Pick counties, ZIP codes, and categories below, then open Discovery Monitor to see the exact ZIP/category units being processed.
+              Start here when you want new businesses. Pick a market, postal/postcode cells, and categories below, then open Discovery Monitor to see the exact market/cell/category units being processed.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             {isIdle && (
               <a href="#run-controls" className="btn-primary text-sm">
-                Choose ZIPs & Start
+                Choose Cells & Start
               </a>
             )}
             {isRunning && (
               <button type="button" className="btn-glass text-sm" onClick={() => setConfirmAction({
                 title: "Pause Discovery",
-                message: "This will stop processing new ZIP/category units. You can resume the run later.",
+                message: "This will stop processing new market/cell/category units. You can resume the run later.",
                 action: handlePause,
               })} disabled={loading}>
                 Pause Discovery
               </button>
             )}
-            {isPaused && (
-              <button type="button" className="btn-primary text-sm" onClick={handleResume} disabled={loading}>
-                Resume Discovery
-              </button>
-            )}
-            {canStop && (
+            {(isRunning || isQueued) && (
               <button type="button" className="btn-glass text-sm" onClick={() => setConfirmAction({
-                title: "Stop Discovery",
-                message: "This permanently stops the current run and marks unprocessed ZIP/category units as canceled. Completed leads stay saved.",
-                action: handleStop,
+                title: "Cancel remaining units",
+                message: "This marks the processing item's unprocessed market/cell/category units as canceled. Completed leads stay saved.",
+                action: () => handleStop(stats.processingRunId),
               })} disabled={loading}>
-                Stop Discovery
+                Cancel remaining units
               </button>
             )}
             <Link href="/coverage" className="btn-glass text-sm">
@@ -582,7 +992,7 @@ export function DashboardClient({
             <span>{progress.done} done / {progress.failed} failed / {progress.canceled} canceled / {progress.pending + progress.running} remaining of {progress.total} total</span>
             {stats.zipCodesSelected > 0 && (
               <span>
-                Geography: {stats.zipCodesCompleted}/{stats.zipCodesSelected} selected zips completed, {stats.zipCodesNotStarted} selected zips not started, {stats.zipCodesNotSelected} active zips not selected
+                Geography: {stats.zipCodesCompleted}/{stats.zipCodesSelected} selected cells completed, {stats.zipCodesNotStarted} selected cells not started, {stats.zipCodesNotSelected} active cells not selected
               </span>
             )}
             {stats.apiCallsUsed > 0 && (
@@ -623,9 +1033,107 @@ export function DashboardClient({
         </section>
       )}
 
+      <section className="glass rounded-2xl p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="section-label">Discovery Items</h3>
+            <p className="mt-1 max-w-3xl text-sm" style={{ color: "var(--text-secondary)" }}>
+              Each item is a saved market/cell/category discovery run. Paused items are preserved and do not block a new guarded probe.
+            </p>
+          </div>
+          <Link href="/coverage" className="btn-glass text-sm">Open Coverage</Link>
+        </div>
+        {!isRunning && !isQueued && pausedDiscoveryItems.length > 0 && (
+          <div className="mt-4 rounded-xl px-4 py-3" style={{ background: "rgba(22,101,52,0.08)", border: "1px solid rgba(22,101,52,0.14)" }}>
+            <p className="text-sm font-semibold" style={{ color: "#166534" }}>
+              Denver / Colorado is paused and preserved. Starting a new probe will create a separate discovery item.
+            </p>
+          </div>
+        )}
+        {discoveryItemsStatus === "loading" && discoveryItems.length === 0 ? (
+          <p className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+            Loading discovery items...
+          </p>
+        ) : discoveryItemsStatus === "error" && discoveryItems.length === 0 ? (
+          <div className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#92400e" }}>
+            <p className="font-semibold">Discovery items unavailable</p>
+            <p className="mt-1">{discoveryItemsError ?? "This panel did not finish loading. Core dashboard controls remain available."}</p>
+            <button type="button" className="btn-glass mt-3 text-xs" onClick={loadDiscoveryItems}>Retry items</button>
+          </div>
+        ) : discoveryItems.length === 0 ? (
+          <p className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+            No discovery items exist yet.
+          </p>
+        ) : (
+          <div className="mt-5 grid gap-3 xl:grid-cols-2">
+            {discoveryItems.map((item) => {
+              const itemCanPause = item.status === "running" || item.status === "queued";
+              const itemCanResume = item.status === "paused";
+              const itemCanCancel = item.status === "running" || item.status === "queued" || item.status === "paused";
+              const itemPct = item.totalUnits > 0 ? Math.round((item.doneUnits / item.totalUnits) * 100) : 0;
+              return (
+                <article key={item.id} className="rounded-2xl p-4" style={{ background: item.id === visibleRun?.id ? "rgba(79,70,229,0.08)" : "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.42)" }}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{formatDiscoveryItemLabel(item)}</p>
+                      <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                        {item.scopeLabel} · Run {item.id.slice(0, 8)} · {formatDiscoveryMode(item.discoveryMode)} · {item.categories.length} categories
+                      </p>
+                    </div>
+                    <DiscoveryStatusBadge status={item.status} />
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
+                    <DiscoveryMiniMetric label="Done" value={`${item.doneUnits}/${item.totalUnits}`} />
+                    <DiscoveryMiniMetric label="Open" value={String(item.openUnits + item.runningUnits)} />
+                    <DiscoveryMiniMetric label="Failed" value={String(item.failedUnits)} />
+                    <DiscoveryMiniMetric label={item.discoveryMode === "coverage_probe" ? "Candidates" : "Leads"} value={String(item.discoveryMode === "coverage_probe" ? item.newPlacesSeen : item.discoveredCount)} />
+                    <DiscoveryMiniMetric label="API calls" value={String(item.apiCallsUsed)} />
+                    <DiscoveryMiniMetric label="Complete" value={`${itemPct}%`} />
+                  </div>
+                  {item.discoveryMode === "coverage_probe" && item.rawPlacesSeen > 0 && (
+                    <p className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                      Probe stored {item.rawPlacesSeen} raw candidates in the directory database across {item.pagesFetched} page{item.pagesFetched === 1 ? "" : "s"}; it intentionally created 0 active leads.
+                    </p>
+                  )}
+                  {item.lastError && <p className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(239,68,68,0.08)", color: "#991b1b" }}>{item.lastError}</p>}
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <Link href={`/coverage?run=${encodeURIComponent(item.id)}`} className="btn-glass text-xs">Inspect</Link>
+                    {itemCanPause && (
+                      <button type="button" className="btn-glass text-xs" disabled={loading} onClick={() => setConfirmAction({
+                        title: "Pause discovery item",
+                        message: "This preserves the discovery item and stops processing new units until it is resumed.",
+                        action: () => handlePause(item.id),
+                      })}>Pause</button>
+                    )}
+                    {itemCanResume && (
+                      <button type="button" className="btn-primary text-xs" disabled={loading} onClick={() => handleResume(item.id)}>Resume</button>
+                    )}
+                    {item.failedUnits > 0 && (
+                      <button type="button" className="btn-glass text-xs" disabled={loading} onClick={() => setConfirmAction({
+                        title: "Retry failed units",
+                        message: `This will retry ${item.failedUnits} failed units for this discovery item. API calls may be consumed.`,
+                        action: () => handleRetry(item.id),
+                      })}>Retry failed</button>
+                    )}
+                    {itemCanCancel && (
+                      <button type="button" className="btn-glass text-xs" disabled={loading} onClick={() => setConfirmAction({
+                        title: "Cancel remaining units",
+                        message: "This marks this item's unprocessed units as canceled. Completed leads and discovery history stay saved.",
+                        action: () => handleStop(item.id),
+                      })}>Cancel remaining units</button>
+                    )}
+                    <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Created {formatDateTime(item.createdAt)}</span>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
       {/* Run controls */}
       <section id="run-controls" className="glass rounded-2xl p-6 scroll-mt-24">
-        <h3 className="section-label">Start or Pause Discovery</h3>
+        <h3 className="section-label">Start a New Discovery Item</h3>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
           {isIdle && (
@@ -633,21 +1141,24 @@ export function DashboardClient({
               <button
                 type="button"
                 className="btn-primary"
-                onClick={handleStart}
-                disabled={loading || selectedCategories.length === 0 || locationScope.zipCodes.length === 0}
+                onClick={openStartConfirmation}
+                disabled={coreStatus !== "ready" || loading || selectedCategories.length === 0 || selectedCellCount === 0 || activeBudgetEstimateStatus === "loading" || !activeBudgetEstimate?.canStart}
               >
                 Start Discovery
               </button>
-              <HelpTip>Creates ZIP/category crawl work units for the selected geography and business types.</HelpTip>
+              <button type="button" className="btn-glass" onClick={applyTestRunPreset} disabled={loading}>
+                Use test run preset
+              </button>
+              <HelpTip>Creates market/cell/category crawl work units for the selected geography and business types.</HelpTip>
               <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
                 {selectedCategories.length === CATEGORY_OPTIONS.length
                   ? "All categories"
                   : `${selectedCategories.length} of ${CATEGORY_OPTIONS.length} categories`}
               </span>
               <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-                {locationScope.zipCodes.length > 0
-                  ? `${locationScope.zipCodes.length} zip codes selected`
-                  : "Select zip codes to start"}
+                {selectedCellCount > 0
+                  ? `${selectedCellCount} location cells selected`
+                  : "Select postal/postcode cells to start"}
               </span>
               <button
                 type="button"
@@ -662,7 +1173,7 @@ export function DashboardClient({
           {isRunning && (
             <button type="button" className="btn-glass" onClick={() => setConfirmAction({
               title: "Pause Discovery",
-              message: "This will stop processing new ZIP/category units. You can resume the run later.",
+              message: "This will stop processing new market/cell/category units. You can resume the run later.",
               action: handlePause,
             })} disabled={loading}>
               Pause Discovery
@@ -677,30 +1188,76 @@ export function DashboardClient({
               Pause Discovery
             </button>
           )}
-          {isPaused && (
-            <button type="button" className="btn-primary" onClick={handleResume} disabled={loading}>
-              Resume Discovery
-            </button>
-          )}
-          {canStop && (
+          {(isRunning || isQueued) && (
             <button type="button" className="btn-glass" onClick={() => setConfirmAction({
-              title: "Stop Discovery",
-              message: "This permanently stops the current run and marks unprocessed ZIP/category units as canceled. Completed leads stay saved.",
-              action: handleStop,
+              title: "Cancel remaining units",
+              message: "This marks the processing item's unprocessed market/cell/category units as canceled. Completed leads stay saved.",
+              action: () => handleStop(stats.processingRunId),
             })} disabled={loading}>
-              Stop Discovery
+              Cancel remaining units
             </button>
           )}
           {stats.failedUnits > 0 && (
             <button type="button" className="btn-glass" onClick={() => setConfirmAction({
               title: "Retry Failed Units",
               message: `This will retry ${stats.failedUnits} failed crawl units. API calls will be consumed.`,
-              action: handleRetry,
+              action: () => handleRetry(stats.runId),
             })} disabled={loading}>
               Retry Failed ({stats.failedUnits})
             </button>
           )}
         </div>
+
+        {isIdle && (
+          <div className="mt-4 grid gap-3 lg:grid-cols-[0.8fr_0.8fr_0.7fr_1.3fr]">
+            <label className="rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+              <span className="mb-1 block font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Discovery mode</span>
+              <select className="glass-input w-full" value={discoveryMode} onChange={(event) => setDiscoveryMode(event.target.value as DiscoveryMode)} disabled={loading}>
+                <option value="coverage_probe">Coverage probe - cheaper</option>
+                <option value="lead_harvest">Lead harvest - richer data</option>
+              </select>
+            </label>
+            <label className="rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+              <span className="mb-1 block font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Pagination</span>
+              <select className="glass-input w-full" value={paginationPolicy} onChange={(event) => setPaginationPolicy(event.target.value as PaginationPolicy)} disabled={loading}>
+                <option value="auto_yield_based">Auto yield-based</option>
+                <option value="first_page_only">First page only</option>
+                <option value="manual_extra_pages">Manual extra pages</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-2 rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+              <input type="checkbox" checked={isTestRun} onChange={(event) => setIsTestRun(event.target.checked)} disabled={loading} />
+              Test-run cap
+            </label>
+            <div className="rounded-xl p-3 text-xs" style={{ background: activeBudgetEstimate?.canStart === false ? "rgba(239,68,68,0.08)" : "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+              <p className="font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Google call estimate</p>
+              {activeBudgetEstimateStatus === "idle" && <p className="mt-1">Select cells and categories to estimate cost before starting.</p>}
+              {activeBudgetEstimateStatus === "loading" && <p className="mt-1">Estimating...</p>}
+              {activeBudgetEstimateStatus === "error" && <p className="mt-1 text-red-700">{activeBudgetEstimateError ?? "Unable to estimate."}</p>}
+              {activeBudgetEstimate && (
+                <div className="mt-1 space-y-1">
+                  <p><strong>{activeBudgetEstimate.estimatedSearchCalls}</strong> max calls · up to {activeBudgetEstimate.estimatedMaxRawPlaces} raw places</p>
+                  <p>{activeBudgetEstimate.sku.replace(/_/g, " ")} · monthly remaining {activeBudgetEstimate.monthlyRemaining === null ? "unlimited" : activeBudgetEstimate.monthlyRemaining}</p>
+                  <p>Run remaining {activeBudgetEstimate.runRemaining} · daily remaining {activeBudgetEstimate.dailyRemaining}</p>
+                  {discoveryMode === "coverage_probe" && <p>Probe mode records market/cell candidates and yield, but does not add active leads.</p>}
+                  {discoveryMode === "lead_harvest" && <p>Lead harvest creates active leads and uses richer Google fields.</p>}
+                  {activeBudgetEstimate.warnings.map((warning) => <p key={warning} className="text-red-700">{warning}</p>)}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!isIdle && (
+          <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(245, 158, 11, 0.1)", border: "1px solid rgba(245, 158, 11, 0.2)" }}>
+            <p className="text-sm font-semibold" style={{ color: "#92400e" }}>
+              A discovery item is {activeRunLabel}. Pause, cancel remaining units, or finish it before starting another Google-consuming run.
+            </p>
+            <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
+              The market/cell picker below is shown as a read-only preview so you can plan the next Canada, U.K., or Colorado batch without creating duplicate crawl units.
+            </p>
+          </div>
+        )}
 
         {isIdle && showCategories && (
           <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)" }}>
@@ -743,26 +1300,24 @@ export function DashboardClient({
           </div>
         )}
 
-        {isIdle && (
-          <>
-            <LocationScopePicker
-              value={locationScope}
-              categories={selectedCategories}
-              disabled={loading}
-              onChange={setLocationScope}
-            />
-            <div className="mt-3 flex flex-wrap gap-2 text-xs">
-              <SummaryChip label={`State: ${locationScope.state || "N/A"}`} />
-              <SummaryChip label={`Counties: ${locationScope.counties.length}`} />
-              <SummaryChip label={`Zip Codes: ${locationScope.zipCodes.length}`} />
-              <SummaryChip label={`Categories: ${selectedCategories.length}`} />
-            </div>
-          </>
-        )}
+        <LocationScopePicker
+          value={locationScope}
+          categories={selectedCategories}
+          disabled={loading || !isIdle}
+          onChange={setLocationScope}
+        />
+        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          <SummaryChip label={`Market: ${selectedMarketLabel}`} />
+          <SummaryChip label={`Cells: ${selectedCellCount}`} />
+          <SummaryChip label={`Categories: ${selectedCategories.length}`} />
+          <SummaryChip label={`Estimated units: ${estimatedUnitCount}`} />
+          <SummaryChip label={`Mode: ${discoveryMode.replace(/_/g, " ")}`} />
+          <SummaryChip label={`Google calls: ${activeBudgetEstimate?.estimatedSearchCalls ?? "select cells"}`} />
+        </div>
 
         {isProcessing && (
           <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            Discovery is processing ZIP/category units... polling every 3 seconds.
+            Discovery is processing market/cell/category units... polling every 3 seconds.
           </p>
         )}
       </section>
@@ -805,7 +1360,7 @@ export function DashboardClient({
           <MetricCard label="Running" value={String(stats.aiQueueStats.running)} />
           <MetricCard label="Verified" value={String(stats.aiQueueStats.verified)} />
           <MetricCard label="Errors" value={String(stats.aiQueueStats.error)} />
-          <MetricCard label="Not Checked" value={String(stats.aiQueueStats.notChecked)} />
+          <MetricCard label="AI Not Run" value={String(stats.aiQueueStats.notChecked)} />
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <button type="button" className="btn-primary text-sm" onClick={handleAiVerify} disabled={loading || isAiVerifying || stats.aiQueueStats.queued === 0}>
@@ -893,7 +1448,7 @@ function FulfillmentMiniCard({ request }: { request: AdminRequest }) {
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <Link className="link-accent break-words font-semibold" href={`/leads/${request.lead_id}`}>
+          <Link className="link-accent break-words font-semibold" href={`/leads/${request.lead_id}`} prefetch={false}>
             {request.lead_name ?? "Unknown business"}
           </Link>
           <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
@@ -952,7 +1507,7 @@ function ActivityRow({ activity }: { activity: TeamBoardSummary["latestActivity"
       style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Link className="link-accent break-words font-medium" href={`/leads/${activity.lead_id}`}>
+        <Link className="link-accent break-words font-medium" href={`/leads/${activity.lead_id}`} prefetch={false}>
           {activity.lead_name ?? "Unknown lead"}
         </Link>
         <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>

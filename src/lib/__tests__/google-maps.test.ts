@@ -9,7 +9,7 @@ describe("google maps browser loader config", () => {
     expect(hasGoogleMapsBrowserKey("AIza-browser-key")).toBe(true);
   });
 
-  it("builds a Maps JS URL without paid Places, Routes, or Geocoding libraries", () => {
+  it("builds a Maps JS URL with only the marker library and without paid Places, Routes, or Geocoding libraries", () => {
     const url = new URL(buildGoogleMapsScriptUrl("AIza-browser-key", "__nositeGoogleMapsReady"));
 
     expect(url.origin).toBe("https://maps.googleapis.com");
@@ -18,7 +18,7 @@ describe("google maps browser loader config", () => {
     expect(url.searchParams.get("callback")).toBe("__nositeGoogleMapsReady");
     expect(url.searchParams.get("loading")).toBe("async");
     expect(url.searchParams.get("auth_referrer_policy")).toBe("origin");
-    expect(url.searchParams.has("libraries")).toBe(false);
+    expect(url.searchParams.get("libraries")).toBe("marker");
     expect(url.search).not.toMatch(/places|geocod|routes|directions/i);
   });
 });

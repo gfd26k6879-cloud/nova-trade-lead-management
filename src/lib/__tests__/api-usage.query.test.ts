@@ -18,7 +18,9 @@ import {
   backfillPlacesMasterFromLeads,
   getCanonicalPlacesForExport,
   getMonthlyApiUsageSummary,
+  getMonthlyBillableEventsForSku,
   getRunApiUsageSummary,
+  getTodayApiCalls,
   logApiUsageEvent,
 } from "@/lib/db/queries";
 
@@ -90,6 +92,24 @@ describe("api usage metering queries", () => {
     expect(summary.discoveryCalls).toBe(1);
     expect(summary.enrichmentCalls).toBe(2);
     expect(summary.atmosphereCalls).toBe(1);
+  });
+
+  it("counts failed Google requests against billable caps without adding successful cost", async () => {
+    await logApiUsageEvent({
+      endpoint: API_ENDPOINT_TEXT_SEARCH,
+      sku: "places_text_search_pro",
+      success: false,
+      was_cached: false,
+      billable_units: 1,
+      metadata: { googleStatus: 400 },
+    });
+
+    await expect(getTodayApiCalls()).resolves.toBe(1);
+    await expect(getMonthlyBillableEventsForSku("places_text_search_pro")).resolves.toBe(1);
+
+    const monthly = await getMonthlyApiUsageSummary();
+    expect(monthly.discoveryCalls).toBe(0);
+    expect(monthly.discoveryCost).toBe(0);
   });
 });
 

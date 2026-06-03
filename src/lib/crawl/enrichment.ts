@@ -12,7 +12,7 @@ import {
   getSettings,
   getRunEnrichmentCalls,
   getRunAtmosphereEnrichmentCalls,
-  getMonthlyFreeTierStatus,
+  getMonthlyBillableEventsForSku,
   getMonthlyApiCost,
   isMonthlySpendLimitReached,
   API_ENDPOINT_PLACE_DETAILS,
@@ -79,11 +79,12 @@ export async function enrichNextLead(): Promise<EnrichResult> {
   const expectedSku: GooglePlacesSku = includeAtmosphere
     ? "places_place_details_enterprise_plus_atmosphere"
     : "places_place_details_enterprise";
-  const freeTier = await getMonthlyFreeTierStatus(expectedSku, 1);
-  if (freeTier.wouldExceed) {
+  const monthlyCap = settings.google_enterprise_monthly_cap;
+  const monthlyCalls = await getMonthlyBillableEventsForSku(expectedSku);
+  if (monthlyCalls + 1 > monthlyCap) {
     return {
       status: "budget_limit",
-      error: `Monthly Google free-tier cap reached for ${expectedSku} (${freeTier.current}/${freeTier.freeCap} calls).`,
+      error: `Monthly Google free-safe cap reached for ${expectedSku} (${monthlyCalls}/${monthlyCap} calls).`,
     };
   }
 

@@ -1,0 +1,33 @@
+import { NextResponse } from "next/server";
+import { ForbiddenError, requirePermission, UnauthorizedError } from "@/lib/auth";
+import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
+import { ensureDbReady, getStaleClientReadQueries } from "@/lib/db/queries";
+import { applyNoStoreHeaders } from "@/lib/http-cache";
+
+export const dynamic = "force-dynamic";
+
+export async function GET() {
+  try {
+    await requirePermission("settings:manage");
+    const staleClientReads = await withDbStatementTimeout(8_000, async () => {
+      await ensureDbReady();
+      return getStaleClientReadQueries(60);
+    });
+    return applyNoStoreHeaders(NextResponse.json({
+      status: staleClientReads.length > 0 ? "warning" : "ok",
+      checkedAt: new Date().toISOString(),
+      staleClientReads,
+    }));
+  } catch (error) {
+    if (error instanceof UnauthorizedError || error instanceof ForbiddenError) {
+      return applyNoStoreHeaders(NextResponse.json({ status: "error", error: error.message }, { status: error.status }));
+    }
+    if (isDbStatementTimeoutError(error)) {
+      return applyNoStoreHeaders(NextResponse.json({ status: "error", error: "db_statement_timeout" }, { status: 503 }));
+    }
+    if (isTransientDbError(error)) {
+      return applyNoStoreHeaders(NextResponse.json({ status: "error", error: "transient_db_error" }, { status: 503 }));
+    }
+    return applyNoStoreHeaders(NextResponse.json({ status: "error", error: "db_activity_unavailable" }, { status: 500 }));
+  }
+}

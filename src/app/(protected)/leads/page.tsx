@@ -26,6 +26,7 @@ interface Props {
     sortDir?: string;
     page?: string;
     view?: string;
+    archived?: string;
   }>;
 }
 
@@ -55,12 +56,13 @@ export default async function LeadsPage({ searchParams }: Props) {
     businessType: params.businessType,
     assigned: assignedFilter,
     assignedToUserId: params.assigned === "me" ? session.userId : params.owner,
+    archived: params.archived === "archived" || params.archived === "all" ? params.archived : "active",
     sortBy: params.sortBy ?? "score",
     sortDir: (params.sortDir ?? "desc") as "asc" | "desc",
     page: params.page ? parseInt(params.page) : 1,
     pageSize: isKanban ? KANBAN_PAGE_SIZE : 25,
   });
-  const businessTypeCounts = await getBusinessTypeCounts();
+  const businessTypeCounts = await getBusinessTypeCounts(filters);
 
   if (isKanban) {
     const { leads, total } = await getKanbanLeads(filters);
@@ -88,6 +90,7 @@ export default async function LeadsPage({ searchParams }: Props) {
       businessTypeCounts={businessTypeCounts}
       canExport={session.role === "admin"}
       canClose={session.role === "admin"}
+      canArchive={session.role === "admin"}
     />
   );
 }

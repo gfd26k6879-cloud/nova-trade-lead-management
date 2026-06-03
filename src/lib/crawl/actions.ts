@@ -1,18 +1,19 @@
 "use server";
 
 import { z } from "zod";
+import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
 import {
   ensureDbReady,
   createCrawlRun,
   createCrawlUnits,
   createCrawlUnitsForSelection,
+  createCrawlUnitsForCells,
   updateCrawlRunStatus,
   cancelCrawlRun,
   retryFailedUnits as retryFailed,
   getDashboardStats,
-  getActiveCrawlRun,
-  getLatestCrawlRun,
   getCrawlProgress,
+  getCrawlUnitPreview,
   getZipCodeCount,
   getTodayFocusCount,
   getNeedsFollowUpCount,
@@ -21,25 +22,77 @@ import {
   createAuditLog,
   getRunApiUsageSummary,
   getMonthlyApiUsageSummary,
+  getMonthlyBillableEventsForSku,
+  getTodayApiCalls,
   getRunLastError,
   getFailedUnitErrors,
   getStatesWithCounts,
   getCountiesByState,
   getZipCodesByCounty,
   getZipCoverageStatus,
+  getPlannerMarkets,
+  getPlannerCells,
+  getLocationCellCoverage,
+  getMarketCoverageSummary,
+  getRunGeographyProgress,
   getSchedulerHealth,
   getSchedulerOperationsSummary,
+  buildSchedulerOperationsFallback,
+  getProcessingCrawlRun,
+  getDiscoveryRunCandidates,
+  getSelectedOrDefaultVisibleCrawlRun,
+  getLatestPausedCrawlRun,
+  listDiscoveryItems,
+  type DiscoveryItemSummary,
   getSettings,
+  getAdminFulfillmentSummary,
+  getStatisticsSummary,
+  getTeamBoardSummary,
   updateSettings,
+  type CrawlProgress,
+  type CrawlRun,
+  type CrawlUnitPreview,
+  type DiscoveryRunCandidate,
+  type GeographyProgress,
+  type LocationCellCoverage,
+  type MarketCoverageSummary,
   type SchedulerWorkerName,
 } from "@/lib/db/queries";
 import { requirePermission } from "@/lib/auth";
+import {
+  emptyDashboardStats,
+  emptyDashboardSummaryPanels,
+  type DashboardStatsResult,
+  type DashboardSummaryLoadError,
+  type DashboardSummaryPanelsResult,
+} from "@/lib/dashboard-fallbacks";
+import {
+  estimateDiscoveryRunBudget,
+  getTextSearchSkuForDiscoveryMode,
+  normalizeDiscoveryMode,
+  normalizePaginationPolicy,
+  type DiscoveryBudgetEstimate,
+} from "@/lib/discovery-budget";
+import { startRouteTiming } from "@/lib/route-timing";
 
 const startPlannerSchema = z.object({
   state: z.string().trim().min(2).max(2).transform((value) => value.toUpperCase()),
   counties: z.array(z.string().trim().min(1)).default([]),
   zipCodes: z.array(z.string().trim().regex(/^\d{5}$/)).min(1),
   categories: z.array(z.string().trim().min(1)).min(1),
+  discoveryMode: z.enum(["coverage_probe", "lead_harvest"]).optional(),
+  paginationPolicy: z.enum(["first_page_only", "auto_yield_based", "manual_extra_pages"]).optional(),
+  testRun: z.boolean().optional(),
+});
+
+const startMarketPlannerSchema = z.object({
+  marketId: z.string().trim().min(1),
+  cellIds: z.array(z.string().trim().min(1)).min(1),
+  categories: z.array(z.string().trim().min(1)).min(1),
+  discoveryMode: z.enum(["coverage_probe", "lead_harvest"]).optional(),
+  paginationPolicy: z.enum(["first_page_only", "auto_yield_based", "manual_extra_pages"]).optional(),
+  testRun: z.boolean().optional(),
+  promotedFromRunId: z.string().trim().min(1).optional(),
 });
 
 const plannerStateSchema = z.string().trim().min(2).max(2).transform((value) => value.toUpperCase());
@@ -50,35 +103,148 @@ function normalizeDistinct(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)));
 }
 
-type StartCrawlPayload = string[] | z.infer<typeof startPlannerSchema>;
+function classifyDashboardActionFailure(error: unknown): "db_statement_timeout" | "transient_db_error" | "dashboard_stats_unavailable" {
+  if (isDbStatementTimeoutError(error)) return "db_statement_timeout";
+  if (isTransientDbError(error)) return "transient_db_error";
+  return "dashboard_stats_unavailable";
+}
+
+function classifyDashboardSummaryFailure(error: unknown): DashboardSummaryLoadError {
+  if (isDbStatementTimeoutError(error)) return "db_statement_timeout";
+  if (isTransientDbError(error)) return "transient_db_error";
+  return "summary_panels_unavailable";
+}
+
+class ReadOnlyActionDeadlineError extends Error {
+  constructor(actionName: string, timeoutMs: number) {
+    super(`${actionName} exceeded its internal response deadline of ${timeoutMs}ms.`);
+    this.name = "ReadOnlyActionDeadlineError";
+  }
+}
+
+function withReadOnlyActionDeadline<T>(_actionName: string, _timeoutMs: number, promise: Promise<T>): Promise<T> {
+  return promise;
+}
+
+type CoverageLoadError = "db_statement_timeout" | "transient_db_error" | "coverage_load_timeout" | "coverage_data_unavailable";
+
+type CoverageRunSummary = Pick<
+  CrawlRun,
+  "id" | "name" | "scope_label" | "status" | "started_at" | "created_at" | "ended_at" | "categories" | "discovered_count" | "api_calls_used" | "last_error" | "market_id"
+> & { discoveryMode: "coverage_probe" | "lead_harvest" | null };
+
+function classifyCoverageFailure(error: unknown): CoverageLoadError {
+  if (error instanceof ReadOnlyActionDeadlineError) return "coverage_load_timeout";
+  if (isDbStatementTimeoutError(error)) return "db_statement_timeout";
+  if (isTransientDbError(error)) return "transient_db_error";
+  return "coverage_data_unavailable";
+}
+
+function logReadFailureReason(error: unknown, loadError: string): string {
+  return error instanceof ReadOnlyActionDeadlineError ? "read_action_deadline" : loadError;
+}
+
+function summarizeCoverageRun(run: CrawlRun | null | undefined): CoverageRunSummary | null {
+  return run ? {
+    id: run.id,
+    name: run.name,
+    scope_label: run.scope_label,
+    status: run.status,
+    started_at: run.started_at,
+    created_at: run.created_at,
+    ended_at: run.ended_at,
+    categories: run.categories,
+    discovered_count: run.discovered_count,
+    api_calls_used: run.api_calls_used,
+    last_error: run.last_error,
+    market_id: run.market_id,
+    discoveryMode: normalizeDiscoveryModeFromSelection(run.selection_json),
+  } : null;
+}
+
+function normalizeDiscoveryModeFromSelection(selection: Record<string, unknown> | null): "coverage_probe" | "lead_harvest" | null {
+  const value = selection?.discoveryMode;
+  return value === "coverage_probe" || value === "lead_harvest" ? value : null;
+}
+
+async function timedDashboardStatsStep<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  const logStepTiming = startRouteTiming(`action:getDashboardStatsAction:${label}`);
+  try {
+    const result = await fn();
+    logStepTiming(200);
+    return result;
+  } catch (error) {
+    const reason = classifyDashboardActionFailure(error);
+    logStepTiming(503, { reason });
+    throw error;
+  }
+}
+
+async function timedDashboardAnalyticsStep<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  const logStepTiming = startRouteTiming(`action:getDashboardAnalyticsAction:${label}`);
+  try {
+    const result = await fn();
+    logStepTiming(200);
+    return result;
+  } catch (error) {
+    const reason = classifyDashboardActionFailure(error);
+    logStepTiming(503, { reason });
+    throw error;
+  }
+}
+
+async function timedCoverageStep<T>(actionName: string, label: string, fn: () => Promise<T>): Promise<T> {
+  const logStepTiming = startRouteTiming(`action:${actionName}:${label}`);
+  try {
+    const result = await fn();
+    logStepTiming(200);
+    return result;
+  } catch (error) {
+    const loadError = classifyCoverageFailure(error);
+    logStepTiming(503, { reason: logReadFailureReason(error, loadError) });
+    throw error;
+  }
+}
+
+type StartCrawlPayload = string[] | z.infer<typeof startPlannerSchema> | z.infer<typeof startMarketPlannerSchema>;
+
+type EstimateCrawlPayload = z.infer<typeof startPlannerSchema> | z.infer<typeof startMarketPlannerSchema>;
 
 export async function startCrawlRunAction(payload: StartCrawlPayload) {
-  await requirePermission("crawl:manage");
+  const actor = await requirePermission("crawl:manage");
   await ensureDbReady();
 
-  const existing = await getActiveCrawlRun();
+  const existing = await getProcessingCrawlRun();
   if (existing) {
-    return { error: "A crawl run is already active. Pause or complete it first." };
+    return { error: "A discovery item is already processing. Pause or complete it before starting another Google-consuming run." };
   }
 
   const legacyCategories = Array.isArray(payload) ? normalizeDistinct(payload) : [];
   let plannerSelection: z.infer<typeof startPlannerSchema> | null = null;
+  let marketSelection: z.infer<typeof startMarketPlannerSchema> | null = null;
 
   if (!Array.isArray(payload)) {
-    const parsedPlanner = startPlannerSchema.safeParse(payload);
-    if (!parsedPlanner.success) {
-      return { error: "Invalid run selection. Please choose state, county, zip codes, and categories again." };
+    const parsedMarket = startMarketPlannerSchema.safeParse(payload);
+    if (parsedMarket.success) {
+      marketSelection = parsedMarket.data;
+    } else {
+      const parsedPlanner = startPlannerSchema.safeParse(payload);
+      if (!parsedPlanner.success) {
+        return { error: "Invalid run selection. Please choose market, location cells, and categories again." };
+      }
+      plannerSelection = parsedPlanner.data;
     }
-    plannerSelection = parsedPlanner.data;
   }
 
-  if (!Array.isArray(payload) && !plannerSelection) {
-    return { error: "Invalid run selection. Please choose state, county, zip codes, and categories again." };
+  if (!Array.isArray(payload) && !plannerSelection && !marketSelection) {
+    return { error: "Invalid run selection. Please choose market, location cells, and categories again." };
   }
 
   let categories: string[];
   if (Array.isArray(payload)) {
     categories = legacyCategories;
+  } else if (marketSelection) {
+    categories = normalizeDistinct(marketSelection.categories);
   } else {
     categories = normalizeDistinct(plannerSelection!.categories);
   }
@@ -91,8 +257,68 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
   let selectedCountyCount = 0;
   let selectedZipCount = 0;
   let unitCount = 0;
+  const settings = await getSettings();
+  const discoveryMode = normalizeDiscoveryMode(
+    marketSelection?.discoveryMode ?? plannerSelection?.discoveryMode ?? settings.google_default_discovery_mode,
+    settings.google_default_discovery_mode,
+  );
+  const paginationPolicy = normalizePaginationPolicy(
+    marketSelection?.paginationPolicy ?? plannerSelection?.paginationPolicy ?? settings.google_default_pagination_policy,
+    settings.google_default_pagination_policy,
+  );
+  const testRun = Boolean(marketSelection?.testRun ?? plannerSelection?.testRun ?? false);
+  const maxPages = paginationPolicy === "first_page_only" ? 1 : 3;
+  const plannedCellCount = Array.isArray(payload)
+    ? await getZipCodeCount()
+    : marketSelection
+      ? normalizeDistinct(marketSelection.cellIds).length
+      : normalizeDistinct(plannerSelection!.zipCodes).length;
+  const sku = getTextSearchSkuForDiscoveryMode(discoveryMode);
+  const budgetEstimate = estimateDiscoveryRunBudget({
+    cellCount: plannedCellCount,
+    categoryCount: categories.length,
+    mode: discoveryMode,
+    paginationPolicy,
+    testRun,
+    settings,
+    monthlyUsedForSku: await getMonthlyBillableEventsForSku(sku),
+    todayCalls: await getTodayApiCalls(),
+  });
 
-  const run = await createCrawlRun(categories);
+  if (!budgetEstimate.canStart) {
+    return {
+      error: budgetEstimate.warnings[0] ?? "Discovery would exceed Google Places budget guardrails.",
+      estimate: budgetEstimate,
+    };
+  }
+
+  const run = await createCrawlRun(categories, marketSelection ? {
+    marketId: marketSelection.marketId,
+    createdByUserId: actor.userId,
+    selection: {
+      marketId: marketSelection.marketId,
+      cellIds: marketSelection.cellIds,
+      categories,
+      source: marketSelection.promotedFromRunId ? "promoted_probe" : "market_cells",
+      discoveryMode,
+      paginationPolicy,
+      testRun,
+      ...(marketSelection.promotedFromRunId ? { promotedFromRunId: marketSelection.promotedFromRunId } : {}),
+      budgetEstimate,
+    },
+  } : {
+    createdByUserId: actor.userId,
+    selection: {
+      state: plannerSelection?.state ?? null,
+      zipCodes: plannerSelection?.zipCodes ?? null,
+      categories,
+      source: Array.isArray(payload) ? "legacy_all_active_zips" : "legacy_zip_selection",
+      discoveryMode,
+      paginationPolicy,
+      testRun,
+      budgetEstimate,
+    },
+  });
 
   if (Array.isArray(payload)) {
     const zipCount = await getZipCodeCount();
@@ -100,8 +326,22 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
       await updateCrawlRunStatus(run.id, "error");
       return { error: "No active zip codes found. Check seed data." };
     }
-    unitCount = await createCrawlUnits(run.id, categories);
+    unitCount = await createCrawlUnits(run.id, categories, { maxPages });
     selectedZipCount = zipCount;
+  } else if (marketSelection) {
+    const selectedCellIds = normalizeDistinct(marketSelection.cellIds);
+    unitCount = await createCrawlUnitsForCells(run.id, categories, selectedCellIds, { maxPages });
+    selectedZipCount = categories.length > 0 ? Math.floor(unitCount / categories.length) : 0;
+    selectedState = marketSelection.marketId;
+    if (unitCount === 0 || selectedZipCount === 0) {
+      await updateCrawlRunStatus(run.id, "error");
+      await createAuditLog("crawl_run_start_failed", "crawl_run", run.id, {
+        reason: "no_units_for_market_selection",
+        marketId: marketSelection.marketId,
+        selectedCellCount: selectedCellIds.length,
+      });
+      return { error: "No active location cells matched this selection. Choose different postal/postcode cells." };
+    }
   } else {
     const selection = plannerSelection!;
     const selectedZipCodes = normalizeDistinct(selection.zipCodes);
@@ -110,7 +350,7 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
     selectedState = selection.state;
     selectedCountyCount = selectedCounties.length;
 
-    unitCount = await createCrawlUnitsForSelection(run.id, categories, selectedZipCodes);
+    unitCount = await createCrawlUnitsForSelection(run.id, categories, selectedZipCodes, { maxPages });
     selectedZipCount = categories.length > 0 ? Math.floor(unitCount / categories.length) : 0;
 
     if (unitCount === 0 || selectedZipCount === 0) {
@@ -138,10 +378,81 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
     unitCount,
     zipCount: selectedZipCount,
     selectedZipCount,
+    selectedCellCount: selectedZipCount,
     selectedCountyCount,
     selectedState,
+    selectedMarketId: marketSelection?.marketId ?? null,
     categories,
+    estimate: budgetEstimate,
   };
+}
+
+export async function estimateDiscoveryRunAction(payload: EstimateCrawlPayload): Promise<DiscoveryBudgetEstimate | { error: string }> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:estimateDiscoveryRunAction");
+  try {
+    const estimate = await withReadOnlyActionDeadline(
+      "estimateDiscoveryRunAction",
+      10_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        const parsedMarket = startMarketPlannerSchema.safeParse(payload);
+        const parsedPlanner = startPlannerSchema.safeParse(payload);
+        const settings = await getSettings();
+        const selection = parsedMarket.success ? parsedMarket.data : parsedPlanner.success ? parsedPlanner.data : null;
+        if (!selection) return { error: "Invalid discovery selection." };
+        const categories = normalizeDistinct(selection.categories);
+        const cellCount = "cellIds" in selection ? normalizeDistinct(selection.cellIds).length : normalizeDistinct(selection.zipCodes).length;
+        const mode = normalizeDiscoveryMode(selection.discoveryMode ?? settings.google_default_discovery_mode, settings.google_default_discovery_mode);
+        const paginationPolicy = normalizePaginationPolicy(selection.paginationPolicy ?? settings.google_default_pagination_policy, settings.google_default_pagination_policy);
+        const sku = getTextSearchSkuForDiscoveryMode(mode);
+        const [monthlyUsedForSku, todayCalls] = await Promise.all([
+          getMonthlyBillableEventsForSku(sku),
+          getTodayApiCalls(),
+        ]);
+        return estimateDiscoveryRunBudget({
+          cellCount,
+          categoryCount: categories.length,
+          mode,
+          paginationPolicy,
+          testRun: Boolean(selection.testRun),
+          settings,
+          monthlyUsedForSku,
+          todayCalls,
+        });
+      }),
+    );
+    logActionTiming("error" in estimate ? 400 : 200, "error" in estimate ? { reason: "invalid_selection" } : undefined);
+    return estimate;
+  } catch (error) {
+    if (error instanceof ReadOnlyActionDeadlineError) {
+      logActionTiming(503, { reason: "dashboard_action_deadline" });
+      return { error: "Google call estimate is taking too long. Try again in a moment." };
+    }
+    if (isDbStatementTimeoutError(error)) {
+      logActionTiming(503, { reason: "db_statement_timeout" });
+      return { error: "Google call estimate is taking too long. Try again in a moment." };
+    }
+    if (isTransientDbError(error)) {
+      logActionTiming(503, { reason: "transient_db_error" });
+      return { error: "Google call estimate is temporarily unavailable. Try again in a moment." };
+    }
+    logActionTiming(500, { reason: "estimate_action_error" });
+    throw error;
+  }
+}
+
+export async function getPlannerMarketsAction() {
+  await requirePermission("crawl:manage");
+  await ensureDbReady();
+  return getPlannerMarkets();
+}
+
+export async function getPlannerCellsAction(marketId: string, categories: string[] = []) {
+  await requirePermission("crawl:manage");
+  await ensureDbReady();
+  if (!marketId.trim()) return [];
+  return getPlannerCells(marketId.trim(), normalizeDistinct(categories));
 }
 
 export async function getPlannerStatesAction() {
@@ -173,21 +484,25 @@ export async function getPlannerZipCodesAction(state: string, county: string, ca
   })));
 }
 
-export async function pauseCrawlRunAction() {
+export async function pauseCrawlRunAction(runId?: string) {
   await requirePermission("crawl:manage");
   await ensureDbReady();
-  const run = await getActiveCrawlRun();
+  const run = runId ? await getSelectedOrDefaultVisibleCrawlRun(runId) : await getProcessingCrawlRun();
   if (!run) return { error: "No active run to pause." };
+  if (run.status !== "running" && run.status !== "queued") return { error: "Only a running or queued discovery item can be paused." };
   await updateCrawlRunStatus(run.id, "paused");
   await createAuditLog("crawl_run_paused", "crawl_run", run.id);
   return { success: true };
 }
 
-export async function stopCrawlRunAction() {
+export async function stopCrawlRunAction(runId?: string) {
   await requirePermission("crawl:manage");
   await ensureDbReady();
-  const run = await getActiveCrawlRun();
+  const run = await getSelectedOrDefaultVisibleCrawlRun(runId);
   if (!run) return { error: "No active discovery run to stop." };
+  if (run.status !== "running" && run.status !== "queued" && run.status !== "paused") {
+    return { error: "Only a running, queued, or paused discovery item can have remaining units canceled." };
+  }
   const result = await cancelCrawlRun(run.id);
   await createAuditLog("crawl_run_canceled", "crawl_run", run.id, {
     canceledUnits: result.canceledUnits,
@@ -195,20 +510,22 @@ export async function stopCrawlRunAction() {
   return { success: true, runId: run.id, canceledUnits: result.canceledUnits };
 }
 
-export async function resumeCrawlRunAction() {
+export async function resumeCrawlRunAction(runId?: string) {
   await requirePermission("crawl:manage");
   await ensureDbReady();
-  const latest = await getLatestCrawlRun();
+  const processing = await getProcessingCrawlRun();
+  if (processing) return { error: "Another discovery item is already processing. Pause or complete it before resuming this item." };
+  const latest = runId ? await getSelectedOrDefaultVisibleCrawlRun(runId) : await getLatestPausedCrawlRun();
   if (!latest || latest.status !== "paused") return { error: "No paused run to resume." };
   await updateCrawlRunStatus(latest.id, "running");
   await createAuditLog("crawl_run_resumed", "crawl_run", latest.id);
   return { success: true };
 }
 
-export async function retryFailedUnitsAction() {
+export async function retryFailedUnitsAction(runId?: string) {
   await requirePermission("crawl:manage");
   await ensureDbReady();
-  const run = (await getActiveCrawlRun()) ?? (await getLatestCrawlRun());
+  const run = await getSelectedOrDefaultVisibleCrawlRun(runId);
   if (!run) return { error: "No run found." };
   if (run.status === "canceled") return { error: "This run was stopped. Start a new discovery instead of retrying it." };
   const count = await retryFailed(run.id);
@@ -268,18 +585,85 @@ export async function resumeRecommendedSchedulerWorkersAction() {
 
 export async function getSchedulerOperationsAction() {
   await requirePermission("crawl:manage");
-  await ensureDbReady();
-  return getSchedulerOperationsSummary();
+  try {
+    return await withDbStatementTimeout(8_000, async () => {
+      await ensureDbReady();
+      return getSchedulerOperationsSummary();
+    });
+  } catch (error) {
+    if (isDbStatementTimeoutError(error)) {
+      return buildSchedulerOperationsFallback("db_statement_timeout");
+    }
+    if (isTransientDbError(error)) {
+      return buildSchedulerOperationsFallback("transient_db_error");
+    }
+    throw error;
+  }
 }
 
-export async function getDashboardStatsAction() {
+export async function getDashboardStatsAction(): Promise<DashboardStatsResult> {
   await requirePermission("crawl:manage");
-  await ensureDbReady();
-  const base = await getDashboardStats();
-  const todayFocus = await getTodayFocusCount();
-  const needsFollowUp = await getNeedsFollowUpCount();
-  const conversionMetrics = await getConversionMetrics();
+  const logActionTiming = startRouteTiming("action:getDashboardStatsAction");
+  try {
+    const stats = await withReadOnlyActionDeadline(
+      "getDashboardStatsAction",
+      12_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        return getDashboardStatsActionInternal();
+      }),
+    );
+    logActionTiming(200);
+    return stats;
+  } catch (error) {
+    if (error instanceof ReadOnlyActionDeadlineError) {
+      logActionTiming(503, { reason: "dashboard_action_deadline" });
+      return emptyDashboardStats("dashboard_stats_unavailable");
+    }
+    const reason = classifyDashboardActionFailure(error);
+    logActionTiming(503, { reason });
+    return emptyDashboardStats(reason);
+  }
+}
 
+async function getDashboardStatsActionInternal(): Promise<DashboardStatsResult> {
+  const base = await timedDashboardStatsStep("core_base", getDashboardStats);
+  const settings = await timedDashboardStatsStep("settings", getSettings);
+  return {
+    ...emptyDashboardStats(),
+    ...base,
+    lastError: null,
+    googleDiscoveryDefaults: {
+      discoveryMode: settings.google_default_discovery_mode,
+      paginationPolicy: settings.google_default_pagination_policy,
+      testRunCallCap: settings.google_test_run_call_cap,
+    },
+  };
+}
+
+export async function getDashboardAnalyticsAction(): Promise<Partial<DashboardStatsResult> & { loadError?: "db_statement_timeout" | "transient_db_error" | "dashboard_stats_unavailable" }> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:getDashboardAnalyticsAction");
+  try {
+    const stats = await withReadOnlyActionDeadline(
+      "getDashboardAnalyticsAction",
+      12_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        return getDashboardAnalyticsActionInternal();
+      }),
+    );
+    logActionTiming(200);
+    return stats;
+  } catch (error) {
+    const reason = error instanceof ReadOnlyActionDeadlineError ? "dashboard_stats_unavailable" : classifyDashboardActionFailure(error);
+    logActionTiming(503, { reason: error instanceof ReadOnlyActionDeadlineError ? "dashboard_action_deadline" : reason });
+    return { loadError: reason };
+  }
+}
+
+async function getDashboardAnalyticsActionInternal(): Promise<Partial<DashboardStatsResult>> {
+  const visibleRun = await timedDashboardAnalyticsStep("visible_run", () => getSelectedOrDefaultVisibleCrawlRun());
   let apiCallsUsed = 0;
   let estimatedCost = 0;
   let discoveryApiCalls = 0;
@@ -290,7 +674,12 @@ export async function getDashboardStatsAction() {
   let atmosphereEstimatedCost = 0;
   let lastError: string | null = null;
 
-  const monthlyUsage = await getMonthlyApiUsageSummary();
+  const todayFocus = await timedDashboardAnalyticsStep("today_focus", getTodayFocusCount);
+  const needsFollowUp = await timedDashboardAnalyticsStep("needs_follow_up", getNeedsFollowUpCount);
+  const conversionMetrics = await timedDashboardAnalyticsStep("conversion_metrics", getConversionMetrics);
+  const monthlyUsage = await timedDashboardAnalyticsStep("monthly_api_usage", getMonthlyApiUsageSummary);
+  const qualifiedLeadCount = await timedDashboardAnalyticsStep("qualified_lead_count", () => getQualifiedLeadCount(5.0));
+  const schedulerHealth = await timedDashboardAnalyticsStep("scheduler_health", getSchedulerHealth);
   const monthlyApiCalls = monthlyUsage.totalCalls;
   const monthlyApiCost = monthlyUsage.totalCost;
   let projectedMonthlyCost = monthlyApiCost;
@@ -302,8 +691,8 @@ export async function getDashboardStatsAction() {
     projectedMonthlyCost = Math.round(((monthlyApiCost / daysElapsed) * daysInMonth) * 100) / 100;
   }
 
-  if (base.runId) {
-    const runUsage = await getRunApiUsageSummary(base.runId);
+  if (visibleRun?.id) {
+    const runUsage = await timedDashboardAnalyticsStep("run_api_usage", () => getRunApiUsageSummary(visibleRun.id));
     apiCallsUsed = runUsage.totalCalls;
     estimatedCost = runUsage.totalCost;
     discoveryApiCalls = runUsage.discoveryCalls;
@@ -312,15 +701,12 @@ export async function getDashboardStatsAction() {
     enrichmentEstimatedCost = runUsage.enrichmentCost;
     atmosphereEnrichmentCalls = runUsage.atmosphereCalls;
     atmosphereEstimatedCost = runUsage.atmosphereCost;
-    lastError = await getRunLastError(base.runId);
+    lastError = await timedDashboardAnalyticsStep("run_last_error", () => getRunLastError(visibleRun.id));
   }
 
-  const qualifiedLeadCount = await getQualifiedLeadCount(5.0);
   const costPerQualifiedLead = qualifiedLeadCount > 0 ? Math.round((estimatedCost / qualifiedLeadCount) * 100) / 100 : null;
-  const schedulerHealth = await getSchedulerHealth();
 
   return {
-    ...base,
     todayFocus,
     needsFollowUp,
     conversionMetrics,
@@ -342,6 +728,338 @@ export async function getDashboardStatsAction() {
   };
 }
 
+export async function getDashboardSummaryPanelsAction(): Promise<DashboardSummaryPanelsResult> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:getDashboardSummaryPanelsAction");
+  try {
+    const panels = await withReadOnlyActionDeadline(
+      "getDashboardSummaryPanelsAction",
+      12_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        const teamSummary = await getTeamBoardSummary();
+        const weeklyStats = await getStatisticsSummary({ range: "7d" });
+        const fulfillmentSummary = await getAdminFulfillmentSummary();
+        return { teamSummary, weeklyStats, fulfillmentSummary };
+      }),
+    );
+    logActionTiming(200);
+    return panels;
+  } catch (error) {
+    if (error instanceof ReadOnlyActionDeadlineError) {
+      logActionTiming(503, { reason: "dashboard_action_deadline" });
+      return emptyDashboardSummaryPanels("summary_panels_unavailable");
+    }
+    const loadError = classifyDashboardSummaryFailure(error);
+    logActionTiming(503, { reason: loadError });
+    return emptyDashboardSummaryPanels(loadError);
+  }
+}
+
+export async function getDiscoveryItemsAction(): Promise<{ items: DiscoveryItemSummary[]; loadError?: DashboardSummaryLoadError }> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:getDiscoveryItemsAction");
+  try {
+    const items = await withReadOnlyActionDeadline(
+      "getDiscoveryItemsAction",
+      10_000,
+      withDbStatementTimeout(6_000, async () => {
+        await ensureDbReady();
+        return listDiscoveryItems(12);
+      }),
+    );
+    logActionTiming(200);
+    return { items };
+  } catch (error) {
+    const loadError = error instanceof ReadOnlyActionDeadlineError
+      ? "discovery_items_unavailable"
+      : isDbStatementTimeoutError(error)
+      ? "db_statement_timeout"
+      : isTransientDbError(error)
+        ? "transient_db_error"
+        : "discovery_items_unavailable";
+    logActionTiming(503, { reason: error instanceof ReadOnlyActionDeadlineError ? "dashboard_action_deadline" : loadError });
+    return { items: [], loadError };
+  }
+}
+
+export async function getCoverageDiscoveryItemsAction(selectedRunId?: string | null): Promise<{
+  run: CoverageRunSummary | null;
+  discoveryItems: DiscoveryItemSummary[];
+  loadError?: CoverageLoadError;
+}> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:getCoverageDiscoveryItems");
+  try {
+    const result = await withReadOnlyActionDeadline(
+      "getCoverageDiscoveryItemsAction",
+      10_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        const run = await timedCoverageStep("getCoverageDiscoveryItems", "selected_run", () => getSelectedOrDefaultVisibleCrawlRun(selectedRunId ?? undefined));
+        const discoveryItems = await timedCoverageStep("getCoverageDiscoveryItems", "item_list", () => listDiscoveryItems(30));
+        return { run: summarizeCoverageRun(run), discoveryItems };
+      }),
+    );
+    logActionTiming(200);
+    return result;
+  } catch (error) {
+    const loadError = classifyCoverageFailure(error);
+    logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
+    return { run: null, discoveryItems: [], loadError };
+  }
+}
+
+export async function getCoverageSelectedRunAction(selectedRunId?: string | null): Promise<{
+  run: CoverageRunSummary | null;
+  loadError?: CoverageLoadError;
+}> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:getCoverageSelectedRun");
+  try {
+    const run = await withReadOnlyActionDeadline(
+      "getCoverageSelectedRunAction",
+      10_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        return timedCoverageStep("getCoverageSelectedRun", "selected_run", () => getSelectedOrDefaultVisibleCrawlRun(selectedRunId ?? undefined));
+      }),
+    );
+    logActionTiming(200);
+    return { run: summarizeCoverageRun(run) };
+  } catch (error) {
+    const loadError = classifyCoverageFailure(error);
+    logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
+    return { run: null, loadError };
+  }
+}
+
+export async function getCoverageDiscoveryItemListAction(limit = 30): Promise<{
+  discoveryItems: DiscoveryItemSummary[];
+  loadError?: CoverageLoadError;
+}> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:getCoverageDiscoveryItemList");
+  try {
+    const discoveryItems = await withReadOnlyActionDeadline(
+      "getCoverageDiscoveryItemListAction",
+      10_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        const safeLimit = Math.max(1, Math.min(Math.floor(limit), 50));
+        return timedCoverageStep("getCoverageDiscoveryItemList", "item_list", () => listDiscoveryItems(safeLimit));
+      }),
+    );
+    logActionTiming(200);
+    return { discoveryItems };
+  } catch (error) {
+    const loadError = classifyCoverageFailure(error);
+    logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
+    return { discoveryItems: [], loadError };
+  }
+}
+
+export async function getCoverageMarketSummaryAction(runId?: string | null): Promise<{
+  markets: MarketCoverageSummary[];
+  loadError?: CoverageLoadError;
+}> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:getCoverageMarketSummary");
+  try {
+    const markets = await withReadOnlyActionDeadline(
+      "getCoverageMarketSummaryAction",
+      10_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        return getMarketCoverageSummary(runId ?? undefined);
+      }),
+    );
+    logActionTiming(200);
+    return { markets };
+  } catch (error) {
+    const loadError = classifyCoverageFailure(error);
+    logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
+    return { markets: [], loadError };
+  }
+}
+
+export async function getCoverageCellLedgerAction(runId?: string | null): Promise<{
+  cells: LocationCellCoverage[];
+  loadError?: CoverageLoadError;
+}> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:getCoverageCellLedger");
+  try {
+    const cells = await withReadOnlyActionDeadline(
+      "getCoverageCellLedgerAction",
+      10_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        return getLocationCellCoverage(runId ?? undefined);
+      }),
+    );
+    logActionTiming(200);
+    return { cells };
+  } catch (error) {
+    const loadError = classifyCoverageFailure(error);
+    logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
+    return { cells: [], loadError };
+  }
+}
+
+export async function getCoverageRunProgressAction(runId?: string | null): Promise<{
+  progress: CrawlProgress | null;
+  geography: GeographyProgress | null;
+  loadError?: CoverageLoadError;
+}> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:getCoverageRunProgress");
+  if (!runId) {
+    logActionTiming(200, { mode: "no_run" });
+    return { progress: null, geography: null };
+  }
+  try {
+    const result = await withReadOnlyActionDeadline(
+      "getCoverageRunProgressAction",
+      10_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        const progress = await getCrawlProgress(runId);
+        const geography = await getRunGeographyProgress(runId);
+        return { progress, geography };
+      }),
+    );
+    logActionTiming(200);
+    return result;
+  } catch (error) {
+    const loadError = classifyCoverageFailure(error);
+    logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
+    return { progress: null, geography: null, loadError };
+  }
+}
+
+export async function getCoverageUnitPreviewAction(runId?: string | null): Promise<{
+  unitPreview: CrawlUnitPreview[];
+  loadError?: CoverageLoadError;
+}> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:getCoverageUnitPreview");
+  if (!runId) {
+    logActionTiming(200, { mode: "no_run" });
+    return { unitPreview: [] };
+  }
+  try {
+    const unitPreview = await withReadOnlyActionDeadline(
+      "getCoverageUnitPreviewAction",
+      10_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        return getCrawlUnitPreview(runId, 100);
+      }),
+    );
+    logActionTiming(200);
+    return { unitPreview };
+  } catch (error) {
+    const loadError = classifyCoverageFailure(error);
+    logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
+    return { unitPreview: [], loadError };
+  }
+}
+
+export async function getCoverageProbeCandidatesAction(runId?: string | null): Promise<{
+  candidates: DiscoveryRunCandidate[];
+  loadError?: CoverageLoadError;
+}> {
+  await requirePermission("crawl:manage");
+  const logActionTiming = startRouteTiming("action:getCoverageProbeCandidates");
+  if (!runId) {
+    logActionTiming(200, { mode: "no_run" });
+    return { candidates: [] };
+  }
+  try {
+    const candidates = await withReadOnlyActionDeadline(
+      "getCoverageProbeCandidatesAction",
+      10_000,
+      withDbStatementTimeout(8_000, async () => {
+        await ensureDbReady();
+        return getDiscoveryRunCandidates(runId, 100);
+      }),
+    );
+    logActionTiming(200);
+    return { candidates };
+  } catch (error) {
+    const loadError = classifyCoverageFailure(error);
+    logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
+    return { candidates: [], loadError };
+  }
+}
+
+export async function promoteProbeToLeadHarvestAction(runId: string): Promise<
+  | { runId: string; unitCount: number; selectedCellCount: number; categories: string[]; promotedFromRunId: string; estimate: DiscoveryBudgetEstimate }
+  | { error: string; estimate?: DiscoveryBudgetEstimate }
+> {
+  await requirePermission("crawl:manage");
+  await ensureDbReady();
+  const run = await getSelectedOrDefaultVisibleCrawlRun(runId);
+  if (!run) return { error: "Discovery item not found." };
+  if (run.status !== "done") return { error: "Only a completed coverage probe can be promoted to lead harvest." };
+
+  const selection = run.selection_json ?? {};
+  const sourceMode = normalizeDiscoveryMode(selection.discoveryMode, "lead_harvest");
+  if (sourceMode !== "coverage_probe") {
+    return { error: "Only coverage probe discovery items can be promoted. This item is already a lead harvest or does not have probe metadata." };
+  }
+
+  const marketId = typeof selection.marketId === "string" && selection.marketId.trim()
+    ? selection.marketId.trim()
+    : run.market_id;
+  const rawCellIds = Array.isArray(selection.cellIds) ? selection.cellIds.map((value) => String(value)) : [];
+  const rawCategories = Array.isArray(selection.categories) ? selection.categories.map((value) => String(value)) : run.categories;
+  const cellIds = normalizeDistinct(rawCellIds);
+  const categories = normalizeDistinct(rawCategories);
+  if (!marketId || cellIds.length === 0 || categories.length === 0) {
+    return { error: "This probe does not have enough market/cell/category metadata to promote safely. Start a new lead harvest manually." };
+  }
+
+  const processing = await getProcessingCrawlRun();
+  if (processing) {
+    return { error: "A discovery item is already processing. Let it finish or pause it before promoting this probe." };
+  }
+
+  const result = await startCrawlRunAction({
+    marketId,
+    cellIds,
+    categories,
+    discoveryMode: "lead_harvest",
+    paginationPolicy: normalizePaginationPolicy(selection.paginationPolicy, "auto_yield_based"),
+    testRun: true,
+    promotedFromRunId: run.id,
+  });
+
+  if ("error" in result && result.error) return { error: result.error, estimate: result.estimate };
+
+  if (!result.runId) return { error: "Lead harvest was not created. Try again from the completed probe." };
+  const createdRunId = result.runId;
+  const createdUnitCount = result.unitCount ?? 0;
+  const createdSelectedCellCount = result.selectedCellCount ?? cellIds.length;
+
+  await createAuditLog("coverage_probe_promoted_to_lead_harvest", "crawl_run", createdRunId, {
+    promotedFromRunId: run.id,
+    marketId,
+    cellIds,
+    categories,
+  });
+
+  return {
+    runId: createdRunId,
+    unitCount: createdUnitCount,
+    selectedCellCount: createdSelectedCellCount,
+    categories,
+    promotedFromRunId: run.id,
+    estimate: result.estimate,
+  };
+}
+
 function schedulerSettingKey(workerName: SchedulerWorkerName) {
   if (workerName === "ai_verification") return "scheduler_ai_verification_enabled" as const;
   if (workerName === "crawl") return "scheduler_crawl_enabled" as const;
@@ -350,10 +1068,10 @@ function schedulerSettingKey(workerName: SchedulerWorkerName) {
   return "scheduler_score_recompute_enabled" as const;
 }
 
-export async function getFailedUnitErrorsAction() {
+export async function getFailedUnitErrorsAction(runId?: string) {
   await requirePermission("crawl:manage");
   await ensureDbReady();
-  const run = (await getActiveCrawlRun()) ?? (await getLatestCrawlRun());
+  const run = await getSelectedOrDefaultVisibleCrawlRun(runId);
   if (!run) return [];
   return getFailedUnitErrors(run.id);
 }
@@ -361,7 +1079,7 @@ export async function getFailedUnitErrorsAction() {
 export async function getCrawlProgressAction() {
   await requirePermission("crawl:manage");
   await ensureDbReady();
-  const run = (await getActiveCrawlRun()) ?? (await getLatestCrawlRun());
+  const run = await getSelectedOrDefaultVisibleCrawlRun();
   if (!run) return null;
   return { runId: run.id, status: run.status, ...(await getCrawlProgress(run.id)) };
 }

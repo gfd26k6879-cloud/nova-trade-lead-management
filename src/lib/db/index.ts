@@ -1,5 +1,6 @@
-import postgres, { type Sql } from "postgres";
+import postgres, { type Sql, type TransactionSql } from "postgres";
 import path from "path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { SCHEMA_SQL, MIGRATION_COLUMNS } from "./schema";
 import { classifyBusinessType, isBusinessType } from "@/lib/business-types";
 import type Database from "better-sqlite3";
@@ -17,22 +18,20 @@ export interface DbStatement {
 export interface DbClient {
   prepare(query: string): DbStatement;
   exec(query: string): Promise<void>;
+  withStatementTimeout?<T>(timeoutMs: number, fn: () => Promise<T>): Promise<T>;
 }
 
 let _db: DbClient | null = null;
 let _pg: Sql | null = null;
+const scopedDbClient = new AsyncLocalStorage<DbClient>();
 
 export async function getDb(): Promise<DbClient> {
+  const scoped = scopedDbClient.getStore();
+  if (scoped) return scoped;
   if (_db) return _db;
 
   if (process.env.DATABASE_URL?.trim()) {
-    _pg = postgres(process.env.DATABASE_URL, {
-      ssl: "require",
-      prepare: false,
-      max: 5,
-      idle_timeout: 20,
-      connect_timeout: 15,
-    });
+    _pg = createPostgresClient();
     _db = new PostgresClient(_pg);
     return _db;
   }
@@ -81,25 +80,43 @@ class SqliteClient implements DbClient {
   async exec(query: string): Promise<void> {
     this.db.exec(query);
   }
+
+  async withStatementTimeout<T>(_timeoutMs: number, fn: () => Promise<T>): Promise<T> {
+    return fn();
+  }
 }
 
 class PostgresClient implements DbClient {
-  constructor(private readonly sql: Sql) {}
+  constructor(
+    private readonly sql: Sql | TransactionSql,
+    private readonly scoped = false,
+  ) {}
 
   prepare(query: string): DbStatement {
     const pgQuery = normalizePostgresQuery(query);
     return {
       get: async <T = Record<string, unknown>>(...params: unknown[]) => {
-        const rows = await this.sql.unsafe(pgQuery, normalizePostgresParams(params) as never[]);
-        return rows[0] as T | undefined;
+        return this.runReadQuery(pgQuery, async (sql) => {
+          const rows = await sql.unsafe(pgQuery, normalizePostgresParams(params) as never[]);
+          return rows[0] as T | undefined;
+        });
       },
       all: async <T = Record<string, unknown>>(...params: unknown[]) => {
-        const rows = await this.sql.unsafe(pgQuery, normalizePostgresParams(params) as never[]);
-        return rows as unknown as T[];
+        return this.runReadQuery(pgQuery, async (sql) => {
+          const rows = await sql.unsafe(pgQuery, normalizePostgresParams(params) as never[]);
+          return rows as unknown as T[];
+        });
       },
       run: async (...params) => {
-        const rows = await this.sql.unsafe(pgQuery, normalizePostgresParams(params) as never[]);
-        return { changes: rows.count ?? 0 };
+        try {
+          const rows = await this.sql.unsafe(pgQuery, normalizePostgresParams(params) as never[]);
+      return { changes: rows.count ?? 0 };
+        } catch (error) {
+          if (isTransientPostgresConnectionError(error)) {
+            await resetPostgresClient(this.sql as Sql);
+          }
+          throw error;
+        }
       },
     };
   }
@@ -107,6 +124,117 @@ class PostgresClient implements DbClient {
   async exec(query: string): Promise<void> {
     await this.sql.unsafe(query);
   }
+
+  async withStatementTimeout<T>(timeoutMs: number, fn: () => Promise<T>): Promise<T> {
+    const safeTimeoutMs = Math.max(1, Math.min(60_000, Math.floor(timeoutMs)));
+    try {
+      if (this.scoped) return fn();
+      const result = await (this.sql as Sql).begin(async (sql) => {
+        await sql.unsafe(`SET LOCAL statement_timeout = ${safeTimeoutMs}`);
+        return scopedDbClient.run(new PostgresClient(sql, true), fn);
+      });
+      return result as T;
+    } catch (error) {
+      if (isDbStatementTimeoutError(error) || isTransientPostgresConnectionError(error)) {
+        await resetPostgresClient(this.sql as Sql);
+      }
+      throw error;
+    }
+  }
+
+  private async runReadQuery<T>(
+    query: string,
+    run: (sql: Sql | TransactionSql) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await run(this.sql);
+    } catch (error) {
+      if (this.scoped || !isReadOnlyQuery(query) || !isTransientPostgresConnectionError(error)) {
+        throw error;
+      }
+
+      const sql = await resetPostgresClient(this.sql as Sql);
+      return run(sql);
+    }
+  }
+}
+
+function createPostgresClient(): Sql {
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+  if (!databaseUrl) throw new Error("DATABASE_URL is not configured.");
+
+  return postgres(databaseUrl, {
+    ssl: "require",
+    prepare: false,
+    max: getPostgresMaxConnections(),
+    idle_timeout: 20,
+    connect_timeout: 5,
+  });
+}
+
+function getPostgresMaxConnections(): number {
+  const configured = Number(process.env.POSTGRES_MAX_CONNECTIONS);
+  if (Number.isFinite(configured) && configured > 0) return Math.floor(configured);
+  return process.env.VERCEL ? 1 : 5;
+}
+
+export async function withDbStatementTimeout<T>(timeoutMs: number, fn: () => Promise<T>): Promise<T> {
+  const db = await getDb();
+  if (typeof db.withStatementTimeout === "function") {
+    return db.withStatementTimeout(timeoutMs, fn);
+  }
+  return fn();
+}
+
+export async function resetDbClient(): Promise<void> {
+  const current = _pg;
+  _pg = null;
+  _db = null;
+
+  if (!current) return;
+
+  try {
+    await current.end({ timeout: 1 });
+  } catch {
+    // The socket may already be gone. The next request will create a fresh client.
+  }
+}
+
+export function isDbStatementTimeoutError(error: unknown): boolean {
+  const maybe = error as { code?: unknown; message?: unknown };
+  const message = error instanceof Error ? error.message : String(maybe?.message ?? error ?? "");
+  return maybe?.code === "57014" || /canceling statement due to statement timeout|statement timeout/i.test(message);
+}
+
+export function isTransientDbError(error: unknown): boolean {
+  return isDbStatementTimeoutError(error) || isTransientPostgresConnectionError(error);
+}
+
+async function resetPostgresClient(current: Sql): Promise<Sql> {
+  if (_pg === current) {
+    _pg = null;
+    _db = null;
+  }
+
+  try {
+    await current.end({ timeout: 1 });
+  } catch {
+    // The socket is already unhealthy; closing best-effort is enough.
+  }
+
+  _pg = createPostgresClient();
+  _db = new PostgresClient(_pg);
+  return _pg;
+}
+
+function isReadOnlyQuery(query: string): boolean {
+  const normalized = query.trim().toUpperCase();
+  return normalized.startsWith("SELECT") || normalized.startsWith("WITH");
+}
+
+function isTransientPostgresConnectionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /connection (closed|terminated)|connection refused|econnreset|etimedout|timeout|socket|server closed the connection/i.test(message);
 }
 
 function normalizePostgresParams(params: unknown[]): unknown[] {
