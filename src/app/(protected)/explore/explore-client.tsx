@@ -12,6 +12,7 @@ import { claimLeadAction } from "@/lib/leads/actions";
 import { getBusinessTypeLabel } from "@/lib/business-types";
 import { getAiVerificationDisplay } from "@/lib/ai-verification-display";
 import type { Lead, LeadMapPoint, LeadMapZipCoverage } from "@/lib/db/queries";
+import { buildExploreFilterChips, parseExploreCommand, type ExploreFilterChip, type ExploreMode } from "@/lib/explore-filters";
 import { buildGoogleMapsScriptUrl, GOOGLE_MAPS_SCRIPT_ID, hasGoogleMapsBrowserKey } from "@/lib/google-maps";
 import type { AppRole } from "@/lib/permissions";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
@@ -107,6 +108,9 @@ interface Props {
     view?: string;
     map?: string;
     geo?: string;
+    mode?: ExploreMode;
+    archived?: string;
+    includeExcluded?: boolean | string;
   };
   scoreThresholds: ScoreBandThresholds;
   businessTypeCounts: Array<{ id: string; label: string; total: number; active: number }>;
@@ -141,6 +145,13 @@ const GEO_PRESETS = [
   { value: "boulder", label: "Boulder" },
   { value: "colorado_springs", label: "Colorado Springs" },
 ];
+const MODE_TABS: Array<{ value: ExploreMode; label: string; description: string }> = [
+  { value: "work_ready", label: "Work-ready", description: "Active sales opportunities." },
+  { value: "directory", label: "Directory", description: "All records, including disqualified or archived inventory." },
+  { value: "my_leads", label: "My leads", description: "Leads assigned to you." },
+  { value: "unclaimed", label: "Unclaimed", description: "Open leads nobody owns yet." },
+  { value: "needs_review", label: "Needs review", description: "Manual or AI review candidates." },
+];
 const MAP_LIST_LIMIT = 80;
 const MAP_FETCH_TIMEOUT_MS = 10_000;
 const QUICK_FILTERS: Array<{
@@ -149,24 +160,29 @@ const QUICK_FILTERS: Array<{
   updates: Record<string, string | null>;
 }> = [
   {
-    label: "All no-site leads",
-    description: "No website, any owner, sorted by website need, with map drawer open.",
-    updates: { websiteStatus: "none", assigned: "any", sortBy: "website_need", map: "open", page: null },
+    label: "Best no-site",
+    description: "No website, active opportunities, sorted by website need.",
+    updates: { mode: "work_ready", websiteStatus: "none", assigned: "any", sortBy: "website_need", page: null },
   },
   {
-    label: "Unclaimed no-site",
-    description: "No website and not claimed by anyone yet.",
-    updates: { websiteStatus: "none", assigned: "unassigned", sortBy: "website_need", map: "open", page: null },
+    label: "Unclaimed",
+    description: "Open leads that nobody owns yet.",
+    updates: { mode: "unclaimed", assigned: "unassigned", sortBy: "opportunity", page: null },
   },
   {
-    label: "Broken site",
-    description: "AI/manual quality marked as broken-site opportunity.",
-    updates: { qualityBucket: "broken_site_opportunity", assigned: "any", sortBy: "website_need", map: "open", page: null },
-  },
-  {
-    label: "Needs AI review",
+    label: "Needs AI",
     description: "Leads still waiting on AI verification.",
-    updates: { qualityBucket: "needs_ai_verify", aiVerificationStatus: "not_checked", assigned: "any", sortBy: "opportunity", map: null, page: null },
+    updates: { mode: "needs_review", qualityBucket: "needs_ai_verify", aiVerificationStatus: "not_checked", assigned: "any", sortBy: "opportunity", page: null },
+  },
+  {
+    label: "Broken/basic site",
+    description: "AI/manual quality marked as broken-site opportunity.",
+    updates: { mode: "work_ready", qualityBucket: "broken_site_opportunity", assigned: "any", sortBy: "website_need", page: null },
+  },
+  {
+    label: "My follow-ups",
+    description: "Your contacted leads, sorted by newest.",
+    updates: { mode: "my_leads", assigned: "me", status: "contacted", sortBy: "created_at", page: null },
   },
 ];
 
@@ -185,9 +201,9 @@ export function ExploreClient({
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [search, setSearch] = useState(filters.search ?? "");
-  const [city, setCity] = useState(filters.city ?? "");
-  const [zip, setZip] = useState(filters.zip ?? "");
+  const [command, setCommand] = useState("");
+  const [commandErrors, setCommandErrors] = useState<string[]>([]);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [busyLeadId, setBusyLeadId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [manualLeadOpen, setManualLeadOpen] = useState(false);
@@ -207,19 +223,28 @@ export function ExploreClient({
   const pageSize = filters.pageSize ?? 60;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const view = normalizeView(filters.view);
+  const mode = filters.mode ?? "work_ready";
   const mapOpen = filters.map === "open";
   const mapDrawerRef = useRef<HTMLDivElement | null>(null);
   const searchParamsString = searchParams.toString();
+  const showColoradoAreaPresets = shouldShowColoradoAreaPresets(filters);
   const selectedMapPoint = mapData.points.find((lead) => lead.id === selectedLeadId) ?? mapData.points[0] ?? null;
   const zipCoverageWithLeadCounts = useMemo(() => mergeZipCoverageWithMapPoints(mapData.zipCoverage, mapData.points), [mapData.zipCoverage, mapData.points]);
   const visibleMapList = useMemo(() => mapData.points.slice(0, MAP_LIST_LIMIT), [mapData.points]);
   const pageUnclaimed = leads.filter((lead) => !lead.assigned_to_user_id).length;
   const pageMapped = leads.filter((lead) => typeof lead.lat === "number" && typeof lead.lng === "number").length;
+  const pageNoWebsite = leads.filter((lead) => lead.website_status === "none").length;
+  const pageNeedsReview = leads.filter((lead) => lead.quality_bucket === "needs_ai_verify" || lead.quality_bucket === "needs_manual_review").length;
+  const activeChips = useMemo(
+    () => buildExploreFilterChips({ ...Object.fromEntries(new URLSearchParams(searchParamsString).entries()), mode }),
+    [mode, searchParamsString],
+  );
   const stats = [
-    { label: "Matching Leads", value: String(total) },
-    { label: "Unclaimed Here", value: String(pageUnclaimed), hint: "On this page" },
-    { label: "Mapped Here", value: String(pageMapped), hint: "On this page" },
-    { label: "Page", value: `${page} / ${totalPages}` },
+    { label: "Results", value: String(total) },
+    { label: "Unclaimed", value: String(pageUnclaimed), hint: "This page" },
+    { label: "No website", value: String(pageNoWebsite), hint: "This page" },
+    { label: "Needs review", value: String(pageNeedsReview), hint: "This page" },
+    { label: "Mapped", value: String(pageMapped), hint: "This page" },
   ];
 
   const pushFilters = useCallback(
@@ -238,7 +263,24 @@ export function ExploreClient({
 
   const submitSearch = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const search = String(formData.get("search") ?? "");
+    const city = String(formData.get("city") ?? "");
+    const zip = String(formData.get("zip") ?? "");
     pushFilters({ search, city, zip });
+  };
+
+  const submitCommand = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const parsed = parseExploreCommand(command);
+    setCommandErrors(parsed.errors);
+    if (parsed.errors.length > 0) return;
+    pushFilters({ ...parsed.filters, page: null });
+    setCommand("");
+  };
+
+  const removeChip = (chip: ExploreFilterChip) => {
+    pushFilters({ ...chip.removeParams, page: null });
   };
 
   const claimLead = async (leadId: string) => {
@@ -252,7 +294,6 @@ export function ExploreClient({
   };
 
   const selectMapZip = useCallback((nextZip: string) => {
-    setZip(nextZip);
     pushFilters({ zip: nextZip });
   }, [pushFilters]);
 
@@ -345,30 +386,112 @@ export function ExploreClient({
       )}
 
       <section className="glass rounded-2xl p-4 sm:p-5">
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <form onSubmit={submitSearch} className="flex flex-wrap items-end gap-2">
-              <label className="flex flex-col gap-1">
-                <span className="section-label">Search</span>
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-wrap items-center gap-2">
+            {MODE_TABS.map((tab) => (
+              <button
+                key={tab.value}
+                type="button"
+                className={`btn-glass text-sm ${mode === tab.value ? "nav-link-active" : ""}`}
+                title={tab.description}
+                aria-pressed={mode === tab.value}
+                onClick={() => pushFilters(modeTabUpdates(tab.value))}
+              >
+                {tab.label}
+              </button>
+            ))}
+            <span className="ml-auto rounded-full px-3 py-1.5 text-xs font-semibold" style={{ background: "rgba(79,70,229,0.1)", color: "var(--accent)" }}>
+              Mode: {MODE_TABS.find((tab) => tab.value === mode)?.label ?? "Work-ready"}
+            </span>
+            <span className="rounded-full px-3 py-1.5 text-xs font-semibold" style={{ background: "rgba(255,255,255,0.55)", color: "var(--text-secondary)" }}>
+              Filters: {activeChips.length}
+            </span>
+          </div>
+
+          <form onSubmit={submitCommand} className="rounded-2xl p-3" style={{ background: "rgba(255,255,255,0.36)", border: "1px solid rgba(255,255,255,0.5)" }}>
+            <label className="flex flex-col gap-2">
+              <span className="section-label">Command search</span>
+              <div className="flex flex-col gap-2 lg:flex-row">
                 <input
                   type="text"
-                  className="glass-input min-w-56"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Name, phone, address"
+                  className="glass-input min-h-12 flex-1"
+                  value={command}
+                  onChange={(event) => setCommand(event.target.value)}
+                  list="explore-command-suggestions"
+                  placeholder='Try: city:toronto website:none owner:unclaimed reviews>50, or "premier plumbing"'
                 />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="section-label">City</span>
-                <input className="glass-input w-36" value={city} onChange={(event) => setCity(event.target.value)} placeholder="Denver" />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="section-label">Postal / postcode</span>
-                <input className="glass-input w-36" value={zip} onChange={(event) => setZip(event.target.value)} placeholder="80202, M5V, SW1A" />
-              </label>
-              <button type="submit" className="btn-primary text-sm">Apply</button>
-            </form>
+                <datalist id="explore-command-suggestions">
+                  <option value="city:toronto website:none owner:unclaimed" />
+                  <option value={"city:denver website:none reviews>50"} />
+                  <option value="country:GB postal:SW1A quality:needs_ai" />
+                  <option value="market:toronto sort:opportunity map:on" />
+                  <option value="owner:me status:contacted sort:newest" />
+                  <option value={"website:broken rating>4.2"} />
+                </datalist>
+                <button type="submit" className="btn-primary text-sm">Apply command</button>
+              </div>
+            </label>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
+              <span>Commands:</span>
+              <button type="button" className="link-accent" onClick={() => setCommand("city:toronto website:none owner:unclaimed")}>city:toronto website:none</button>
+              <button type="button" className="link-accent" onClick={() => setCommand("country:GB postal:SW1A quality:needs_ai")}>country:GB postal:SW1A</button>
+              <button type="button" className="link-accent" onClick={() => setCommand("reviews>50 rating>4.2 sort:opportunity")}>reviews&gt;50 rating&gt;4.2</button>
+            </div>
+            {commandErrors.length > 0 && (
+              <div className="mt-3 rounded-xl px-3 py-2 text-sm" style={{ background: "rgba(239,68,68,0.1)", color: "#dc2626" }}>
+                {commandErrors.map((error) => <p key={error}>{error}</p>)}
+              </div>
+            )}
+          </form>
 
+          <div className="flex flex-wrap items-center gap-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.32)" }}>
+            <span className="section-label">Quick views</span>
+            {QUICK_FILTERS.map((filter) => {
+              const active = isQuickFilterActive(filter.updates, filters, mode);
+              return (
+                <button
+                  key={filter.label}
+                  type="button"
+                  className={`btn-glass text-xs ${active ? "nav-link-active" : ""}`}
+                  title={filter.description}
+                  aria-pressed={active}
+                  onClick={() => pushFilters(filter.updates)}
+                >
+                  {filter.label}
+                </button>
+              );
+            })}
+            <Link href="/explore" className="btn-glass text-xs">Reset all</Link>
+            <span className="inline-flex items-center gap-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+              Filters update the list and optional map together. <HelpTip>The map drawer loads Google Maps only after you open it. No Places, Geocoding, Routes, or server map API calls are made from this view.</HelpTip>
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="section-label">Active filters</span>
+            {activeChips.length === 0 ? (
+              <span className="rounded-full px-3 py-1.5 text-xs" style={{ background: "rgba(255,255,255,0.45)", color: "var(--text-tertiary)" }}>Default work-ready scope</span>
+            ) : activeChips.map((chip) => (
+              <button
+                key={`${chip.key}:${chip.value}`}
+                type="button"
+                className="rounded-full px-3 py-1.5 text-xs font-medium"
+                style={{ background: "rgba(79,70,229,0.1)", color: "var(--accent)" }}
+                title={`Remove ${chip.label}`}
+                onClick={() => removeChip(chip)}
+              >
+                {chip.label}: {formatLabel(chip.value)} ×
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex min-w-48 flex-col gap-1">
+              <span className="section-label">Sort</span>
+              <select className="glass-select" value={filters.sortBy ?? "opportunity"} onChange={(event) => pushFilters({ sortBy: event.target.value })}>
+                {SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
             <div className="flex flex-wrap gap-2 lg:ml-auto">
               {currentUser.role === "admin" && (
                 <button type="button" className="btn-primary text-sm" onClick={() => setManualLeadOpen(true)}>
@@ -378,159 +501,146 @@ export function ExploreClient({
               <SegmentButton active={mapOpen} onClick={() => pushFilters({ map: mapOpen ? null : "open" })}>
                 {mapOpen ? "Hide map" : "Show map"}
               </SegmentButton>
-              {mapOpen && (
-                <span className="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium" style={{ background: "rgba(79,70,229,0.1)", color: "var(--accent)" }}>
-                  {mapFetchState === "loading" && "Map loading"}
-                  {mapFetchState === "ready" && `${mapData.points.length} shown / ${mapData.totalMapped} mapped`}
-                  {mapFetchState === "error" && "Map error - retry"}
-                  {mapFetchState === "timeout" && "Map taking too long - retry"}
-                  {mapFetchState === "idle" && "Map ready to open"}
-                </span>
-              )}
+              <span className="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium" style={{ background: "rgba(79,70,229,0.1)", color: "var(--accent)" }}>
+                {mapFetchState === "loading" && "Map loading"}
+                {mapFetchState === "ready" && `${mapData.points.length} shown / ${mapData.totalMapped} mapped`}
+                {mapFetchState === "error" && "Map error - retry"}
+                {mapFetchState === "timeout" && "Map taking too long - retry"}
+                {mapFetchState === "idle" && "Map available"}
+              </span>
               <SegmentButton active={view === "cards"} onClick={() => pushFilters({ view: "cards" })}>Cards</SegmentButton>
               <SegmentButton active={view === "table"} onClick={() => pushFilters({ view: "table" })}>Table</SegmentButton>
+              <button type="button" className={`btn-glass text-sm ${advancedOpen ? "nav-link-active" : ""}`} onClick={() => setAdvancedOpen((value) => !value)}>
+                {advancedOpen ? "Hide advanced" : "Advanced filters"}
+              </button>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.32)" }}>
-            <span className="section-label">Quick views</span>
-            {QUICK_FILTERS.map((filter) => (
-              <button
-                key={filter.label}
-                type="button"
-                className="btn-glass text-xs"
-                title={filter.description}
-                onClick={() => pushFilters(filter.updates)}
-              >
-                {filter.label}
+          {advancedOpen && (
+            <div className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.28)", border: "1px solid rgba(255,255,255,0.42)" }}>
+              <form onSubmit={submitSearch} className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">Search</span>
+                  <input name="search" type="text" className="glass-input" defaultValue={filters.search ?? ""} placeholder="Name, phone, address" />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">City</span>
+                  <input name="city" className="glass-input" defaultValue={filters.city ?? ""} placeholder="Denver, Toronto, London" />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">Postal / postcode</span>
+                  <input name="zip" className="glass-input" defaultValue={filters.zip ?? ""} placeholder="80202, M5V, SW1A" />
+                </label>
+                <button type="submit" className="btn-primary self-end text-sm">Apply fields</button>
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">Business type</span>
+                  <select className="glass-select" value={filters.businessType ?? ""} onChange={(event) => pushFilters({ businessType: event.target.value })}>
+                    <option value="">All business types</option>
+                    {businessTypeCounts.map((type) => (
+                      <option key={type.id} value={type.id}>{type.label}{type.total > 0 ? ` (${type.active})` : ""}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">Website</span>
+                  <select className="glass-select" value={filters.websiteStatus ?? ""} onChange={(event) => pushFilters({ websiteStatus: event.target.value })}>
+                    <option value="">All websites</option>
+                    {WEBSITE_OPTIONS.filter(Boolean).map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">Quality</span>
+                  <select className="glass-select" value={filters.qualityBucket ?? ""} onChange={(event) => pushFilters({ qualityBucket: event.target.value })}>
+                    <option value="">All quality</option>
+                    {QUALITY_OPTIONS.filter(Boolean).map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">AI verification</span>
+                  <select className="glass-select" value={filters.aiVerificationStatus ?? ""} onChange={(event) => pushFilters({ aiVerificationStatus: event.target.value })}>
+                    <option value="">All AI states</option>
+                    {AI_OPTIONS.filter(Boolean).map((status) => <option key={status} value={status}>{getAiVerificationDisplay({ status }).label}</option>)}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">Lead status</span>
+                  <select className="glass-select" value={filters.status ?? ""} onChange={(event) => pushFilters({ status: event.target.value })}>
+                    <option value="">All statuses</option>
+                    {STATUS_OPTIONS.filter(Boolean).map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">Category</span>
+                  <select className="glass-select" value={filters.category ?? ""} onChange={(event) => pushFilters({ category: event.target.value })}>
+                    <option value="">All categories</option>
+                    {CATEGORY_OPTIONS.map((category) => <option key={category} value={category}>{formatLabel(category)}</option>)}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">Assignment</span>
+                  <select className="glass-select" value={filters.assigned ?? "any"} onChange={(event) => pushFilters({ assigned: event.target.value })}>
+                    <option value="any">Any owner</option>
+                    <option value="unassigned">Unclaimed</option>
+                    <option value="me">Mine</option>
+                  </select>
+                </label>
+                {currentUser.role === "admin" && (
+                  <label className="flex flex-col gap-1">
+                    <span className="section-label">Inventory</span>
+                    <select className="glass-select" value={filters.archived ?? "active"} onChange={(event) => pushFilters({ archived: event.target.value })}>
+                      <option value="active">Active only</option>
+                      <option value="archived">Archived only</option>
+                      <option value="all">Active + archived</option>
+                    </select>
+                  </label>
+                )}
+                {currentUser.role === "admin" && (
+                  <label className="flex items-center gap-2 self-end rounded-xl px-3 py-3 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+                    <input
+                      type="checkbox"
+                      checked={filters.includeExcluded === true || filters.includeExcluded === "true"}
+                      onChange={(event) => pushFilters({ includeExcluded: event.target.checked ? "true" : null })}
+                    />
+                    Include excluded/disqualified
+                  </label>
+                )}
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">Min reviews</span>
+                  <input type="number" min={0} step={1} className="glass-input" defaultValue={filters.minReviews ?? ""} onChange={(event) => pushFilters({ minReviews: event.target.value })} />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">Min rating</span>
+                  <input type="number" min={0} max={5} step={0.1} className="glass-input" defaultValue={filters.minRating ?? ""} onChange={(event) => pushFilters({ minRating: event.target.value })} />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="section-label">Min score</span>
+                  <input type="number" min={0} step={0.5} className="glass-input" defaultValue={filters.minScore ?? ""} onChange={(event) => pushFilters({ minScore: event.target.value })} />
+                </label>
+              </form>
+            </div>
+          )}
+
+          {showColoradoAreaPresets && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="section-label">Area</span>
+              {GEO_PRESETS.map((preset) => (
+                <button
+                  key={preset.value}
+                  type="button"
+                  className={`btn-glass text-xs ${filters.geo === preset.value ? "nav-link-active" : ""}`}
+                  onClick={() => pushFilters({ geo: preset.value, minLat: null, maxLat: null, minLng: null, maxLng: null })}
+                >
+                  {preset.label}
+                </button>
+              ))}
+              <button type="button" className="btn-glass text-xs" onClick={() => pushFilters({ geo: null, minLat: null, maxLat: null, minLng: null, maxLng: null })}>
+                Clear area
               </button>
-            ))}
-            <Link href="/explore" className="btn-glass text-xs">Reset all</Link>
-            <span className="inline-flex items-center gap-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-              Filters update the list and the optional map together. <HelpTip>The map drawer loads Google Maps only after you open it. No Places, Geocoding, Routes, or server map API calls are made from this view.</HelpTip>
-            </span>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <label className="flex flex-col gap-1">
-              <span className="section-label">Business type</span>
-              <select className="glass-select" value={filters.businessType ?? ""} onChange={(event) => pushFilters({ businessType: event.target.value })}>
-                <option value="">All business types</option>
-                {businessTypeCounts.map((type) => (
-                  <option key={type.id} value={type.id}>{type.label}{type.total > 0 ? ` (${type.active})` : ""}</option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="section-label">Website</span>
-              <select className="glass-select" value={filters.websiteStatus ?? ""} onChange={(event) => pushFilters({ websiteStatus: event.target.value })}>
-                <option value="">All websites</option>
-                {WEBSITE_OPTIONS.filter(Boolean).map((status) => <option key={status} value={status}>{status}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="section-label">Quality</span>
-              <select className="glass-select" value={filters.qualityBucket ?? ""} onChange={(event) => pushFilters({ qualityBucket: event.target.value })}>
-                <option value="">All quality</option>
-                {QUALITY_OPTIONS.filter(Boolean).map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="section-label">AI verification</span>
-              <select className="glass-select" value={filters.aiVerificationStatus ?? ""} onChange={(event) => pushFilters({ aiVerificationStatus: event.target.value })}>
-                <option value="">All AI states</option>
-                {AI_OPTIONS.filter(Boolean).map((status) => <option key={status} value={status}>{getAiVerificationDisplay({ status }).label}</option>)}
-              </select>
-            </label>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <label className="flex flex-col gap-1">
-              <span className="section-label">Lead status</span>
-              <select className="glass-select" value={filters.status ?? ""} onChange={(event) => pushFilters({ status: event.target.value })}>
-                <option value="">All statuses</option>
-                {STATUS_OPTIONS.filter(Boolean).map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="section-label">Category</span>
-              <select className="glass-select" value={filters.category ?? ""} onChange={(event) => pushFilters({ category: event.target.value })}>
-                <option value="">All categories</option>
-                {CATEGORY_OPTIONS.map((category) => <option key={category} value={category}>{formatLabel(category)}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="section-label">Assignment</span>
-              <select className="glass-select" value={filters.assigned ?? "any"} onChange={(event) => pushFilters({ assigned: event.target.value })}>
-                <option value="any">Any owner</option>
-                <option value="unassigned">Unclaimed</option>
-                <option value="me">Mine</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="section-label">Sort</span>
-              <select className="glass-select" value={filters.sortBy ?? "opportunity"} onChange={(event) => pushFilters({ sortBy: event.target.value })}>
-                {SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="section-label">Min reviews</span>
-              <input
-                type="number"
-                min={0}
-                step={1}
-                className="glass-input"
-                defaultValue={filters.minReviews ?? ""}
-                onChange={(event) => pushFilters({ minReviews: event.target.value })}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="section-label">Min rating</span>
-              <input
-                type="number"
-                min={0}
-                max={5}
-                step={0.1}
-                className="glass-input"
-                defaultValue={filters.minRating ?? ""}
-                onChange={(event) => pushFilters({ minRating: event.target.value })}
-              />
-            </label>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <label className="flex flex-col gap-1">
-              <span className="section-label">Min score</span>
-              <input
-                type="number"
-                min={0}
-                step={0.5}
-                className="glass-input"
-                defaultValue={filters.minScore ?? ""}
-                onChange={(event) => pushFilters({ minScore: event.target.value })}
-              />
-            </label>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="section-label">Area</span>
-            {GEO_PRESETS.map((preset) => (
-              <button
-                key={preset.value}
-                type="button"
-                className={`btn-glass text-xs ${filters.geo === preset.value ? "nav-link-active" : ""}`}
-                onClick={() => pushFilters({ geo: preset.value, minLat: null, maxLat: null, minLng: null, maxLng: null })}
-              >
-                {preset.label}
-              </button>
-            ))}
-            <button type="button" className="btn-glass text-xs" onClick={() => pushFilters({ geo: null, minLat: null, maxLat: null, minLng: null, maxLng: null })}>
-              Clear area
-            </button>
-            <span className="inline-flex items-center gap-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-              Opportunity sort <HelpTip>No-site and broken-site businesses rank ahead of weak/basic website leads, then quality and sales priority break ties.</HelpTip>
-            </span>
-          </div>
+              <span className="inline-flex items-center gap-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                Opportunity sort <HelpTip>No-site and broken-site businesses rank ahead of weak/basic website leads, then quality and sales priority break ties.</HelpTip>
+              </span>
+            </div>
+          )}
         </div>
       </section>
 
@@ -572,7 +682,13 @@ export function ExploreClient({
         <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {leads.length === 0 ? (
             <div className="md:col-span-2 xl:col-span-3">
-              <EmptyState text="No leads match the current filters." />
+              <ExploreEmptyState
+                mode={mode}
+                chips={activeChips}
+                onDirectory={() => pushFilters({ mode: "directory", page: null })}
+                onClearLocation={() => pushFilters({ city: null, zip: null, marketId: null, locationCellId: null, countryCode: null, page: null })}
+                onTorontoMarket={() => pushFilters({ mode: "directory", countryCode: "CA", marketId: "market-toronto", city: null, page: null })}
+              />
             </div>
           ) : leads.map((lead) => (
             <LeadCard
@@ -754,6 +870,71 @@ function MapLoadState({
       <div className="mt-4 flex flex-wrap gap-2">
         <button type="button" className="btn-primary text-sm" onClick={onRetry}>{retryLabel}</button>
         <button type="button" className="btn-glass text-sm" onClick={onHide}>Hide map</button>
+      </div>
+    </div>
+  );
+}
+
+function isQuickFilterActive(
+  updates: Record<string, string | null>,
+  filters: Props["filters"],
+  mode: ExploreMode,
+): boolean {
+  return Object.entries(updates).every(([key, value]) => {
+    if (key === "page") return true;
+    if (key === "mode") return (value ?? "work_ready") === mode;
+    if (key === "assigned" && value === "any") return !filters.assigned;
+    if (value === null) return true;
+    return String(filters[key as keyof Props["filters"]] ?? "") === value;
+  });
+}
+
+function modeTabUpdates(mode: ExploreMode): Record<string, string | null> {
+  const base = { page: null, assigned: null, qualityBucket: null, aiVerificationStatus: null, status: null };
+  if (mode === "work_ready") return { ...base, mode: null };
+  return { ...base, mode };
+}
+
+function shouldShowColoradoAreaPresets(filters: Props["filters"]): boolean {
+  if (filters.countryCode && filters.countryCode !== "US") return false;
+  const location = `${filters.city ?? ""} ${filters.marketId ?? ""}`.toLowerCase();
+  return !/(toronto|vancouver|london|market-toronto|market-vancouver|market-london)/.test(location);
+}
+
+function ExploreEmptyState({
+  mode,
+  chips,
+  onDirectory,
+  onClearLocation,
+  onTorontoMarket,
+}: {
+  mode: ExploreMode;
+  chips: ExploreFilterChip[];
+  onDirectory: () => void;
+  onClearLocation: () => void;
+  onTorontoMarket: () => void;
+}) {
+  const filterSummary = chips.length > 0
+    ? chips.map((chip) => `${chip.label.toLowerCase()}:${chip.value}`).join(", ")
+    : "the default work-ready scope";
+  const locationActive = chips.some((chip) => ["city", "zip", "countryCode", "marketId", "locationCellId", "geo"].includes(chip.key));
+  const cityTorontoActive = chips.some((chip) => chip.key === "city" && chip.value.toLowerCase() === "toronto");
+
+  return (
+    <div className="rounded-2xl p-8 text-center" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.5)" }}>
+      <p className="section-label">No matching leads</p>
+      <h3 className="mt-2 text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
+        No {formatLabel(mode)} leads match {filterSummary}.
+      </h3>
+      <p className="mx-auto mt-3 max-w-2xl text-sm leading-6" style={{ color: "var(--text-secondary)" }}>
+        Work-ready mode only shows active sales opportunities. If you are checking a newly probed market like Toronto, Vancouver, or London, switch to Directory to inspect inventory before harvesting.
+      </p>
+      <div className="mt-5 flex flex-wrap justify-center gap-2">
+        {mode !== "directory" && <button type="button" className="btn-primary text-sm" onClick={onDirectory}>Search Directory</button>}
+        {locationActive && <button type="button" className="btn-glass text-sm" onClick={onClearLocation}>Clear location</button>}
+        {cityTorontoActive && <button type="button" className="btn-glass text-sm" onClick={onTorontoMarket}>Switch to Toronto market</button>}
+        <Link href="/dashboard" className="btn-glass text-sm">Start discovery / harvest</Link>
+        <Link href="/explore" className="btn-glass text-sm">Reset all</Link>
       </div>
     </div>
   );
@@ -1126,6 +1307,9 @@ function LeadCard({
       <p className="mt-3 line-clamp-2 text-sm leading-relaxed" style={{ color: "var(--text-primary)" }}>
         {lead.next_best_action ?? lead.quality_reason ?? "Review, claim, and verify the opportunity before outreach."}
       </p>
+      <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
+        Why this result: {resultReason(lead)}
+      </p>
 
       <div className="mt-3 flex flex-wrap gap-2">
         <Badge label={formatLabel(lead.website_status)} style={websiteBadgeStyle(lead.website_status)} />
@@ -1145,6 +1329,9 @@ function LeadCard({
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
         <OwnerPill label={owner} mine={lead.assigned_to_user_id === currentUserId} />
         <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass ml-auto text-sm">Details</Link>
+        <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass text-sm">Website found</Link>
+        <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass text-sm">Work update</Link>
+        <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass text-sm">Archive</Link>
         {!lead.assigned_to_user_id && (
           <button type="button" className="btn-primary text-sm" disabled={busy} onClick={() => onClaim(lead.id)}>
             {busy ? "Claiming..." : "Claim"}
@@ -1464,6 +1651,17 @@ function ownerLabel(lead: LeadOwner, currentUserId: string): string {
   if (!lead.assigned_to_user_id) return "Unclaimed";
   if (lead.assigned_to_user_id === currentUserId) return "Mine";
   return lead.assigned_user_display_name || lead.assigned_user_email || "Taken";
+}
+
+function resultReason(lead: Pick<Lead, "website_status" | "rating" | "review_count" | "quality_bucket" | "ai_verification_status">): string {
+  const parts = [
+    formatLabel(lead.website_status),
+    lead.rating ? `${lead.rating.toFixed(1)} rating` : null,
+    `${lead.review_count ?? 0} reviews`,
+    formatLabel(lead.quality_bucket),
+  ].filter(Boolean);
+  if (lead.ai_verification_status === "not_checked") parts.push("AI not run");
+  return parts.join(" + ");
 }
 
 function websiteBadgeStyle(status: string): React.CSSProperties {

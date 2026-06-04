@@ -20,7 +20,7 @@ const logRouteTiming = startRouteTiming("/explore");
   const params = await searchParams;
   const queryState = buildExploreQueryState(params, session.userId);
   const filters = constrainLeadFiltersForSession(session, queryState.filters);
-  const { view } = queryState;
+  const { view, mode } = queryState;
   let loaded: {
     scoreThresholds: Awaited<ReturnType<typeof getScoreBandThresholds>>;
     businessTypeCounts: Awaited<ReturnType<typeof getBusinessTypeCounts>>;
@@ -56,7 +56,7 @@ const logRouteTiming = startRouteTiming("/explore");
       totalMapped={0}
       mapPointLimit={DEFAULT_MAP_POINT_LIMIT}
       zipCoverage={[]}
-      filters={{ ...filters, view, map: params.map, geo: params.geo }}
+      filters={{ ...filters, view, map: params.map, geo: params.geo, mode, archived: params.archived, includeExcluded: params.includeExcluded }}
       scoreThresholds={loaded.scoreThresholds}
       businessTypeCounts={loaded.businessTypeCounts}
       currentUser={{ userId: session.userId, email: session.email, role: session.role }}
