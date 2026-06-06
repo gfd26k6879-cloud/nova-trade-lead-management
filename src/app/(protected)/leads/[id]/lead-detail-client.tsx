@@ -244,6 +244,15 @@ type ActivityTimelineItem = {
   meta?: string;
   channel?: string;
 };
+type CallOutcomePreset = {
+  key: string;
+  label: string;
+  channel: string;
+  outcome: string;
+  note: string;
+  nextStep: string;
+  decisionMakerReached: boolean;
+};
 
 const LEAD_DETAIL_TABS: Array<{ key: LeadDetailTab; label: string }> = [
   { key: "work", label: "Work" },
@@ -251,6 +260,35 @@ const LEAD_DETAIL_TABS: Array<{ key: LeadDetailTab; label: string }> = [
   { key: "verification", label: "Verification" },
   { key: "intelligence", label: "Intelligence" },
   { key: "admin", label: "Admin" },
+];
+const CALL_OUTCOME_PRESETS: CallOutcomePreset[] = [
+  {
+    key: "no_answer",
+    label: "No answer",
+    channel: "call",
+    outcome: "not_reached",
+    note: "No answer. Try once more later before marking the phone bad.",
+    nextStep: "Call again later today or tomorrow.",
+    decisionMakerReached: false,
+  },
+  {
+    key: "spoke_to_owner",
+    label: "Spoke to owner",
+    channel: "call",
+    outcome: "decision_maker_reached",
+    note: "Spoke with the owner. Confirmed they are the decision maker and introduced the website gap.",
+    nextStep: "Send a preview or quote if they showed interest.",
+    decisionMakerReached: true,
+  },
+  {
+    key: "send_preview",
+    label: "Send preview",
+    channel: "text",
+    outcome: "demo_sent",
+    note: "Sent preview/demo link and asked for a good time to review it.",
+    nextStep: "Follow up after they review the preview.",
+    decisionMakerReached: true,
+  },
 ];
 const WEBSITE_CORRECTION_OPTIONS: Array<{ value: WebsiteCorrectionResolution; label: string; help: string }> = [
   { value: "official_website_found", label: "Official website found", help: "Remove from no-site sales queues but keep the directory record." },
@@ -709,6 +747,19 @@ export function LeadDetailClient({
       flash(result.error ?? "Unable to log contact");
     }
     setLogging(false);
+  };
+
+  const handleApplyCallPreset = (preset: CallOutcomePreset) => {
+    if (!canEditLead) {
+      flash(isClaimedByOther ? "Taken by another researcher." : "Claim this lead before logging contact.");
+      return;
+    }
+    setEventChannel(preset.channel);
+    setEventOutcome(preset.outcome);
+    setEventNote(preset.note);
+    setNextStep(preset.nextStep);
+    setDecisionMakerReached(preset.decisionMakerReached);
+    flash(`${preset.label} preset applied`);
   };
 
   const handleCreateAdminRequest = async (requestType: AdminRequestType) => {
@@ -1221,6 +1272,20 @@ export function LeadDetailClient({
               <button type="button" className="btn-primary text-sm" onClick={handleLogEvent} disabled={logging || !canEditLead}>
                 {logging ? "Logging..." : "Log outcome"}
               </button>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.42)" }}>
+              <span className="text-xs font-medium uppercase" style={{ color: "var(--text-tertiary)" }}>Call presets</span>
+              {CALL_OUTCOME_PRESETS.map((preset) => (
+                <button
+                  key={preset.key}
+                  type="button"
+                  className="btn-glass text-xs"
+                  disabled={!canEditLead}
+                  onClick={() => handleApplyCallPreset(preset)}
+                >
+                  {preset.label}
+                </button>
+              ))}
             </div>
             <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
               <label className="flex flex-col gap-1">

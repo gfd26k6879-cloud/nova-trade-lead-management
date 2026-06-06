@@ -1,16 +1,12 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, EMAIL, PASSWORD, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
+import { login, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
 
 test.describe("UI Smoke Test", () => {
   skipIfMissingAuth();
   test.setTimeout(60000);
   test.beforeEach(async ({ page }) => {
-    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle", timeout: 30000 });
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL(/\/queue/, { timeout: 10000 });
+    await login(page);
   });
 
   test("1. Open app and log in", async ({ page }) => {

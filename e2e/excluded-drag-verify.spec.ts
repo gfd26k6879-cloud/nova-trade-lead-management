@@ -1,17 +1,13 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, EMAIL, PASSWORD, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, skipIfMissingAuth } from "./auth-fixtures";
 
 test("Excluded drag behavior only", async ({ page }) => {
   skipIfMissingAuth();
   const observations: string[] = [];
   await page.setViewportSize({ width: 1920, height: 1080 });
 
-  await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle", timeout: 30000 });
-  await page.getByLabel("Email").fill(EMAIL);
-  await page.getByLabel("Password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL(/\/queue/, { timeout: 10000 });
+  await login(page);
 
   await page.goto(`${BASE_URL}/leads?view=kanban`, { waitUntil: "networkidle", timeout: 15000 });
   await expect(page.getByRole("button", { name: "Switch to Table" })).toBeVisible({ timeout: 5000 });

@@ -6,6 +6,7 @@ export default defineConfig({
   workers: 1,
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
+    storageState: process.env.E2E_STORAGE_STATE || undefined,
     trace: "retain-on-failure",
   },
 });

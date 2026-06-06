@@ -158,6 +158,10 @@ describe("LeadDetailClient archive UX", () => {
     expect(html).toContain("Website finding");
     expect(html).toContain("AI confidence");
     expect(html).toContain("Rating / reviews");
+    expect(html).toContain("Call presets");
+    expect(html).toContain("No answer");
+    expect(html).toContain("Spoke to owner");
+    expect(html).toContain("Send preview");
     expect(html).toContain("Recent activity");
   });
 

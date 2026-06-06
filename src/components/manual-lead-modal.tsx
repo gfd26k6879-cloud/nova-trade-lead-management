@@ -23,6 +23,9 @@ export function ManualLeadModal({ open, onClose }: Props) {
   const [businessType, setBusinessType] = useState<string>(BUSINESS_TYPE_OPTIONS[0]?.id ?? "local_services");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
+  const [mapsUri, setMapsUri] = useState("");
+  const [source, setSource] = useState("");
+  const [contactPersonName, setContactPersonName] = useState("");
   const [websiteStatus, setWebsiteStatus] = useState("none");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
@@ -35,6 +38,9 @@ export function ManualLeadModal({ open, onClose }: Props) {
     setBusinessType(BUSINESS_TYPE_OPTIONS[0]?.id ?? "local_services");
     setPhone("");
     setAddress("");
+    setMapsUri("");
+    setSource("");
+    setContactPersonName("");
     setWebsiteStatus("none");
     setNotes("");
     setError(null);
@@ -53,6 +59,9 @@ export function ManualLeadModal({ open, onClose }: Props) {
       businessType,
       phone,
       address,
+      mapsUri,
+      source,
+      contactPersonName,
       websiteStatus,
       notes,
     });
@@ -74,7 +83,7 @@ export function ManualLeadModal({ open, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="manual-lead-title"
-        className="glass-heavy w-full max-w-2xl rounded-2xl p-6 shadow-2xl"
+        className="glass-heavy max-h-[calc(100vh-4rem)] w-full max-w-3xl overflow-y-auto rounded-2xl p-6 shadow-2xl"
         style={{ border: "1px solid rgba(255,255,255,0.55)" }}
       >
         <div className="flex items-start justify-between gap-4">
@@ -123,6 +132,18 @@ export function ManualLeadModal({ open, onClose }: Props) {
           <label htmlFor="manual-lead-address" className="flex flex-col gap-1">
             <span className="section-label">Address</span>
             <input id="manual-lead-address" name="manualLeadAddress" className="glass-input" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="123 Main St, Denver, CO" maxLength={300} />
+          </label>
+          <label htmlFor="manual-lead-maps-uri" className="flex flex-col gap-1 sm:col-span-2">
+            <span className="section-label">Maps URL</span>
+            <input id="manual-lead-maps-uri" name="manualLeadMapsUri" className="glass-input" value={mapsUri} onChange={(event) => setMapsUri(event.target.value)} placeholder="https://maps.google.com/..." maxLength={500} />
+          </label>
+          <label htmlFor="manual-lead-source" className="flex flex-col gap-1">
+            <span className="section-label">Lead source</span>
+            <input id="manual-lead-source" name="manualLeadSource" className="glass-input" value={source} onChange={(event) => setSource(event.target.value)} placeholder="Google Maps, referral, walk-in..." maxLength={160} />
+          </label>
+          <label htmlFor="manual-lead-contact-person" className="flex flex-col gap-1">
+            <span className="section-label">Contact person</span>
+            <input id="manual-lead-contact-person" name="manualLeadContactPerson" className="glass-input" value={contactPersonName} onChange={(event) => setContactPersonName(event.target.value)} placeholder="Owner or manager name" maxLength={160} />
           </label>
           <label htmlFor="manual-lead-notes" className="flex flex-col gap-1 sm:col-span-2">
             <span className="section-label">Notes</span>

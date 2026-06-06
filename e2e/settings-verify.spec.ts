@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, EMAIL, PASSWORD, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
+import { login, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
 
 test("Settings controls verification", async ({ page }) => {
   skipIfMissingAuth();
@@ -9,11 +9,7 @@ test("Settings controls verification", async ({ page }) => {
   page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
   try {
-    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle", timeout: 30000 });
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL(/\/queue/, { timeout: 10000 });
+    await login(page);
     await openAdminPage(page, "Settings");
     await page.waitForURL(/\/settings/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 5000 });
