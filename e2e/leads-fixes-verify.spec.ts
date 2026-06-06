@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, EMAIL, PASSWORD, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, skipIfMissingAuth } from "./auth-fixtures";
 
 test("Leads Kanban/Table view and Excluded column fixes", async ({ page }) => {
   skipIfMissingAuth();
@@ -10,11 +10,7 @@ test("Leads Kanban/Table view and Excluded column fixes", async ({ page }) => {
   page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
   try {
-    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle", timeout: 30000 });
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL(/\/queue/, { timeout: 10000 });
+    await login(page);
 
     await page.goto(`${BASE_URL}/leads?view=kanban`, { waitUntil: "networkidle", timeout: 15000 });
     await expect(page.getByRole("button", { name: "Switch to Table" })).toBeVisible({ timeout: 5000 });

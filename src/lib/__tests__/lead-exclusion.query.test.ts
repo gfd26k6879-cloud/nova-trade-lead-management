@@ -227,22 +227,26 @@ describe("lead exclusion query behavior", () => {
       businessType: "local_services",
       phone: "303-555-0100",
       address: null,
+      mapsUri: "https://maps.google.com/?q=Manual+Candidate",
+      source: "Google Maps",
+      contactPersonName: "Jamie Owner",
       websiteStatus: "none",
       notes: "Added from user flow",
     });
 
     const row = testDb.prepare(
-      `SELECT place_id, status, website_status, quality_bucket, enrichment_status, ai_queue_status, notes
+      `SELECT place_id, status, website_status, maps_uri, quality_bucket, enrichment_status, ai_queue_status, notes
        FROM leads WHERE id = ?`
     ).get(lead.id) as Record<string, unknown>;
 
     expect(String(row.place_id)).toMatch(/^manual:/);
     expect(row.status).toBe("new");
     expect(row.website_status).toBe("none");
+    expect(row.maps_uri).toBe("https://maps.google.com/?q=Manual+Candidate");
     expect(row.quality_bucket).toBe("needs_ai_verify");
     expect(row.enrichment_status).toBe("pending");
     expect(row.ai_queue_status).toBe("queued");
-    expect(row.notes).toBe("Added from user flow");
+    expect(row.notes).toBe("Source: Google Maps\n\nContact person: Jamie Owner\n\nAdded from user flow");
   });
 
   it("filters leads by assigned researcher markets", async () => {

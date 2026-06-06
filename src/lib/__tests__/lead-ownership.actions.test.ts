@@ -141,6 +141,9 @@ describe("lead ownership server actions", () => {
       name: "Manual Candidate",
       businessType: "local_services",
       phone: "303-555-0100",
+      mapsUri: "https://maps.google.com/?q=Manual+Candidate",
+      source: "Google Maps",
+      contactPersonName: "Jamie Owner",
       websiteStatus: "none",
     });
 
@@ -150,12 +153,17 @@ describe("lead ownership server actions", () => {
       businessType: "local_services",
       phone: "303-555-0100",
       address: null,
+      mapsUri: "https://maps.google.com/?q=Manual+Candidate",
+      source: "Google Maps",
+      contactPersonName: "Jamie Owner",
       websiteStatus: "none",
       notes: null,
     });
     expect(queryMocks.createAuditLog).toHaveBeenCalledWith("manual_lead_created", "lead", "lead-manual", {
       businessType: "local_services",
       websiteStatus: "none",
+      source: "Google Maps",
+      contactPersonName: "Jamie Owner",
       actorUserId: "admin-1",
     });
   });

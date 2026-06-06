@@ -4459,12 +4459,16 @@ export interface ManualLeadInput {
   businessType: BusinessType | string;
   phone?: string | null;
   address?: string | null;
+  mapsUri?: string | null;
+  source?: string | null;
+  contactPersonName?: string | null;
   websiteStatus?: WebsiteStatus | string;
   notes?: string | null;
 }
 
 export async function createManualLead(input: ManualLeadInput): Promise<Lead> {
   const websiteStatus = normalizeWebsiteStatus(input.websiteStatus);
+  const notes = composeManualLeadNotes(input);
   const id = await upsertLead({
     place_id: `manual:${generateId()}`,
     name: input.name,
@@ -4472,6 +4476,7 @@ export async function createManualLead(input: ManualLeadInput): Promise<Lead> {
     phone: input.phone ?? null,
     categories: [],
     website_status: websiteStatus,
+    maps_uri: input.mapsUri ?? null,
     score: 0,
     business_type: input.businessType as BusinessType,
     qualification_status: "needs_verification",
@@ -4491,10 +4496,22 @@ export async function createManualLead(input: ManualLeadInput): Promise<Lead> {
          archive_reason = NULL,
          updated_at = ?
      WHERE id = ?`
-  ).run(input.notes?.trim() || null, nowISO(), id);
+  ).run(notes, nowISO(), id);
   const lead = await getLeadById(id);
   if (!lead) throw new Error("Manual lead was created but could not be loaded.");
   return lead;
+}
+
+function composeManualLeadNotes(input: ManualLeadInput): string | null {
+  const source = input.source?.trim();
+  const contactPersonName = input.contactPersonName?.trim();
+  const notes = input.notes?.trim();
+  const parts = [
+    source ? `Source: ${source}` : null,
+    contactPersonName ? `Contact person: ${contactPersonName}` : null,
+    notes || null,
+  ].filter((part): part is string => Boolean(part));
+  return parts.length ? parts.join("\n\n") : null;
 }
 
 function normalizeWebsiteStatus(value: unknown): WebsiteStatus {

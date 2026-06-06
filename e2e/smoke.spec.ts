@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, EMAIL, PASSWORD, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
 
 test.describe("Smoke pass", () => {
   skipIfMissingAuth();
@@ -15,12 +15,7 @@ test.describe("Smoke pass", () => {
       }
     });
 
-    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle" });
-    await expect(page.locator("h1")).toContainText("NoSite Leads");
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL(/\/queue/, { timeout: 10000 });
+    await login(page);
     expect(page.url()).toContain("/queue");
     if (errors.length) console.log("Step 1 errors:", errors);
   });
@@ -30,11 +25,7 @@ test.describe("Smoke pass", () => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
-    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle" });
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL(/\/queue/, { timeout: 10000 });
+    await login(page);
 
     await expect(page.locator("h1, [role='heading']").first()).toBeVisible({ timeout: 5000 });
     expect(errors).toHaveLength(0);
@@ -42,11 +33,7 @@ test.describe("Smoke pass", () => {
 
   test("3. Leads table page renders", async ({ page }) => {
   skipIfMissingAuth();
-    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle" });
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL(/\/queue/, { timeout: 10000 });
+    await login(page);
 
     await openAdminPage(page, "All Leads");
     await page.waitForURL(/\/leads/, { timeout: 5000 });
@@ -56,11 +43,7 @@ test.describe("Smoke pass", () => {
 
   test("4. Kanban view renders", async ({ page }) => {
   skipIfMissingAuth();
-    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle" });
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL(/\/queue/, { timeout: 10000 });
+    await login(page);
 
     await page.goto(`${BASE_URL}/leads?view=kanban`, { waitUntil: "networkidle" });
     await expect(page.getByRole("heading", { name: "Leads", exact: true })).toBeVisible({ timeout: 5000 });
@@ -70,11 +53,7 @@ test.describe("Smoke pass", () => {
 
   test("5. Kanban drag lead to different status", async ({ page }) => {
   skipIfMissingAuth();
-    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle" });
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL(/\/queue/, { timeout: 10000 });
+    await login(page);
 
     await page.goto(`${BASE_URL}/leads?view=kanban`, { waitUntil: "networkidle" });
 
@@ -98,11 +77,7 @@ test.describe("Smoke pass", () => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
-    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle" });
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL(/\/queue/, { timeout: 10000 });
+    await login(page);
 
     await page.getByRole("link", { name: "Workbench", exact: true }).click();
     await page.waitForURL(/\/queue/, { timeout: 5000 });
@@ -123,11 +98,7 @@ test.describe("Smoke pass", () => {
 
   test("7. Return to Dashboard - still healthy", async ({ page }) => {
   skipIfMissingAuth();
-    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle" });
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL(/\/queue/, { timeout: 10000 });
+    await login(page);
 
     await page.getByRole("link", { name: "Workbench", exact: true }).click();
     await page.waitForURL(/\/queue/, { timeout: 5000 });
@@ -144,11 +115,7 @@ test.describe("Smoke pass", () => {
 
   test("8. Fulfillment page and Users team controls render", async ({ page }) => {
   skipIfMissingAuth();
-    await page.goto(`${BASE_URL}/login`, { waitUntil: "networkidle" });
-    await page.getByLabel("Email").fill(EMAIL);
-    await page.getByLabel("Password").fill(PASSWORD);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await page.waitForURL(/\/queue/, { timeout: 10000 });
+    await login(page);
 
     await openAdminPage(page, "Fulfillment");
     await page.waitForURL(/\/fulfillment/, { timeout: 5000 });

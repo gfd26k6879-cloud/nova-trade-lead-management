@@ -105,6 +105,9 @@ const manualLeadSchema = z.object({
   businessType: z.string().trim().min(2).max(80),
   phone: z.string().trim().max(80).optional().or(z.literal("")),
   address: z.string().trim().max(300).optional().or(z.literal("")),
+  mapsUri: z.string().trim().max(500).optional().or(z.literal("")),
+  source: z.string().trim().max(160).optional().or(z.literal("")),
+  contactPersonName: z.string().trim().max(160).optional().or(z.literal("")),
   websiteStatus: z.enum(["none", "social", "basic", "custom"]).optional().default("none"),
   notes: z.string().trim().max(2000).optional().or(z.literal("")),
 }).refine((data) => Boolean(data.phone?.trim() || data.address?.trim()), {
@@ -405,12 +408,17 @@ export async function createManualLeadAction(input: unknown) {
     businessType: parsed.data.businessType,
     phone: normalizeOptionalText(parsed.data.phone),
     address: normalizeOptionalText(parsed.data.address),
+    mapsUri: normalizeOptionalText(parsed.data.mapsUri),
+    source: normalizeOptionalText(parsed.data.source),
+    contactPersonName: normalizeOptionalText(parsed.data.contactPersonName),
     websiteStatus: parsed.data.websiteStatus,
     notes: normalizeOptionalText(parsed.data.notes),
   });
   await createAuditLog("manual_lead_created", "lead", lead.id, {
     businessType: parsed.data.businessType,
     websiteStatus: parsed.data.websiteStatus,
+    source: normalizeOptionalText(parsed.data.source),
+    contactPersonName: normalizeOptionalText(parsed.data.contactPersonName),
     actorUserId: session.userId,
   });
   revalidateLeadViews();
