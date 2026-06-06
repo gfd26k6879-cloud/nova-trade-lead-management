@@ -39,7 +39,14 @@ vi.mock("@/lib/leads/actions", () => ({
 
 import { ArchiveConfirmDialog, LeadDetailClient } from "@/app/(protected)/leads/[id]/lead-detail-client";
 
-function renderLead(overrides: Record<string, unknown> = {}) {
+function renderLead(
+  overrides: Record<string, unknown> = {},
+  currentUser: { userId: string; email: string; role: "admin" | "researcher" } = {
+    userId: "admin-1",
+    email: "admin@example.com",
+    role: "admin",
+  },
+) {
   const lead = {
     id: "lead-1",
     place_id: "manual:test",
@@ -132,22 +139,37 @@ function renderLead(overrides: Record<string, unknown> = {}) {
       initialAiVerification={null}
       initialAiArtifacts={[]}
       scoreThresholds={{ high: 20, medium: 10 }}
-      currentUser={{ userId: "admin-1", email: "admin@example.com", role: "admin" }}
+      currentUser={currentUser}
     />,
   );
 }
 
 describe("LeadDetailClient archive UX", () => {
-  it("keeps archive disabled until a reason is long enough", () => {
+  it("defaults to the Work tab and renders the compact call brief", () => {
     const html = renderLead({ archive_reason: "" });
 
-    expect(html).toContain("Archive reason");
-    expect(html).toContain("Enter at least 5 characters to enable Archive Lead.");
-    expect(html).toContain("Archive active lead");
-    expect(html).toContain("disabled");
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('aria-selected="true"');
+    expect(html).toContain("Lead workbench");
+    expect(html).toContain("Website finding");
+    expect(html).toContain("AI confidence");
+    expect(html).toContain("Rating / reviews");
+    expect(html).toContain("Recent activity");
   });
 
-  it("shows restore controls for archived leads", () => {
+  it("keeps secondary capabilities discoverable without rendering admin controls by default", () => {
+    const html = renderLead({ archive_reason: "" });
+
+    expect(html).toContain("Overview");
+    expect(html).toContain("Verification");
+    expect(html).toContain("Intelligence");
+    expect(html).toContain("Admin");
+    expect(html).not.toContain("Archive reason");
+    expect(html).not.toContain("Archive active lead");
+    expect(html).not.toContain("Lead Archive");
+  });
+
+  it("shows archived state without exposing restore controls on the default tab", () => {
     const html = renderLead({
       archived_at: "2026-06-02T20:17:00.000Z",
       archive_reason: "duplicate lead",
@@ -155,7 +177,16 @@ describe("LeadDetailClient archive UX", () => {
 
     expect(html).toContain("Archived");
     expect(html).toContain("duplicate lead");
-    expect(html).toContain("Restore to active inventory");
+    expect(html).not.toContain("Restore to active inventory");
+  });
+
+  it("warns an unclaimed researcher before editing workflow data", () => {
+    const html = renderLead(
+      {},
+      { userId: "researcher-1", email: "researcher@example.com", role: "researcher" },
+    );
+
+    expect(html).toContain("Claim this lead before changing workflow, notes, follow-ups, or contact history.");
   });
 
   it("renders the custom archive confirmation modal", () => {

@@ -234,6 +234,16 @@ const OUTCOME_OPTIONS = ["not_reached", "left_voicemail", "contacted", "decision
 type AiApplyAction = "update_website" | "exclude_has_website" | "mark_broken_site_opportunity" | "mark_manual_review";
 type WebsiteCorrectionResolution = "official_website_found" | "weak_or_basic_site" | "social_or_directory_only" | "remove_website";
 type WorkUpdateAction = "research_note" | "called" | "left_voicemail" | "follow_up" | "not_interested" | "done";
+type LeadDetailTab = "work" | "overview" | "verification" | "intelligence" | "admin";
+type ActivityTimelineItem = { id: string; kind: "outreach" | "note"; createdAt: string; title: string; body: string; meta?: string };
+
+const LEAD_DETAIL_TABS: Array<{ key: LeadDetailTab; label: string }> = [
+  { key: "work", label: "Work" },
+  { key: "overview", label: "Overview" },
+  { key: "verification", label: "Verification" },
+  { key: "intelligence", label: "Intelligence" },
+  { key: "admin", label: "Admin" },
+];
 const WEBSITE_CORRECTION_OPTIONS: Array<{ value: WebsiteCorrectionResolution; label: string; help: string }> = [
   { value: "official_website_found", label: "Official website found", help: "Remove from no-site sales queues but keep the directory record." },
   { value: "weak_or_basic_site", label: "Weak/basic site", help: "Keep as a website-improvement opportunity." },
@@ -301,6 +311,8 @@ export function LeadDetailClient({
   const router = useRouter();
   const scoreBand = resolveScoreBand(lead.score, scoreThresholds);
   const scoreBandStyle = getScoreBandStyle(scoreBand.key);
+  const [activeTab, setActiveTab] = useState<LeadDetailTab>("work");
+  const [showAiSources, setShowAiSources] = useState(false);
   const [status, setStatus] = useState(lead.status);
   const [notes, setNotes] = useState(lead.notes ?? "");
   const [reminder, setReminder] = useState(lead.reminder_date ?? "");
@@ -1008,6 +1020,47 @@ export function LeadDetailClient({
   };
   const hasOpenWebsiteRequest = adminRequests.some((request) => request.request_type === "website_request" && isOpenAdminRequestStatus(request.status));
   const hasOpenQuoteRequest = adminRequests.some((request) => request.request_type === "quote_request" && isOpenAdminRequestStatus(request.status));
+  const aiConfidenceLabel = aiStatusDisplay.hasRun ? `${Math.round((aiVerification?.confidence ?? lead.ai_confidence) * 100)}%` : "Not run";
+  const readinessLabel = archivedAt
+    ? "Archived"
+    : isExcluded
+      ? "Excluded"
+      : qualityBucket === "ready_to_call"
+        ? "Ready to call"
+        : qualityBucket === "broken_site_opportunity"
+          ? "Broken-site opportunity"
+          : qualityBucket === "needs_manual_review"
+            ? "Manual review"
+            : qualityBucket === "needs_ai_verify"
+              ? "Needs AI verify"
+              : formatLabel(lead.qualification_status);
+  const contactStat = lead.phone ? `${lead.phone} (${formatLabel(phoneVerificationStatus)})` : "No phone";
+  const activityTimeline: ActivityTimelineItem[] = [
+    ...events.map((ev) => ({
+      id: `outreach-${ev.id}`,
+      kind: "outreach" as const,
+      createdAt: ev.created_at,
+      title: `${formatLabel(ev.outcome)}${ev.contact_person_name ? ` with ${ev.contact_person_name}` : ""}${ev.contact_person_role ? ` (${ev.contact_person_role})` : ""}`,
+      body: ev.note || "No note",
+      meta: [
+        ev.channel === "walkin" ? "in person" : ev.channel,
+        ev.next_step ? `Next: ${ev.next_step}` : null,
+        ev.follow_up_at ? `Follow-up: ${new Date(ev.follow_up_at).toLocaleDateString()}` : null,
+        ev.objection_reason ? `Objection: ${ev.objection_reason}` : null,
+        ev.quoted_amount > 0 ? `Quote: $${ev.quoted_amount.toLocaleString()}` : null,
+        ev.close_value > 0 ? `Close: $${ev.close_value.toLocaleString()}` : null,
+        ev.actor_email ? `by ${ev.actor_email}` : null,
+      ].filter(Boolean).join(" | "),
+    })),
+    ...leadNotes.map((note) => ({
+      id: `note-${note.id}`,
+      kind: "note" as const,
+      createdAt: note.created_at,
+      title: "Research note",
+      body: note.body,
+      meta: note.author_email ? `by ${note.author_email}` : "team note",
+    })),
+  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   return (
     <PageShell
@@ -1015,19 +1068,15 @@ export function LeadDetailClient({
       description={lead.address ?? "No address available"}
       stats={[
         { label: "Score", value: `${lead.score.toFixed(1)} (${scoreBand.label})` },
-        { label: "Rating", value: lead.rating?.toFixed(1) ?? "—" },
-        { label: "Reviews", value: String(lead.review_count ?? 0) },
-        { label: "Website", value: lead.website_status },
-        { label: "Quality", value: `${Math.round(lead.lead_quality_score)}%` },
-        { label: "Win Prob.", value: `${Math.round(lead.win_probability_score)}%` },
-        { label: "AI", value: aiStatusDisplay.label },
-        { label: "Qualification", value: lead.qualification_status.replace(/_/g, " ") },
+        { label: "Website", value: formatLabel(lead.website_status), hint: websiteFinding },
+        { label: "Readiness", value: readinessLabel, hint: `${Math.round(lead.lead_quality_score)}% quality` },
+        { label: "Contact", value: contactStat, hint: `${Math.round(lead.contactability_score * 100)}% contactability` },
       ]}
     >
       {/* Back link and notifications */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <Link href="/explore" className="link-accent text-sm">&larr; Back to Explorer</Link>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <span
             className="rounded-md border px-2 py-0.5 text-xs font-semibold capitalize"
             style={{ background: "rgba(99,102,241,0.08)", borderColor: "rgba(99,102,241,0.18)", color: "#6366f1" }}
@@ -1065,92 +1114,187 @@ export function LeadDetailClient({
         </div>
       </div>
 
-      <section className="glass rounded-2xl p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <h3 className="section-label">Guided workflow</h3>
-            <div className="mt-3 flex flex-wrap gap-2 text-xs">
-              <WorkflowStep active={!assignedToUserId} done={Boolean(assignedToUserId)} label="Claim lead" />
-              <WorkflowStep active={Boolean(assignedToUserId) && !lead.first_contacted_at} done={Boolean(lead.first_contacted_at)} label="Prepare" />
-              <WorkflowStep active={Boolean(lead.first_contacted_at) && !firstReply} done={Boolean(firstReply)} label="Contact" />
-              <WorkflowStep active={Boolean(firstReply) && !meetingBooked} done={Boolean(meetingBooked)} label="Log outcome" />
-              <WorkflowStep active={Boolean(lead.reminder_date)} done={Boolean(lead.reminder_date)} label="Set follow-up" />
-            </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <CallSheetField label="Owner" value={assignedLabel} />
-              <CallSheetField label="Phone" value={lead.phone ?? "No phone"} />
-              <CallSheetField label="Address" value={lead.address ?? "No address"} />
-              <CallSheetField label="Next action" value={lead.next_best_action ?? "Call and qualify owner interest."} />
-            </div>
-          </div>
-          <div className="flex flex-wrap justify-end gap-2">
-            {!assignedToUserId && (
-              <button type="button" className="btn-primary text-sm" onClick={handleClaimToggle}>Claim</button>
-            )}
-            {isClaimedByCurrentUser && (
-              <button type="button" className="btn-glass text-sm" onClick={handleClaimToggle}>Release ownership</button>
-            )}
-            {lead.phone && <a className="btn-primary text-sm" href={`tel:${lead.phone.replace(/[^\d+]/g, "")}`}>Call</a>}
-            {lead.phone && <a className="btn-glass text-sm" href={`sms:${lead.phone.replace(/[^\d+]/g, "")}`}>Text</a>}
-            <button type="button" className="btn-glass text-sm" disabled={!canEditLead} onClick={() => setEventChannel("email")}>Email</button>
-            <button type="button" className="btn-glass text-sm" disabled={!canEditLead} onClick={() => setEventChannel("walkin")}>In person</button>
-            <AdminRequestActionButton
-              label="Website needed"
-              alreadyQueued={hasOpenWebsiteRequest}
-              busy={adminRequestLoading === "website_request"}
-              disabled={!canEditLead || Boolean(adminRequestLoading)}
-              onClick={() => handleCreateAdminRequest("website_request")}
-            />
-            <AdminRequestActionButton
-              label="Quote requested"
-              alreadyQueued={hasOpenQuoteRequest}
-              busy={adminRequestLoading === "quote_request"}
-              disabled={!canEditLead || Boolean(adminRequestLoading)}
-              onClick={() => handleCreateAdminRequest("quote_request")}
-            />
-          </div>
-        </div>
-        {!canEditLead && (
-          <p className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(245,158,11,0.12)", color: "#92400e" }}>
-            {isClaimedByOther ? `This lead is already owned by ${lead.assigned_user_display_name || lead.assigned_user_email || "another researcher"}.` : "Claim this lead before changing workflow, notes, follow-ups, or contact history."}
-          </p>
-        )}
-      </section>
-
-      <section className="glass rounded-2xl p-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="section-label">Call Sheet</h3>
-            <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-              Verification evidence, offer, demo, and next action for the pitch.
-            </p>
-          </div>
-          {demoHref && (
-            <button type="button" className="btn-glass text-xs" onClick={copyDemoPitch}>
-              Copy Demo Link + Pitch
+      <section className="glass rounded-2xl p-3" role="tablist" aria-label="Lead detail sections">
+        <div className="flex flex-wrap gap-2">
+          {LEAD_DETAIL_TABS.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              id={`lead-detail-tab-${tab.key}`}
+              role="tab"
+              aria-selected={activeTab === tab.key}
+              aria-controls={`lead-detail-panel-${tab.key}`}
+              className={activeTab === tab.key ? "btn-primary text-sm" : "btn-glass text-sm"}
+              onClick={() => setActiveTab(tab.key)}
+            >
+              {tab.label}
             </button>
-          )}
-        </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <CallSheetField label="Website finding" value={websiteFinding} />
-          <CallSheetField label="AI verification" value={aiStatusDisplay.label} />
-          <CallSheetField label="Confidence" value={aiStatusDisplay.hasRun ? `${Math.round((aiVerification?.confidence ?? lead.ai_confidence) * 100)}%` : "Not run"} />
-          <CallSheetField label="Phone" value={`${lead.phone ?? "No phone"} (${formatLabel(phoneVerificationStatus)})`} />
-          <CallSheetField label="Offer" value={formatLabel(lead.recommended_offer)} />
-          <CallSheetField label="Pitch angle" value={lead.quality_reason ?? "Use the verified website gap and local review volume."} />
-          <CallSheetField label="Next action" value={lead.next_best_action ?? "Call and qualify owner interest."} />
-          <CallSheetField label="Last contact" value={lead.last_contacted_at ? new Date(lead.last_contacted_at).toLocaleDateString() : "Not contacted"} />
-          <CallSheetField label="Follow-up" value={lead.reminder_date ? new Date(lead.reminder_date).toLocaleDateString() : "No reminder"} />
-          <CallSheetField label="Demo" value={demoHref ?? "No demo yet"} href={demoHref ?? undefined} />
-          <CallSheetField label="AI queue" value={formatLabel(lead.ai_queue_status)} />
-          <CallSheetField label="Sales priority" value={`${Math.round(lead.sales_priority_score)}%`} />
-          <CallSheetField label="Verification score" value={`${Math.round(lead.verification_score)}%`} />
+          ))}
         </div>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-3">
-        {/* Business profile */}
-        <article className="glass rounded-2xl p-6 lg:col-span-2">
+      {activeTab === "work" && (
+        <section id="lead-detail-panel-work" role="tabpanel" aria-labelledby="lead-detail-tab-work" className="space-y-5">
+          <section className="glass rounded-2xl p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0 flex-1">
+                <h3 className="section-label">Lead workbench</h3>
+                <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                  Decide if this lead is worth a call, use the verified website gap, and log the outcome without digging through admin panels.
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                  <WorkflowStep active={!assignedToUserId} done={Boolean(assignedToUserId)} label="Claim" />
+                  <WorkflowStep active={Boolean(assignedToUserId) && !aiStatusDisplay.hasRun} done={aiStatusDisplay.hasRun || qualityBucket !== "needs_ai_verify"} label="Verify" />
+                  <WorkflowStep active={Boolean(assignedToUserId) && !lead.first_contacted_at} done={Boolean(lead.first_contacted_at)} label="Call" />
+                  <WorkflowStep active={Boolean(lead.first_contacted_at) && events.length === 0} done={events.length > 0} label="Log outcome" />
+                  <WorkflowStep active={events.length > 0 && !hasOpenWebsiteRequest && !hasOpenQuoteRequest} done={hasOpenWebsiteRequest || hasOpenQuoteRequest || Boolean(meetingBooked)} label="Handoff" />
+                </div>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                {!assignedToUserId && (
+                  <button type="button" className="btn-primary text-sm" onClick={handleClaimToggle}>Claim</button>
+                )}
+                {isClaimedByCurrentUser && (
+                  <button type="button" className="btn-glass text-sm" onClick={handleClaimToggle}>Release ownership</button>
+                )}
+                {lead.phone && <a className="btn-primary text-sm" href={`tel:${lead.phone.replace(/[^\d+]/g, "")}`}>Call</a>}
+                {lead.phone && <a className="btn-glass text-sm" href={`sms:${lead.phone.replace(/[^\d+]/g, "")}`}>Text</a>}
+                {lead.phone && <button type="button" className="btn-glass text-sm" onClick={() => copyToClipboard(lead.phone!)}>Copy phone</button>}
+                {lead.maps_uri && <a className="btn-glass text-sm" href={lead.maps_uri} target="_blank" rel="noopener noreferrer">Open Maps</a>}
+                <AdminRequestActionButton
+                  label="Website needed"
+                  alreadyQueued={hasOpenWebsiteRequest}
+                  busy={adminRequestLoading === "website_request"}
+                  disabled={!canEditLead || Boolean(adminRequestLoading)}
+                  onClick={() => handleCreateAdminRequest("website_request")}
+                />
+                <AdminRequestActionButton
+                  label="Quote requested"
+                  alreadyQueued={hasOpenQuoteRequest}
+                  busy={adminRequestLoading === "quote_request"}
+                  disabled={!canEditLead || Boolean(adminRequestLoading)}
+                  onClick={() => handleCreateAdminRequest("quote_request")}
+                />
+              </div>
+            </div>
+            {!canEditLead && (
+              <p className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(245,158,11,0.12)", color: "#92400e" }}>
+                {isClaimedByOther ? `This lead is already owned by ${lead.assigned_user_display_name || lead.assigned_user_email || "another researcher"}.` : "Claim this lead before changing workflow, notes, follow-ups, or contact history."}
+              </p>
+            )}
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <CallSheetField label="Phone" value={contactStat} />
+              <CallSheetField label="Address" value={lead.address ?? "No address"} href={lead.maps_uri ?? undefined} />
+              <CallSheetField label="Website finding" value={websiteFinding} />
+              <CallSheetField label="AI confidence" value={aiConfidenceLabel} />
+              <CallSheetField label="Rating / reviews" value={`${lead.rating?.toFixed(1) ?? "No rating"} / ${lead.review_count ?? 0}`} />
+              <CallSheetField label="Offer" value={formatLabel(lead.recommended_offer)} />
+              <CallSheetField label="Pitch angle" value={lead.quality_reason ?? "Use the verified website gap and local review volume."} />
+              <CallSheetField label="Next action" value={lead.next_best_action ?? "Call and confirm the owner or decision maker."} />
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" className="btn-glass text-xs" disabled={!canEditLead} onClick={() => handlePhoneVerificationStatus("works")}>Phone Works</button>
+              <button type="button" className="btn-glass text-xs" disabled={!canEditLead} onClick={() => handlePhoneVerificationStatus("bad")}>Phone Bad</button>
+              <button type="button" className="btn-glass text-xs" disabled={!canEditLead} onClick={() => handleQualityBucket("ready_to_call")}>Mark Ready to Call</button>
+              <button type="button" className="btn-glass text-xs" disabled={!canEditLead} onClick={() => handleQualityBucket("broken_site_opportunity")}>Mark Broken-Site Opportunity</button>
+              <button type="button" className="btn-glass text-xs" disabled={!canEditLead} onClick={() => handleQualityBucket("needs_manual_review")}>Mark Manual Review</button>
+            </div>
+          </section>
+
+          <section className="glass rounded-2xl p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="section-label">Log outcome</h3>
+                <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+                  Record who you reached, what happened, and the next follow-up.
+                </p>
+              </div>
+              <button type="button" className="btn-primary text-sm" onClick={handleLogEvent} disabled={logging || !canEditLead}>
+                {logging ? "Logging..." : "Log outcome"}
+              </button>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Channel</span>
+                <select className="glass-select" value={eventChannel} onChange={(e) => setEventChannel(e.target.value)} disabled={!canEditLead}>
+                  {CHANNEL_OPTIONS.map((c) => <option key={c} value={c}>{c === "walkin" ? "In person" : c}</option>)}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Outcome</span>
+                <select className="glass-select" value={eventOutcome} onChange={(e) => setEventOutcome(e.target.value)} disabled={!canEditLead}>
+                  {OUTCOME_OPTIONS.filter((option) => isAdmin || (option !== "closed_won" && option !== "closed_lost")).map((option) => (
+                    <option key={option} value={option}>{formatLabel(option)}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Person</span>
+                <input className="glass-input" value={contactPersonName} onChange={(e) => setContactPersonName(e.target.value)} disabled={!canEditLead} placeholder="Name if known" />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Role</span>
+                <input className="glass-input" value={contactPersonRole} onChange={(e) => setContactPersonRole(e.target.value)} disabled={!canEditLead} placeholder="Owner, manager..." />
+              </label>
+              <label className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.35)" }}>
+                <input type="checkbox" checked={decisionMakerReached} onChange={(e) => setDecisionMakerReached(e.target.checked)} disabled={!canEditLead} />
+                <span className="text-sm" style={{ color: "var(--text-primary)" }}>Decision maker reached</span>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Quoted amount</span>
+                <input className="glass-input" type="number" min={0} value={quotedAmount} onChange={(e) => setQuotedAmount(e.target.value)} disabled={!canEditLead} placeholder="0" />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Close value</span>
+                <input className="glass-input" type="number" min={0} value={closeValue} onChange={(e) => setCloseValue(e.target.value)} disabled={!canEditLead} placeholder="0" />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Follow-up date</span>
+                <input className="glass-input" type="date" value={followUpAt} onChange={(e) => setFollowUpAt(e.target.value)} disabled={!canEditLead} />
+              </label>
+              <label className="flex flex-col gap-1 md:col-span-2">
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Next step</span>
+                <input className="glass-input" value={nextStep} onChange={(e) => setNextStep(e.target.value)} disabled={!canEditLead} placeholder="What should happen next?" />
+              </label>
+              <label className="flex flex-col gap-1 md:col-span-2">
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Objection</span>
+                <input className="glass-input" value={objectionReason} onChange={(e) => setObjectionReason(e.target.value)} disabled={!canEditLead} placeholder="Price, timing, not interested..." />
+              </label>
+              <label className="flex flex-col gap-1 md:col-span-2 lg:col-span-4">
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Note</span>
+                <textarea className="glass-input w-full" rows={3} value={eventNote} onChange={(e) => setEventNote(e.target.value)} disabled={!canEditLead} placeholder="What happened?" />
+              </label>
+            </div>
+          </section>
+
+          <section className="glass rounded-2xl p-6">
+            <h3 className="section-label">Recent activity ({activityTimeline.length})</h3>
+            {activityTimeline.length === 0 ? (
+              <p className="mt-3 text-sm" style={{ color: "var(--text-tertiary)" }}>No outreach or research notes yet.</p>
+            ) : (
+              <div className="mt-3 space-y-3">
+                {activityTimeline.map((item) => (
+                  <article key={item.id} className="flex items-start gap-3 rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+                    <span style={item.kind === "outreach" ? channelBadgeStyle("call") : channelBadgeStyle("other")}>{item.kind}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{item.title}</p>
+                      <p className="mt-1 whitespace-pre-wrap text-sm" style={{ color: "var(--text-primary)" }}>{item.body}</p>
+                      <p className="mt-0.5 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                        {formatRelativeTime(item.createdAt)}{item.meta ? ` | ${item.meta}` : ""}
+                      </p>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        </section>
+      )}
+
+      {activeTab === "overview" && (
+        <section id="lead-detail-panel-overview" role="tabpanel" aria-labelledby="lead-detail-tab-overview" className="space-y-5">
+          <section className="grid gap-4 lg:grid-cols-3">
+            <article className="glass rounded-2xl p-6 lg:col-span-2">
           <h3 className="section-label">Business Profile</h3>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <ProfileField label="Name" value={lead.name} />
@@ -1170,936 +1314,563 @@ export function LeadDetailClient({
             <ProfileField label="Website" value={lead.website_uri ?? "None"} link={lead.website_uri ?? undefined} />
             <ProfileField label="Google Maps" value={lead.maps_uri ? "Open in Maps" : "—"} link={lead.maps_uri ?? undefined} />
           </div>
-        </article>
-
-        {/* Quality decision */}
-        <article className="glass rounded-2xl p-6 lg:col-span-3">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3 className="section-label">Quality Decision</h3>
-              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                Website-sales decisioning for whether this is worth a call today.
-              </p>
-            </div>
-            <Link href={`/quality?search=${encodeURIComponent(lead.name ?? "")}`} className="btn-glass text-xs">
-              Open in Quality
-            </Link>
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <QualityMetric label="Bucket" value={formatLabel(qualityBucket)} />
-            <QualityMetric label="Quality Score" value={`${Math.round(lead.lead_quality_score)}%`} />
-            <QualityMetric label="Need" value={`${Math.round(lead.need_score)}%`} />
-            <QualityMetric label="Easy Build" value={`${Math.round(lead.easy_build_score)}%`} />
-            <QualityMetric label="Cash Speed" value={`${Math.round(lead.cash_speed_score)}%`} />
-          </div>
-
-          <div className="mt-4 grid gap-4 lg:grid-cols-3">
-            <div className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Why this is good or bad</span>
-              <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--text-primary)" }}>
-                {lead.quality_reason ?? "No quality reason has been calculated yet."}
-              </p>
-            </div>
-            <div className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Next best action</span>
-              <p className="mt-2 text-sm leading-relaxed" style={{ color: "var(--text-primary)" }}>
-                {lead.next_best_action ?? "Run AI verification or manually review the website evidence."}
-              </p>
-            </div>
-            <div className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Recommended package</span>
-              <p className="mt-2 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-                {formatLabel(lead.recommended_offer)}
-              </p>
-              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                Pitch a simple one-time build first. Keep the offer easy to understand and fast to deliver.
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button type="button" className="btn-glass text-xs" onClick={() => handlePhoneVerificationStatus("works")}>
-              Phone Works
-            </button>
-            <button type="button" className="btn-glass text-xs" onClick={() => handlePhoneVerificationStatus("bad")}>
-              Phone Bad
-            </button>
-            <button type="button" className="btn-glass text-xs" onClick={() => handleQualityBucket("ready_to_call")}>
-              Mark Ready to Call
-            </button>
-            <button type="button" className="btn-glass text-xs" onClick={() => handleQualityBucket("broken_site_opportunity")}>
-              Mark Broken-Site Opportunity
-            </button>
-            <button type="button" className="btn-glass text-xs" onClick={() => handleQualityBucket("needs_manual_review")}>
-              Mark Manual Review
-            </button>
-            <span className="rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
-              Phone: {formatLabel(phoneVerificationStatus)}
-            </span>
-          </div>
-        </article>
-
-        {/* Operator workflow */}
-        <article className="glass rounded-2xl p-6 lg:col-span-3">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3 className="section-label">Operator Workflow</h3>
-              <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-                Correct lead facts, fix website status, and log the next work step without using the advanced AI/outreach panels.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {(factWebsiteUrl || lead.website_uri) && (
-                <a className="btn-glass text-xs" href={factWebsiteUrl || lead.website_uri || "#"} target="_blank" rel="noopener noreferrer">Open website</a>
-              )}
-              {lead.maps_uri && (
-                <a className="btn-glass text-xs" href={lead.maps_uri} target="_blank" rel="noopener noreferrer">Open Maps</a>
-              )}
-              {!isClaimedByOther && (
-                <button type="button" className="btn-glass text-xs" onClick={handleClaimToggle}>
-                  {isClaimedByCurrentUser ? "Release ownership" : "Claim / assign to me"}
-                </button>
-              )}
-              {!canEditLead && (
-                <span className="rounded-full px-3 py-2 text-xs font-semibold" style={{ background: "rgba(245,158,11,0.14)", color: "#b45309" }}>
-                  {isClaimedByOther ? "Taken by another researcher" : "Claim this lead to edit"}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-5 grid gap-4 xl:grid-cols-3">
-            <section className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.52)" }}>
-              <div className="flex items-start justify-between gap-3">
+            </article>
+            <article className="glass rounded-2xl p-6">
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Website correction</h4>
-                  <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                    Paste the website once and choose how it should affect the no-site workflow.
-                  </p>
+                  <h3 className="section-label">Quality Summary</h3>
+                  <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>Normal operator context, not scoring debug.</p>
                 </div>
-                {factWebsiteUrl || lead.website_uri ? (
-                  <a className="btn-glass text-xs" href={factWebsiteUrl || lead.website_uri || "#"} target="_blank" rel="noopener noreferrer">Open website</a>
-                ) : (
-                  <span className="rounded-lg px-2 py-1 text-xs" style={{ background: "rgba(239,68,68,0.1)", color: "#dc2626" }}>No website</span>
-                )}
+                <Link href={`/quality?search=${encodeURIComponent(lead.name ?? "")}`} className="btn-glass text-xs">Open in Quality</Link>
               </div>
-              <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                Website URL
-                <input
-                  className="glass-input mt-2 w-full"
-                  value={websiteCorrectionUrl}
-                  onChange={(e) => setWebsiteCorrectionUrl(e.target.value)}
-                  placeholder="https://business.com"
-                  disabled={!canEditLead || websiteCorrectionLoading}
-                />
-              </label>
-              <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                Correction type
-                <select
-                  className="glass-select mt-2 w-full"
-                  value={websiteCorrectionResolution}
-                  onChange={(e) => setWebsiteCorrectionResolution(e.target.value as WebsiteCorrectionResolution)}
-                  disabled={!canEditLead || websiteCorrectionLoading}
-                >
-                  {WEBSITE_CORRECTION_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                {WEBSITE_CORRECTION_OPTIONS.find((option) => option.value === websiteCorrectionResolution)?.help}
-              </p>
-              <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                Notes
-                <textarea
-                  className="glass-input mt-2 min-h-[84px] w-full"
-                  value={websiteCorrectionNotes}
-                  onChange={(e) => setWebsiteCorrectionNotes(e.target.value)}
-                  placeholder="Where did you find it? Any caveats?"
-                  disabled={!canEditLead || websiteCorrectionLoading}
-                />
-              </label>
-              <button
-                type="button"
-                className="btn-primary mt-4 w-full"
-                onClick={handleManualWebsiteCorrection}
-                disabled={!canEditLead || websiteCorrectionLoading || (websiteCorrectionResolution !== "remove_website" && !websiteCorrectionUrl.trim())}
-              >
-                {websiteCorrectionLoading ? "Saving..." : "Save website correction"}
-              </button>
-            </section>
-
-            <section className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.52)" }}>
-              <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Edit business info</h4>
-              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                Human-owned facts are editable. Scores and AI fields update through correction actions.
-              </p>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                  Business name
-                  <input className="glass-input mt-2 w-full" value={factName} onChange={(e) => setFactName(e.target.value)} disabled={!canEditLead || factsLoading} />
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                  Phone
-                  <input className="glass-input mt-2 w-full" value={factPhone} onChange={(e) => setFactPhone(e.target.value)} disabled={!canEditLead || factsLoading} />
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.16em] sm:col-span-2 xl:col-span-1" style={{ color: "var(--text-tertiary)" }}>
-                  Address
-                  <input className="glass-input mt-2 w-full" value={factAddress} onChange={(e) => setFactAddress(e.target.value)} disabled={!canEditLead || factsLoading} />
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.16em] sm:col-span-2 xl:col-span-1" style={{ color: "var(--text-tertiary)" }}>
-                  Website
-                  <input className="glass-input mt-2 w-full" value={factWebsiteUrl} onChange={(e) => setFactWebsiteUrl(e.target.value)} placeholder="https://..." disabled={!canEditLead || factsLoading} />
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                  Business type
-                  <input className="glass-input mt-2 w-full" value={factBusinessType} onChange={(e) => setFactBusinessType(e.target.value)} disabled={!canEditLead || factsLoading} />
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                  Primary category
-                  <input className="glass-input mt-2 w-full" value={factPrimaryType} onChange={(e) => setFactPrimaryType(e.target.value)} disabled={!canEditLead || factsLoading} />
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                  Status
-                  <select className="glass-select mt-2 w-full" value={factStatus} onChange={(e) => setFactStatus(e.target.value)} disabled={!canEditLead || factsLoading}>
-                    {STATUS_OPTIONS.filter((s) => isAdmin || (s !== "closed_won" && s !== "closed_lost")).map((s) => (
-                      <option key={s} value={s}>{formatLabel(s)}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.16em] sm:col-span-2 xl:col-span-1" style={{ color: "var(--text-tertiary)" }}>
-                  Internal notes
-                  <textarea className="glass-input mt-2 min-h-[84px] w-full" value={factNotes} onChange={(e) => setFactNotes(e.target.value)} disabled={!canEditLead || factsLoading} />
-                </label>
+              <div className="mt-4 grid gap-3">
+                <QualityMetric label="Bucket" value={formatLabel(qualityBucket)} />
+                <QualityMetric label="Quality Score" value={`${Math.round(lead.lead_quality_score)}%`} />
+                <QualityMetric label="Need" value={`${Math.round(lead.need_score)}%`} />
+                <QualityMetric label="Easy Build" value={`${Math.round(lead.easy_build_score)}%`} />
+                <QualityMetric label="Cash Speed" value={`${Math.round(lead.cash_speed_score)}%`} />
               </div>
-              <button type="button" className="btn-primary mt-4 w-full" onClick={handleSaveLeadFacts} disabled={!canEditLead || factsLoading || !factName.trim()}>
-                {factsLoading ? "Saving..." : "Save business info"}
-              </button>
-            </section>
+            </article>
+          </section>
 
-            <section className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.52)" }}>
-              <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Work update</h4>
-              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                One composer for notes, calls, follow-ups, and simple workflow state.
-              </p>
-              <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                Action
-                <select className="glass-select mt-2 w-full" value={workAction} onChange={(e) => setWorkAction(e.target.value as WorkUpdateAction)} disabled={!canEditLead || workLoading}>
-                  {WORK_UPDATE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                Note
-                <textarea className="glass-input mt-2 min-h-[112px] w-full" value={workNote} onChange={(e) => setWorkNote(e.target.value)} placeholder="What changed? What should the next person know?" disabled={!canEditLead || workLoading} />
-              </label>
-              <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                Follow-up date
-                <input className="glass-input mt-2 w-full" type="date" value={workFollowUpAt} onChange={(e) => setWorkFollowUpAt(e.target.value)} disabled={!canEditLead || workLoading} />
-              </label>
-              <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
-                Next step
-                <input className="glass-input mt-2 w-full" value={workNextStep} onChange={(e) => setWorkNextStep(e.target.value)} placeholder="Call owner, verify website, send preview..." disabled={!canEditLead || workLoading} />
-              </label>
-              <button type="button" className="btn-primary mt-4 w-full" onClick={handleSaveWorkUpdate} disabled={!canEditLead || workLoading || (!workNote.trim() && !workFollowUpAt && !workNextStep && workAction === "research_note")}>
-                {workLoading ? "Saving..." : "Save work update"}
-              </button>
-            </section>
-          </div>
-        </article>
-
-        {/* AI verification */}
-        <article className="glass rounded-2xl p-6 lg:col-span-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="section-label">AI Verification</h3>
-              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                Uses the locked gpt-5.4-mini verifier with budget limits and manual apply.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" className="btn-primary text-xs" disabled={aiLoading} onClick={() => handleRunAiVerification(false)}>
-                {aiLoading ? "Checking..." : aiVerification ? "Run AI Verify" : "Run AI Verify"}
-              </button>
-              <button type="button" className="btn-glass text-xs" disabled={aiLoading} onClick={() => handleRunAiVerification(true)}>
-                Refresh
-              </button>
-              <button type="button" className="btn-glass text-xs" disabled={aiLoading || !foundAiWebsite} onClick={handleRepairAiViability}>
-                Re-check Website Viability
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-4 grid gap-4 lg:grid-cols-4">
-            <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Status</span>
-              <div className="mt-1">
-                <AiVerificationBadge
-                  status={currentAiStatus}
-                  checkedAt={currentAiCheckedAt}
-                  queueStatus={lead.ai_queue_status}
-                  viability={currentViability}
-                  confidence={aiVerification?.confidence ?? lead.ai_confidence}
-                  showDetail
-                />
+          {lead.enrichment_status === "enriched" && (
+            <section className="glass rounded-2xl p-6">
+              <div className="flex items-center justify-between">
+                <h3 className="section-label">Enrichment Data</h3>
+                <span className="rounded-lg px-2.5 py-1 text-xs font-medium" style={{ background: "rgba(34,197,94,0.1)", color: "#16a34a" }}>Enriched</span>
               </div>
-            </div>
-            <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Found Website</span>
-              {foundAiWebsite ? (
-                <a className="link-accent mt-1 block truncate text-sm" href={foundAiWebsite} target="_blank" rel="noopener noreferrer">
-                  {foundAiWebsite}
-                </a>
-              ) : (
-                <p className="mt-1 text-sm" style={{ color: "var(--text-primary)" }}>None found</p>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <div><span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Photos</span><p className="text-sm" style={{ color: "var(--text-primary)" }}>{lead.photo_count} photos</p></div>
+                <div><span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Opening Hours</span><p className="text-sm" style={{ color: "var(--text-primary)" }}>{lead.has_opening_hours ? "Listed" : "Not listed"}</p></div>
+                {lead.primary_type && <div><span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Primary Type</span><p className="text-sm" style={{ color: "var(--text-primary)" }}>{lead.primary_type.replace(/_/g, " ")}</p></div>}
+                {lead.editorial_summary && <div className="sm:col-span-2"><span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Editorial Summary</span><p className="mt-1 text-sm leading-relaxed" style={{ color: "var(--text-primary)" }}>{lead.editorial_summary}</p></div>}
+              </div>
+              {lead.review_highlights && lead.review_highlights.length > 0 && (
+                <div className="mt-4">
+                  <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Review Insights</span>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {lead.review_highlights.map((h) => <span key={h} className="rounded-lg px-2 py-1 text-xs" style={{ background: "rgba(99,102,241,0.1)", color: "#6366f1" }}>{h}</span>)}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
+          <section className="glass rounded-2xl p-6">
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div>
+                <h3 className="section-label">Timeline</h3>
+                <div className="mt-3 space-y-1.5">
+                  <TimestampRow label="Discovered" value={lead.discovered_at} />
+                  <TimestampRow label="First Contact" value={lead.first_contacted_at} />
+                  <TimestampRow label="First Reply" value={firstReply} />
+                  <TimestampRow label="Meeting Booked" value={meetingBooked} />
+                  <TimestampRow label="Last Contacted" value={lead.last_contacted_at} />
+                </div>
+              </div>
+              {density && density.count > 0 && (
+                <div>
+                  <h3 className="section-label">Market Density</h3>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="rounded-lg px-2 py-1 text-xs font-medium" style={{
+                      background: density.label === "Very High" ? "rgba(239,68,68,0.1)" : density.label === "High" ? "rgba(245,158,11,0.1)" : "rgba(34,197,94,0.1)",
+                      color: density.label === "Very High" ? "#dc2626" : density.label === "High" ? "#d97706" : "#16a34a",
+                    }}>{density.label}</span>
+                    <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{density.count} similar businesses nearby</span>
+                  </div>
+                </div>
               )}
             </div>
-            <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Recommendation</span>
-              <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-                {(aiVerification?.recommendation ?? lead.ai_recommendation ?? "manual_review").replace(/_/g, " ")}
-              </p>
-              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                {aiVerification?.created_at ? new Date(aiVerification.created_at).toLocaleString() : lead.ai_checked_at ? new Date(lead.ai_checked_at).toLocaleString() : "Not checked yet"}
-              </p>
-            </div>
-            <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Website Viability</span>
-              <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-                {formatViabilityLabel(currentViability)}
-              </p>
-              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                {formatHealthSummary(currentHealth)}
-              </p>
-            </div>
-          </div>
+          </section>
+        </section>
+      )}
 
-          {(currentHealth || currentViabilityReason) && (
-            <div className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-primary)" }}>
-              <div className="grid gap-2 sm:grid-cols-4">
-                <HealthMeta label="HTTP" value={String(currentHealth?.statusCode ?? "N/A")} />
-                <HealthMeta label="Final URL" value={String(currentHealth?.finalUrl ?? foundAiWebsite ?? "N/A")} link={String(currentHealth?.finalUrl ?? foundAiWebsite ?? "") || undefined} />
-                <HealthMeta label="Title" value={String(currentHealth?.title ?? "N/A")} />
-                <HealthMeta label="Reason" value={currentViabilityReason ?? String(currentHealth?.classifierSignals ?? "N/A")} />
-              </div>
-            </div>
-          )}
-
-          {(aiVerification?.summary || lead.ai_summary) && (
-            <p className="mt-4 rounded-xl p-4 text-sm leading-relaxed" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-primary)" }}>
-              {aiVerification?.summary ?? lead.ai_summary}
-            </p>
-          )}
-
-          {aiVerification && aiVerification.sources.length > 0 && (
-            <div className="mt-4">
-              <h4 className="section-label">Sources</h4>
-              <div className="mt-2 grid gap-2 lg:grid-cols-2">
-                {aiVerification.sources.map((source) => (
-                  <a key={`${source.url}-${source.evidence}`} className="rounded-xl px-4 py-3 text-sm hover:opacity-80" href={source.url} target="_blank" rel="noopener noreferrer" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-primary)" }}>
-                    <span className="block truncate font-medium">{source.title ?? source.url}</span>
-                    <span className="mt-1 block text-xs" style={{ color: "var(--text-tertiary)" }}>{source.evidence}</span>
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {aiVerification && (
-            <div className="mt-4 flex flex-wrap gap-2">
-              {isAdmin && (
-                <>
-                  <button
-                    type="button"
-                    className="btn-glass text-xs"
-                    disabled={aiApplying !== null || !aiVerification.found_website_url || !hasUsableAiWebsite}
-                    onClick={() => handleApplyAi("update_website")}
-                  >
-                    {aiApplying === "update_website" ? "Applying..." : "Apply Usable Website"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-glass text-xs"
-                    disabled={aiApplying !== null || !hasUsableAiWebsite}
-                    onClick={() => handleApplyAi("exclude_has_website")}
-                  >
-                    {aiApplying === "exclude_has_website" ? "Excluding..." : "Exclude as Has Website"}
-                  </button>
-                </>
-              )}
-              <button
-                type="button"
-                className="btn-glass text-xs"
-                disabled={aiApplying !== null || !hasBrokenSiteOpportunity}
-                onClick={() => handleApplyAi("mark_broken_site_opportunity")}
-              >
-                {aiApplying === "mark_broken_site_opportunity" ? "Marking..." : "Mark Broken Site Opportunity"}
-              </button>
-              <button
-                type="button"
-                className="btn-glass text-xs"
-                disabled={aiApplying !== null}
-                onClick={() => handleApplyAi("mark_manual_review")}
-              >
-                {aiApplying === "mark_manual_review" ? "Marking..." : "Mark Manual Review"}
-              </button>
-            </div>
-          )}
-
-          <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.42)" }}>
+      {activeTab === "verification" && (
+        <section id="lead-detail-panel-verification" role="tabpanel" aria-labelledby="lead-detail-tab-verification" className="space-y-5">
+          <section className="glass rounded-2xl p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h4 className="section-label">Advanced AI Accuracy Feedback</h4>
+                <h3 className="section-label">Website correction</h3>
+                <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+                  Paste the website once and choose how it should affect the no-site workflow.
+                </p>
+              </div>
+              {factWebsiteUrl || lead.website_uri ? (
+                <a className="btn-glass text-xs" href={factWebsiteUrl || lead.website_uri || "#"} target="_blank" rel="noopener noreferrer">Open website</a>
+              ) : (
+                <span className="rounded-lg px-2 py-1 text-xs" style={{ background: "rgba(239,68,68,0.1)", color: "#dc2626" }}>No website</span>
+              )}
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-3">
+              <label className="block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                Website URL
+                <input className="glass-input mt-2 w-full" value={websiteCorrectionUrl} onChange={(e) => setWebsiteCorrectionUrl(e.target.value)} placeholder="https://business.com" disabled={!canEditLead || websiteCorrectionLoading} />
+              </label>
+              <label className="block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                Correction type
+                <select className="glass-select mt-2 w-full" value={websiteCorrectionResolution} onChange={(e) => setWebsiteCorrectionResolution(e.target.value as WebsiteCorrectionResolution)} disabled={!canEditLead || websiteCorrectionLoading}>
+                  {WEBSITE_CORRECTION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              <label className="block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                Notes
+                <input className="glass-input mt-2 w-full" value={websiteCorrectionNotes} onChange={(e) => setWebsiteCorrectionNotes(e.target.value)} placeholder="Where did you find it?" disabled={!canEditLead || websiteCorrectionLoading} />
+              </label>
+            </div>
+            <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
+              {WEBSITE_CORRECTION_OPTIONS.find((option) => option.value === websiteCorrectionResolution)?.help}
+            </p>
+            <button type="button" className="btn-primary mt-4 text-sm" onClick={handleManualWebsiteCorrection} disabled={!canEditLead || websiteCorrectionLoading || (websiteCorrectionResolution !== "remove_website" && !websiteCorrectionUrl.trim())}>
+              {websiteCorrectionLoading ? "Saving..." : "Save website correction"}
+            </button>
+          </section>
+
+          <section className="glass rounded-2xl p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="section-label">AI Verification</h3>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                  Uses the locked gpt-5.4-mini verifier with budget limits and manual apply.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className="btn-primary text-xs" disabled={aiLoading} onClick={() => handleRunAiVerification(false)}>
+                  {aiLoading ? "Checking..." : "Run AI Verify"}
+                </button>
+                <button type="button" className="btn-glass text-xs" disabled={aiLoading} onClick={() => handleRunAiVerification(true)}>Refresh</button>
+                <button type="button" className="btn-glass text-xs" disabled={aiLoading || !foundAiWebsite} onClick={handleRepairAiViability}>Re-check Website Viability</button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-4">
+              <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Status</span>
+                <div className="mt-1">
+                  <AiVerificationBadge status={currentAiStatus} checkedAt={currentAiCheckedAt} queueStatus={lead.ai_queue_status} viability={currentViability} confidence={aiVerification?.confidence ?? lead.ai_confidence} showDetail />
+                </div>
+              </div>
+              <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Found Website</span>
+                {foundAiWebsite ? <a className="link-accent mt-1 block truncate text-sm" href={foundAiWebsite} target="_blank" rel="noopener noreferrer">{foundAiWebsite}</a> : <p className="mt-1 text-sm" style={{ color: "var(--text-primary)" }}>None found</p>}
+              </div>
+              <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Recommendation</span>
+                <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{(aiVerification?.recommendation ?? lead.ai_recommendation ?? "manual_review").replace(/_/g, " ")}</p>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>{aiVerification?.created_at ? new Date(aiVerification.created_at).toLocaleString() : lead.ai_checked_at ? new Date(lead.ai_checked_at).toLocaleString() : "Not checked yet"}</p>
+              </div>
+              <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Website Viability</span>
+                <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{formatViabilityLabel(currentViability)}</p>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>{formatHealthSummary(currentHealth)}</p>
+              </div>
+            </div>
+
+            {(currentHealth || currentViabilityReason) && (
+              <div className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-primary)" }}>
+                <div className="grid gap-2 sm:grid-cols-4">
+                  <HealthMeta label="HTTP" value={String(currentHealth?.statusCode ?? "N/A")} />
+                  <HealthMeta label="Final URL" value={String(currentHealth?.finalUrl ?? foundAiWebsite ?? "N/A")} link={String(currentHealth?.finalUrl ?? foundAiWebsite ?? "") || undefined} />
+                  <HealthMeta label="Title" value={String(currentHealth?.title ?? "N/A")} />
+                  <HealthMeta label="Reason" value={currentViabilityReason ?? String(currentHealth?.classifierSignals ?? "N/A")} />
+                </div>
+              </div>
+            )}
+
+            {(aiVerification?.summary || lead.ai_summary) && (
+              <p className="mt-4 rounded-xl p-4 text-sm leading-relaxed" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-primary)" }}>
+                {aiVerification?.summary ?? lead.ai_summary}
+              </p>
+            )}
+
+            {aiVerification && aiVerification.sources.length > 0 && (
+              <div className="mt-4">
+                <button type="button" className="btn-glass text-xs" onClick={() => setShowAiSources((current) => !current)}>
+                  {showAiSources ? "Hide sources" : `Show sources (${aiVerification.sources.length})`}
+                </button>
+                {showAiSources && (
+                  <div className="mt-2 grid gap-2 lg:grid-cols-2">
+                    {aiVerification.sources.map((source) => (
+                      <a key={`${source.url}-${source.evidence}`} className="rounded-xl px-4 py-3 text-sm hover:opacity-80" href={source.url} target="_blank" rel="noopener noreferrer" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-primary)" }}>
+                        <span className="block truncate font-medium">{source.title ?? source.url}</span>
+                        <span className="mt-1 block text-xs" style={{ color: "var(--text-tertiary)" }}>{source.evidence}</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {aiVerification && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {isAdmin && (
+                  <>
+                    <button type="button" className="btn-glass text-xs" disabled={aiApplying !== null || !aiVerification.found_website_url || !hasUsableAiWebsite} onClick={() => handleApplyAi("update_website")}>{aiApplying === "update_website" ? "Applying..." : "Apply Usable Website"}</button>
+                    <button type="button" className="btn-glass text-xs" disabled={aiApplying !== null || !hasUsableAiWebsite} onClick={() => handleApplyAi("exclude_has_website")}>{aiApplying === "exclude_has_website" ? "Excluding..." : "Exclude as Has Website"}</button>
+                  </>
+                )}
+                <button type="button" className="btn-glass text-xs" disabled={aiApplying !== null || !hasBrokenSiteOpportunity} onClick={() => handleApplyAi("mark_broken_site_opportunity")}>{aiApplying === "mark_broken_site_opportunity" ? "Marking..." : "Mark Broken Site Opportunity"}</button>
+                <button type="button" className="btn-glass text-xs" disabled={aiApplying !== null} onClick={() => handleApplyAi("mark_manual_review")}>{aiApplying === "mark_manual_review" ? "Marking..." : "Mark Manual Review"}</button>
+              </div>
+            )}
+          </section>
+
+          <section className="glass rounded-2xl p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="section-label">Advanced AI Accuracy Feedback</h3>
                 <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
                   Use this for AI metadata only. Use Website correction above when the actual lead website should change.
                 </p>
               </div>
-              {lead.ai_feedback_at && (
-                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-                  Last reviewed {new Date(lead.ai_feedback_at).toLocaleString()}
-                </span>
-              )}
+              {lead.ai_feedback_at && <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Last reviewed {new Date(lead.ai_feedback_at).toLocaleString()}</span>}
             </div>
             <div className="mt-3 grid gap-3 lg:grid-cols-4">
-              <label className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                Feedback
-                <select className="glass-input mt-1 w-full" value={aiFeedbackStatus} onChange={(e) => setAiFeedbackStatus(e.target.value)}>
-                  <option value="correct">Correct</option>
-                  <option value="incorrect">Incorrect</option>
-                  <option value="uncertain">Uncertain</option>
-                </select>
-              </label>
-              <label className="text-xs lg:col-span-1" style={{ color: "var(--text-secondary)" }}>
-                Correct Website URL
-                <input className="glass-input mt-1 w-full" value={aiCorrectedWebsiteUrl} onChange={(e) => setAiCorrectedWebsiteUrl(e.target.value)} placeholder="https://..." />
-              </label>
-              <label className="text-xs lg:col-span-2" style={{ color: "var(--text-secondary)" }}>
-                False Positive / Notes
-                <input className="glass-input mt-1 w-full" value={aiFalsePositiveReason} onChange={(e) => setAiFalsePositiveReason(e.target.value)} placeholder="Wrong business, directory only, parked page..." />
-              </label>
+              <label className="text-xs" style={{ color: "var(--text-secondary)" }}>Feedback<select className="glass-input mt-1 w-full" value={aiFeedbackStatus} onChange={(e) => setAiFeedbackStatus(e.target.value)}><option value="correct">Correct</option><option value="incorrect">Incorrect</option><option value="uncertain">Uncertain</option></select></label>
+              <label className="text-xs lg:col-span-1" style={{ color: "var(--text-secondary)" }}>Correct Website URL<input className="glass-input mt-1 w-full" value={aiCorrectedWebsiteUrl} onChange={(e) => setAiCorrectedWebsiteUrl(e.target.value)} placeholder="https://..." /></label>
+              <label className="text-xs lg:col-span-2" style={{ color: "var(--text-secondary)" }}>False Positive / Notes<input className="glass-input mt-1 w-full" value={aiFalsePositiveReason} onChange={(e) => setAiFalsePositiveReason(e.target.value)} placeholder="Wrong business, directory only, parked page..." /></label>
             </div>
-            <textarea
-              className="glass-input mt-3 min-h-20 w-full"
-              value={aiReviewerNotes}
-              onChange={(e) => setAiReviewerNotes(e.target.value)}
-              placeholder="Reviewer notes for future scoring/pitch decisions"
-            />
+            <textarea className="glass-input mt-3 min-h-20 w-full" value={aiReviewerNotes} onChange={(e) => setAiReviewerNotes(e.target.value)} placeholder="Reviewer notes for future scoring/pitch decisions" />
             <div className="mt-3 flex justify-end">
-              <button type="button" className="btn-glass text-xs" disabled={aiFeedbackLoading} onClick={handleSaveAiFeedback}>
-                {aiFeedbackLoading ? "Saving..." : "Save AI Feedback"}
-              </button>
+              <button type="button" className="btn-glass text-xs" disabled={aiFeedbackLoading} onClick={handleSaveAiFeedback}>{aiFeedbackLoading ? "Saving..." : "Save AI Feedback"}</button>
             </div>
-          </div>
-        </article>
+          </section>
+        </section>
+      )}
 
-        {/* Lead intelligence */}
-        <article className="glass rounded-2xl p-6 lg:col-span-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="section-label">Lead Intelligence</h3>
-              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                Manual gpt-5.4-mini briefs for website generation and the sales pitch.
-              </p>
+      {activeTab === "intelligence" && (
+        <section id="lead-detail-panel-intelligence" role="tabpanel" aria-labelledby="lead-detail-tab-intelligence" className="space-y-5">
+          <section className="glass rounded-2xl p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="section-label">Pitch actions</h3>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>Generate sales copy, outreach, and demo assets from the verified lead context.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {demoHref && <button type="button" className="btn-glass text-xs" onClick={copyDemoPitch}>Copy Demo Link + Pitch</button>}
+                <button type="button" className="btn-primary text-xs" onClick={handleGeneratePackage} disabled={pkgLoading}>{pkgLoading ? "Generating..." : "Generate Outreach"}</button>
+                <button type="button" className="btn-glass text-xs" onClick={handleCreateDemo} disabled={demoLoading || !canEditLead}>{demoLoading ? "Creating..." : demo ? "Refresh Demo Link" : "Create Demo"}</button>
+              </div>
             </div>
-            <button
-              type="button"
-              className="btn-primary text-xs"
-              disabled={artifactLoading !== null}
-              onClick={() => handleGeneratePitchPack(false)}
-            >
-              {artifactLoading === "pitch_pack" ? "Generating..." : "Generate Pitch Pack"}
-            </button>
-          </div>
-
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <ArtifactPanel
-              title="Business Detail"
-              description="Website build brief and copy-ready prompt."
-              artifact={businessDetailArtifact}
-              latestJob={businessDetailJob}
-              loading={artifactLoading === "business_detail" || artifactLoading === "pitch_pack"}
-              generateLabel="Generate Brief"
-              regenerateLabel="Regenerate Brief"
-              onGenerate={() => handleQueueArtifact("business_detail", false)}
-              onRegenerate={() => handleQueueArtifact("business_detail", true)}
-              onCopy={() => copyToClipboard(String(businessDetailArtifact?.content_json.website_generation_prompt ?? ""))}
-            >
-              {businessDetailArtifact ? (
-                <BusinessDetailView artifact={businessDetailArtifact} />
-              ) : (
-                <EmptyArtifactState label={artifactStateLabel(businessDetailJob)} />
-              )}
-            </ArtifactPanel>
-
-            <ArtifactPanel
-              title="Competitive Report"
-              description="Competitor snapshot, upside estimate, and pitch points."
-              artifact={competitiveReportArtifact}
-              latestJob={competitiveReportJob}
-              loading={artifactLoading === "competitive_report" || artifactLoading === "pitch_pack"}
-              generateLabel="Generate Report"
-              regenerateLabel="Regenerate Report"
-              onGenerate={() => handleQueueArtifact("competitive_report", false)}
-              onRegenerate={() => handleQueueArtifact("competitive_report", true)}
-              onCopy={() => copyToClipboard(buildPitchBriefText(competitiveReportArtifact))}
-            >
-              {competitiveReportArtifact ? (
-                <CompetitiveReportView artifact={competitiveReportArtifact} />
-              ) : (
-                <EmptyArtifactState label={artifactStateLabel(competitiveReportJob)} />
-              )}
-            </ArtifactPanel>
-          </div>
-        </article>
-
-        {/* Status, reminder, and quick actions */}
-        <article className="glass rounded-2xl p-6">
-          <h3 className="section-label">Status</h3>
-          <select className="glass-select mt-3 w-full" value={status} onChange={(e) => handleStatusChange(e.target.value)} disabled={!canEditLead}>
-            {STATUS_OPTIONS.filter((s) => isAdmin || (s !== "closed_won" && s !== "closed_lost")).map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
-          </select>
-
-          <h3 className="section-label mt-5">Reminder</h3>
-          <div className="mt-2 flex gap-2">
-            <input type="date" className="glass-input flex-1 text-xs" value={reminder} onChange={(e) => setReminder(e.target.value)} disabled={!canEditLead} />
-            <button type="button" className="btn-glass text-xs" onClick={handleSaveReminder} disabled={!canEditLead}>Set</button>
-          </div>
-
-          {/* Quick actions */}
-          <div className="mt-5 flex flex-col gap-2">
-            {!firstReply && lead.first_contacted_at && (
-              <button type="button" className="btn-glass w-full text-xs" onClick={handleMarkReplied} disabled={!canEditLead}>
-                Mark Replied
-              </button>
-            )}
-            {!meetingBooked && (
-              <button type="button" className="btn-glass w-full text-xs" onClick={handleMarkMeeting} disabled={!canEditLead}>
-                Mark Meeting Booked
-              </button>
-            )}
-            <button type="button" className="btn-primary w-full text-xs" onClick={handleGeneratePackage} disabled={pkgLoading}>
-              {pkgLoading ? "Generating..." : "Generate Outreach"}
-            </button>
-            <button type="button" className="btn-glass w-full text-xs" onClick={handleCreateDemo} disabled={demoLoading || !canEditLead}>
-              {demoLoading ? "Creating..." : demo ? "Refresh Demo Link" : "Create Demo"}
-            </button>
-          </div>
-
-          {demo && (
-            <div className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(99,102,241,0.08)", color: "var(--text-secondary)" }}>
-              <span className="block font-medium" style={{ color: "var(--text-primary)" }}>Demo URL</span>
-              <a className="link-accent break-all" href={`/demo/${demo.slug}`} target="_blank" rel="noopener noreferrer">
-                /demo/{demo.slug}
-              </a>
-            </div>
-          )}
-
-          {/* Verification checklist */}
-          <VerificationChecklist
-            verification={verification}
-            onChange={async (key, value) => {
-              if (!canEditLead) {
-                flash("Claim this lead before updating verification");
-                return;
-              }
-              const updated = { ...verification, [key]: value };
-              setVerification(updated);
-              const result = await updateLeadVerificationAction(lead.id, key, value);
-              if ("error" in result) {
-                setVerification(verification);
-                flash(result.error ?? "Error");
-              }
-            }}
-          />
-
-          {isAdmin && (
-          <div className="mt-5 space-y-2">
-            <div className="flex items-center justify-between">
-              <h3 className="section-label">Lead Exclusion</h3>
-              {isExcluded && (
-                <span className="text-xs font-medium" style={{ color: "#4b5563" }}>
-                  Excluded
-                </span>
-              )}
-            </div>
-            <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-              Excluded leads stay visible for audit, but are ignored by qualified counts, queue, enrichment ranking, and score bands.
-            </p>
-            <textarea
-              className="glass-input w-full text-xs"
-              rows={3}
-              placeholder="Reason for exclusion (for example: already has a real website)"
-              value={exclusionReason}
-              onChange={(e) => setExclusionReason(e.target.value)}
-            />
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="btn-glass text-xs"
-                disabled={exclusionLoading || isExcluded || exclusionReason.trim().length < 5}
-                onClick={handleExcludeLead}
-              >
-                {exclusionLoading && !isExcluded ? "Excluding..." : "Exclude Lead"}
-              </button>
-              <button
-                type="button"
-                className="btn-glass text-xs"
-                disabled={exclusionLoading || !isExcluded}
-                onClick={handleRestoreLead}
-              >
-                {exclusionLoading && isExcluded ? "Restoring..." : "Restore Lead"}
-              </button>
-            </div>
-            {isExcluded && (
-              <div className="rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(107,114,128,0.08)", color: "#4b5563" }}>
-                <span>Excluded on: {excludedAt ? new Date(excludedAt).toLocaleString() : "—"}</span>
-                {exclusionReason && <span className="ml-2">Reason: {exclusionReason}</span>}
+            {demo && (
+              <div className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(99,102,241,0.08)", color: "var(--text-secondary)" }}>
+                <span className="block font-medium" style={{ color: "var(--text-primary)" }}>Demo URL</span>
+                <a className="link-accent break-all" href={`/demo/${demo.slug}`} target="_blank" rel="noopener noreferrer">/demo/{demo.slug}</a>
               </div>
             )}
-            <div className="mt-5 border-t pt-4" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
+          </section>
+
+          {showPkg && outreachPkg && (
+            <section className="glass rounded-2xl p-6">
               <div className="flex items-center justify-between">
-                <h3 className="section-label">Lead Archive</h3>
-                {archivedAt && (
-                  <span className="text-xs font-medium" style={{ color: "#0f172a" }}>
-                    Archived
-                  </span>
+                <h3 className="section-label">Outreach Package</h3>
+                <div className="flex gap-2">
+                  <button type="button" className="btn-glass text-xs" onClick={() => copyToClipboard(outreachPkg.fullMessage)}>Copy All</button>
+                  <button type="button" className="btn-glass text-xs" onClick={() => setShowPkg(false)}>Close</button>
+                </div>
+              </div>
+              <div className="mt-4 whitespace-pre-wrap rounded-xl p-4 text-sm leading-relaxed" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-primary)" }}>{outreachPkg.fullMessage}</div>
+            </section>
+          )}
+
+          <section className="glass rounded-2xl p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="section-label">Lead Intelligence</h3>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>Manual gpt-5.4-mini briefs for website generation and the sales pitch.</p>
+              </div>
+              <button type="button" className="btn-primary text-xs" disabled={artifactLoading !== null} onClick={() => handleGeneratePitchPack(false)}>
+                {artifactLoading === "pitch_pack" ? "Generating..." : "Generate Pitch Pack"}
+              </button>
+            </div>
+            <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              <ArtifactPanel title="Business Detail" description="Website build brief and copy-ready prompt." artifact={businessDetailArtifact} latestJob={businessDetailJob} loading={artifactLoading === "business_detail" || artifactLoading === "pitch_pack"} generateLabel="Generate Brief" regenerateLabel="Regenerate Brief" onGenerate={() => handleQueueArtifact("business_detail", false)} onRegenerate={() => handleQueueArtifact("business_detail", true)} onCopy={() => copyToClipboard(String(businessDetailArtifact?.content_json.website_generation_prompt ?? ""))}>
+                {businessDetailArtifact ? <BusinessDetailView artifact={businessDetailArtifact} /> : <EmptyArtifactState label={artifactStateLabel(businessDetailJob)} />}
+              </ArtifactPanel>
+              <ArtifactPanel title="Competitive Report" description="Competitor snapshot, upside estimate, and pitch points." artifact={competitiveReportArtifact} latestJob={competitiveReportJob} loading={artifactLoading === "competitive_report" || artifactLoading === "pitch_pack"} generateLabel="Generate Report" regenerateLabel="Regenerate Report" onGenerate={() => handleQueueArtifact("competitive_report", false)} onRegenerate={() => handleQueueArtifact("competitive_report", true)} onCopy={() => copyToClipboard(buildPitchBriefText(competitiveReportArtifact))}>
+                {competitiveReportArtifact ? <CompetitiveReportView artifact={competitiveReportArtifact} /> : <EmptyArtifactState label={artifactStateLabel(competitiveReportJob)} />}
+              </ArtifactPanel>
+            </div>
+          </section>
+        </section>
+      )}
+
+      {activeTab === "admin" && (
+        <section id="lead-detail-panel-admin" role="tabpanel" aria-labelledby="lead-detail-tab-admin" className="space-y-5">
+          <section className="glass rounded-2xl p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="section-label">Admin controls</h3>
+                <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+                  Edit canonical facts, workflow state, internal notes, and audit-only controls.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {(factWebsiteUrl || lead.website_uri) && (
+                  <a className="btn-glass text-xs" href={factWebsiteUrl || lead.website_uri || "#"} target="_blank" rel="noopener noreferrer">
+                    Open website
+                  </a>
+                )}
+                {lead.maps_uri && (
+                  <a className="btn-glass text-xs" href={lead.maps_uri} target="_blank" rel="noopener noreferrer">
+                    Open Maps
+                  </a>
                 )}
               </div>
-              <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                Archive removes this lead from active inventory without deleting notes, outreach history, demos, or AI artifacts.
-              </p>
-              <label htmlFor="archive-reason" className="section-label mt-3 block">Archive reason</label>
-              <textarea
-                id="archive-reason"
-                name="archiveReason"
-                aria-describedby="archive-reason-help"
-                className="glass-input mt-2 w-full text-xs"
-                rows={3}
-                placeholder="Reason for archiving (for example: duplicate, bad data, not useful for current campaign)"
-                value={archiveReason}
-                onChange={(e) => setArchiveReason(e.target.value)}
-              />
-              <p id="archive-reason-help" className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                Enter at least 5 characters to enable Archive Lead.
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn-glass text-xs"
-                  disabled={archiveLoading || Boolean(archivedAt) || archiveReason.trim().length < 5}
-                  onClick={handleArchiveLead}
-                >
-                  {archiveLoading && !archivedAt ? "Archiving..." : "Archive active lead"}
-                </button>
-                <button
-                  type="button"
-                  className="btn-glass text-xs"
-                  disabled={archiveLoading || !archivedAt}
-                  onClick={handleRestoreArchivedLead}
-                >
-                  {archiveLoading && archivedAt ? "Restoring..." : "Restore to active inventory"}
-                </button>
-              </div>
-              {archivedAt && (
-                <div className="mt-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(15,23,42,0.08)", color: "#0f172a" }}>
-                  <span>Archived on: {new Date(archivedAt).toLocaleString()}</span>
-                  {archiveReason && <span className="ml-2">Reason: {archiveReason}</span>}
+            </div>
+
+            <div className="mt-5 grid gap-4 xl:grid-cols-2">
+              <section className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.52)" }}>
+                <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Edit business info</h4>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                  Human-owned facts are editable. Scores and AI fields update through correction actions.
+                </p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                    Business name
+                    <input className="glass-input mt-2 w-full" value={factName} onChange={(e) => setFactName(e.target.value)} disabled={!canEditLead || factsLoading} />
+                  </label>
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                    Phone
+                    <input className="glass-input mt-2 w-full" value={factPhone} onChange={(e) => setFactPhone(e.target.value)} disabled={!canEditLead || factsLoading} />
+                  </label>
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] sm:col-span-2" style={{ color: "var(--text-tertiary)" }}>
+                    Address
+                    <input className="glass-input mt-2 w-full" value={factAddress} onChange={(e) => setFactAddress(e.target.value)} disabled={!canEditLead || factsLoading} />
+                  </label>
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] sm:col-span-2" style={{ color: "var(--text-tertiary)" }}>
+                    Website
+                    <input className="glass-input mt-2 w-full" value={factWebsiteUrl} onChange={(e) => setFactWebsiteUrl(e.target.value)} placeholder="https://..." disabled={!canEditLead || factsLoading} />
+                  </label>
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                    Business type
+                    <input className="glass-input mt-2 w-full" value={factBusinessType} onChange={(e) => setFactBusinessType(e.target.value)} disabled={!canEditLead || factsLoading} />
+                  </label>
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                    Primary category
+                    <input className="glass-input mt-2 w-full" value={factPrimaryType} onChange={(e) => setFactPrimaryType(e.target.value)} disabled={!canEditLead || factsLoading} />
+                  </label>
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                    Status
+                    <select className="glass-select mt-2 w-full" value={factStatus} onChange={(e) => setFactStatus(e.target.value)} disabled={!canEditLead || factsLoading}>
+                      {STATUS_OPTIONS.filter((s) => isAdmin || (s !== "closed_won" && s !== "closed_lost")).map((s) => (
+                        <option key={s} value={s}>{formatLabel(s)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] sm:col-span-2" style={{ color: "var(--text-tertiary)" }}>
+                    Internal notes
+                    <textarea className="glass-input mt-2 min-h-[84px] w-full" value={factNotes} onChange={(e) => setFactNotes(e.target.value)} disabled={!canEditLead || factsLoading} />
+                  </label>
                 </div>
-              )}
-            </div>
-          </div>
-          )}
+                <button type="button" className="btn-primary mt-4 w-full" onClick={handleSaveLeadFacts} disabled={!canEditLead || factsLoading || !factName.trim()}>
+                  {factsLoading ? "Saving..." : "Save business info"}
+                </button>
+              </section>
 
-          {/* Score breakdown */}
-          {scoreBreakdown && (
-            <div className="mt-5 space-y-1.5">
-              <h3 className="section-label">Score Breakdown</h3>
-              <ScoreRow label="Base (log reviews x rating)" value={scoreBreakdown.base} />
-              <ScoreRow label="Niche Weight" value={`${scoreBreakdown.nicheWeight}x`} />
-              <ScoreRow label="Website Multiplier" value={`${scoreBreakdown.websiteMultiplier}x`} />
-              {scoreBreakdown.photoBonus > 0 && <ScoreRow label="Photo Opportunity" value={`+${scoreBreakdown.photoBonus}`} />}
-              {scoreBreakdown.hoursBonus > 0 && <ScoreRow label="Hours Bonus" value={`+${scoreBreakdown.hoursBonus}`} />}
-              {scoreBreakdown.opportunityBonus > 0 && <ScoreRow label="Opportunity Signal" value={`+${scoreBreakdown.opportunityBonus}`} accent />}
-              {scoreBreakdown.healthBonus > 0 && <ScoreRow label="Website Health" value={`+${scoreBreakdown.healthBonus}`} accent />}
-              {scoreBreakdown.densityBonus > 0 && <ScoreRow label="Competitive Density" value={`+${scoreBreakdown.densityBonus}`} />}
-              <div className="flex items-center justify-between text-xs font-semibold">
-                <span style={{ color: "var(--text-primary)" }}>{`Final Score (${scoreBand.label})`}</span>
-                <span style={{ color: scoreBandStyle.color }}>{scoreBreakdown.final}</span>
-              </div>
+              <section className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.52)" }}>
+                <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Operator workflow</h4>
+                <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                  Internal state updates for research notes, follow-ups, and routing.
+                </p>
+                <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                  Action
+                  <select className="glass-select mt-2 w-full" value={workAction} onChange={(e) => setWorkAction(e.target.value as WorkUpdateAction)} disabled={!canEditLead || workLoading}>
+                    {WORK_UPDATE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="mt-3 block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                  Note
+                  <textarea className="glass-input mt-2 min-h-[112px] w-full" value={workNote} onChange={(e) => setWorkNote(e.target.value)} placeholder="What changed? What should the next person know?" disabled={!canEditLead || workLoading} />
+                </label>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                    Follow-up date
+                    <input className="glass-input mt-2 w-full" type="date" value={workFollowUpAt} onChange={(e) => setWorkFollowUpAt(e.target.value)} disabled={!canEditLead || workLoading} />
+                  </label>
+                  <label className="block text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--text-tertiary)" }}>
+                    Next step
+                    <input className="glass-input mt-2 w-full" value={workNextStep} onChange={(e) => setWorkNextStep(e.target.value)} placeholder="Call owner, verify website..." disabled={!canEditLead || workLoading} />
+                  </label>
+                </div>
+                <button type="button" className="btn-primary mt-4 w-full" onClick={handleSaveWorkUpdate} disabled={!canEditLead || workLoading || (!workNote.trim() && !workFollowUpAt && !workNextStep && workAction === "research_note")}>
+                  {workLoading ? "Saving..." : "Save work update"}
+                </button>
+              </section>
             </div>
-          )}
+          </section>
 
-          {/* Competitive density */}
-          {density && density.count > 0 && (
-            <div className="mt-5">
-              <h3 className="section-label">Market Density</h3>
-              <div className="mt-1.5 flex items-center gap-2">
-                <span className="rounded-lg px-2 py-1 text-xs font-medium" style={{
-                  background: density.label === "Very High" ? "rgba(239,68,68,0.1)" : density.label === "High" ? "rgba(245,158,11,0.1)" : "rgba(34,197,94,0.1)",
-                  color: density.label === "Very High" ? "#dc2626" : density.label === "High" ? "#d97706" : "#16a34a",
-                }}>{density.label}</span>
-                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{density.count} similar businesses nearby</span>
-              </div>
-            </div>
-          )}
-
-          {/* Conversion timestamps */}
-          <div className="mt-5 space-y-1.5">
-            <h3 className="section-label">Timeline</h3>
-            <TimestampRow label="Discovered" value={lead.discovered_at} />
-            <TimestampRow label="First Contact" value={lead.first_contacted_at} />
-            <TimestampRow label="First Reply" value={firstReply} />
-            <TimestampRow label="Meeting Booked" value={meetingBooked} />
-            <TimestampRow label="Last Contacted" value={lead.last_contacted_at} />
-          </div>
-        </article>
-      </section>
-
-      {/* Enrichment data */}
-      {lead.enrichment_status === "enriched" && (
-        <section className="glass rounded-2xl p-6">
-          <div className="flex items-center justify-between">
-            <h3 className="section-label">Enrichment Data</h3>
-            <span className="rounded-lg px-2.5 py-1 text-xs font-medium" style={{ background: "rgba(34,197,94,0.1)", color: "#16a34a" }}>Enriched</span>
-          </div>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <div>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Photos</span>
-              <p className="text-sm" style={{ color: "var(--text-primary)" }}>{lead.photo_count} photos</p>
-            </div>
-            <div>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Opening Hours</span>
-              <p className="text-sm" style={{ color: "var(--text-primary)" }}>{lead.has_opening_hours ? "Listed" : "Not listed"}</p>
-            </div>
-            {lead.primary_type && (
+          <section className="glass rounded-2xl p-6">
+            <div className="grid gap-5 lg:grid-cols-2">
               <div>
-                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Primary Type</span>
-                <p className="text-sm" style={{ color: "var(--text-primary)" }}>{lead.primary_type.replace(/_/g, " ")}</p>
-              </div>
-            )}
-            {lead.editorial_summary && (
-              <div className="sm:col-span-2">
-                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Editorial Summary</span>
-                <p className="mt-1 text-sm leading-relaxed" style={{ color: "var(--text-primary)" }}>{lead.editorial_summary}</p>
-              </div>
-            )}
-          </div>
-
-          {lead.review_highlights && lead.review_highlights.length > 0 && (
-            <div className="mt-4">
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Review Insights</span>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {lead.review_highlights.map((h) => (
-                  <span key={h} className="rounded-lg px-2 py-1 text-xs" style={{ background: "rgba(99,102,241,0.1)", color: "#6366f1" }}>{h}</span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {lead.website_health && (
-            <div className="mt-4">
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Website Health</span>
-              <div className="mt-1.5 grid gap-2 sm:grid-cols-4">
-                <HealthBadge label="Status" value={String((lead.website_health as Record<string, unknown>).statusCode ?? "N/A")} good={typeof (lead.website_health as Record<string, unknown>).statusCode === "number" && ((lead.website_health as Record<string, unknown>).statusCode as number) < 400} />
-                <HealthBadge label="SSL" value={(lead.website_health as Record<string, unknown>).ssl ? "Yes" : "No"} good={!!(lead.website_health as Record<string, unknown>).ssl} />
-                <HealthBadge label="Speed" value={`${(lead.website_health as Record<string, unknown>).responseMs ?? "?"}ms`} good={typeof (lead.website_health as Record<string, unknown>).responseMs === "number" && ((lead.website_health as Record<string, unknown>).responseMs as number) < 3000} />
-                <HealthBadge label="Healthy" value={(lead.website_health as Record<string, unknown>).healthy ? "Yes" : "No"} good={!!(lead.website_health as Record<string, unknown>).healthy} />
-              </div>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Outreach package */}
-      {showPkg && outreachPkg && (
-        <section className="glass rounded-2xl p-6">
-          <div className="flex items-center justify-between">
-            <h3 className="section-label">Outreach Package</h3>
-            <div className="flex gap-2">
-              <button type="button" className="btn-glass text-xs" onClick={() => copyToClipboard(outreachPkg.fullMessage)}>
-                Copy All
-              </button>
-              <button type="button" className="btn-glass text-xs" onClick={() => setShowPkg(false)}>
-                Close
-              </button>
-            </div>
-          </div>
-          <div className="mt-4 whitespace-pre-wrap rounded-xl p-4 text-sm leading-relaxed"
-            style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-primary)" }}>
-            {outreachPkg.fullMessage}
-          </div>
-        </section>
-      )}
-
-      {/* Log outreach event */}
-      <section className="glass rounded-2xl p-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="section-label">Log outcome</h3>
-            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-              Record who you reached, what happened, and the next follow-up.
-            </p>
-          </div>
-          <button type="button" className="btn-primary text-sm" onClick={handleLogEvent} disabled={logging || !canEditLead}>
-            {logging ? "Logging..." : "Log outcome"}
-          </button>
-        </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Channel</span>
-            <select className="glass-select" value={eventChannel} onChange={(e) => setEventChannel(e.target.value)} disabled={!canEditLead}>
-              {CHANNEL_OPTIONS.map((c) => <option key={c} value={c}>{c === "walkin" ? "In person" : c}</option>)}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Outcome</span>
-            <select className="glass-select" value={eventOutcome} onChange={(e) => setEventOutcome(e.target.value)} disabled={!canEditLead}>
-              {OUTCOME_OPTIONS.filter((option) => isAdmin || (option !== "closed_won" && option !== "closed_lost")).map((option) => (
-                <option key={option} value={option}>{formatLabel(option)}</option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Person</span>
-            <input className="glass-input" value={contactPersonName} onChange={(e) => setContactPersonName(e.target.value)} disabled={!canEditLead} placeholder="Name if known" />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Role</span>
-            <input className="glass-input" value={contactPersonRole} onChange={(e) => setContactPersonRole(e.target.value)} disabled={!canEditLead} placeholder="Owner, manager..." />
-          </label>
-          <label className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.35)" }}>
-            <input type="checkbox" checked={decisionMakerReached} onChange={(e) => setDecisionMakerReached(e.target.checked)} disabled={!canEditLead} />
-            <span className="text-sm" style={{ color: "var(--text-primary)" }}>Decision maker reached</span>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Quoted amount</span>
-            <input className="glass-input" type="number" min={0} value={quotedAmount} onChange={(e) => setQuotedAmount(e.target.value)} disabled={!canEditLead} placeholder="0" />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Close value</span>
-            <input className="glass-input" type="number" min={0} value={closeValue} onChange={(e) => setCloseValue(e.target.value)} disabled={!canEditLead} placeholder="0" />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Follow-up date</span>
-            <input className="glass-input" type="date" value={followUpAt} onChange={(e) => setFollowUpAt(e.target.value)} disabled={!canEditLead} />
-          </label>
-          <label className="flex flex-col gap-1 md:col-span-2">
-            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Next step</span>
-            <input className="glass-input" value={nextStep} onChange={(e) => setNextStep(e.target.value)} disabled={!canEditLead} placeholder="What should happen next?" />
-          </label>
-          <label className="flex flex-col gap-1 md:col-span-2">
-            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Objection</span>
-            <input className="glass-input" value={objectionReason} onChange={(e) => setObjectionReason(e.target.value)} disabled={!canEditLead} placeholder="Price, timing, not interested..." />
-          </label>
-          <label className="flex flex-col gap-1 md:col-span-2 lg:col-span-4">
-            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Note</span>
-            <textarea className="glass-input w-full" rows={3} value={eventNote} onChange={(e) => setEventNote(e.target.value)} disabled={!canEditLead} placeholder="What happened?" />
-          </label>
-        </div>
-        <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.16)" }}>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Send to Steve</h4>
-              <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-                Create an admin queue item when this lead needs a website or quote.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <AdminRequestActionButton
-                label="Website needed"
-                alreadyQueued={hasOpenWebsiteRequest}
-                busy={adminRequestLoading === "website_request"}
-                disabled={!canEditLead || Boolean(adminRequestLoading)}
-                onClick={() => handleCreateAdminRequest("website_request")}
-              />
-              <AdminRequestActionButton
-                label="Quote requested"
-                alreadyQueued={hasOpenQuoteRequest}
-                busy={adminRequestLoading === "quote_request"}
-                disabled={!canEditLead || Boolean(adminRequestLoading)}
-                onClick={() => handleCreateAdminRequest("quote_request")}
-              />
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Outreach timeline */}
-      <section className="glass rounded-2xl p-6">
-        <h3 className="section-label">Outreach History ({events.length})</h3>
-        {events.length === 0 ? (
-          <p className="mt-3 text-sm" style={{ color: "var(--text-tertiary)" }}>No outreach events yet.</p>
-        ) : (
-          <div className="mt-3 space-y-3">
-            {events.map((ev) => (
-              <div key={ev.id} className="flex items-start gap-3 rounded-xl px-4 py-3"
-                style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-                <span style={channelBadgeStyle(ev.channel)}>{ev.channel === "walkin" ? "in person" : ev.channel}</span>
-                <div className="flex-1">
-                  <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>
-                    {formatLabel(ev.outcome)}
-                    {ev.contact_person_name ? ` with ${ev.contact_person_name}` : ""}
-                    {ev.contact_person_role ? ` (${ev.contact_person_role})` : ""}
-                  </p>
-                  <p className="mt-1 text-sm" style={{ color: "var(--text-primary)" }}>{ev.note || "No note"}</p>
-                  {(ev.next_step || ev.follow_up_at || ev.objection_reason || ev.quoted_amount > 0 || ev.close_value > 0) && (
-                    <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-                      {[
-                        ev.next_step ? `Next: ${ev.next_step}` : null,
-                        ev.follow_up_at ? `Follow-up: ${new Date(ev.follow_up_at).toLocaleDateString()}` : null,
-                        ev.objection_reason ? `Objection: ${ev.objection_reason}` : null,
-                        ev.quoted_amount > 0 ? `Quote: $${ev.quoted_amount.toLocaleString()}` : null,
-                        ev.close_value > 0 ? `Close: $${ev.close_value.toLocaleString()}` : null,
-                      ].filter(Boolean).join(" | ")}
-                    </p>
+                <h3 className="section-label">Status and reminder</h3>
+                <select className="glass-select mt-3 w-full" value={status} onChange={(e) => handleStatusChange(e.target.value)} disabled={!canEditLead}>
+                  {STATUS_OPTIONS.filter((s) => isAdmin || (s !== "closed_won" && s !== "closed_lost")).map((s) => (
+                    <option key={s} value={s}>{formatLabel(s)}</option>
+                  ))}
+                </select>
+                <div className="mt-3 flex gap-2">
+                  <input type="date" className="glass-input flex-1 text-xs" value={reminder} onChange={(e) => setReminder(e.target.value)} disabled={!canEditLead} />
+                  <button type="button" className="btn-glass text-xs" onClick={handleSaveReminder} disabled={!canEditLead}>Set</button>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {!firstReply && lead.first_contacted_at && (
+                    <button type="button" className="btn-glass text-xs" onClick={handleMarkReplied} disabled={!canEditLead}>Mark Replied</button>
                   )}
-                  <p className="mt-0.5 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                    {formatRelativeTime(ev.created_at)}{ev.actor_email ? ` by ${ev.actor_email}` : ""}
-                  </p>
+                  {!meetingBooked && (
+                    <button type="button" className="btn-glass text-xs" onClick={handleMarkMeeting} disabled={!canEditLead}>Mark Meeting Booked</button>
+                  )}
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Notes */}
-      <section className="glass rounded-2xl p-6">
-        <h3 className="section-label">Notes</h3>
-        <textarea className="glass-input mt-3 w-full" rows={4} placeholder="Add notes..." value={notes} onChange={(e) => setNotes(e.target.value)} disabled={!canEditLead} />
-        <button type="button" className="btn-primary mt-3 text-sm" onClick={handleSaveNotes} disabled={!canEditLead}>Save Notes</button>
-      </section>
-
-      <section className="glass rounded-2xl p-6">
-        <h3 className="section-label">Team Notes</h3>
-        <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-          <textarea
-            className="glass-input min-h-24 flex-1"
-            placeholder="Add a research note..."
-            value={leadNoteBody}
-            onChange={(event) => setLeadNoteBody(event.target.value)}
-            disabled={!canEditLead}
-          />
-          <button type="button" className="btn-primary self-start text-sm" disabled={noteLoading || !leadNoteBody.trim() || !canEditLead} onClick={handleAddLeadNote}>
-            Add Note
-          </button>
-        </div>
-        <div className="mt-4 space-y-3">
-          {leadNotes.length === 0 ? (
-            <p className="text-sm" style={{ color: "var(--text-tertiary)" }}>No team notes yet.</p>
-          ) : leadNotes.map((note) => (
-            <article key={note.id} className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>{note.author_email ?? "Unknown user"}</span>
-                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{formatRelativeTime(note.created_at)}</span>
+              <div>
+                <h3 className="section-label">Verification checklist</h3>
+                <VerificationChecklist
+                  verification={verification}
+                  onChange={async (key, value) => {
+                    if (!canEditLead) {
+                      flash("Claim this lead before updating verification");
+                      return;
+                    }
+                    const updated = { ...verification, [key]: value };
+                    setVerification(updated);
+                    const result = await updateLeadVerificationAction(lead.id, key, value);
+                    if ("error" in result) {
+                      setVerification(verification);
+                      flash(result.error ?? "Error");
+                    }
+                  }}
+                />
               </div>
-              <p className="mt-2 whitespace-pre-wrap text-sm" style={{ color: "var(--text-secondary)" }}>{note.body}</p>
-            </article>
-          ))}
-        </div>
-      </section>
+            </div>
+          </section>
+
+          {isAdmin && (
+            <section className="glass rounded-2xl p-6">
+              <div className="grid gap-5 lg:grid-cols-2">
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="section-label">Lead Exclusion</h3>
+                    {isExcluded && <span className="text-xs font-medium" style={{ color: "#4b5563" }}>Excluded</span>}
+                  </div>
+                  <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                    Excluded leads stay visible for audit, but are ignored by qualified counts, queue, enrichment ranking, and score bands.
+                  </p>
+                  <textarea className="glass-input mt-3 w-full text-xs" rows={3} placeholder="Reason for exclusion" value={exclusionReason} onChange={(e) => setExclusionReason(e.target.value)} />
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button type="button" className="btn-glass text-xs" disabled={exclusionLoading || isExcluded || exclusionReason.trim().length < 5} onClick={handleExcludeLead}>
+                      {exclusionLoading && !isExcluded ? "Excluding..." : "Exclude Lead"}
+                    </button>
+                    <button type="button" className="btn-glass text-xs" disabled={exclusionLoading || !isExcluded} onClick={handleRestoreLead}>
+                      {exclusionLoading && isExcluded ? "Restoring..." : "Restore Lead"}
+                    </button>
+                  </div>
+                  {isExcluded && (
+                    <div className="mt-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(107,114,128,0.08)", color: "#4b5563" }}>
+                      <span>Excluded on: {excludedAt ? new Date(excludedAt).toLocaleString() : "-"}</span>
+                      {exclusionReason && <span className="ml-2">Reason: {exclusionReason}</span>}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="section-label">Lead Archive</h3>
+                    {archivedAt && <span className="text-xs font-medium" style={{ color: "#0f172a" }}>Archived</span>}
+                  </div>
+                  <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                    Archive removes this lead from active inventory without deleting notes, outreach history, demos, or AI artifacts.
+                  </p>
+                  <label htmlFor="archive-reason" className="section-label mt-3 block">Archive reason</label>
+                  <textarea
+                    id="archive-reason"
+                    name="archiveReason"
+                    aria-describedby="archive-reason-help"
+                    className="glass-input mt-2 w-full text-xs"
+                    rows={3}
+                    placeholder="Reason for archiving"
+                    value={archiveReason}
+                    onChange={(e) => setArchiveReason(e.target.value)}
+                  />
+                  <p id="archive-reason-help" className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                    Enter at least 5 characters to enable Archive Lead.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button type="button" className="btn-glass text-xs" disabled={archiveLoading || Boolean(archivedAt) || archiveReason.trim().length < 5} onClick={handleArchiveLead}>
+                      {archiveLoading && !archivedAt ? "Archiving..." : "Archive active lead"}
+                    </button>
+                    <button type="button" className="btn-glass text-xs" disabled={archiveLoading || !archivedAt} onClick={handleRestoreArchivedLead}>
+                      {archiveLoading && archivedAt ? "Restoring..." : "Restore to active inventory"}
+                    </button>
+                  </div>
+                  {archivedAt && (
+                    <div className="mt-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(15,23,42,0.08)", color: "#0f172a" }}>
+                      <span>Archived on: {new Date(archivedAt).toLocaleString()}</span>
+                      {archiveReason && <span className="ml-2">Reason: {archiveReason}</span>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
+
+          {scoreBreakdown && (
+            <section className="glass rounded-2xl p-6">
+              <h3 className="section-label">Score Breakdown</h3>
+              <div className="mt-3 space-y-1.5">
+                <ScoreRow label="Base (log reviews x rating)" value={scoreBreakdown.base} />
+                <ScoreRow label="Niche Weight" value={scoreBreakdown.nicheWeight + "x"} />
+                <ScoreRow label="Website Multiplier" value={scoreBreakdown.websiteMultiplier + "x"} />
+                {scoreBreakdown.photoBonus > 0 && <ScoreRow label="Photo Opportunity" value={"+" + scoreBreakdown.photoBonus} />}
+                {scoreBreakdown.hoursBonus > 0 && <ScoreRow label="Hours Bonus" value={"+" + scoreBreakdown.hoursBonus} />}
+                {scoreBreakdown.opportunityBonus > 0 && <ScoreRow label="Opportunity Signal" value={"+" + scoreBreakdown.opportunityBonus} accent />}
+                {scoreBreakdown.healthBonus > 0 && <ScoreRow label="Website Health" value={"+" + scoreBreakdown.healthBonus} accent />}
+                {scoreBreakdown.densityBonus > 0 && <ScoreRow label="Competitive Density" value={"+" + scoreBreakdown.densityBonus} />}
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span style={{ color: "var(--text-primary)" }}>{"Final Score (" + scoreBand.label + ")"}</span>
+                  <span style={{ color: scoreBandStyle.color }}>{scoreBreakdown.final}</span>
+                </div>
+              </div>
+            </section>
+          )}
+
+          <section className="glass rounded-2xl p-6">
+            <h3 className="section-label">Raw internal notes</h3>
+            <textarea className="glass-input mt-3 w-full" rows={4} placeholder="Add notes..." value={notes} onChange={(e) => setNotes(e.target.value)} disabled={!canEditLead} />
+            <button type="button" className="btn-primary mt-3 text-sm" onClick={handleSaveNotes} disabled={!canEditLead}>Save Notes</button>
+          </section>
+
+          <section className="glass rounded-2xl p-6">
+            <h3 className="section-label">Team Notes</h3>
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+              <textarea
+                className="glass-input min-h-24 flex-1"
+                placeholder="Add a research note..."
+                value={leadNoteBody}
+                onChange={(event) => setLeadNoteBody(event.target.value)}
+                disabled={!canEditLead}
+              />
+              <button type="button" className="btn-primary self-start text-sm" disabled={noteLoading || !leadNoteBody.trim() || !canEditLead} onClick={handleAddLeadNote}>
+                Add Note
+              </button>
+            </div>
+            <div className="mt-4 space-y-3">
+              {leadNotes.length === 0 ? (
+                <p className="text-sm" style={{ color: "var(--text-tertiary)" }}>No team notes yet.</p>
+              ) : leadNotes.map((note) => (
+                <article key={note.id} className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>{note.author_email ?? "Unknown user"}</span>
+                    <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{formatRelativeTime(note.created_at)}</span>
+                  </div>
+                  <p className="mt-2 whitespace-pre-wrap text-sm" style={{ color: "var(--text-secondary)" }}>{note.body}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+        </section>
+      )}
+
       <ArchiveConfirmDialog
         open={archiveConfirmOpen}
         leadName={lead.name ?? "Unknown Business"}
@@ -2480,18 +2251,6 @@ function ScoreRow({ label, value, accent }: { label: string; value: string | num
     <div className="flex items-center justify-between text-xs">
       <span style={{ color: "var(--text-tertiary)" }}>{label}</span>
       <span style={{ color: accent ? "var(--accent)" : "var(--text-secondary)" }}>{value}</span>
-    </div>
-  );
-}
-
-function HealthBadge({ label, value, good }: { label: string; value: string; good: boolean }) {
-  return (
-    <div className="rounded-lg px-3 py-2 text-center" style={{
-      background: good ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
-      border: `1px solid ${good ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)"}`,
-    }}>
-      <span className="block text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
-      <span className="text-sm font-medium" style={{ color: good ? "#16a34a" : "#dc2626" }}>{value}</span>
     </div>
   );
 }
