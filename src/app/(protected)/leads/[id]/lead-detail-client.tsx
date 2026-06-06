@@ -235,7 +235,15 @@ type AiApplyAction = "update_website" | "exclude_has_website" | "mark_broken_sit
 type WebsiteCorrectionResolution = "official_website_found" | "weak_or_basic_site" | "social_or_directory_only" | "remove_website";
 type WorkUpdateAction = "research_note" | "called" | "left_voicemail" | "follow_up" | "not_interested" | "done";
 type LeadDetailTab = "work" | "overview" | "verification" | "intelligence" | "admin";
-type ActivityTimelineItem = { id: string; kind: "outreach" | "note"; createdAt: string; title: string; body: string; meta?: string };
+type ActivityTimelineItem = {
+  id: string;
+  kind: "outreach" | "note";
+  createdAt: string;
+  title: string;
+  body: string;
+  meta?: string;
+  channel?: string;
+};
 
 const LEAD_DETAIL_TABS: Array<{ key: LeadDetailTab; label: string }> = [
   { key: "work", label: "Work" },
@@ -1040,6 +1048,7 @@ export function LeadDetailClient({
       id: `outreach-${ev.id}`,
       kind: "outreach" as const,
       createdAt: ev.created_at,
+      channel: ev.channel,
       title: `${formatLabel(ev.outcome)}${ev.contact_person_name ? ` with ${ev.contact_person_name}` : ""}${ev.contact_person_role ? ` (${ev.contact_person_role})` : ""}`,
       body: ev.note || "No note",
       meta: [
@@ -1236,18 +1245,6 @@ export function LeadDetailClient({
                 <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Role</span>
                 <input className="glass-input" value={contactPersonRole} onChange={(e) => setContactPersonRole(e.target.value)} disabled={!canEditLead} placeholder="Owner, manager..." />
               </label>
-              <label className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.35)" }}>
-                <input type="checkbox" checked={decisionMakerReached} onChange={(e) => setDecisionMakerReached(e.target.checked)} disabled={!canEditLead} />
-                <span className="text-sm" style={{ color: "var(--text-primary)" }}>Decision maker reached</span>
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Quoted amount</span>
-                <input className="glass-input" type="number" min={0} value={quotedAmount} onChange={(e) => setQuotedAmount(e.target.value)} disabled={!canEditLead} placeholder="0" />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Close value</span>
-                <input className="glass-input" type="number" min={0} value={closeValue} onChange={(e) => setCloseValue(e.target.value)} disabled={!canEditLead} placeholder="0" />
-              </label>
               <label className="flex flex-col gap-1">
                 <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Follow-up date</span>
                 <input className="glass-input" type="date" value={followUpAt} onChange={(e) => setFollowUpAt(e.target.value)} disabled={!canEditLead} />
@@ -1256,15 +1253,34 @@ export function LeadDetailClient({
                 <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Next step</span>
                 <input className="glass-input" value={nextStep} onChange={(e) => setNextStep(e.target.value)} disabled={!canEditLead} placeholder="What should happen next?" />
               </label>
-              <label className="flex flex-col gap-1 md:col-span-2">
-                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Objection</span>
-                <input className="glass-input" value={objectionReason} onChange={(e) => setObjectionReason(e.target.value)} disabled={!canEditLead} placeholder="Price, timing, not interested..." />
-              </label>
               <label className="flex flex-col gap-1 md:col-span-2 lg:col-span-4">
                 <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Note</span>
                 <textarea className="glass-input w-full" rows={3} value={eventNote} onChange={(e) => setEventNote(e.target.value)} disabled={!canEditLead} placeholder="What happened?" />
               </label>
             </div>
+            <details className="mt-4 rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.42)" }}>
+              <summary className="cursor-pointer text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+                Deal details and objections
+              </summary>
+              <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+                <label className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.35)" }}>
+                  <input type="checkbox" checked={decisionMakerReached} onChange={(e) => setDecisionMakerReached(e.target.checked)} disabled={!canEditLead} />
+                  <span className="text-sm" style={{ color: "var(--text-primary)" }}>Decision maker reached</span>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Quoted amount</span>
+                  <input className="glass-input" type="number" min={0} value={quotedAmount} onChange={(e) => setQuotedAmount(e.target.value)} disabled={!canEditLead} placeholder="0" />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Close value</span>
+                  <input className="glass-input" type="number" min={0} value={closeValue} onChange={(e) => setCloseValue(e.target.value)} disabled={!canEditLead} placeholder="0" />
+                </label>
+                <label className="flex flex-col gap-1 lg:col-span-1">
+                  <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Objection</span>
+                  <input className="glass-input" value={objectionReason} onChange={(e) => setObjectionReason(e.target.value)} disabled={!canEditLead} placeholder="Price, timing, not interested..." />
+                </label>
+              </div>
+            </details>
           </section>
 
           <section className="glass rounded-2xl p-6">
@@ -1275,7 +1291,9 @@ export function LeadDetailClient({
               <div className="mt-3 space-y-3">
                 {activityTimeline.map((item) => (
                   <article key={item.id} className="flex items-start gap-3 rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-                    <span style={item.kind === "outreach" ? channelBadgeStyle("call") : channelBadgeStyle("other")}>{item.kind}</span>
+                    <span style={item.kind === "outreach" ? channelBadgeStyle(item.channel ?? "other") : channelBadgeStyle("other")}>
+                      {item.kind === "outreach" ? item.channel === "walkin" ? "in person" : item.channel ?? "outreach" : "note"}
+                    </span>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{item.title}</p>
                       <p className="mt-1 whitespace-pre-wrap text-sm" style={{ color: "var(--text-primary)" }}>{item.body}</p>

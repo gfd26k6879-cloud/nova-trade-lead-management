@@ -46,6 +46,10 @@ function renderLead(
     email: "admin@example.com",
     role: "admin",
   },
+  related: {
+    events?: Array<Record<string, unknown>>;
+    leadNotes?: Array<Record<string, unknown>>;
+  } = {},
 ) {
   const lead = {
     id: "lead-1",
@@ -132,9 +136,9 @@ function renderLead(
   return renderToStaticMarkup(
     <LeadDetailClient
       lead={lead as never}
-      initialEvents={[]}
+      initialEvents={(related.events ?? []) as never}
       initialAdminRequests={[]}
-      initialLeadNotes={[]}
+      initialLeadNotes={(related.leadNotes ?? []) as never}
       initialDemo={null}
       initialAiVerification={null}
       initialAiArtifacts={[]}
@@ -155,6 +159,37 @@ describe("LeadDetailClient archive UX", () => {
     expect(html).toContain("AI confidence");
     expect(html).toContain("Rating / reviews");
     expect(html).toContain("Recent activity");
+  });
+
+  it("labels recent outreach activity with the actual channel", () => {
+    const html = renderLead(
+      {},
+      { userId: "admin-1", email: "admin@example.com", role: "admin" },
+      {
+        events: [
+          {
+            id: "event-1",
+            lead_id: "lead-1",
+            channel: "text",
+            actor_email: "admin@example.com",
+            contact_person_name: "Jamie",
+            contact_person_role: "Owner",
+            decision_maker_reached: true,
+            outcome: "follow_up_needed",
+            objection_reason: null,
+            quoted_amount: 0,
+            close_value: 0,
+            follow_up_at: null,
+            next_step: "Follow up tomorrow",
+            note: "Sent preview link.",
+            created_at: "2026-06-02T01:00:00.000Z",
+          },
+        ],
+      },
+    );
+
+    expect(html).toContain(">text</span>");
+    expect(html).not.toContain(">outreach</span>");
   });
 
   it("keeps secondary capabilities discoverable without rendering admin controls by default", () => {
