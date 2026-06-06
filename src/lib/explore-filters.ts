@@ -19,6 +19,37 @@ export interface ExploreFilterChip {
   removeParams: Record<string, string | null>;
 }
 
+export type ExploreSuggestionKind = "view" | "quick" | "filter" | "area" | "presentation" | "example" | "builder";
+
+export interface ExploreSearchSuggestion {
+  id: string;
+  kind: ExploreSuggestionKind;
+  label: string;
+  description: string;
+  command: string;
+  updates: Record<string, string | null>;
+  aliases?: string[];
+}
+
+export interface ExploreSuggestionGroup {
+  title: string;
+  suggestions: ExploreSearchSuggestion[];
+}
+
+export interface ExploreSearchToken extends ExploreFilterChip {
+  locked?: boolean;
+}
+
+export interface ExploreSuggestionContext {
+  mode: ExploreMode;
+  query?: string;
+  includeAdmin?: boolean;
+  showColoradoAreas?: boolean;
+  businessTypes?: Array<{ id: string; label: string; active?: number; total?: number }>;
+}
+
+export const EXPLORE_PRESENTATION_KEYS = ["sortBy", "view", "map"] as const;
+
 export const GEO_PRESETS: Record<string, Pick<LeadFilters, "minLat" | "maxLat" | "minLng" | "maxLng">> = {
   denver: { minLat: 39.58, maxLat: 39.91, minLng: -105.12, maxLng: -104.72 },
   north_metro: { minLat: 39.85, maxLat: 40.2, minLng: -105.2, maxLng: -104.72 },
@@ -26,6 +57,66 @@ export const GEO_PRESETS: Record<string, Pick<LeadFilters, "minLat" | "maxLat" |
   boulder: { minLat: 39.94, maxLat: 40.1, minLng: -105.34, maxLng: -105.16 },
   colorado_springs: { minLat: 38.72, maxLat: 39.03, minLng: -104.93, maxLng: -104.62 },
 };
+
+export const EXPLORE_MODE_OPTIONS: Array<{ value: ExploreMode; label: string; description: string }> = [
+  { value: "work_ready", label: "Work-ready", description: "Active sales opportunities." },
+  { value: "directory", label: "Directory", description: "All records, including disqualified or archived inventory." },
+  { value: "my_leads", label: "My leads", description: "Leads assigned to you." },
+  { value: "unclaimed", label: "Unclaimed", description: "Open leads nobody owns yet." },
+  { value: "needs_review", label: "Needs review", description: "Manual or AI review candidates." },
+];
+
+export const EXPLORE_QUICK_FILTERS: Array<{
+  label: string;
+  description: string;
+  command: string;
+  updates: Record<string, string | null>;
+  aliases?: string[];
+}> = [
+  {
+    label: "Best no-site",
+    description: "No website, active opportunities, sorted by website need.",
+    command: "website:none sort:website_need",
+    updates: { mode: "work_ready", websiteStatus: "none", assigned: "any", sortBy: "website_need", page: null },
+    aliases: ["no website", "best website gap", "work ready no site"],
+  },
+  {
+    label: "Unclaimed",
+    description: "Open leads that nobody owns yet.",
+    command: "owner:unclaimed",
+    updates: { mode: "unclaimed", assigned: "unassigned", sortBy: "opportunity", page: null },
+    aliases: ["unassigned", "available leads"],
+  },
+  {
+    label: "Needs AI",
+    description: "Leads still waiting on AI verification.",
+    command: "quality:needs_ai owner:any",
+    updates: { mode: "needs_review", qualityBucket: "needs_ai_verify", aiVerificationStatus: "not_checked", assigned: "any", sortBy: "opportunity", page: null },
+    aliases: ["ai review", "needs verification"],
+  },
+  {
+    label: "Broken/basic site",
+    description: "AI/manual quality marked as broken-site opportunity.",
+    command: "website:broken",
+    updates: { mode: "work_ready", qualityBucket: "broken_site_opportunity", assigned: "any", sortBy: "website_need", page: null },
+    aliases: ["broken site", "basic site", "website opportunity"],
+  },
+  {
+    label: "My follow-ups",
+    description: "Your contacted leads, sorted by newest.",
+    command: "owner:me status:contacted sort:newest",
+    updates: { mode: "my_leads", assigned: "me", status: "contacted", sortBy: "created_at", page: null },
+    aliases: ["follow ups", "mine contacted"],
+  },
+];
+
+export const EXPLORE_GEO_PRESET_OPTIONS = [
+  { value: "denver", label: "Denver" },
+  { value: "north_metro", label: "North metro" },
+  { value: "south_metro", label: "South metro" },
+  { value: "boulder", label: "Boulder" },
+  { value: "colorado_springs", label: "Colorado Springs" },
+];
 
 export interface ExploreParams {
   search?: string;
@@ -118,10 +209,10 @@ export function parseExploreCommand(input: string): ExploreCommandResult {
   const tokens = input.trim().split(/\s+/).filter(Boolean);
 
   for (const token of tokens) {
-    const comparison = token.match(/^(reviews|rating|score)>(\d+(?:\.\d+)?)$/i);
+    const comparison = token.match(/^(reviews|rating|score)(>=|>)(\d+(?:\.\d+)?)$/i);
     if (comparison) {
       const key = comparison[1].toLowerCase();
-      const value = comparison[2];
+      const value = comparison[3];
       const param = key === "reviews" ? "minReviews" : key === "rating" ? "minRating" : "minScore";
       filters[param] = value;
       chips.push({ key: param, label: minLabel(param), value, removeParams: { [param]: null } });
@@ -183,9 +274,160 @@ export function buildExploreFilterChips(params: ExploreParams & Record<string, s
   return chips;
 }
 
+export function buildExploreSearchTokens(mode: ExploreMode, chips: ExploreFilterChip[]): ExploreSearchToken[] {
+  return [
+    { key: "scope", label: "Scope", value: getExploreModeLabel(mode), removeParams: {}, locked: true },
+    ...chips.filter((chip) => !isExplorePresentationChip(chip)),
+  ];
+}
+
+export function isExplorePresentationChip(chip: Pick<ExploreFilterChip, "key">): boolean {
+  return (EXPLORE_PRESENTATION_KEYS as readonly string[]).includes(chip.key);
+}
+
+export function buildExploreModeUpdates(mode: ExploreMode): Record<string, string | null> {
+  const base = { page: null, assigned: null, qualityBucket: null, aiVerificationStatus: null, status: null };
+  if (mode === "work_ready") return { ...base, mode: null };
+  return { ...base, mode };
+}
+
+export function getExploreModeLabel(mode: ExploreMode): string {
+  return EXPLORE_MODE_OPTIONS.find((option) => option.value === mode)?.label ?? "Work-ready";
+}
+
+export function buildExploreSearchSuggestions(context: ExploreSuggestionContext): ExploreSuggestionGroup[] {
+  const query = (context.query ?? "").trim().toLowerCase();
+  const groups: ExploreSuggestionGroup[] = [
+    {
+      title: "Suggested views",
+      suggestions: EXPLORE_MODE_OPTIONS.map((option) => ({
+        id: `view:${option.value}`,
+        kind: "view",
+        label: option.label,
+        description: option.description,
+        command: `mode:${option.value}`,
+        updates: buildExploreModeUpdates(option.value),
+        aliases: [option.value.replace(/_/g, " "), option.description],
+      })),
+    },
+    {
+      title: "Quick filters",
+      suggestions: EXPLORE_QUICK_FILTERS.map((filter) => ({
+        id: `quick:${filter.label}`,
+        kind: "quick",
+        label: filter.label,
+        description: filter.description,
+        command: filter.command,
+        updates: filter.updates,
+        aliases: filter.aliases,
+      })),
+    },
+    {
+      title: "Common filters",
+      suggestions: [
+        suggestion("filter:website:none", "filter", "Website: No website", "Businesses without a usable website.", "website:none", { websiteStatus: "none", page: null }, ["no site", "nosite"]),
+        suggestion("filter:owner:unclaimed", "filter", "Owner: Unclaimed", "Open leads nobody owns yet.", "owner:unclaimed", { assigned: "unassigned", page: null }, ["unassigned"]),
+        suggestion("filter:owner:me", "filter", "Owner: Mine", "Only leads assigned to you.", "owner:me", { assigned: "me", page: null }, ["my leads", "mine"]),
+        suggestion("filter:quality:needs_ai", "filter", "Quality: Needs AI", "Leads waiting for AI verification.", "quality:needs_ai", { qualityBucket: "needs_ai_verify", aiVerificationStatus: "not_checked", page: null }, ["ai", "needs review"]),
+        suggestion("filter:website:broken", "filter", "Website: Broken/basic", "Broken-site opportunities.", "website:broken", { qualityBucket: "broken_site_opportunity", page: null }, ["basic site", "broken site"]),
+        suggestion("filter:reviews", "filter", "Reviews >= 50", "Businesses with enough review volume to prioritize.", "reviews>=50", { minReviews: "50", page: null }, ["review count"]),
+        suggestion("filter:rating", "filter", "Rating >= 4.2", "Higher-rated businesses.", "rating>=4.2", { minRating: "4.2", page: null }, ["stars"]),
+        suggestion("filter:score", "filter", "Score >= 70", "Higher scored lead candidates.", "score>=70", { minScore: "70", page: null }, ["lead score"]),
+      ],
+    },
+    {
+      title: "Examples",
+      suggestions: [
+        suggestion("example:toronto", "example", "Toronto no-site and unclaimed", "Apply city, website, and owner filters together.", "city:toronto website:none owner:unclaimed", { city: "toronto", websiteStatus: "none", assigned: "unassigned", page: null }, ["canada", "toronto"]),
+        suggestion("example:high_reviews", "example", "High-review, high-rating leads", "Prioritize businesses with stronger public demand.", "reviews>=50 rating>=4.2", { minReviews: "50", minRating: "4.2", page: null }, ["reviews", "rating"]),
+        suggestion("example:followups", "example", "My contacted follow-ups", "Find your contacted leads sorted by newest.", "owner:me status:contacted sort:newest", { assigned: "me", status: "contacted", sortBy: "created_at", page: null }, ["mine", "follow ups"]),
+      ],
+    },
+  ];
+
+  if (context.showColoradoAreas !== false) {
+    groups.splice(3, 0, {
+      title: "Areas",
+      suggestions: [
+        ...EXPLORE_GEO_PRESET_OPTIONS.map((preset) => suggestion(
+          `area:${preset.value}`,
+          "area",
+          `Area: ${preset.label}`,
+          "Apply a saved Colorado map boundary.",
+          `area:${preset.value}`,
+          { geo: preset.value, minLat: null, maxLat: null, minLng: null, maxLng: null, page: null },
+          [preset.value.replace(/_/g, " ")],
+        )),
+        suggestion("area:clear", "area", "Clear area", "Remove saved area boundaries.", "clear area", { geo: null, minLat: null, maxLat: null, minLng: null, maxLng: null, page: null }, ["remove area"]),
+      ],
+    });
+  }
+
+  const businessTypes = context.businessTypes ?? [];
+  if (businessTypes.length > 0) {
+    groups.splice(3, 0, {
+      title: "Business types",
+      suggestions: businessTypes.slice(0, 10).map((type) => suggestion(
+        `type:${type.id}`,
+        "filter",
+        `Type: ${type.label}`,
+        type.active != null ? `${type.active} active leads` : "Filter by business type.",
+        `type:${type.id}`,
+        { businessType: type.id, page: null },
+        [type.id.replace(/_/g, " ")],
+      )),
+    });
+  }
+
+  groups.push({
+    title: "Presentation",
+    suggestions: [
+      suggestion("presentation:sort:opportunity", "presentation", "Sort: Best opportunity", "Rank by no-site opportunity and quality.", "sort:opportunity", { sortBy: "opportunity", page: null }, ["best"]),
+      suggestion("presentation:sort:website_need", "presentation", "Sort: Website need", "Prioritize no-site and broken-site opportunities.", "sort:website_need", { sortBy: "website_need", page: null }, ["website sort"]),
+      suggestion("presentation:view:cards", "presentation", "View: Cards", "Use scannable lead cards.", "view:cards", { view: "cards", page: null }, ["cards"]),
+      suggestion("presentation:view:table", "presentation", "View: Table", "Use the dense table view.", "view:table", { view: "table", page: null }, ["table"]),
+      suggestion("presentation:map:open", "presentation", "Map: Open", "Open the lazy-loaded map drawer.", "map:on", { map: "open", page: null }, ["show map"]),
+    ],
+  });
+
+  if (context.includeAdmin) {
+    groups.push({
+      title: "Admin filters",
+      suggestions: [
+        suggestion("admin:archive:all", "filter", "Inventory: Active + archived", "Include archived records.", "archive:all", { archived: "all", page: null }, ["archived"]),
+        suggestion("admin:excluded", "filter", "Include excluded", "Show excluded and disqualified inventory.", "include excluded", { includeExcluded: "true", page: null }, ["disqualified"]),
+      ],
+    });
+  }
+
+  return groups
+    .map((group) => ({ ...group, suggestions: group.suggestions.filter((item) => matchesSuggestion(item, query)) }))
+    .filter((group) => group.suggestions.length > 0);
+}
+
 export function parseMapPointLimit(value: string | null | undefined): number {
   const requested = Math.floor(parseNumber(value ?? undefined) ?? DEFAULT_MAP_POINT_LIMIT);
   return Math.max(1, Math.min(MAX_MAP_POINT_LIMIT, requested));
+}
+
+function suggestion(
+  id: string,
+  kind: ExploreSuggestionKind,
+  label: string,
+  description: string,
+  command: string,
+  updates: Record<string, string | null>,
+  aliases?: string[],
+): ExploreSearchSuggestion {
+  return { id, kind, label, description, command, updates, aliases };
+}
+
+function matchesSuggestion(item: ExploreSearchSuggestion, query: string): boolean {
+  if (!query) return true;
+  const searchable = [item.label, item.description, item.command, ...(item.aliases ?? [])].join(" ").toLowerCase();
+  if (searchable.includes(query)) return true;
+  const firstWord = item.label.split(/[\s:]+/)[0]?.toLowerCase() ?? "";
+  return query.length >= 3 && editDistance(query, firstWord) <= 2;
 }
 
 function normalizeExploreMode(value: string | undefined): ExploreMode {
