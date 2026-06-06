@@ -4596,8 +4596,8 @@ function buildLeadFilterWhere(filters: LeadFilters): { where: string; params: un
   }
 
   if (filters.search) {
-    conditions.push("(l.name LIKE ? OR l.phone LIKE ? OR l.address LIKE ? OR l.notes LIKE ?)");
-    const term = `%${filters.search}%`;
+    conditions.push("(LOWER(COALESCE(l.name, '')) LIKE ? OR LOWER(COALESCE(l.phone, '')) LIKE ? OR LOWER(COALESCE(l.address, '')) LIKE ? OR LOWER(COALESCE(l.notes, '')) LIKE ?)");
+    const term = `%${filters.search.toLowerCase()}%`;
     params.push(term, term, term, term);
   }
   if (filters.websiteStatus) {

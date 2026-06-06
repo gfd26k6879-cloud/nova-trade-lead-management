@@ -24,6 +24,20 @@ export function constrainLeadFiltersForSession(session: LeadAccessSession, filte
   };
 }
 
+export function constrainExploreFiltersForSession(session: LeadAccessSession, filters: LeadFilters): LeadFilters {
+  if (session.role === "admin") return filters;
+
+  const assigned = filters.assigned === "me" || filters.assigned === "unassigned" ? filters.assigned : undefined;
+
+  return {
+    ...filters,
+    assigned,
+    assignedToUserId: assigned === "me" ? session.userId : undefined,
+    includeExcluded: false,
+    visibleToUserId: session.userId,
+  };
+}
+
 export function shouldRedirectResearcherLeadList(session: LeadAccessSession, params: LeadListRouteParams): boolean {
   if (session.role === "admin") return false;
   return params.view === "kanban" || params.assigned !== "me" || Boolean(params.owner);
