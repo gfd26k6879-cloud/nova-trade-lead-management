@@ -4596,9 +4596,9 @@ function buildLeadFilterWhere(filters: LeadFilters): { where: string; params: un
   }
 
   if (filters.search) {
-    conditions.push("(l.name LIKE ? OR l.phone LIKE ? OR l.address LIKE ?)");
+    conditions.push("(l.name LIKE ? OR l.phone LIKE ? OR l.address LIKE ? OR l.notes LIKE ?)");
     const term = `%${filters.search}%`;
-    params.push(term, term, term);
+    params.push(term, term, term, term);
   }
   if (filters.websiteStatus) {
     conditions.push("l.website_status = ?");

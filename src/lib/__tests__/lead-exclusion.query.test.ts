@@ -221,6 +221,17 @@ describe("lead exclusion query behavior", () => {
     expect((await getLeads({ pageSize: 10 })).leads.map((lead) => lead.id)).toContain(archivedId);
   });
 
+  it("matches Explore free-text search against internal lead notes", async () => {
+    const pilotId = insertLead(testDb, 410, { score: 12, status: "new", websiteStatus: "none" });
+    const otherId = insertLead(testDb, 411, { score: 13, status: "new", websiteStatus: "none" });
+
+    testDb.prepare("UPDATE leads SET notes = ? WHERE id = ?").run("[tag:pilot] Saturday cold-call pilot", pilotId);
+
+    const result = await getLeads({ search: "pilot", pageSize: 10 });
+    expect(result.leads.map((lead) => lead.id)).toContain(pilotId);
+    expect(result.leads.map((lead) => lead.id)).not.toContain(otherId);
+  });
+
   it("creates manual leads with safe defaults", async () => {
     const lead = await createManualLead({
       name: "Manual Candidate",
