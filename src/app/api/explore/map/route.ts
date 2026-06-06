@@ -9,7 +9,7 @@ import {
 } from "@/lib/db/queries";
 import { buildExploreQueryState, parseMapPointLimit, type ExploreParams } from "@/lib/explore-filters";
 import { applyNoStoreHeaders } from "@/lib/http-cache";
-import { constrainLeadFiltersForSession } from "@/lib/lead-access";
+import { constrainExploreFiltersForSession } from "@/lib/lead-access";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +25,7 @@ export async function GET(request: Request) {
     const session = await requirePermission("view:workspace");
     await ensureDbReady();
     const { filters: rawFilters } = buildExploreQueryState(params, session.userId);
-    const filters = constrainLeadFiltersForSession(session, rawFilters);
+    const filters = constrainExploreFiltersForSession(session, rawFilters);
 
     const [mapResult, zipCoverage, googleMapsApiKey] = await withDbStatementTimeout(8_000, async () => {
       const pointsResult = await getLeadMapPoints(filters, limit, { includeTotal, fastOrder: true });

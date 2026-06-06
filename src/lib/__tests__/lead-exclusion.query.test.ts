@@ -227,7 +227,7 @@ describe("lead exclusion query behavior", () => {
 
     testDb.prepare("UPDATE leads SET notes = ? WHERE id = ?").run("[tag:pilot] Saturday cold-call pilot", pilotId);
 
-    const result = await getLeads({ search: "pilot", pageSize: 10 });
+    const result = await getLeads({ search: "Pilot", pageSize: 10 });
     expect(result.leads.map((lead) => lead.id)).toContain(pilotId);
     expect(result.leads.map((lead) => lead.id)).not.toContain(otherId);
   });

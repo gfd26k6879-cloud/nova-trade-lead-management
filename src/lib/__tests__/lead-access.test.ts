@@ -10,6 +10,7 @@ vi.mock("@/lib/db/queries", () => ({
 
 import {
   canReadLeadForSession,
+  constrainExploreFiltersForSession,
   constrainLeadFiltersForSession,
   shouldRedirectResearcherLeadList,
 } from "@/lib/lead-access";
@@ -38,6 +39,37 @@ describe("lead access boundaries", () => {
   it("does not rewrite admin lead filters", () => {
     const filters = { assignedToUserId: "researcher-2", includeExcluded: true };
     expect(constrainLeadFiltersForSession(admin, filters)).toBe(filters);
+  });
+
+  it("scopes researcher Explore filters to assigned markets without forcing owned leads", () => {
+    const filters = constrainExploreFiltersForSession(researcher, {
+      assigned: "unassigned",
+      assignedToUserId: "other-user",
+      includeExcluded: true,
+      search: "pilot",
+    });
+
+    expect(filters).toMatchObject({
+      assigned: "unassigned",
+      includeExcluded: false,
+      search: "pilot",
+      visibleToUserId: "researcher-1",
+    });
+    expect(filters.assignedToUserId).toBeUndefined();
+  });
+
+  it("keeps researcher Explore owner:me scoped to the current user", () => {
+    const filters = constrainExploreFiltersForSession(researcher, {
+      assigned: "me",
+      assignedToUserId: "other-user",
+      search: "pilot",
+    });
+
+    expect(filters).toMatchObject({
+      assigned: "me",
+      assignedToUserId: "researcher-1",
+      visibleToUserId: "researcher-1",
+    });
   });
 
   it("redirects researchers away from all-leads, kanban, and arbitrary owner URLs", () => {

@@ -4,7 +4,7 @@ import { requirePermission } from "@/lib/auth";
 import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
 import { ensureDbReady, getBusinessTypeCounts, getLeads, getScoreBandThresholds } from "@/lib/db/queries";
 import { DEFAULT_MAP_POINT_LIMIT, buildExploreQueryState, type ExploreParams } from "@/lib/explore-filters";
-import { constrainLeadFiltersForSession } from "@/lib/lead-access";
+import { constrainExploreFiltersForSession } from "@/lib/lead-access";
 import { startRouteTiming } from "@/lib/route-timing";
 import { ExploreClient } from "./explore-client";
 
@@ -19,7 +19,7 @@ const logRouteTiming = startRouteTiming("/explore");
   const session = await requirePermission("view:workspace");
   const params = await searchParams;
   const queryState = buildExploreQueryState(params, session.userId);
-  const filters = constrainLeadFiltersForSession(session, queryState.filters);
+  const filters = constrainExploreFiltersForSession(session, queryState.filters);
   const { view, mode } = queryState;
   let loaded: {
     scoreThresholds: Awaited<ReturnType<typeof getScoreBandThresholds>>;
