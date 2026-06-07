@@ -15,8 +15,10 @@ const dbIndexMocks = vi.hoisted(() => ({
 const queryMocks = vi.hoisted(() => ({
   ensureDbReady: vi.fn(),
   getBusinessTypeCounts: vi.fn(),
+  getLocationCells: vi.fn(),
   getQualityLeads: vi.fn(),
   getQualitySummary: vi.fn(),
+  listLocationMarkets: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => authMocks);
@@ -53,15 +55,27 @@ describe("QualityPage", () => {
       brokenSiteOpportunities: 0,
       estimatedPipelineValue: 0,
       needsAiVerify: 0,
+      needsManualReview: 0,
+      removedBecauseWebsiteFound: 0,
+      averageQualityScore: 0,
     });
     queryMocks.getQualityLeads.mockResolvedValue({ leads: [], total: 0 });
     queryMocks.getBusinessTypeCounts.mockResolvedValue([]);
+    queryMocks.listLocationMarkets.mockResolvedValue([]);
+    queryMocks.getLocationCells.mockResolvedValue([]);
     dbIndexMocks.withDbStatementTimeout.mockImplementation((_timeoutMs: number, fn: () => Promise<unknown>) => fn());
 
-    const node = await QualityPage({ searchParams: Promise.resolve({}) });
+    const node = await QualityPage({ searchParams: Promise.resolve({ countryCode: "CA", marketId: "market-london-ca", locationCellId: "cell-ca-london-on-n6h" }) });
     const text = renderToStaticMarkup(node as React.ReactElement);
 
     expect(text).toContain("Quality loaded");
+    expect(queryMocks.getQualitySummary).toHaveBeenCalledWith(expect.objectContaining({
+      countryCode: "CA",
+      marketId: "market-london-ca",
+      locationCellId: "cell-ca-london-on-n6h",
+      denverOnly: false,
+    }));
+    expect(queryMocks.getLocationCells).toHaveBeenCalledWith("market-london-ca");
     expect(dbIndexMocks.withDbStatementTimeout).toHaveBeenCalledWith(10_000, expect.any(Function));
   });
 });

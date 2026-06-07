@@ -1111,6 +1111,12 @@ export interface LeadFactsInput {
 
 export interface QualityLead extends QueueLead {
   city: string | null;
+  market_id: string | null;
+  location_cell_id: string | null;
+  country_code: CountryCode | null;
+  locality: string | null;
+  postal_code: string | null;
+  enrichment_status: string;
   quality_reason: string | null;
   next_best_action: string | null;
 }
@@ -1187,6 +1193,12 @@ export interface QualityFilters {
   recommendedOffer?: RecommendedOffer | string;
   phoneVerificationStatus?: PhoneVerificationStatus | string;
   aiVerificationStatus?: AiVerificationStatus | string;
+  enrichmentStatus?: string;
+  countryCode?: CountryCode | string;
+  marketId?: string;
+  locationCellId?: string;
+  city?: string;
+  zip?: string;
   denverOnly?: boolean;
   page?: number;
   pageSize?: number;
@@ -6473,14 +6485,83 @@ function buildQualityWhere(filters: QualityFilters = {}): { where: string; param
     conditions.push("l.ai_verification_status = ?");
     params.push(filters.aiVerificationStatus);
   }
+  if (filters.enrichmentStatus) {
+    conditions.push("l.enrichment_status = ?");
+    params.push(filters.enrichmentStatus);
+  }
+  appendQualityLocationConditions(conditions, params, filters);
   if (filters.denverOnly) {
-    conditions.push("(l.address LIKE '%Denver%' OR l.address LIKE '%CO 802%')");
+    conditions.push("(l.market_id = 'market-colorado' OR l.address LIKE '%Denver%' OR l.address LIKE '%CO 802%')");
   }
 
   return { where: `WHERE ${conditions.join(" AND ")}`, params };
 }
 
-export async function getQualitySummary(filters: Pick<QualityFilters, "denverOnly" | "businessType"> = {}): Promise<QualitySummary>{
+function appendQualityLocationConditions(conditions: string[], params: unknown[], filters: Pick<QualityFilters, "countryCode" | "marketId" | "locationCellId" | "city" | "zip">): void {
+  if (filters.countryCode) {
+    conditions.push("l.country_code = ?");
+    params.push(normalizeCountryCode(filters.countryCode));
+  }
+  if (filters.marketId) {
+    conditions.push("l.market_id = ?");
+    params.push(filters.marketId);
+  }
+  if (filters.locationCellId) {
+    conditions.push("l.location_cell_id = ?");
+    params.push(filters.locationCellId);
+  }
+  if (filters.city) {
+    conditions.push("(l.locality LIKE ? OR l.address LIKE ?)");
+    const term = `%${filters.city}%`;
+    params.push(term, term);
+  }
+  if (filters.zip) {
+    conditions.push("(UPPER(l.postal_code) LIKE ? OR UPPER(l.address) LIKE ?)");
+    const term = String(filters.zip).trim().toUpperCase();
+    params.push(`${term}%`, `%${term}%`);
+  }
+}
+
+function buildQualityRemovedWebsiteWhere(filters: QualityFilters = {}): { where: string; params: unknown[] } {
+  const conditions = [
+    "l.ai_verification_status = 'site_found'",
+    "l.ai_website_viability_status = 'usable'",
+    "COALESCE(l.ai_found_website_url, '') != ''",
+    "COALESCE(l.is_excluded, 0) = 0",
+    "l.archived_at IS NULL",
+  ];
+  const params: unknown[] = [];
+
+  if (filters.search) {
+    conditions.push("(l.name LIKE ? OR l.phone LIKE ? OR l.address LIKE ?)");
+    const term = `%${filters.search}%`;
+    params.push(term, term, term);
+  }
+  if (filters.businessType) {
+    conditions.push("l.business_type = ?");
+    params.push(filters.businessType);
+  }
+  if (filters.recommendedOffer) {
+    conditions.push("l.recommended_offer = ?");
+    params.push(filters.recommendedOffer);
+  }
+  if (filters.phoneVerificationStatus) {
+    conditions.push("l.phone_verification_status = ?");
+    params.push(filters.phoneVerificationStatus);
+  }
+  if (filters.enrichmentStatus) {
+    conditions.push("l.enrichment_status = ?");
+    params.push(filters.enrichmentStatus);
+  }
+  appendQualityLocationConditions(conditions, params, filters);
+  if (filters.denverOnly) {
+    conditions.push("(l.market_id = 'market-colorado' OR l.address LIKE '%Denver%' OR l.address LIKE '%CO 802%')");
+  }
+
+  return { where: `WHERE ${conditions.join(" AND ")}`, params };
+}
+
+export async function getQualitySummary(filters: QualityFilters = {}): Promise<QualitySummary>{
   const db = await getDb();
   const { where, params } = buildQualityWhere(filters);
   const row = await db.prepare(
@@ -6494,13 +6575,12 @@ export async function getQualitySummary(filters: Pick<QualityFilters, "denverOnl
        COALESCE(SUM(CASE WHEN l.quality_bucket IN ('ready_to_call','broken_site_opportunity') THEN l.estimated_deal_value ELSE 0 END), 0) as estimated_pipeline_value
      FROM leads l ${where}`
   ).get(...params) as Record<string, number>;
+  const removedWebsiteWhere = buildQualityRemovedWebsiteWhere(filters);
   const removedRow = await db.prepare(
     `SELECT COUNT(*) as count
      FROM leads l
-     WHERE l.ai_verification_status = 'site_found'
-       AND l.ai_website_viability_status = 'usable'
-       AND COALESCE(l.ai_found_website_url, '') != ''`
-  ).get() as { count: number };
+     ${removedWebsiteWhere.where}`
+  ).get(...removedWebsiteWhere.params) as { count: number };
 
   return {
     readyToCall: Number(row.ready_to_call) || 0,
@@ -6528,6 +6608,13 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
        l.name,
        l.address,
        l.phone,
+       l.market_id,
+       l.location_cell_id,
+       l.country_code,
+       l.admin_area1,
+       l.admin_area2,
+       l.locality,
+       l.postal_code,
        l.website_uri,
        l.website_status,
        l.categories,
@@ -6613,6 +6700,16 @@ export async function getQualityAiVerificationCandidates(input: {
   businessType?: BusinessType | string | null;
   denverOnly?: boolean;
   ids?: string[];
+  recommendedOffer?: RecommendedOffer | string | null;
+  phoneVerificationStatus?: PhoneVerificationStatus | string | null;
+  aiVerificationStatus?: AiVerificationStatus | string | null;
+  enrichmentStatus?: string | null;
+  qualityBucket?: QualityBucket | string | null;
+  countryCode?: CountryCode | string | null;
+  marketId?: string | null;
+  locationCellId?: string | null;
+  city?: string | null;
+  zip?: string | null;
 }): Promise<Lead[]>{
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(100, Math.floor(input.limit)));
@@ -6630,8 +6727,35 @@ export async function getQualityAiVerificationCandidates(input: {
     conditions.push("l.business_type = ?");
     params.push(input.businessType);
   }
+  if (input.recommendedOffer) {
+    conditions.push("l.recommended_offer = ?");
+    params.push(input.recommendedOffer);
+  }
+  if (input.qualityBucket) {
+    conditions.push("l.quality_bucket = ?");
+    params.push(input.qualityBucket);
+  }
+  if (input.phoneVerificationStatus) {
+    conditions.push("l.phone_verification_status = ?");
+    params.push(input.phoneVerificationStatus);
+  }
+  if (input.aiVerificationStatus) {
+    conditions.push("l.ai_verification_status = ?");
+    params.push(input.aiVerificationStatus);
+  }
+  if (input.enrichmentStatus) {
+    conditions.push("l.enrichment_status = ?");
+    params.push(input.enrichmentStatus);
+  }
+  appendQualityLocationConditions(conditions, params, {
+    countryCode: input.countryCode ?? undefined,
+    marketId: input.marketId ?? undefined,
+    locationCellId: input.locationCellId ?? undefined,
+    city: input.city ?? undefined,
+    zip: input.zip ?? undefined,
+  });
   if (input.denverOnly) {
-    conditions.push("(l.address LIKE '%Denver%' OR l.address LIKE '%CO 802%')");
+    conditions.push("(l.market_id = 'market-colorado' OR l.address LIKE '%Denver%' OR l.address LIKE '%CO 802%')");
   }
   if (input.ids && input.ids.length > 0) {
     conditions.push(`l.id IN (${input.ids.map(() => "?").join(",")})`);
@@ -6648,6 +6772,53 @@ export async function getQualityAiVerificationCandidates(input: {
      LIMIT ?`
   ).all(...params, safeLimit) as Array<Record<string, unknown>>;
   return rows.map(parseLeadRow);
+}
+
+export async function getQualityActionCandidateIds(filters: QualityFilters & { limit: number; ids?: string[] }): Promise<string[]>{
+  const db = await getDb();
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(filters.limit)));
+  const { where, params } = buildQualityWhere(filters);
+  const idConditions: string[] = [];
+  const idParams: unknown[] = [];
+  if (filters.ids && filters.ids.length > 0) {
+    idConditions.push(`l.id IN (${filters.ids.map(() => "?").join(",")})`);
+    idParams.push(...filters.ids);
+  }
+  const rows = await db.prepare(
+    `SELECT l.id
+     FROM leads l
+     ${where}${idConditions.length > 0 ? ` AND ${idConditions.join(" AND ")}` : ""}
+     ORDER BY
+       CASE l.quality_bucket
+         WHEN 'ready_to_call' THEN 1
+         WHEN 'broken_site_opportunity' THEN 2
+         WHEN 'needs_ai_verify' THEN 3
+         WHEN 'needs_manual_review' THEN 4
+         ELSE 5
+       END ASC,
+       l.lead_quality_score DESC,
+       l.score DESC,
+       COALESCE(l.ai_checked_at, l.discovered_at) DESC
+     LIMIT ?`
+  ).all(...params, ...idParams, safeLimit) as Array<{ id: string }>;
+  return rows.map((row) => row.id);
+}
+
+export async function queueLeadsForEnrichment(ids: string[]): Promise<number>{
+  const db = await getDb();
+  const uniqueIds = Array.from(new Set(ids)).filter(Boolean).slice(0, 100);
+  if (uniqueIds.length === 0) return 0;
+  const placeholders = uniqueIds.map(() => "?").join(",");
+  const result = await db.prepare(
+    `UPDATE leads
+     SET enrichment_status = 'pending',
+         enriched_at = NULL,
+         updated_at = ?
+     WHERE id IN (${placeholders})
+       AND COALESCE(is_excluded, 0) = 0
+       AND archived_at IS NULL`
+  ).run(nowISO(), ...uniqueIds);
+  return Number(result.changes ?? 0);
 }
 
 function parseLeadRow(row: Record<string, unknown>): Lead {

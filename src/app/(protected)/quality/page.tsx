@@ -5,6 +5,8 @@ import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout }
 import {
   ensureDbReady,
   getBusinessTypeCounts,
+  getLocationCells,
+  listLocationMarkets,
   getQualityLeads,
   getQualitySummary,
   type QualityFilters,
@@ -23,6 +25,12 @@ interface Props {
     recommendedOffer?: string;
     phoneVerificationStatus?: string;
     aiVerificationStatus?: string;
+    enrichmentStatus?: string;
+    countryCode?: string;
+    marketId?: string;
+    locationCellId?: string;
+    city?: string;
+    zip?: string;
     denverOnly?: string;
     page?: string;
   }>;
@@ -39,7 +47,13 @@ export default async function QualityPage({ searchParams }: Props) {
     recommendedOffer: params.recommendedOffer,
     phoneVerificationStatus: params.phoneVerificationStatus,
     aiVerificationStatus: params.aiVerificationStatus,
-    denverOnly: params.denverOnly !== "0",
+    enrichmentStatus: params.enrichmentStatus,
+    countryCode: params.countryCode,
+    marketId: params.marketId,
+    locationCellId: params.locationCellId,
+    city: params.city,
+    zip: params.zip,
+    denverOnly: params.denverOnly === "1",
     page: params.page ? parseInt(params.page, 10) : 1,
     pageSize: 50,
   };
@@ -61,6 +75,8 @@ export default async function QualityPage({ searchParams }: Props) {
       total={loaded.result.total}
       filters={filters}
       businessTypeCounts={loaded.businessTypeCounts}
+      locationMarkets={loaded.locationMarkets}
+      locationCells={loaded.locationCells}
     />
   );
 }
@@ -69,11 +85,21 @@ function loadQualityData(filters: QualityFilters) {
   return withDbStatementTimeout(10_000, async () => {
       await ensureDbReady();
       const [loadedSummary, loadedResult, loadedBusinessTypeCounts] = await Promise.all([
-        getQualitySummary({ denverOnly: filters.denverOnly, businessType: filters.businessType }),
+        getQualitySummary(filters),
         getQualityLeads(filters),
         getBusinessTypeCounts(),
       ]);
-      return { summary: loadedSummary, result: loadedResult, businessTypeCounts: loadedBusinessTypeCounts };
+      const [loadedLocationMarkets, loadedLocationCells] = await Promise.all([
+        listLocationMarkets(),
+        filters.marketId ? getLocationCells(filters.marketId) : Promise.resolve([]),
+      ]);
+      return {
+        summary: loadedSummary,
+        result: loadedResult,
+        businessTypeCounts: loadedBusinessTypeCounts,
+        locationMarkets: loadedLocationMarkets,
+        locationCells: loadedLocationCells,
+      };
   });
 }
 

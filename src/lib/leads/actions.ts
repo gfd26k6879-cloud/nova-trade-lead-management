@@ -33,6 +33,7 @@ import {
   getLatestAiVerification,
   getAiVerificationById,
   getAiVerificationCandidates,
+  getQualityActionCandidateIds,
   getQualityAiVerificationCandidates,
   getAiWebsiteViabilityRepairLeads,
   applyManualWebsiteCorrection as dbApplyManualWebsiteCorrection,
@@ -44,11 +45,13 @@ import {
   updateLeadPhoneVerificationStatus,
   updateLeadAiFeedback,
   markLeadAiVerified,
+  queueLeadsForEnrichment,
   createAuditLog,
   getSettings,
   refreshStaleUnits as dbRefreshStale,
   updateCrawlRunStatus,
   type LeadFilters,
+  type QualityFilters,
 } from "@/lib/db/queries";
 import { requirePermission } from "@/lib/auth";
 import { canReadLeadForSession, constrainLeadFiltersForSession } from "@/lib/lead-access";
@@ -58,6 +61,7 @@ import { computeScoreWithBreakdown } from "@/lib/scoring";
 import { classifyWebsite, type WebsiteStatus } from "@/lib/classify-website";
 import {
   computeLeadWinProbability,
+  enqueueAiVerificationForLead,
   isWeakWebsiteOpportunity,
   performAiVerification,
   queueMissingAiVerifications,
@@ -145,6 +149,16 @@ const workUpdateSchema = z.object({
 const qualityAiBatchSchema = z.object({
   limit: z.number().int().min(1).max(100).optional(),
   businessType: z.string().trim().min(1).max(80).optional(),
+  recommendedOffer: z.string().trim().min(1).max(80).optional(),
+  phoneVerificationStatus: z.string().trim().min(1).max(80).optional(),
+  aiVerificationStatus: z.string().trim().min(1).max(80).optional(),
+  enrichmentStatus: z.string().trim().min(1).max(80).optional(),
+  qualityBucket: z.string().trim().min(1).max(80).optional(),
+  countryCode: z.string().trim().min(2).max(8).optional(),
+  marketId: z.string().trim().min(1).max(120).optional(),
+  locationCellId: z.string().trim().min(1).max(120).optional(),
+  city: z.string().trim().min(1).max(120).optional(),
+  zip: z.string().trim().min(1).max(40).optional(),
   denverOnly: z.boolean().optional(),
   ids: z.array(z.string().uuid()).max(100).optional(),
 });
@@ -1015,6 +1029,16 @@ export async function runAiVerificationBatchAction(input: { limit?: number; busi
 export async function runQualityAiVerificationBatchAction(input: {
   limit?: number;
   businessType?: string;
+  recommendedOffer?: string;
+  phoneVerificationStatus?: string;
+  aiVerificationStatus?: string;
+  enrichmentStatus?: string;
+  qualityBucket?: string;
+  countryCode?: string;
+  marketId?: string;
+  locationCellId?: string;
+  city?: string;
+  zip?: string;
   denverOnly?: boolean;
   ids?: string[];
 } = {}) {
@@ -1031,6 +1055,16 @@ export async function runQualityAiVerificationBatchAction(input: {
   const leads = await getQualityAiVerificationCandidates({
     limit: safeLimit,
     businessType: parsed.data.businessType,
+    recommendedOffer: parsed.data.recommendedOffer,
+    qualityBucket: parsed.data.qualityBucket,
+    phoneVerificationStatus: parsed.data.phoneVerificationStatus,
+    aiVerificationStatus: parsed.data.aiVerificationStatus,
+    enrichmentStatus: parsed.data.enrichmentStatus,
+    countryCode: parsed.data.countryCode,
+    marketId: parsed.data.marketId,
+    locationCellId: parsed.data.locationCellId,
+    city: parsed.data.city,
+    zip: parsed.data.zip,
     denverOnly: parsed.data.denverOnly,
     ids: parsed.data.ids,
   });
@@ -1054,6 +1088,9 @@ export async function runQualityAiVerificationBatchAction(input: {
     requestedLimit,
     processed: results.length,
     businessType: parsed.data.businessType ?? null,
+    countryCode: parsed.data.countryCode ?? null,
+    marketId: parsed.data.marketId ?? null,
+    locationCellId: parsed.data.locationCellId ?? null,
     denverOnly: parsed.data.denverOnly ?? false,
     selectedCount: parsed.data.ids?.length ?? 0,
   });
@@ -1066,6 +1103,118 @@ export async function runQualityAiVerificationBatchAction(input: {
     errors: results.filter((row) => row.error).length,
     results,
   };
+}
+
+export async function queueQualityAiVerificationBatchAction(input: {
+  limit?: number;
+  businessType?: string;
+  recommendedOffer?: string;
+  phoneVerificationStatus?: string;
+  aiVerificationStatus?: string;
+  enrichmentStatus?: string;
+  qualityBucket?: string;
+  countryCode?: string;
+  marketId?: string;
+  locationCellId?: string;
+  city?: string;
+  zip?: string;
+  denverOnly?: boolean;
+  ids?: string[];
+} = {}) {
+  await requirePermission("ai:verify");
+  await ensureDbReady();
+  const parsed = qualityAiBatchSchema.safeParse(input);
+  if (!parsed.success) return { error: "Invalid quality AI queue request." };
+
+  const settings = await getSettings();
+  if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
+
+  const requestedLimit = Math.max(1, Math.floor(parsed.data.limit ?? parsed.data.ids?.length ?? 25));
+  const safeLimit = Math.min(requestedLimit, settings.ai_batch_limit, parsed.data.ids?.length ?? requestedLimit);
+  const leads = await getQualityAiVerificationCandidates({
+    limit: safeLimit,
+    businessType: parsed.data.businessType,
+    recommendedOffer: parsed.data.recommendedOffer,
+    qualityBucket: parsed.data.qualityBucket,
+    phoneVerificationStatus: parsed.data.phoneVerificationStatus,
+    aiVerificationStatus: parsed.data.aiVerificationStatus,
+    enrichmentStatus: parsed.data.enrichmentStatus,
+    countryCode: parsed.data.countryCode,
+    marketId: parsed.data.marketId,
+    locationCellId: parsed.data.locationCellId,
+    city: parsed.data.city,
+    zip: parsed.data.zip,
+    denverOnly: parsed.data.denverOnly,
+    ids: parsed.data.ids,
+  });
+  const results = [];
+  for (const lead of leads) {
+    results.push(await enqueueAiVerificationForLead(lead.id, "quality_workspace", { force: true, settings }));
+  }
+
+  await createAuditLog("quality_ai_batch_queued", "leads", undefined, {
+    requestedLimit,
+    processed: results.length,
+    businessType: parsed.data.businessType ?? null,
+    countryCode: parsed.data.countryCode ?? null,
+    marketId: parsed.data.marketId ?? null,
+    locationCellId: parsed.data.locationCellId ?? null,
+    denverOnly: parsed.data.denverOnly ?? false,
+    selectedCount: parsed.data.ids?.length ?? 0,
+  });
+  revalidateLeadViews();
+  return {
+    success: true,
+    processed: results.length,
+    queued: results.filter((row) => row.status === "queued").length,
+    skipped: results.filter((row) => row.status === "skipped").length,
+    cached: results.filter((row) => row.status === "cached").length,
+    disabled: results.filter((row) => row.status === "disabled").length,
+    results,
+  };
+}
+
+export async function queueQualityEnrichmentBatchAction(input: {
+  limit?: number;
+  businessType?: string;
+  recommendedOffer?: string;
+  phoneVerificationStatus?: string;
+  aiVerificationStatus?: string;
+  enrichmentStatus?: string;
+  qualityBucket?: string;
+  countryCode?: string;
+  marketId?: string;
+  locationCellId?: string;
+  city?: string;
+  zip?: string;
+  denverOnly?: boolean;
+  ids?: string[];
+} = {}) {
+  await requirePermission("crawl:manage");
+  await ensureDbReady();
+  const parsed = qualityAiBatchSchema.safeParse(input);
+  if (!parsed.success) return { error: "Invalid quality enrichment queue request." };
+
+  const requestedLimit = Math.max(1, Math.floor(parsed.data.limit ?? parsed.data.ids?.length ?? 25));
+  const safeLimit = Math.min(requestedLimit, parsed.data.ids?.length ?? requestedLimit, 100);
+  const ids = await getQualityActionCandidateIds({
+    ...(parsed.data as QualityFilters),
+    ids: parsed.data.ids,
+    limit: safeLimit,
+  });
+  const queued = await queueLeadsForEnrichment(ids);
+  await createAuditLog("quality_enrichment_batch_queued", "leads", undefined, {
+    requestedLimit,
+    queued,
+    selectedCount: parsed.data.ids?.length ?? 0,
+    businessType: parsed.data.businessType ?? null,
+    countryCode: parsed.data.countryCode ?? null,
+    marketId: parsed.data.marketId ?? null,
+    locationCellId: parsed.data.locationCellId ?? null,
+    denverOnly: parsed.data.denverOnly ?? false,
+  });
+  revalidateLeadViews();
+  return { success: true, processed: ids.length, queued };
 }
 
 export async function applyAiRecommendationAction(verificationId: string, action: string) {

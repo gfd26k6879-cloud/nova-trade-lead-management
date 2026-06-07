@@ -10,12 +10,14 @@ import {
   addLeadNoteAction,
   logOutreachEventAction,
   markLeadQualityBucketAction,
+  queueQualityAiVerificationBatchAction,
+  queueQualityEnrichmentBatchAction,
   runQualityAiVerificationBatchAction,
   updateLeadPhoneVerificationStatusAction,
   updateLeadStatusAction,
 } from "@/lib/leads/actions";
 import { getBusinessTypeLabel } from "@/lib/business-types";
-import type { QualityFilters, QualityLead, QualitySummary } from "@/lib/db/queries";
+import type { LocationCell, LocationMarket, QualityFilters, QualityLead, QualitySummary } from "@/lib/db/queries";
 
 const BUCKET_OPTIONS = [
   { value: "", label: "All quality buckets" },
@@ -50,18 +52,37 @@ const AI_OPTIONS = [
   { value: "mismatch", label: "AI Run: Mismatch" },
 ];
 
+const ENRICHMENT_OPTIONS = [
+  { value: "", label: "All enrichment states" },
+  { value: "pending", label: "Pending enrichment" },
+  { value: "enriched", label: "Enriched" },
+  { value: "skipped", label: "Skipped" },
+];
+
+const COUNTRY_OPTIONS = [
+  { value: "", label: "All countries" },
+  { value: "US", label: "United States" },
+  { value: "CA", label: "Canada" },
+  { value: "GB", label: "United Kingdom" },
+];
+
 interface Props {
   summary: QualitySummary;
   leads: QualityLead[];
   total: number;
   filters: QualityFilters;
   businessTypeCounts: Array<{ id: string; label: string; total: number; active: number }>;
+  locationMarkets: LocationMarket[];
+  locationCells: LocationCell[];
 }
 
-export function QualityClient({ summary, leads, total, filters, businessTypeCounts }: Props) {
+export function QualityClient({ summary, leads, total, filters, businessTypeCounts, locationMarkets, locationCells }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [search, setSearch] = useState(filters.search ?? "");
+  const [city, setCity] = useState(filters.city ?? "");
+  const [zip, setZip] = useState(filters.zip ?? "");
+  const [batchLimit, setBatchLimit] = useState("25");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -71,19 +92,62 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
   const pageSize = filters.pageSize ?? 50;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
+  const visibleMarkets = useMemo(() => {
+    return locationMarkets.filter((market) => !filters.countryCode || market.country_code === filters.countryCode);
+  }, [filters.countryCode, locationMarkets]);
+  const selectedMarket = useMemo(() => locationMarkets.find((market) => market.id === filters.marketId) ?? null, [filters.marketId, locationMarkets]);
+  const activeCells = useMemo(() => locationCells.filter((cell) => cell.is_active === 1), [locationCells]);
+  const currentScope = useMemo(() => {
+    if (filters.locationCellId) {
+      const cell = locationCells.find((item) => item.id === filters.locationCellId);
+      return cell?.cell_label ?? filters.locationCellId;
+    }
+    if (selectedMarket) return marketLabel(selectedMarket);
+    if (filters.city || filters.zip) return [filters.city, filters.zip].filter(Boolean).join(" ");
+    if (filters.countryCode) return countryLabel(filters.countryCode);
+    if (filters.denverOnly) return "Denver / Colorado";
+    return "All markets";
+  }, [filters.city, filters.countryCode, filters.denverOnly, filters.locationCellId, filters.zip, locationCells, selectedMarket]);
 
-  const updateFilter = useCallback((key: string, value: string) => {
+  const updateFilters = useCallback((updates: Record<string, string | null | undefined>) => {
     const params = new URLSearchParams(searchParams.toString());
-    if (value) params.set(key, value);
-    else params.delete(key);
-    if (key !== "page") params.delete("page");
+    let onlyPage = true;
+    for (const [key, value] of Object.entries(updates)) {
+      if (value) params.set(key, value);
+      else params.delete(key);
+      if (key !== "page") onlyPage = false;
+    }
+    if (!onlyPage) params.delete("page");
     router.push(`/quality?${params.toString()}`);
   }, [router, searchParams]);
+
+  const updateFilter = useCallback((key: string, value: string) => {
+    updateFilters({ [key]: value || null });
+  }, [updateFilters]);
 
   const flash = (text: string) => {
     setMessage(text);
     setTimeout(() => setMessage(null), 3500);
   };
+
+  const batchLimitNumber = () => Math.max(1, Math.min(100, Math.floor(Number(batchLimit) || 25)));
+
+  const batchInput = (ids?: string[]) => ({
+    limit: ids?.length ?? batchLimitNumber(),
+    businessType: filters.businessType,
+    recommendedOffer: filters.recommendedOffer,
+    phoneVerificationStatus: filters.phoneVerificationStatus,
+    aiVerificationStatus: filters.aiVerificationStatus,
+    enrichmentStatus: filters.enrichmentStatus,
+    qualityBucket: filters.qualityBucket,
+    countryCode: filters.countryCode,
+    marketId: filters.marketId,
+    locationCellId: filters.locationCellId,
+    city: filters.city,
+    zip: filters.zip,
+    denverOnly: filters.denverOnly,
+    ids,
+  });
 
   const runBatch = async (name: string, input: Parameters<typeof runQualityAiVerificationBatchAction>[0]) => {
     setBusy(name);
@@ -93,6 +157,38 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
         flash(result.error ?? "AI verification failed");
       } else {
         flash(`Processed ${result.processed}. Verified ${result.verified}, cached ${result.cached}, errors ${result.errors}.`);
+        setSelected(new Set());
+        router.refresh();
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const queueAiBatch = async (name: string, input: Parameters<typeof queueQualityAiVerificationBatchAction>[0]) => {
+    setBusy(name);
+    try {
+      const result = await queueQualityAiVerificationBatchAction(input);
+      if ("error" in result) {
+        flash(result.error ?? "Unable to queue AI verification");
+      } else {
+        flash(`Queued ${result.queued} for AI. Skipped ${result.skipped}, cached ${result.cached}.`);
+        setSelected(new Set());
+        router.refresh();
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const queueEnrichmentBatch = async (name: string, input: Parameters<typeof queueQualityEnrichmentBatchAction>[0]) => {
+    setBusy(name);
+    try {
+      const result = await queueQualityEnrichmentBatchAction(input);
+      if ("error" in result) {
+        flash(result.error ?? "Unable to queue enrichment");
+      } else {
+        flash(`Set ${result.queued} leads for enrichment.`);
         setSelected(new Set());
         router.refresh();
       }
@@ -165,7 +261,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
   return (
     <PageShell
       title="Lead Quality"
-      description="Researcher workspace for the fastest no-website opportunities to call today."
+      description="Market-aware quality workspace for staging enrichment, AI verification, and call-ready lead review."
       stats={[
         { label: "Ready to Call", value: String(summary.readyToCall) },
         { label: "No Website", value: String(summary.aiVerifiedNoWebsite) },
@@ -185,7 +281,73 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
       </section>
 
       <section className="glass rounded-2xl p-5">
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="section-label">Quality scope</p>
+            <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+              Current scope: <span className="font-medium" style={{ color: "var(--text-primary)" }}>{currentScope}</span>
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-glass text-xs" onClick={() => updateFilters({ countryCode: null, marketId: null, locationCellId: null, city: null, zip: null, denverOnly: null })}>
+              All markets
+            </button>
+            <button type="button" className="btn-glass text-xs" onClick={() => updateFilters({ countryCode: "US", marketId: "market-colorado", locationCellId: null, city: null, zip: null, denverOnly: "1" })}>
+              Colorado
+            </button>
+            {locationMarkets.some((market) => market.id === "market-london-ca") && (
+              <button type="button" className="btn-glass text-xs" onClick={() => updateFilters({ countryCode: "CA", marketId: "market-london-ca", locationCellId: null, city: null, zip: null, denverOnly: null })}>
+                London, Ontario
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <select
+            aria-label="Country filter"
+            className="glass-select"
+            value={filters.countryCode ?? ""}
+            onChange={(event) => updateFilters({ countryCode: event.target.value || null, marketId: null, locationCellId: null, denverOnly: null })}
+          >
+            {COUNTRY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <select
+            aria-label="Market filter"
+            className="glass-select"
+            value={filters.marketId ?? ""}
+            onChange={(event) => {
+              const market = locationMarkets.find((item) => item.id === event.target.value);
+              updateFilters({ marketId: event.target.value || null, countryCode: market?.country_code ?? filters.countryCode ?? null, locationCellId: null, denverOnly: null });
+            }}
+          >
+            <option value="">All markets</option>
+            {visibleMarkets.map((market) => <option key={market.id} value={market.id}>{marketLabel(market)}</option>)}
+          </select>
+          <select
+            aria-label="Location cell filter"
+            className="glass-select"
+            value={filters.locationCellId ?? ""}
+            disabled={!filters.marketId}
+            onChange={(event) => updateFilters({ locationCellId: event.target.value || null, denverOnly: null })}
+          >
+            <option value="">{filters.marketId ? "All cells" : "Pick a market first"}</option>
+            {activeCells.map((cell) => <option key={cell.id} value={cell.id}>{cell.cell_label}</option>)}
+          </select>
+          <form
+            className="flex gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              updateFilters({ city: city.trim() || null, zip: zip.trim() || null, denverOnly: null });
+            }}
+          >
+            <input className="glass-input min-w-0 flex-1" placeholder="City" value={city} onChange={(event) => setCity(event.target.value)} />
+            <input className="glass-input w-28" placeholder="Postal" value={zip} onChange={(event) => setZip(event.target.value)} />
+            <button type="submit" className="btn-glass text-xs">Apply</button>
+          </form>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-3">
           <form
             className="flex gap-2"
             onSubmit={(event) => {
@@ -196,7 +358,6 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
             <input className="glass-input min-w-60" placeholder="Search name, phone, area..." value={search} onChange={(event) => setSearch(event.target.value)} />
             <button type="submit" className="btn-glass text-xs">Search</button>
           </form>
-
           <select aria-label="Quality bucket filter" className="glass-select" value={filters.qualityBucket ?? ""} onChange={(event) => updateFilter("qualityBucket", event.target.value)}>
             {BUCKET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
@@ -213,30 +374,32 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
           <select aria-label="AI verification filter" className="glass-select" value={filters.aiVerificationStatus ?? ""} onChange={(event) => updateFilter("aiVerificationStatus", event.target.value)}>
             {AI_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <label className="flex items-center gap-2 text-xs" style={{ color: "var(--text-secondary)" }}>
-            <input
-              type="checkbox"
-              checked={filters.denverOnly !== false}
-              onChange={(event) => updateFilter("denverOnly", event.target.checked ? "1" : "0")}
-            />
-            Denver first
-          </label>
+          <select aria-label="Enrichment filter" className="glass-select" value={filters.enrichmentStatus ?? ""} onChange={(event) => updateFilter("enrichmentStatus", event.target.value)}>
+            {ENRICHMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <button type="button" className="btn-primary text-xs" disabled={busy !== null} onClick={() => runBatch("top10", { limit: 10, businessType: filters.businessType, denverOnly: filters.denverOnly })}>
-            {busy === "top10" ? "Verifying..." : "Verify Top 10"}
+          <label className="flex items-center gap-2 text-xs" style={{ color: "var(--text-secondary)" }}>
+            Batch
+            <input className="glass-input w-20 text-xs" type="number" min={1} max={100} value={batchLimit} onChange={(event) => setBatchLimit(event.target.value)} />
+          </label>
+          <button type="button" className="btn-primary text-xs" disabled={busy !== null} onClick={() => queueEnrichmentBatch("queue-enrichment", batchInput())}>
+            {busy === "queue-enrichment" ? "Queueing..." : `Set Top ${batchLimitNumber()} for Enrichment`}
           </button>
-          <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={() => runBatch("denver25", { limit: 25, businessType: filters.businessType, denverOnly: true })}>
-            {busy === "denver25" ? "Verifying..." : "Verify Denver Top 25"}
+          <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={() => queueAiBatch("queue-ai", batchInput())}>
+            {busy === "queue-ai" ? "Queueing..." : `Queue Top ${batchLimitNumber()} for AI`}
           </button>
-          <button type="button" className="btn-glass text-xs" disabled={busy !== null || selectedIds.length === 0} onClick={() => runBatch("selected", { ids: selectedIds, limit: selectedIds.length })}>
-            {busy === "selected" ? "Verifying..." : `Verify Selected (${selectedIds.length})`}
+          <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={() => runBatch("run-now", batchInput())}>
+            {busy === "run-now" ? "Verifying..." : `Run AI Now (${batchLimitNumber()})`}
           </button>
-          <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={() => runBatch("refresh", { limit: 25, denverOnly: filters.denverOnly, businessType: filters.businessType })}>
-            {busy === "refresh" ? "Refreshing..." : "Refresh Broken/Uncertain"}
+          <button type="button" className="btn-glass text-xs" disabled={busy !== null || selectedIds.length === 0} onClick={() => queueEnrichmentBatch("selected-enrichment", batchInput(selectedIds))}>
+            {busy === "selected-enrichment" ? "Queueing..." : `Enrich Selected (${selectedIds.length})`}
           </button>
-          <HelpTip>Runs AI verification against the filtered batch; it updates AI evidence and may change recommended quality buckets.</HelpTip>
+          <button type="button" className="btn-glass text-xs" disabled={busy !== null || selectedIds.length === 0} onClick={() => queueAiBatch("selected-ai", batchInput(selectedIds))}>
+            {busy === "selected-ai" ? "Queueing..." : `AI Selected (${selectedIds.length})`}
+          </button>
+          <HelpTip>Batch actions use the current country, market, cell, quality, and text filters. Queueing marks leads for workers; Run AI Now verifies immediately.</HelpTip>
           {message && <span className="text-xs" style={{ color: "#166534" }}>{message}</span>}
         </div>
       </section>
@@ -245,7 +408,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="section-label">Today Quality Queue</h3>
-            <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>{total} matching leads. Default view hides usable websites and excluded leads.</p>
+            <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>{total} matching leads in {currentScope}. Usable websites and excluded leads are hidden.</p>
           </div>
           {selected.size > 0 && <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>{selected.size} selected</span>}
         </div>
@@ -265,7 +428,8 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
                   <th>Business</th>
                   <th>Type</th>
                   <th>Phone</th>
-                  <th>Area</th>
+                  <th>Location</th>
+                  <th>Enrichment</th>
                   <th>Website Finding</th>
                   <th>Quality</th>
                   <th>Offer</th>
@@ -294,7 +458,13 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
                       <div>{lead.phone ?? "No phone"}</div>
                       <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{phoneLabel(lead.phone_verification_status)}</span>
                     </td>
-                    <td>{lead.city ?? "N/A"}</td>
+                    <td>
+                      <div>{qualityLeadLocation(lead)}</div>
+                      <div className="text-xs" style={{ color: "var(--text-tertiary)" }}>{lead.postal_code ?? lead.country_code ?? ""}</div>
+                    </td>
+                    <td>
+                      <span style={badge("#4338ca", "rgba(99,102,241,0.1)")}>{lead.enrichment_status}</span>
+                    </td>
                     <td>
                       <span style={websiteFindingStyle(lead)}>{websiteFindingLabel(lead)}</span>
                       <div className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
@@ -415,6 +585,24 @@ function artifactBadgeLabel(type: "brief" | "report", status: string | null): st
   if (status === "complete") return type === "brief" ? "Brief ready" : "Report ready";
   if (status === "queued" || status === "running") return "Generating";
   return "Missing";
+}
+
+function marketLabel(market: LocationMarket): string {
+  return [market.name, market.admin_area1, market.country_code].filter(Boolean).join(", ");
+}
+
+function countryLabel(value: string): string {
+  return COUNTRY_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
+
+function qualityLeadLocation(lead: QualityLead): string {
+  return lead.locality || lead.city || extractLocationFromAddress(lead.address) || "N/A";
+}
+
+function extractLocationFromAddress(address: string | null): string | null {
+  if (!address) return null;
+  const parts = address.split(",").map((part) => part.trim()).filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 2] ?? null : parts[0] ?? null;
 }
 
 function formatCurrency(value: number): string {
