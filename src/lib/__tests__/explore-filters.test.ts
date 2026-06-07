@@ -10,15 +10,16 @@ import {
 
 describe("explore command filters", () => {
   it("parses location, website, and owner commands", () => {
-    const result = parseExploreCommand("city:toronto website:none owner:unclaimed");
+    const result = parseExploreCommand("city:toronto country:canada website:none owner:unclaimed");
 
     expect(result.errors).toEqual([]);
     expect(result.filters).toMatchObject({
       city: "toronto",
+      countryCode: "CA",
       websiteStatus: "none",
       assigned: "unassigned",
     });
-    expect(result.chips.map((chip) => chip.label)).toEqual(["City", "Website", "Owner"]);
+    expect(result.chips.map((chip) => chip.label)).toEqual(["City", "Country", "Website", "Owner"]);
   });
 
   it("parses numeric threshold commands", () => {
@@ -95,10 +96,12 @@ describe("explore command filters", () => {
     });
     const quick = groups.flatMap((group) => group.suggestions).find((item) => item.label === "Best no-site");
     const area = groups.flatMap((group) => group.suggestions).find((item) => item.label === "Area: Denver");
+    const country = groups.flatMap((group) => group.suggestions).find((item) => item.label === "Country: Canada");
     const type = groups.flatMap((group) => group.suggestions).find((item) => item.label === "Type: Dental");
 
     expect(quick?.updates).toMatchObject({ mode: "work_ready", websiteStatus: "none", assigned: "any", sortBy: "website_need" });
     expect(area?.updates).toMatchObject({ geo: "denver", minLat: null, maxLat: null, minLng: null, maxLng: null });
+    expect(country?.updates).toMatchObject({ countryCode: "CA" });
     expect(type?.updates).toMatchObject({ businessType: "dental" });
   });
 

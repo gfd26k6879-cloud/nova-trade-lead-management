@@ -326,6 +326,9 @@ export function buildExploreSearchSuggestions(context: ExploreSuggestionContext)
       title: "Common filters",
       suggestions: [
         suggestion("filter:website:none", "filter", "Website: No website", "Businesses without a usable website.", "website:none", { websiteStatus: "none", page: null }, ["no site", "nosite"]),
+        suggestion("filter:country:ca", "filter", "Country: Canada", "Canadian leads and discovery inventory.", "country:CA", { countryCode: "CA", page: null }, ["canada", "ontario", "toronto", "london"]),
+        suggestion("filter:country:us", "filter", "Country: United States", "U.S. leads and discovery inventory.", "country:US", { countryCode: "US", page: null }, ["usa", "america", "colorado"]),
+        suggestion("filter:country:gb", "filter", "Country: United Kingdom", "U.K. leads and discovery inventory.", "country:GB", { countryCode: "GB", page: null }, ["uk", "britain", "england"]),
         suggestion("filter:owner:unclaimed", "filter", "Owner: Unclaimed", "Open leads nobody owns yet.", "owner:unclaimed", { assigned: "unassigned", page: null }, ["unassigned"]),
         suggestion("filter:owner:me", "filter", "Owner: Mine", "Only leads assigned to you.", "owner:me", { assigned: "me", page: null }, ["my leads", "mine"]),
         suggestion("filter:quality:needs_ai", "filter", "Quality: Needs AI", "Leads waiting for AI verification.", "quality:needs_ai", { qualityBucket: "needs_ai_verify", aiVerificationStatus: "not_checked", page: null }, ["ai", "needs review"]),
@@ -449,7 +452,7 @@ function applyCommandToken(
   if (key === "city") return applySimple(filters, chips, "city", "City", value);
   if (key === "postal" || key === "postcode" || key === "zip") return applySimple(filters, chips, "zip", "Postal", value.toUpperCase());
   if (key === "market") return applySimple(filters, chips, "marketId", "Market", normalizeMarketId(value));
-  if (key === "country") return applySimple(filters, chips, "countryCode", "Country", value.toUpperCase());
+  if (key === "country") return applySimple(filters, chips, "countryCode", "Country", countryAlias(value));
   if (key === "cell") return applySimple(filters, chips, "locationCellId", "Cell", value.toUpperCase());
   if (key === "category") return applySimple(filters, chips, "category", "Category", value);
   if (key === "type") return applySimple(filters, chips, "businessType", "Type", value);
@@ -518,6 +521,14 @@ function statusAlias(value: string): string {
 function sortAlias(value: string): string {
   if (value === "newest") return "created_at";
   return value;
+}
+
+function countryAlias(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "canada" || normalized === "ca") return "CA";
+  if (normalized === "us" || normalized === "usa" || normalized === "united_states" || normalized === "united-states" || normalized === "america") return "US";
+  if (normalized === "gb" || normalized === "uk" || normalized === "united_kingdom" || normalized === "united-kingdom" || normalized === "britain") return "GB";
+  return value.toUpperCase();
 }
 
 function minLabel(param: string): string {

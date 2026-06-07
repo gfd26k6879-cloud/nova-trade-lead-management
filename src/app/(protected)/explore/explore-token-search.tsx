@@ -21,6 +21,9 @@ interface ExploreSearchFilters {
   minScore?: number;
   city?: string;
   zip?: string;
+  countryCode?: string;
+  marketId?: string;
+  locationCellId?: string;
   category?: string;
   businessType?: string;
   assigned?: string;
@@ -299,6 +302,7 @@ function ExploreBuilder({
       </div>
       <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <BuilderInput label="Search" value={filters.search ?? ""} placeholder="Name, phone, address" onChange={(value) => onApply({ search: value, page: null })} />
+        <BuilderSelect label="Country" value={filters.countryCode ?? ""} onChange={(value) => onApply({ countryCode: value, page: null })} options={[["", "All countries"], ["US", "United States"], ["CA", "Canada"], ["GB", "United Kingdom"]]} />
         <BuilderInput label="City" value={filters.city ?? ""} placeholder="Denver, Toronto, London" onChange={(value) => onApply({ city: value, page: null })} />
         <BuilderInput label="Postal / postcode" value={filters.zip ?? ""} placeholder="80202, M5V, SW1A" onChange={(value) => onApply({ zip: value, page: null })} />
         <BuilderSelect label="Business type" value={filters.businessType ?? ""} onChange={(value) => onApply({ businessType: value, page: null })} options={[["", "All business types"], ...businessTypeCounts.map((type) => [type.id, `${type.label}${type.total > 0 ? ` (${type.active})` : ""}`] as [string, string])]} />
