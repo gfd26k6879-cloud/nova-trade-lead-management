@@ -22,8 +22,8 @@ export function getAiVerificationDisplay(input: AiVerificationDisplayInput): AiV
 
   if ((status === "not_checked" || !status) && queueStatus === "queued") {
     return {
-      label: "AI queued",
-      detail: "AI verification has been queued but has not completed.",
+      label: "Waiting for AI",
+      detail: "This lead is in the AI verification queue. No result exists yet; a worker still has to process it.",
       tone: "pending",
       hasRun: false,
     };
@@ -31,8 +31,8 @@ export function getAiVerificationDisplay(input: AiVerificationDisplayInput): AiV
 
   if ((status === "not_checked" || !status) && queueStatus === "running") {
     return {
-      label: "AI running",
-      detail: "AI verification is currently running.",
+      label: "AI processing",
+      detail: "AI verification is running now. Wait for the result before deciding whether the lead has no website.",
       tone: "pending",
       hasRun: false,
     };
@@ -49,8 +49,8 @@ export function getAiVerificationDisplay(input: AiVerificationDisplayInput): AiV
 
   if ((status === "not_checked" || !status) && !hasCheckedAt) {
     return {
-      label: "AI not run",
-      detail: "No AI verification result exists for this lead.",
+      label: "Not sent to AI",
+      detail: "This lead has not been queued or processed for AI verification.",
       tone: "muted",
       hasRun: false,
     };

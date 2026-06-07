@@ -8,6 +8,7 @@ import { HelpTip } from "@/components/help-tip";
 import { ManualLeadModal } from "@/components/manual-lead-modal";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
+import { getAiVerificationDisplay } from "@/lib/ai-verification-display";
 import { claimLeadAction } from "@/lib/leads/actions";
 import { getBusinessTypeLabel } from "@/lib/business-types";
 import type { Lead, LeadMapPoint, LeadMapZipCoverage } from "@/lib/db/queries";
@@ -1372,14 +1373,20 @@ function ownerLabel(lead: LeadOwner, currentUserId: string): string {
   return lead.assigned_user_display_name || lead.assigned_user_email || "Taken";
 }
 
-function resultReason(lead: Pick<Lead, "website_status" | "rating" | "review_count" | "quality_bucket" | "ai_verification_status">): string {
+function resultReason(lead: Pick<Lead, "website_status" | "rating" | "review_count" | "quality_bucket" | "ai_verification_status" | "ai_queue_status" | "ai_checked_at" | "ai_website_viability_status">): string {
   const parts = [
     formatLabel(lead.website_status),
     lead.rating ? `${lead.rating.toFixed(1)} rating` : null,
     `${lead.review_count ?? 0} reviews`,
     formatLabel(lead.quality_bucket),
   ].filter(Boolean);
-  if (lead.ai_verification_status === "not_checked") parts.push("AI not run");
+  const aiDisplay = getAiVerificationDisplay({
+    status: lead.ai_verification_status,
+    checkedAt: lead.ai_checked_at,
+    queueStatus: lead.ai_queue_status,
+    viability: lead.ai_website_viability_status,
+  });
+  if (!aiDisplay.hasRun) parts.push(aiDisplay.label);
   return parts.join(" + ");
 }
 

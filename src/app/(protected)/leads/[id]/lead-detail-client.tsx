@@ -1517,11 +1517,11 @@ export function LeadDetailClient({
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className="btn-primary text-xs" disabled={aiLoading} onClick={() => handleRunAiVerification(false)}>
+                <button type="button" className="btn-primary text-xs" title="Run AI verification immediately for this lead and save the completed result." disabled={aiLoading} onClick={() => handleRunAiVerification(false)}>
                   {aiLoading ? "Checking..." : "Run AI Verify"}
                 </button>
-                <button type="button" className="btn-glass text-xs" disabled={aiLoading} onClick={() => handleRunAiVerification(true)}>Refresh</button>
-                <button type="button" className="btn-glass text-xs" disabled={aiLoading || !foundAiWebsite} onClick={handleRepairAiViability}>Re-check Website Viability</button>
+                <button type="button" className="btn-glass text-xs" title="Force a fresh AI verification instead of using a cached result." disabled={aiLoading} onClick={() => handleRunAiVerification(true)}>Refresh</button>
+                <button type="button" className="btn-glass text-xs" title="Re-check whether the AI-found website is usable, weak, broken, or directory-only." disabled={aiLoading || !foundAiWebsite} onClick={handleRepairAiViability}>Re-check Website Viability</button>
               </div>
             </div>
 

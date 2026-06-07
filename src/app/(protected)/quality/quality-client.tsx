@@ -6,6 +6,7 @@ import { useCallback, useMemo, useState } from "react";
 import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { HelpTip } from "@/components/help-tip";
 import { PageShell } from "@/components/page-shell";
+import { getAiVerificationDisplay } from "@/lib/ai-verification-display";
 import {
   addLeadNoteAction,
   logOutreachEventAction,
@@ -23,7 +24,7 @@ const BUCKET_OPTIONS = [
   { value: "", label: "All quality buckets" },
   { value: "ready_to_call", label: "Ready to Call" },
   { value: "broken_site_opportunity", label: "Broken Site Opportunity" },
-  { value: "needs_ai_verify", label: "Needs AI Verify" },
+  { value: "needs_ai_verify", label: "Needs AI verification" },
   { value: "needs_manual_review", label: "Needs Manual Review" },
 ];
 
@@ -44,17 +45,17 @@ const PHONE_OPTIONS = [
 ];
 
 const AI_OPTIONS = [
-  { value: "", label: "All AI states" },
-  { value: "not_checked", label: "AI Not Run" },
-  { value: "no_site_found", label: "AI Run: No Usable Site" },
-  { value: "weak_site_found", label: "AI Run: Weak Site" },
-  { value: "uncertain", label: "AI Run: Uncertain" },
-  { value: "mismatch", label: "AI Run: Mismatch" },
+  { value: "", label: "All AI outcomes" },
+  { value: "not_checked", label: "No AI result yet" },
+  { value: "no_site_found", label: "No usable site found" },
+  { value: "weak_site_found", label: "Weak site found" },
+  { value: "uncertain", label: "Needs human review" },
+  { value: "mismatch", label: "Wrong business match" },
 ];
 
 const ENRICHMENT_OPTIONS = [
-  { value: "", label: "All enrichment states" },
-  { value: "pending", label: "Pending enrichment" },
+  { value: "", label: "All enrichment" },
+  { value: "pending", label: "Needs enrichment" },
   { value: "enriched", label: "Enriched" },
   { value: "skipped", label: "Skipped" },
 ];
@@ -108,6 +109,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
     if (filters.denverOnly) return "Denver / Colorado";
     return "All markets";
   }, [filters.city, filters.countryCode, filters.denverOnly, filters.locationCellId, filters.zip, locationCells, selectedMarket]);
+  const activeFilterChips = useMemo(() => qualityFilterChips(filters, selectedMarket, locationCells), [filters, locationCells, selectedMarket]);
 
   const updateFilters = useCallback((updates: Record<string, string | null | undefined>) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -172,7 +174,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
       if ("error" in result) {
         flash(result.error ?? "Unable to queue AI verification");
       } else {
-        flash(`Queued ${result.queued} for AI. Skipped ${result.skipped}, cached ${result.cached}.`);
+        flash(`Sent ${result.queued} to the AI queue. They will show as "Waiting for AI" until the worker processes them.`);
         setSelected(new Set());
         router.refresh();
       }
@@ -188,7 +190,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
       if ("error" in result) {
         flash(result.error ?? "Unable to queue enrichment");
       } else {
-        flash(`Set ${result.queued} leads for enrichment.`);
+        flash(`${result.queued} leads are in the enrichment backlog.`);
         setSelected(new Set());
         router.refresh();
       }
@@ -261,7 +263,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
   return (
     <PageShell
       title="Lead Quality"
-      description="Market-aware quality workspace for staging enrichment, AI verification, and call-ready lead review."
+      description="Pick a market, then send leads to enrichment or AI verification with clear queue status."
       stats={[
         { label: "Ready to Call", value: String(summary.readyToCall) },
         { label: "No Website", value: String(summary.aiVerifiedNoWebsite) },
@@ -273,7 +275,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
         <MetricCard label="Ready to Call" value={summary.readyToCall} />
         <MetricCard label="AI Verified No Website" value={summary.aiVerifiedNoWebsite} />
         <MetricCard label="Broken Site Opportunities" value={summary.brokenSiteOpportunities} />
-        <MetricCard label="Needs AI Verify" value={summary.needsAiVerify} />
+        <MetricCard label="No AI Result Yet" value={summary.needsAiVerify} />
         <MetricCard label="Needs Manual Review" value={summary.needsManualReview} />
         <MetricCard label="Removed: Website Found" value={summary.removedBecauseWebsiteFound} />
         <MetricCard label="Avg Quality Score" value={`${summary.averageQualityScore}%`} />
@@ -289,23 +291,36 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-glass text-xs" onClick={() => updateFilters({ countryCode: null, marketId: null, locationCellId: null, city: null, zip: null, denverOnly: null })}>
+            <button type="button" className="btn-glass text-xs" title="Clear country, market, cell, city, and postal filters." onClick={() => updateFilters({ countryCode: null, marketId: null, locationCellId: null, city: null, zip: null, denverOnly: null })}>
               All markets
             </button>
-            <button type="button" className="btn-glass text-xs" onClick={() => updateFilters({ countryCode: "US", marketId: "market-colorado", locationCellId: null, city: null, zip: null, denverOnly: "1" })}>
+            <button type="button" className="btn-glass text-xs" title="Switch quality scope to Colorado leads." onClick={() => updateFilters({ countryCode: "US", marketId: "market-colorado", locationCellId: null, city: null, zip: null, denverOnly: "1" })}>
               Colorado
             </button>
             {locationMarkets.some((market) => market.id === "market-london-ca") && (
-              <button type="button" className="btn-glass text-xs" onClick={() => updateFilters({ countryCode: "CA", marketId: "market-london-ca", locationCellId: null, city: null, zip: null, denverOnly: null })}>
+              <button type="button" className="btn-glass text-xs" title="Switch quality scope to London, Ontario leads." onClick={() => updateFilters({ countryCode: "CA", marketId: "market-london-ca", locationCellId: null, city: null, zip: null, denverOnly: null })}>
                 London, Ontario
               </button>
             )}
           </div>
         </div>
+        {activeFilterChips.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2" aria-label="Active quality filters">
+            {activeFilterChips.map((chip) => (
+              <span key={chip.key} className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium" style={{ borderColor: "rgba(99,102,241,0.24)", background: "rgba(99,102,241,0.09)", color: "#4338ca" }} title={chip.help}>
+                {chip.label}: {chip.value}
+                <button type="button" className="text-xs font-bold" aria-label={`Remove ${chip.label} filter`} title={`Remove ${chip.label} filter`} onClick={() => updateFilters(chip.remove)}>
+                  x
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <select
             aria-label="Country filter"
+            title="Limit quality leads to one country. Changing this clears the market and cell."
             className="glass-select"
             value={filters.countryCode ?? ""}
             onChange={(event) => updateFilters({ countryCode: event.target.value || null, marketId: null, locationCellId: null, denverOnly: null })}
@@ -314,6 +329,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
           </select>
           <select
             aria-label="Market filter"
+            title="Limit quality leads to a saved market, such as London, Ontario."
             className="glass-select"
             value={filters.marketId ?? ""}
             onChange={(event) => {
@@ -326,6 +342,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
           </select>
           <select
             aria-label="Location cell filter"
+            title="Limit quality leads to a specific postal, postcode, or area cell inside the selected market."
             className="glass-select"
             value={filters.locationCellId ?? ""}
             disabled={!filters.marketId}
@@ -341,9 +358,9 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
               updateFilters({ city: city.trim() || null, zip: zip.trim() || null, denverOnly: null });
             }}
           >
-            <input className="glass-input min-w-0 flex-1" placeholder="City" value={city} onChange={(event) => setCity(event.target.value)} />
-            <input className="glass-input w-28" placeholder="Postal" value={zip} onChange={(event) => setZip(event.target.value)} />
-            <button type="submit" className="btn-glass text-xs">Apply</button>
+            <input className="glass-input min-w-0 flex-1" placeholder="City" title="Optional city filter for quality leads." value={city} onChange={(event) => setCity(event.target.value)} />
+            <input className="glass-input w-28" placeholder="Postal" title="Optional postal or postcode prefix, such as N6H." value={zip} onChange={(event) => setZip(event.target.value)} />
+            <button type="submit" className="btn-glass text-xs" title="Apply the city and postal filters.">Apply</button>
           </form>
         </div>
 
@@ -355,26 +372,26 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
               updateFilter("search", search);
             }}
           >
-            <input className="glass-input min-w-60" placeholder="Search name, phone, area..." value={search} onChange={(event) => setSearch(event.target.value)} />
-            <button type="submit" className="btn-glass text-xs">Search</button>
+            <input className="glass-input min-w-60" placeholder="Search name, phone, area..." title="Search within the current quality scope." value={search} onChange={(event) => setSearch(event.target.value)} />
+            <button type="submit" className="btn-glass text-xs" title="Apply text search to the quality list.">Search</button>
           </form>
-          <select aria-label="Quality bucket filter" className="glass-select" value={filters.qualityBucket ?? ""} onChange={(event) => updateFilter("qualityBucket", event.target.value)}>
+          <select aria-label="Quality bucket filter" title="Filter by the lead's current sales-readiness bucket." className="glass-select" value={filters.qualityBucket ?? ""} onChange={(event) => updateFilter("qualityBucket", event.target.value)}>
             {BUCKET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <select aria-label="Business type filter" className="glass-select" value={filters.businessType ?? ""} onChange={(event) => updateFilter("businessType", event.target.value)}>
+          <select aria-label="Business type filter" title="Filter by business category, such as plumbing or dental." className="glass-select" value={filters.businessType ?? ""} onChange={(event) => updateFilter("businessType", event.target.value)}>
             <option value="">All business types</option>
             {businessTypeCounts.map((type) => <option key={type.id} value={type.id}>{type.label} ({type.active})</option>)}
           </select>
-          <select aria-label="Recommended offer filter" className="glass-select" value={filters.recommendedOffer ?? ""} onChange={(event) => updateFilter("recommendedOffer", event.target.value)}>
+          <select aria-label="Recommended offer filter" title="Filter by the offer the system recommends pitching." className="glass-select" value={filters.recommendedOffer ?? ""} onChange={(event) => updateFilter("recommendedOffer", event.target.value)}>
             {OFFER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <select aria-label="Phone verification filter" className="glass-select" value={filters.phoneVerificationStatus ?? ""} onChange={(event) => updateFilter("phoneVerificationStatus", event.target.value)}>
+          <select aria-label="Phone verification filter" title="Filter by whether the phone number has been checked." className="glass-select" value={filters.phoneVerificationStatus ?? ""} onChange={(event) => updateFilter("phoneVerificationStatus", event.target.value)}>
             {PHONE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <select aria-label="AI verification filter" className="glass-select" value={filters.aiVerificationStatus ?? ""} onChange={(event) => updateFilter("aiVerificationStatus", event.target.value)}>
+          <select aria-label="AI verification filter" title="Filter by completed AI outcome. Leads waiting in the AI queue still have no result yet." className="glass-select" value={filters.aiVerificationStatus ?? ""} onChange={(event) => updateFilter("aiVerificationStatus", event.target.value)}>
             {AI_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <select aria-label="Enrichment filter" className="glass-select" value={filters.enrichmentStatus ?? ""} onChange={(event) => updateFilter("enrichmentStatus", event.target.value)}>
+          <select aria-label="Enrichment filter" title="Filter by whether Google Place Details enrichment has completed." className="glass-select" value={filters.enrichmentStatus ?? ""} onChange={(event) => updateFilter("enrichmentStatus", event.target.value)}>
             {ENRICHMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </div>
@@ -382,24 +399,24 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-2 text-xs" style={{ color: "var(--text-secondary)" }}>
             Batch
-            <input className="glass-input w-20 text-xs" type="number" min={1} max={100} value={batchLimit} onChange={(event) => setBatchLimit(event.target.value)} />
+            <input className="glass-input w-20 text-xs" type="number" min={1} max={100} value={batchLimit} title="Number of top matching leads to act on. Selected rows override this number." onChange={(event) => setBatchLimit(event.target.value)} />
           </label>
-          <button type="button" className="btn-primary text-xs" disabled={busy !== null} onClick={() => queueEnrichmentBatch("queue-enrichment", batchInput())}>
-            {busy === "queue-enrichment" ? "Queueing..." : `Set Top ${batchLimitNumber()} for Enrichment`}
+          <button type="button" className="btn-primary text-xs" title="Put the top matching leads into the enrichment backlog. This does not instantly enrich them; the enrichment worker processes the backlog." disabled={busy !== null} onClick={() => queueEnrichmentBatch("queue-enrichment", batchInput())}>
+            {busy === "queue-enrichment" ? "Sending..." : `Send Top ${batchLimitNumber()} to Enrichment`}
           </button>
-          <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={() => queueAiBatch("queue-ai", batchInput())}>
-            {busy === "queue-ai" ? "Queueing..." : `Queue Top ${batchLimitNumber()} for AI`}
+          <button type="button" className="btn-glass text-xs" title="Put the top matching leads into the AI queue. They will show as Waiting for AI until the worker processes them." disabled={busy !== null} onClick={() => queueAiBatch("queue-ai", batchInput())}>
+            {busy === "queue-ai" ? "Sending..." : `Send Top ${batchLimitNumber()} to AI Queue`}
           </button>
-          <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={() => runBatch("run-now", batchInput())}>
-            {busy === "run-now" ? "Verifying..." : `Run AI Now (${batchLimitNumber()})`}
+          <button type="button" className="btn-glass text-xs" title="Process the top matching leads immediately in this request. Results should change from Not sent or Waiting to a completed AI outcome." disabled={busy !== null} onClick={() => runBatch("run-now", batchInput())}>
+            {busy === "run-now" ? "Processing..." : `Process AI Now (${batchLimitNumber()})`}
           </button>
-          <button type="button" className="btn-glass text-xs" disabled={busy !== null || selectedIds.length === 0} onClick={() => queueEnrichmentBatch("selected-enrichment", batchInput(selectedIds))}>
-            {busy === "selected-enrichment" ? "Queueing..." : `Enrich Selected (${selectedIds.length})`}
+          <button type="button" className="btn-glass text-xs" title="Put only the selected rows into the enrichment backlog." disabled={busy !== null || selectedIds.length === 0} onClick={() => queueEnrichmentBatch("selected-enrichment", batchInput(selectedIds))}>
+            {busy === "selected-enrichment" ? "Sending..." : `Send Selected to Enrichment (${selectedIds.length})`}
           </button>
-          <button type="button" className="btn-glass text-xs" disabled={busy !== null || selectedIds.length === 0} onClick={() => queueAiBatch("selected-ai", batchInput(selectedIds))}>
-            {busy === "selected-ai" ? "Queueing..." : `AI Selected (${selectedIds.length})`}
+          <button type="button" className="btn-glass text-xs" title="Put only the selected rows into the AI queue." disabled={busy !== null || selectedIds.length === 0} onClick={() => queueAiBatch("selected-ai", batchInput(selectedIds))}>
+            {busy === "selected-ai" ? "Sending..." : `Send Selected to AI Queue (${selectedIds.length})`}
           </button>
-          <HelpTip>Batch actions use the current country, market, cell, quality, and text filters. Queueing marks leads for workers; Run AI Now verifies immediately.</HelpTip>
+          <HelpTip>Send to AI Queue means waiting for a background worker. Process AI Now runs verification immediately and should produce a completed AI outcome.</HelpTip>
           {message && <span className="text-xs" style={{ color: "#166534" }}>{message}</span>}
         </div>
       </section>
@@ -463,7 +480,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
                       <div className="text-xs" style={{ color: "var(--text-tertiary)" }}>{lead.postal_code ?? lead.country_code ?? ""}</div>
                     </td>
                     <td>
-                      <span style={badge("#4338ca", "rgba(99,102,241,0.1)")}>{lead.enrichment_status}</span>
+                      <span style={badge("#4338ca", "rgba(99,102,241,0.1)")} title={enrichmentHelp(lead.enrichment_status)}>{enrichmentLabel(lead.enrichment_status)}</span>
                     </td>
                     <td>
                       <span style={websiteFindingStyle(lead)}>{websiteFindingLabel(lead)}</span>
@@ -492,21 +509,22 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
                     </td>
                     <td className="min-w-72">
                       <div className="flex flex-wrap gap-1.5">
-                        <button type="button" className="btn-glass text-[0.68rem]" disabled={busy !== null} onClick={() => updatePhone(lead.id, "works")}>Phone Works</button>
-                        <button type="button" className="btn-glass text-[0.68rem]" disabled={busy !== null} onClick={() => updatePhone(lead.id, "bad")}>Phone Bad</button>
-                        <button type="button" className="btn-glass text-[0.68rem]" disabled={busy !== null} onClick={() => markBucket(lead.id, "ready_to_call")}>Ready</button>
-                        <button type="button" className="btn-glass text-[0.68rem]" disabled={busy !== null} onClick={() => markBucket(lead.id, "needs_manual_review")}>Manual</button>
-                        <button type="button" className="btn-glass text-[0.68rem]" disabled={busy !== null} onClick={() => markBucket(lead.id, "broken_site_opportunity")}>Broken</button>
-                        <button type="button" className="btn-primary text-[0.68rem]" disabled={busy !== null} onClick={() => markContacted(lead)}>Contacted</button>
+                        <button type="button" className="btn-glass text-[0.68rem]" title="Mark this phone number as callable." disabled={busy !== null} onClick={() => updatePhone(lead.id, "works")}>Phone Works</button>
+                        <button type="button" className="btn-glass text-[0.68rem]" title="Mark this phone number as bad or unusable." disabled={busy !== null} onClick={() => updatePhone(lead.id, "bad")}>Phone Bad</button>
+                        <button type="button" className="btn-glass text-[0.68rem]" title="Mark this lead ready for a call." disabled={busy !== null} onClick={() => markBucket(lead.id, "ready_to_call")}>Ready</button>
+                        <button type="button" className="btn-glass text-[0.68rem]" title="Send this lead to manual review before calling." disabled={busy !== null} onClick={() => markBucket(lead.id, "needs_manual_review")}>Manual</button>
+                        <button type="button" className="btn-glass text-[0.68rem]" title="Mark this as a broken or weak website opportunity." disabled={busy !== null} onClick={() => markBucket(lead.id, "broken_site_opportunity")}>Broken</button>
+                        <button type="button" className="btn-primary text-[0.68rem]" title="Log this lead as contacted from the Quality workspace." disabled={busy !== null} onClick={() => markContacted(lead)}>Contacted</button>
                       </div>
                       <div className="mt-2 flex gap-2">
                         <input
                           className="glass-input min-w-36 flex-1 text-xs"
                           placeholder="Quick note"
+                          title="Add an internal note to this lead."
                           value={noteDrafts[lead.id] ?? ""}
                           onChange={(event) => setNoteDrafts((current) => ({ ...current, [lead.id]: event.target.value }))}
                         />
-                        <button type="button" className="btn-glass text-xs" disabled={busy !== null || !(noteDrafts[lead.id] ?? "").trim()} onClick={() => addNote(lead.id)}>Add</button>
+                        <button type="button" className="btn-glass text-xs" title="Save this internal lead note." disabled={busy !== null || !(noteDrafts[lead.id] ?? "").trim()} onClick={() => addNote(lead.id)}>Add</button>
                       </div>
                     </td>
                   </tr>
@@ -518,9 +536,9 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
 
         {totalPages > 1 && (
           <div className="mt-4 flex items-center justify-center gap-2">
-            <button type="button" className="btn-glass text-xs" disabled={page <= 1} onClick={() => updateFilter("page", String(page - 1))}>Previous</button>
+            <button type="button" className="btn-glass text-xs" title="Go to the previous page of quality leads." disabled={page <= 1} onClick={() => updateFilter("page", String(page - 1))}>Previous</button>
             <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>Page {page} of {totalPages}</span>
-            <button type="button" className="btn-glass text-xs" disabled={page >= totalPages} onClick={() => updateFilter("page", String(page + 1))}>Next</button>
+            <button type="button" className="btn-glass text-xs" title="Go to the next page of quality leads." disabled={page >= totalPages} onClick={() => updateFilter("page", String(page + 1))}>Next</button>
           </div>
         )}
       </section>
@@ -530,7 +548,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
 
 function MetricCard({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="glass rounded-2xl px-4 py-3">
+    <div className="glass rounded-2xl px-4 py-3" title={metricHelp(label)}>
       <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
       <p className="mt-1 text-xl font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
     </div>
@@ -550,10 +568,16 @@ function offerLabel(value: string): string {
 }
 
 function websiteFindingLabel(lead: QualityLead): string {
+  const aiDisplay = getAiVerificationDisplay({
+    status: lead.ai_verification_status,
+    checkedAt: lead.ai_checked_at,
+    queueStatus: lead.ai_queue_status,
+    viability: lead.ai_website_viability_status,
+  });
+  if (!aiDisplay.hasRun) return aiDisplay.label;
   if (lead.ai_verification_status === "no_site_found" || lead.ai_website_viability_status === "directory_only") return "AI no usable site";
   if (lead.ai_verification_status === "weak_site_found") return `Weak site: ${lead.ai_website_viability_status ?? "unknown"}`;
   if (lead.ai_verification_status === "uncertain" || lead.ai_verification_status === "mismatch") return "Needs review";
-  if (lead.ai_verification_status === "not_checked") return "AI not run";
   return lead.website_status;
 }
 
@@ -578,13 +602,85 @@ function ArtifactBadge({ type, status }: { type: "brief" | "report"; status: str
       : status === "error"
         ? badge("#991b1b", "rgba(239,68,68,0.1)")
         : badge("#4b5563", "rgba(107,114,128,0.1)");
-  return <span style={{ ...style, fontSize: "0.68rem" }}>{label}</span>;
+  return <span style={{ ...style, fontSize: "0.68rem" }} title={artifactHelp(type, status)}>{label}</span>;
 }
 
 function artifactBadgeLabel(type: "brief" | "report", status: string | null): string {
   if (status === "complete") return type === "brief" ? "Brief ready" : "Report ready";
   if (status === "queued" || status === "running") return "Generating";
   return "Missing";
+}
+
+function metricHelp(label: string): string {
+  if (label === "No AI Result Yet") return "Leads that do not have a completed AI verification result yet. They may be not sent, waiting, or processing.";
+  if (label === "AI Verified No Website") return "Leads where AI completed verification and found no usable website.";
+  if (label === "Broken Site Opportunities") return "Leads with weak, broken, placeholder, or similar website opportunities.";
+  if (label === "Ready to Call") return "Leads currently marked ready for phone outreach.";
+  if (label === "Needs Manual Review") return "Leads that need a human check before calling.";
+  return label;
+}
+
+function artifactHelp(type: "brief" | "report", status: string | null): string {
+  const name = type === "brief" ? "business detail brief" : "competitive report";
+  if (status === "complete") return `The ${name} is ready.`;
+  if (status === "queued" || status === "running") return `The ${name} is being generated.`;
+  if (status === "error") return `The ${name} failed to generate.`;
+  return `No ${name} has been generated yet.`;
+}
+
+type QualityFilterChip = {
+  key: string;
+  label: string;
+  value: string;
+  help: string;
+  remove: Record<string, string | null>;
+};
+
+function qualityFilterChips(filters: QualityFilters, selectedMarket: LocationMarket | null, locationCells: LocationCell[]): QualityFilterChip[] {
+  const chips: QualityFilterChip[] = [];
+  if (filters.countryCode) {
+    chips.push({
+      key: "countryCode",
+      label: "Country",
+      value: countryLabel(filters.countryCode),
+      help: "Country filter applied to the quality list.",
+      remove: { countryCode: null, marketId: null, locationCellId: null },
+    });
+  }
+  if (filters.marketId) {
+    chips.push({
+      key: "marketId",
+      label: "Market",
+      value: selectedMarket ? marketLabel(selectedMarket) : filters.marketId,
+      help: "Market filter applied to the quality list.",
+      remove: { marketId: null, locationCellId: null },
+    });
+  }
+  if (filters.locationCellId) {
+    const cell = locationCells.find((item) => item.id === filters.locationCellId);
+    chips.push({
+      key: "locationCellId",
+      label: "Cell",
+      value: cell?.cell_label ?? filters.locationCellId,
+      help: "Postal, postcode, or area cell filter applied to the quality list.",
+      remove: { locationCellId: null },
+    });
+  }
+  addQualityChip(chips, "city", "City", filters.city, "City filter applied to the quality list.", { city: null });
+  addQualityChip(chips, "zip", "Postal", filters.zip, "Postal or postcode filter applied to the quality list.", { zip: null });
+  addQualityChip(chips, "search", "Search", filters.search, "Text search applied to the quality list.", { search: null });
+  addQualityChip(chips, "qualityBucket", "Quality", filters.qualityBucket ? bucketLabel(String(filters.qualityBucket)) : null, "Quality bucket filter applied.", { qualityBucket: null });
+  addQualityChip(chips, "businessType", "Type", filters.businessType ? getBusinessTypeLabel(String(filters.businessType)) : null, "Business type filter applied.", { businessType: null });
+  addQualityChip(chips, "recommendedOffer", "Offer", filters.recommendedOffer ? offerLabel(String(filters.recommendedOffer)) : null, "Recommended offer filter applied.", { recommendedOffer: null });
+  addQualityChip(chips, "phoneVerificationStatus", "Phone", filters.phoneVerificationStatus ? phoneLabel(String(filters.phoneVerificationStatus)) : null, "Phone verification filter applied.", { phoneVerificationStatus: null });
+  addQualityChip(chips, "aiVerificationStatus", "AI outcome", filters.aiVerificationStatus ? aiStatusLabel(String(filters.aiVerificationStatus)) : null, "Completed AI outcome filter applied.", { aiVerificationStatus: null });
+  addQualityChip(chips, "enrichmentStatus", "Enrichment", filters.enrichmentStatus ? enrichmentLabel(String(filters.enrichmentStatus)) : null, "Enrichment status filter applied.", { enrichmentStatus: null });
+  return chips;
+}
+
+function addQualityChip(chips: QualityFilterChip[], key: string, label: string, value: string | null | undefined, help: string, remove: Record<string, string | null>): void {
+  if (!value) return;
+  chips.push({ key, label, value, help, remove });
 }
 
 function marketLabel(market: LocationMarket): string {
@@ -597,6 +693,22 @@ function countryLabel(value: string): string {
 
 function qualityLeadLocation(lead: QualityLead): string {
   return lead.locality || lead.city || extractLocationFromAddress(lead.address) || "N/A";
+}
+
+function aiStatusLabel(value: string): string {
+  return AI_OPTIONS.find((option) => option.value === value)?.label ?? value.replace(/_/g, " ");
+}
+
+function enrichmentLabel(value: string): string {
+  if (value === "pending") return "Needs enrichment";
+  return value.replace(/_/g, " ");
+}
+
+function enrichmentHelp(value: string): string {
+  if (value === "pending") return "This lead is in the enrichment backlog. A worker still has to fetch details and update the lead.";
+  if (value === "enriched") return "Google details enrichment has completed for this lead.";
+  if (value === "skipped") return "Enrichment was skipped for this lead.";
+  return "Current enrichment state.";
 }
 
 function extractLocationFromAddress(address: string | null): string | null {

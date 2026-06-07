@@ -1203,10 +1203,10 @@ export function DashboardClient({
               <h3 className="section-label">Lead Enrichment</h3>
               <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>Enrich top leads with detailed reviews, website health checks, and competitive analysis.</p>
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <button type="button" className="btn-primary text-sm" onClick={handleEnrich} disabled={loading || isEnriching}>
+                <button type="button" className="btn-primary text-sm" title="Process the enrichment backlog one lead at a time while this page polls the worker." onClick={handleEnrich} disabled={loading || isEnriching}>
                   {isEnriching ? "Enriching..." : "Enrich Top Leads"}
                 </button>
-                {isEnriching && <button type="button" className="btn-glass text-sm" onClick={() => setIsEnriching(false)}>Stop Local Polling</button>}
+                {isEnriching && <button type="button" className="btn-glass text-sm" title="Stop this browser from polling. It does not cancel server-side worker jobs." onClick={() => setIsEnriching(false)}>Stop Local Polling</button>}
                 {enrichProgress && <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Last: {enrichProgress}</span>}
               </div>
             </section>
@@ -1219,14 +1219,14 @@ export function DashboardClient({
               <MetricCard label="Running" value={String(stats.aiQueueStats.running)} />
               <MetricCard label="Verified" value={String(stats.aiQueueStats.verified)} />
               <MetricCard label="Errors" value={String(stats.aiQueueStats.error)} />
-              <MetricCard label="AI Not Run" value={String(stats.aiQueueStats.notChecked)} />
+              <MetricCard label="Not Sent to AI" value={String(stats.aiQueueStats.notChecked)} />
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-3">
-              <button type="button" className="btn-primary text-sm" onClick={handleAiVerify} disabled={loading || isAiVerifying || stats.aiQueueStats.queued === 0}>
+              <button type="button" className="btn-primary text-sm" title="Process queued AI verification jobs now while this page polls for progress." onClick={handleAiVerify} disabled={loading || isAiVerifying || stats.aiQueueStats.queued === 0}>
                 {isAiVerifying ? "Verifying..." : "Process AI Queue"}
               </button>
-              {isAiVerifying && <button type="button" className="btn-glass text-sm" onClick={() => setIsAiVerifying(false)}>Stop Local Polling</button>}
-              <button type="button" className="btn-glass text-sm" onClick={handleQueueMissingAi} disabled={loading || aiBackfillLoading || stats.aiQueueStats.notChecked === 0}>
+              {isAiVerifying && <button type="button" className="btn-glass text-sm" title="Stop this browser from polling. It does not cancel server-side AI jobs." onClick={() => setIsAiVerifying(false)}>Stop Local Polling</button>}
+              <button type="button" className="btn-glass text-sm" title="Put leads with no AI result into the AI queue. They will show as Waiting for AI until processed." onClick={handleQueueMissingAi} disabled={loading || aiBackfillLoading || stats.aiQueueStats.notChecked === 0}>
                 {aiBackfillLoading ? "Queueing..." : "Queue Missing AI Verifications"}
               </button>
               {aiProgress && <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Last: {aiProgress}</span>}

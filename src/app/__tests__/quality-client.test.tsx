@@ -142,8 +142,8 @@ describe("QualityClient", () => {
     expect(html).toContain("Current scope:");
     expect(html).toContain("London, ON N6H");
     expect(html).toContain("Country filter");
-    expect(html).toContain("Set Top 25 for Enrichment");
-    expect(html).toContain("Queue Top 25 for AI");
-    expect(html).toContain("Pending enrichment");
+    expect(html).toContain("Send Top 25 to Enrichment");
+    expect(html).toContain("Send Top 25 to AI Queue");
+    expect(html).toContain("Needs enrichment");
   });
 });

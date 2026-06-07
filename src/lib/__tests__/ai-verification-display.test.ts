@@ -4,7 +4,7 @@ import { getAiVerificationDisplay } from "@/lib/ai-verification-display";
 describe("AI verification display", () => {
   it("clearly labels leads that have never had AI verification run", () => {
     expect(getAiVerificationDisplay({ status: "not_checked", checkedAt: null, queueStatus: "not_checked" })).toMatchObject({
-      label: "AI not run",
+      label: "Not sent to AI",
       hasRun: false,
       tone: "muted",
     });
@@ -12,13 +12,13 @@ describe("AI verification display", () => {
 
   it("distinguishes queued and running work from completed AI verification", () => {
     expect(getAiVerificationDisplay({ status: "not_checked", checkedAt: null, queueStatus: "queued" })).toMatchObject({
-      label: "AI queued",
+      label: "Waiting for AI",
       hasRun: false,
       tone: "pending",
     });
 
     expect(getAiVerificationDisplay({ status: "not_checked", checkedAt: null, queueStatus: "running" })).toMatchObject({
-      label: "AI running",
+      label: "AI processing",
       hasRun: false,
       tone: "pending",
     });
