@@ -17,9 +17,12 @@ import {
   createCrawlRun,
   createCrawlUnitsForCells,
   createCrawlUnitsForSelection,
+  ensureGeographyBackfill,
   getActiveCrawlRun,
   getCrawlProgress,
   getProcessingCrawlRun,
+  getPlannerCells,
+  getPlannerMarkets,
   listDiscoveryItems,
   getCoverageByCounty,
   getCoverageByState,
@@ -125,6 +128,29 @@ describe("state county zip planner queries", () => {
       zip: "M5V",
       query_location_label: "Toronto, Ontario, M5V, Canada",
     });
+  });
+
+  it("seeds London Ontario N6H as a Canadian discovery cell", async () => {
+    await ensureGeographyBackfill();
+
+    const markets = await getPlannerMarkets();
+    expect(markets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "market-london-ca",
+        name: "London, Ontario",
+        country_code: "CA",
+      }),
+    ]));
+
+    const cells = await getPlannerCells("market-london-ca", ["dentist"]);
+    expect(cells).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "cell-ca-london-on-n6h",
+        country_code: "CA",
+        postal_code_normalized: "N6H",
+        cell_label: "London, ON N6H",
+      }),
+    ]));
   });
 
   it("aggregates coverage by county and state correctly", async () => {

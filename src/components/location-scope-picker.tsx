@@ -7,7 +7,13 @@ import {
   getPlannerCountiesAction,
   getPlannerZipCodesAction,
 } from "@/lib/crawl/actions";
-import type { CountryCode, LocationCellType } from "@/lib/geography";
+import {
+  COUNTRY_NAMES,
+  isValidPostalCell,
+  normalizePostalCode,
+  type CountryCode,
+  type LocationCellType,
+} from "@/lib/geography";
 
 type PlannerMarketOption = {
   id: string;
@@ -58,6 +64,7 @@ export type LocationScopeValue = {
   state: string;
   counties: string[];
   zipCodes: string[];
+  countryCode?: CountryCode;
   marketId?: string;
   cellIds?: string[];
 };
@@ -73,38 +80,66 @@ function toKey(values: readonly string[]): string {
   return [...values].sort().join("|");
 }
 
+const COUNTRY_OPTIONS: CountryCode[] = ["US", "CA", "GB"];
+
+function formatMarketLabel(market: PlannerMarketOption): string {
+  return [market.name, market.admin_area1].filter(Boolean).join(", ");
+}
+
 export function LocationScopePicker({ value, categories, onChange, disabled = false }: LocationScopePickerProps) {
+  const [initialCountry] = useState<CountryCode>(value.countryCode ?? "US");
+  const [initialMarketId] = useState(value.marketId ?? "");
   const [markets, setMarkets] = useState<PlannerMarketOption[]>([]);
-  const [selectedMarketId, setSelectedMarketId] = useState(value.marketId ?? "");
+  const [selectedCountry, setSelectedCountry] = useState<CountryCode>(initialCountry);
+  const [selectedMarketId, setSelectedMarketId] = useState(initialMarketId);
   const [cells, setCells] = useState<PlannerCellOption[]>([]);
+  const [countryCells, setCountryCells] = useState<PlannerCellOption[]>([]);
   const [selectedCellIds, setSelectedCellIds] = useState<string[]>(value.cellIds ?? []);
   const [cellFilter, setCellFilter] = useState("");
+  const [postalEntry, setPostalEntry] = useState("");
+  const [postalFeedback, setPostalFeedback] = useState<string | null>(null);
   const [incompleteOnly, setIncompleteOnly] = useState(false);
   const [legacyZips, setLegacyZips] = useState<LegacyPlannerZipOption[]>([]);
 
   const categoryKey = useMemo(() => toKey(categories), [categories]);
   const selectedCellSet = useMemo(() => new Set(selectedCellIds), [selectedCellIds]);
   const selectedMarket = markets.find((market) => market.id === selectedMarketId) ?? null;
+  const marketsForCountry = useMemo(
+    () => markets.filter((market) => market.country_code === selectedCountry),
+    [markets, selectedCountry],
+  );
+  const selectedCountryCellMatches = useMemo(() => {
+    const normalized = normalizePostalCode(selectedCountry, postalEntry);
+    if (!normalized) return [];
+    return countryCells.filter((cell) => (
+      normalizePostalCode(cell.country_code, cell.postal_code_normalized ?? cell.postal_code ?? "") === normalized
+    ));
+  }, [countryCells, postalEntry, selectedCountry]);
 
   useEffect(() => {
     onChange({
       state: selectedMarket?.admin_area1 ?? value.state ?? "CO",
       counties: [],
       zipCodes: cells.filter((cell) => selectedCellSet.has(cell.id)).map((cell) => cell.postal_code_normalized ?? cell.postal_code ?? cell.id),
+      countryCode: selectedCountry,
       marketId: selectedMarketId || undefined,
       cellIds: selectedCellIds,
     });
-  }, [cells, onChange, selectedCellIds, selectedCellSet, selectedMarket, selectedMarketId, value.state]);
+  }, [cells, onChange, selectedCellIds, selectedCellSet, selectedCountry, selectedMarket, selectedMarketId, value.state]);
 
   useEffect(() => {
     let ignore = false;
     getPlannerMarketsAction().then((rows) => {
       if (ignore) return;
       setMarkets(rows);
-      setSelectedMarketId((previous) => previous || rows[0]?.id || "");
+      const explicitMarket = initialMarketId ? rows.find((market) => market.id === initialMarketId) : null;
+      const nextCountry = explicitMarket?.country_code ?? initialCountry ?? rows[0]?.country_code ?? "US";
+      const firstCountryMarket = rows.find((market) => market.country_code === nextCountry) ?? rows[0];
+      setSelectedCountry(nextCountry);
+      setSelectedMarketId((previous) => previous || explicitMarket?.id || firstCountryMarket?.id || "");
     });
     return () => { ignore = true; };
-  }, []);
+  }, [initialCountry, initialMarketId]);
 
   useEffect(() => {
     if (!selectedMarketId) return;
@@ -117,6 +152,24 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
     });
     return () => { ignore = true; };
   }, [selectedMarketId, categoryKey, categories]);
+
+  useEffect(() => {
+    if (markets.length === 0) return;
+    const countryMarkets = markets.filter((market) => market.country_code === selectedCountry);
+    if (countryMarkets.length === 0) {
+      let ignore = false;
+      Promise.resolve([] as PlannerCellOption[]).then((rows) => {
+        if (!ignore) setCountryCells(rows);
+      });
+      return () => { ignore = true; };
+    }
+    let ignore = false;
+    Promise.all(countryMarkets.map((market) => getPlannerCellsAction(market.id, categories))).then((groups) => {
+      if (ignore) return;
+      setCountryCells(groups.flat());
+    });
+    return () => { ignore = true; };
+  }, [markets, selectedCountry, categoryKey, categories]);
 
   useEffect(() => {
     if (selectedMarketId !== "market-colorado") return;
@@ -148,6 +201,24 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
   const selectAllVisible = () => setSelectedCellIds(visibleCells.map((cell) => cell.id));
   const clearCells = () => setSelectedCellIds([]);
 
+  const applyPostalEntry = () => {
+    const normalized = normalizePostalCode(selectedCountry, postalEntry);
+    if (!normalized || !isValidPostalCell(selectedCountry, postalEntry)) {
+      setPostalFeedback(`Enter a valid ${COUNTRY_NAMES[selectedCountry]} postal code.`);
+      return;
+    }
+    const match = selectedCountryCellMatches[0];
+    if (!match) {
+      setPostalFeedback(`No active discovery cell exists for ${normalized} yet.`);
+      return;
+    }
+    setPostalFeedback(`Selected ${match.cell_label}.`);
+    setSelectedCountry(match.country_code);
+    setSelectedMarketId(match.market_id);
+    setSelectedCellIds([match.id]);
+    setCellFilter(normalized);
+  };
+
   const selectedZipCount = selectedMarketId === "market-colorado"
     ? legacyZips.filter((zip) => selectedCellIds.includes(`cell-us-co-${zip.zip}`)).length || selectedCellIds.length
     : selectedCellIds.length;
@@ -155,18 +226,100 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
   return (
     <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)" }}>
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-        <span>{selectedMarket?.name ?? "No market"}</span>
+        <span>{COUNTRY_NAMES[selectedCountry]}</span>
         <span>•</span>
-        <span>{selectedMarket?.country_code ?? "--"}</span>
+        <span>{selectedMarket ? formatMarketLabel(selectedMarket) : "No area"}</span>
         <span>•</span>
         <span>{selectedCellIds.length} location cells</span>
         {selectedMarketId === "market-colorado" && <span>• {selectedZipCount} ZIP-compatible selections</span>}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(16rem,0.75fr)_1fr]">
+      <div className="grid gap-4 lg:grid-cols-[0.8fr_1fr_1.2fr]">
         <div className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>
-            Market
+            Country
+          </p>
+          <select
+            className="glass-input w-full"
+            value={selectedCountry}
+            disabled={disabled}
+            onChange={(event) => {
+              const nextCountry = event.target.value as CountryCode;
+              const nextMarket = markets.find((market) => market.country_code === nextCountry);
+              setSelectedCountry(nextCountry);
+              setSelectedMarketId(nextMarket?.id ?? "");
+              setSelectedCellIds([]);
+              setCells([]);
+              setCellFilter("");
+              setPostalFeedback(null);
+            }}
+          >
+            {COUNTRY_OPTIONS.map((country) => (
+              <option key={country} value={country}>{COUNTRY_NAMES[country]}</option>
+            ))}
+          </select>
+          <p className="text-xs leading-5" style={{ color: "var(--text-secondary)" }}>
+            Country is the top-level market. Areas below only organize the postal cells used by Google Places.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>
+            Postal / postcode search
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              className="glass-input w-full"
+              placeholder={selectedCountry === "CA" ? "N6H5R8 or N6H" : selectedCountry === "GB" ? "SW1A 1AA" : "80202"}
+              value={postalEntry}
+              disabled={disabled}
+              onChange={(event) => {
+                setPostalEntry(event.target.value);
+                setPostalFeedback(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  applyPostalEntry();
+                }
+              }}
+            />
+            <button type="button" className="btn-glass shrink-0 text-xs" onClick={applyPostalEntry} disabled={disabled || !postalEntry.trim()}>
+              Use
+            </button>
+          </div>
+          {postalFeedback && (
+            <p className="text-xs leading-5" style={{ color: postalFeedback.startsWith("Selected") ? "#166534" : "#92400e" }}>
+              {postalFeedback}
+            </p>
+          )}
+          {selectedCountryCellMatches.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {selectedCountryCellMatches.slice(0, 3).map((cell) => (
+                <button
+                  key={cell.id}
+                  type="button"
+                  className="rounded-full px-2.5 py-1 text-xs"
+                  style={{ background: "rgba(99,102,241,0.12)", color: "var(--accent)" }}
+                  disabled={disabled}
+                  onClick={() => {
+                    setSelectedMarketId(cell.market_id);
+                    setSelectedCellIds([cell.id]);
+                    setCellFilter(cell.postal_code_normalized ?? cell.postal_code ?? "");
+                    setPostalFeedback(`Selected ${cell.cell_label}.`);
+                  }}
+                >
+                  {cell.cell_label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>
+            Area
           </p>
           <select
             className="glass-input w-full"
@@ -179,17 +332,19 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
               setCellFilter("");
             }}
           >
-            {markets.map((market) => (
+            {marketsForCountry.map((market) => (
               <option key={market.id} value={market.id}>
-                {market.name} - {market.country_code} ({market.activeCellCount} active cells)
+                {formatMarketLabel(market)} ({market.activeCellCount} active cells)
               </option>
             ))}
           </select>
           <p className="text-xs leading-5" style={{ color: "var(--text-secondary)" }}>
-            Coverage uses country-specific cells: U.S. ZIPs, Canadian FSAs, and U.K. outward postcodes. Add more markets in the database before selecting them here.
+            If the postal search finds a different area, it switches here automatically.
           </p>
         </div>
+      </div>
 
+      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(16rem,0.75fr)_1fr]">
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>

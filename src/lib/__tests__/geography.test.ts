@@ -10,12 +10,15 @@ describe("international geography helpers", () => {
 
   it("normalizes and validates Canadian FSA cells", () => {
     expect(normalizePostalCode("CA", "m5v")).toBe("M5V");
+    expect(normalizePostalCode("CA", "N6H5R8")).toBe("N6H");
+    expect(normalizePostalCode("CA", "N6H 5R8")).toBe("N6H");
     expect(isValidPostalCell("CA", "M5V", "postal_fsa")).toBe(true);
-    expect(isValidPostalCell("CA", "M5V 2T6", "postal_fsa")).toBe(false);
+    expect(isValidPostalCell("CA", "M5V 2T6", "postal_fsa")).toBe(true);
   });
 
   it("normalizes and validates U.K. outward postcode cells", () => {
     expect(normalizePostalCode("GB", " sw1a ")).toBe("SW1A");
+    expect(normalizePostalCode("GB", "SW1A 1AA")).toBe("SW1A");
     expect(isValidPostalCell("GB", "SW1A", "postcode_outward")).toBe(true);
     expect(isValidPostalCell("GB", "EC", "postcode_area")).toBe(true);
     expect(isValidPostalCell("GB", "80202", "postcode_outward")).toBe(false);

@@ -705,7 +705,9 @@ export function DashboardClient({
   const visibleRun = discoveryItems.find((item) => item.id === stats.runId) ?? null;
   const pausedDiscoveryItems = discoveryItems.filter((item) => item.status === "paused");
   const selectedCellCount = locationScope.cellIds?.length ?? locationScope.zipCodes.length;
-  const selectedMarketLabel = locationScope.marketId || locationScope.state || "No market";
+  const selectedMarketLabel = locationScope.countryCode
+    ? `${locationScope.countryCode}${locationScope.marketId ? ` · ${locationScope.marketId}` : ""}`
+    : locationScope.marketId || locationScope.state || "No country";
   const estimatedUnitCount = selectedCellCount * selectedCategories.length;
   const hasEstimateSelection = selectedCellCount > 0 && selectedCategories.length > 0;
   const activeBudgetEstimate = hasEstimateSelection ? budgetEstimate : null;
@@ -727,7 +729,7 @@ export function DashboardClient({
   const claimedActive = currentTeamSummary.members.reduce((sum, member) => sum + member.claimed_active, 0);
   const openStartConfirmation = () => setConfirmAction({
     title: "Start discovery run?",
-    message: `Market: ${selectedMarketLabel}. Cells selected: ${selectedCellCount}. Categories selected: ${selectedCategories.length}. Estimated crawl units: ${estimatedUnitCount}. Google calls: ${activeBudgetEstimate?.estimatedSearchCalls ?? "unknown"} max. Mode: ${discoveryMode.replace(/_/g, " ")}.`,
+    message: `Country/area: ${selectedMarketLabel}. Cells selected: ${selectedCellCount}. Categories selected: ${selectedCategories.length}. Estimated crawl units: ${estimatedUnitCount}. Google calls: ${activeBudgetEstimate?.estimatedSearchCalls ?? "unknown"} max. Mode: ${discoveryMode.replace(/_/g, " ")}.`,
     action: handleStart,
   });
   const applyTestRunPreset = () => {
@@ -846,7 +848,7 @@ export function DashboardClient({
           <div>
             <h3 className="section-label">Start Discovery</h3>
             <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-              Pick a market, choose location cells, and run either a cheap coverage probe or a lead harvest that creates active leads.
+              Pick a country, enter a ZIP/postal/postcode when you have one, then run either a cheap coverage probe or a lead harvest that creates active leads.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -999,7 +1001,7 @@ export function DashboardClient({
           onChange={setLocationScope}
         />
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
-          <SummaryChip label={`Market: ${selectedMarketLabel}`} />
+          <SummaryChip label={`Country/area: ${selectedMarketLabel}`} />
           <SummaryChip label={`Cells: ${selectedCellCount}`} />
           <SummaryChip label={`Categories: ${selectedCategories.length}`} />
           <SummaryChip label={`Estimated units: ${estimatedUnitCount}`} />

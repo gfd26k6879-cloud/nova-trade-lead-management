@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import type { AppUser } from "@/lib/app-users";
 import type { LocationMarket, UserMarketAccess } from "@/lib/db/queries";
+import { COUNTRY_NAMES, type CountryCode } from "@/lib/geography";
 import type { AppRole } from "@/lib/permissions";
 import {
   createUserAction,
@@ -113,17 +114,14 @@ export function UsersClient({
     });
   };
 
-  const handleMarketToggle = (user: AppUser, marketId: string) => {
+  const saveMarketAccess = (user: AppUser, nextIds: string[]) => {
     const current = marketAccess[user.user_id] ?? [];
-    const currentIds = new Set(current.map((entry) => entry.market_id));
-    if (currentIds.has(marketId)) currentIds.delete(marketId);
-    else currentIds.add(marketId);
-    const nextIds = Array.from(currentIds);
     const previous = current;
+    const uniqueNextIds = Array.from(new Set(nextIds));
     setMarketAccess((state) => ({
       ...state,
       [user.user_id]: markets
-        .filter((market) => nextIds.includes(market.id))
+        .filter((market) => uniqueNextIds.includes(market.id))
         .map((market) => ({
           user_id: user.user_id,
           market_id: market.id,
@@ -133,7 +131,7 @@ export function UsersClient({
         })),
     }));
     startTransition(async () => {
-      const result = await updateUserMarketAccessAction(user.user_id, { marketIds: nextIds });
+      const result = await updateUserMarketAccessAction(user.user_id, { marketIds: uniqueNextIds });
       if ("error" in result) {
         toast.error(result.error);
         setMarketAccess((state) => ({ ...state, [user.user_id]: previous }));
@@ -142,6 +140,27 @@ export function UsersClient({
       setMarketAccess((state) => ({ ...state, [user.user_id]: result.access }));
       toast.success("Territories updated");
     });
+  };
+
+  const handleMarketToggle = (user: AppUser, marketId: string) => {
+    const current = marketAccess[user.user_id] ?? [];
+    const currentIds = new Set(current.map((entry) => entry.market_id));
+    if (currentIds.has(marketId)) currentIds.delete(marketId);
+    else currentIds.add(marketId);
+    saveMarketAccess(user, Array.from(currentIds));
+  };
+
+  const handleCountryToggle = (user: AppUser, countryCode: CountryCode) => {
+    const current = marketAccess[user.user_id] ?? [];
+    const currentIds = new Set(current.map((entry) => entry.market_id));
+    const countryMarketIds = markets.filter((market) => market.country_code === countryCode).map((market) => market.id);
+    const hasAllCountryMarkets = countryMarketIds.length > 0 && countryMarketIds.every((id) => currentIds.has(id));
+    if (hasAllCountryMarkets) {
+      countryMarketIds.forEach((id) => currentIds.delete(id));
+    } else {
+      countryMarketIds.forEach((id) => currentIds.add(id));
+    }
+    saveMarketAccess(user, Array.from(currentIds));
   };
 
   const assignedMarketIds = (userId: string) => new Set((marketAccess[userId] ?? []).map((entry) => entry.market_id));
@@ -266,6 +285,7 @@ export function UsersClient({
                   selectedMarketIds={assignedMarketIds(user.user_id)}
                   pending={pending}
                   onToggle={handleMarketToggle}
+                  onToggleCountry={handleCountryToggle}
                 />
               </div>
             </article>
@@ -350,6 +370,7 @@ export function UsersClient({
                       selectedMarketIds={assignedMarketIds(user.user_id)}
                       pending={pending}
                       onToggle={handleMarketToggle}
+                      onToggleCountry={handleCountryToggle}
                     />
                   </td>
                   <td className="py-4 capitalize">{user.status}</td>
@@ -391,12 +412,14 @@ function TerritorySelector({
   selectedMarketIds,
   pending,
   onToggle,
+  onToggleCountry,
 }: {
   user: AppUser;
   markets: LocationMarket[];
   selectedMarketIds: Set<string>;
   pending: boolean;
   onToggle: (user: AppUser, marketId: string) => void;
+  onToggleCountry: (user: AppUser, countryCode: CountryCode) => void;
 }) {
   if (user.role === "admin") {
     return (
@@ -407,19 +430,27 @@ function TerritorySelector({
   }
 
   const selectedMarkets = markets.filter((market) => selectedMarketIds.has(market.id));
-  const availableMarkets = markets.filter((market) => !selectedMarketIds.has(market.id));
+  const countryGroups = (["US", "CA", "GB"] as CountryCode[])
+    .map((countryCode) => ({
+      countryCode,
+      markets: markets.filter((market) => market.country_code === countryCode),
+    }))
+    .filter((group) => group.markets.length > 0);
+  const selectedCountryCount = countryGroups.filter((group) => (
+    group.markets.every((market) => selectedMarketIds.has(market.id))
+  )).length;
 
   return (
     <div className="rounded-xl px-3 py-3" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.45)" }}>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Market access</span>
+        <span className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>Country access</span>
         <span className="text-[11px]" style={{ color: selectedMarketIds.size === 0 ? "#b45309" : "var(--text-tertiary)" }}>
-          {selectedMarketIds.size === 0 ? "No access" : `${selectedMarketIds.size} selected`}
+          {selectedMarketIds.size === 0 ? "No access" : `${selectedCountryCount} countries`}
         </span>
       </div>
       {selectedMarkets.length === 0 ? (
         <p className="rounded-lg px-2 py-1.5 text-xs" style={{ background: "rgba(245,158,11,0.1)", color: "#92400e" }}>
-          No territory access. This researcher will not see leads until a market is selected.
+          No country access. This researcher will not see leads until a country is selected.
         </p>
       ) : (
         <div className="mb-2 flex flex-wrap gap-1.5">
@@ -432,48 +463,60 @@ function TerritorySelector({
       )}
       <div className="max-h-44 space-y-1 overflow-auto pr-1">
         {markets.length === 0 ? (
-          <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>No markets configured.</p>
+          <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>No countries configured.</p>
         ) : (
-          <>
-            {selectedMarkets.map((market) => (
+          <div className="space-y-1">
+            {countryGroups.map((group) => {
+              const selectedCount = group.markets.filter((market) => selectedMarketIds.has(market.id)).length;
+              const checked = selectedCount === group.markets.length;
+              const partial = selectedCount > 0 && !checked;
+              return (
               <label
-                key={market.id}
+                key={group.countryCode}
                 className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs"
-                style={{ background: "rgba(99,102,241,0.14)", color: "var(--text-primary)" }}
+                style={{ background: selectedCount > 0 ? "rgba(99,102,241,0.14)" : "rgba(255,255,255,0.25)", color: selectedCount > 0 ? "var(--text-primary)" : "var(--text-secondary)" }}
               >
                 <input
                   type="checkbox"
-                  checked
+                  checked={checked}
                   disabled={pending}
-                  aria-label={`Remove ${market.name} market access`}
-                  onChange={() => onToggle(user, market.id)}
+                  aria-label={`Toggle ${COUNTRY_NAMES[group.countryCode]} country access`}
+                  onChange={() => onToggleCountry(user, group.countryCode)}
                 />
-                <span className="font-medium">{market.name}</span>
-                <span style={{ color: "var(--text-tertiary)" }}>{market.country_code}</span>
-                <span className="ml-auto" style={{ color: "var(--accent)" }}>Selected</span>
+                <span className="font-medium">{COUNTRY_NAMES[group.countryCode]}</span>
+                <span style={{ color: "var(--text-tertiary)" }}>{group.countryCode}</span>
+                <span className="ml-auto" style={{ color: selectedCount > 0 ? "var(--accent)" : "var(--text-tertiary)" }}>
+                  {partial ? `${selectedCount}/${group.markets.length}` : checked ? "Selected" : "Available"}
+                </span>
               </label>
-            ))}
-            {availableMarkets.map((market) => (
-              <label
-                key={market.id}
-                className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs"
-                style={{ background: "rgba(255,255,255,0.25)", color: "var(--text-secondary)" }}
-              >
-                <input
-                  type="checkbox"
-                  checked={false}
-                  disabled={pending}
-                  aria-label={`Add ${market.name} market access`}
-                  onChange={() => onToggle(user, market.id)}
-                />
-                <span className="font-medium">{market.name}</span>
-                <span style={{ color: "var(--text-tertiary)" }}>{market.country_code}</span>
-                <span className="ml-auto" style={{ color: "var(--text-tertiary)" }}>Available</span>
-              </label>
-            ))}
-          </>
+              );
+            })}
+          </div>
         )}
       </div>
+      {selectedMarkets.length > 0 && (
+        <details className="mt-2 text-xs" style={{ color: "var(--text-secondary)" }}>
+          <summary className="cursor-pointer">Area details</summary>
+          <div className="mt-2 space-y-1">
+            {markets.map((market) => {
+              const checked = selectedMarketIds.has(market.id);
+              return (
+                <label key={market.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5" style={{ background: checked ? "rgba(99,102,241,0.1)" : "rgba(255,255,255,0.22)" }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={pending}
+                    aria-label={`${checked ? "Remove" : "Add"} ${market.name} area access`}
+                    onChange={() => onToggle(user, market.id)}
+                  />
+                  <span>{market.name}</span>
+                  <span className="ml-auto" style={{ color: "var(--text-tertiary)" }}>{market.country_code}</span>
+                </label>
+              );
+            })}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

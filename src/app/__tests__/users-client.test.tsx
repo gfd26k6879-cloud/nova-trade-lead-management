@@ -69,10 +69,12 @@ describe("UsersClient", () => {
     );
 
     expect(text).toContain("Users and Territories");
+    expect(text).toContain("Country access");
+    expect(text).toContain("United States");
     expect(text).toContain("Colorado · US");
     expect(text).toContain("Toronto");
     expect(text).toContain("Available");
-    expect(text).toContain("No territory access");
+    expect(text).toContain("No country access");
     expect(text).toContain("Admins can access all markets.");
   });
 });

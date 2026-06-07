@@ -75,6 +75,7 @@ ON CONFLICT (id) DO UPDATE SET
 
 INSERT INTO public.location_markets (id, name, country_code, admin_area1, locality, status)
 VALUES
+  ('market-london-ca', 'London, Ontario', 'CA', 'ON', 'London', 'active'),
   ('market-toronto', 'Toronto', 'CA', 'ON', 'Toronto', 'active'),
   ('market-vancouver', 'Vancouver', 'CA', 'BC', 'Vancouver', 'active'),
   ('market-london-gb', 'London', 'GB', 'England', 'London', 'active')
@@ -91,6 +92,7 @@ INSERT INTO public.location_cells (
   postal_code, postal_code_normalized, cell_type, cell_label, lat, lng, radius_meters, is_active
 )
 VALUES
+  ('cell-ca-london-on-n6h', 'market-london-ca', 'CA', 'ON', 'London', 'N6H', 'N6H', 'postal_fsa', 'London, ON N6H', 42.984, -81.292, 3000, 1),
   ('cell-ca-toronto-m5v', 'market-toronto', 'CA', 'ON', 'Toronto', 'M5V', 'M5V', 'postal_fsa', 'Toronto, ON M5V', 43.644, -79.389, 3000, 1),
   ('cell-ca-toronto-m4w', 'market-toronto', 'CA', 'ON', 'Toronto', 'M4W', 'M4W', 'postal_fsa', 'Toronto, ON M4W', 43.679, -79.384, 3000, 1),
   ('cell-ca-toronto-m6j', 'market-toronto', 'CA', 'ON', 'Toronto', 'M6J', 'M6J', 'postal_fsa', 'Toronto, ON M6J', 43.647, -79.419, 3000, 1),

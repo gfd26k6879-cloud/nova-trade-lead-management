@@ -2753,12 +2753,14 @@ function isDuplicateColumnError(error: unknown): boolean {
 export const COLORADO_MARKET_ID = "market-colorado";
 
 const STARTER_MARKETS = [
+  { id: "market-london-ca", name: "London, Ontario", countryCode: "CA", adminArea1: "ON", locality: "London" },
   { id: "market-toronto", name: "Toronto", countryCode: "CA", adminArea1: "ON", locality: "Toronto" },
   { id: "market-vancouver", name: "Vancouver", countryCode: "CA", adminArea1: "BC", locality: "Vancouver" },
   { id: "market-london-gb", name: "London", countryCode: "GB", adminArea1: "England", locality: "London" },
 ] as const;
 
 const STARTER_LOCATION_CELLS = [
+  { id: "cell-ca-london-on-n6h", marketId: "market-london-ca", countryCode: "CA", adminArea1: "ON", locality: "London", postalCode: "N6H", cellType: "postal_fsa", label: "London, ON N6H", lat: 42.984, lng: -81.292, radiusMeters: 3000 },
   { id: "cell-ca-toronto-m5v", marketId: "market-toronto", countryCode: "CA", adminArea1: "ON", locality: "Toronto", postalCode: "M5V", cellType: "postal_fsa", label: "Toronto, ON M5V", lat: 43.644, lng: -79.389, radiusMeters: 3000 },
   { id: "cell-ca-toronto-m4w", marketId: "market-toronto", countryCode: "CA", adminArea1: "ON", locality: "Toronto", postalCode: "M4W", cellType: "postal_fsa", label: "Toronto, ON M4W", lat: 43.679, lng: -79.384, radiusMeters: 3000 },
   { id: "cell-ca-toronto-m6j", marketId: "market-toronto", countryCode: "CA", adminArea1: "ON", locality: "Toronto", postalCode: "M6J", cellType: "postal_fsa", label: "Toronto, ON M6J", lat: 43.647, lng: -79.419, radiusMeters: 3000 },

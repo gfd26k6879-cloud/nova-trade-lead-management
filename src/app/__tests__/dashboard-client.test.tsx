@@ -50,6 +50,7 @@ describe("DashboardClient admin command center", () => {
     expect(html).toContain("Admin Command Center");
     expect(html).toContain("Lead Inventory");
     expect(html).toContain("Start Discovery");
+    expect(html).toContain("Postal / postcode search");
     expect(html).toContain("Recent Discovery Items");
     expect(html).toContain("Fulfillment");
     expect(html).toContain("Advanced Operations");

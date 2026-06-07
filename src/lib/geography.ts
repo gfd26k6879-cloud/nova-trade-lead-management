@@ -44,6 +44,11 @@ export function normalizePostalCode(countryCode: CountryCode, value: string | nu
   if (!raw) return null;
   const compact = raw.toUpperCase().replace(/\s+/g, "");
   if (countryCode === "US") return compact.slice(0, 5);
+  if (countryCode === "CA") return compact.slice(0, 3);
+  if (countryCode === "GB") {
+    const outward = compact.match(/^[A-Z]{1,2}\d[A-Z\d]?/)?.[0];
+    return outward ?? compact;
+  }
   return compact;
 }
 
