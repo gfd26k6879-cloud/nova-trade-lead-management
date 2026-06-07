@@ -10,11 +10,6 @@ import {
   getUnenrichedLeads,
   updateLeadEnrichment,
   getSettings,
-  getRunEnrichmentCalls,
-  getRunAtmosphereEnrichmentCalls,
-  getMonthlyBillableEventsForSku,
-  getMonthlyApiCost,
-  isMonthlySpendLimitReached,
   API_ENDPOINT_PLACE_DETAILS,
   logApiUsageEvent,
   recordPlaceObservation,
@@ -24,10 +19,9 @@ import {
 } from "@/lib/db/queries";
 import { enqueueAiVerificationForLead } from "@/lib/ai/verification-worker";
 import type { WebsiteStatus } from "@/lib/classify-website";
-import type { GooglePlacesSku } from "@/lib/google-pricing";
 
 export interface EnrichResult {
-  status: "enriched" | "idle" | "error" | "budget_limit";
+  status: "enriched" | "idle" | "error";
   leadId?: string;
   leadName?: string;
   error?: string;
@@ -43,50 +37,13 @@ export async function enrichNextLead(): Promise<EnrichResult> {
     return { status: "idle" };
   }
 
-  if (settings.stop_on_budget_limit && settings.cost_engine_v2_enabled) {
-    if (await isMonthlySpendLimitReached(settings.max_monthly_api_spend)) {
-      const current = await getMonthlyApiCost();
-      return {
-        status: "budget_limit",
-        error: `Monthly API spend reached ($${current.toFixed(2)} / $${settings.max_monthly_api_spend.toFixed(2)})`,
-      };
-    }
-  }
-
-  if (runId && settings.max_enrichment_per_run > 0) {
-    const enrichmentCalls = await getRunEnrichmentCalls(runId);
-    if (enrichmentCalls >= settings.max_enrichment_per_run) {
-      return {
-        status: "budget_limit",
-        error: `Run enrichment limit reached (${settings.max_enrichment_per_run})`,
-      };
-    }
-  }
-
   const leads = await getUnenrichedLeads(1);
   if (leads.length === 0) {
     return { status: "idle" };
   }
 
   const lead = leads[0];
-  let includeAtmosphere = lead.score >= settings.enrichment_stage_b_min_score;
-  if (includeAtmosphere && runId && settings.max_atmosphere_enrichment_per_run > 0) {
-    const atmosphereCalls = await getRunAtmosphereEnrichmentCalls(runId);
-    if (atmosphereCalls >= settings.max_atmosphere_enrichment_per_run) {
-      includeAtmosphere = false;
-    }
-  }
-  const expectedSku: GooglePlacesSku = includeAtmosphere
-    ? "places_place_details_enterprise_plus_atmosphere"
-    : "places_place_details_enterprise";
-  const monthlyCap = settings.google_enterprise_monthly_cap;
-  const monthlyCalls = await getMonthlyBillableEventsForSku(expectedSku);
-  if (monthlyCalls + 1 > monthlyCap) {
-    return {
-      status: "budget_limit",
-      error: `Monthly Google free-safe cap reached for ${expectedSku} (${monthlyCalls}/${monthlyCap} calls).`,
-    };
-  }
+  const includeAtmosphere = lead.score >= settings.enrichment_stage_b_min_score;
 
   try {
     const detailsResult = await getPlaceDetails(lead.place_id, settings.rate_limit_ms, {

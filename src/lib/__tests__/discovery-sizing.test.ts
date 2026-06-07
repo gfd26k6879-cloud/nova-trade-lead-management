@@ -1,17 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  estimateDiscoveryRunBudget,
+  estimateDiscoveryRunSize,
   shouldFetchNextTextSearchPage,
-  type DiscoveryBudgetInput,
-} from "@/lib/discovery-budget";
+  type DiscoverySizeInput,
+} from "@/lib/discovery-sizing";
 import type { Settings } from "@/lib/db/queries";
 
 const settings = {
-  max_calls_per_day: 300,
-  max_calls_per_run: 500,
-  google_text_search_monthly_cap: 4900,
-  google_enterprise_monthly_cap: 900,
-  google_test_run_call_cap: 50,
   google_auto_pagination_enabled: true,
   google_auto_pagination_min_new_candidates: 6,
   google_auto_pagination_max_duplicate_rate: 0.6,
@@ -19,22 +14,19 @@ const settings = {
   google_default_pagination_policy: "auto_yield_based",
 } as Settings;
 
-function estimate(overrides: Partial<DiscoveryBudgetInput> = {}) {
-  return estimateDiscoveryRunBudget({
+function estimate(overrides: Partial<DiscoverySizeInput> = {}) {
+  return estimateDiscoveryRunSize({
     cellCount: 10,
     categoryCount: 5,
     mode: "coverage_probe",
     paginationPolicy: "first_page_only",
     testRun: false,
     settings,
-    monthlyUsedForSku: 0,
-    todayCalls: 0,
-    runCalls: 0,
     ...overrides,
   });
 }
 
-describe("discovery budget estimator", () => {
+describe("discovery size estimator", () => {
   it("estimates one call per cell/category for first-page discovery", () => {
     const result = estimate();
     expect(result.estimatedUnits).toBe(50);
@@ -50,16 +42,18 @@ describe("discovery budget estimator", () => {
     expect(result.estimatedSearchCalls).toBe(150);
   });
 
-  it("blocks runs that exceed monthly remaining cap", () => {
-    const result = estimate({ monthlyUsedForSku: 4890, paginationPolicy: "auto_yield_based" });
-    expect(result.canStart).toBe(false);
-    expect(result.warnings.join(" ")).toContain("monthly free-safe cap");
+  it("does not block large estimates on app-side caps", () => {
+    const result = estimate({ cellCount: 100, categoryCount: 10, paginationPolicy: "auto_yield_based" });
+    expect(result.estimatedSearchCalls).toBe(3000);
+    expect(result.canStart).toBe(true);
+    expect(result.warnings).toEqual([]);
   });
 
-  it("uses the stricter test-run cap", () => {
+  it("keeps test-run selection as metadata without capping the estimate", () => {
     const result = estimate({ testRun: true, paginationPolicy: "auto_yield_based" });
-    expect(result.runCap).toBe(50);
-    expect(result.canStart).toBe(false);
+    expect(result.testRun).toBe(true);
+    expect(result.estimatedSearchCalls).toBe(150);
+    expect(result.canStart).toBe(true);
   });
 
   it("allows next page only when yield is strong enough", () => {

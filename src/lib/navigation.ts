@@ -19,6 +19,6 @@ export const ADMIN_NAV_ITEMS: NavItem[] = [
   { href: "/fulfillment", label: "Fulfillment", description: "Website and quote requests from researchers.", badge: "fulfillment" },
   { href: "/leads", label: "All Leads", description: "Full lead database, filters, Kanban, and export." },
   { href: "/quality", label: "Quality", description: "AI verification and manual lead quality review." },
-  { href: "/settings", label: "Settings", description: "API keys, scoring, cost, and model settings." },
+  { href: "/settings", label: "Settings", description: "API keys, scoring, and model settings." },
   { href: "/users", label: "Users", description: "Team roles, status, and team lead assignment." },
 ];

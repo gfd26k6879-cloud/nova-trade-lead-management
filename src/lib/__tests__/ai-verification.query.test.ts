@@ -15,7 +15,6 @@ vi.mock("@/lib/db/index", () => {
 import {
   applyAiFoundWebsite,
   createAiLeadVerification,
-  getAiBudgetStatus,
   getConfiguredOpenAiApiKey,
   getConfiguredGooglePlacesApiKey,
   getConfiguredGoogleMapsBrowserApiKey,
@@ -140,13 +139,6 @@ describe("AI verification queries", () => {
     expect(lead.quality_bucket).toBe("broken_site_opportunity");
   });
 
-  it("blocks budget preflight when reserved cost exceeds daily budget", async () => {
-    testDb.prepare("UPDATE settings SET ai_daily_budget_usd = 0.04, ai_monthly_budget_usd = 25, ai_enabled = 1 WHERE id = 1").run();
-    const status = await getAiBudgetStatus(await getSettings(), 0.05);
-    expect(status.allowed).toBe(false);
-    expect(status.reason).toContain("Daily AI budget");
-  });
-
   it("finds old site_found records that still need viability repair", async () => {
     const verification = await createAiLeadVerification({
       lead_id: "lead-1",
@@ -174,8 +166,8 @@ describe("AI verification queries", () => {
       estimated_cost: 0.05,
     });
 
-    const budget = await getAiBudgetStatus(await getSettings(), 0);
-    expect(budget.dailyCost).toBe(0.05);
+    const usage = testDb.prepare("SELECT COALESCE(SUM(estimated_cost), 0) as cost FROM ai_usage_events").get() as { cost: number };
+    expect(usage.cost).toBe(0.05);
 
     const changed = await applyAiFoundWebsite("lead-1", "https://gatewayparkdental.example");
     const lead = testDb.prepare("SELECT website_uri, website_status, qualification_status, score, win_probability_score FROM leads WHERE id = 'lead-1'").get() as Record<string, unknown>;

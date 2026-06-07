@@ -20,16 +20,6 @@ const queryMocks = vi.hoisted(() => ({
   ensureDbReady: vi.fn(),
   buildSchedulerHealthFallback: vi.fn(() => ({
     workers: [],
-    ai: {
-      dailyCost: 0,
-      dailyBudget: 0,
-      monthlyCost: 0,
-      monthlyBudget: 0,
-      budgetRemainingToday: 0,
-      budgetRemainingMonth: 0,
-      verifiedLeadsPerDollar: null,
-      readyToCallLeadsPerDollar: null,
-    },
     database: { staleClientReads: [] },
     auth: {
       appUrlConfigured: true,

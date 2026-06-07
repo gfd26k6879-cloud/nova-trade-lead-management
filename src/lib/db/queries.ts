@@ -3,7 +3,6 @@ import { seedZipCodes } from "./seed-zips";
 import { computeScoreBandThresholds, type ScoreBandThresholds } from "@/lib/score-bands";
 import { computeWinProbability } from "@/lib/scoring";
 import {
-  GOOGLE_PLACES_SKU_PRICING,
   estimateMarginalSkuCost,
   type GooglePlacesSku,
 } from "@/lib/google-pricing";
@@ -746,16 +745,6 @@ export interface AiUsageEventInput {
   metadata?: Record<string, unknown>;
 }
 
-export interface AiBudgetStatus {
-  dailyCost: number;
-  monthlyCost: number;
-  dailyBudget: number;
-  monthlyBudget: number;
-  reservedCost: number;
-  allowed: boolean;
-  reason: string | null;
-}
-
 export interface ApiUsageSummary {
   totalCalls: number;
   totalCost: number;
@@ -913,16 +902,6 @@ export interface SchedulerWorkerHealth {
 
 export interface SchedulerHealth {
   workers: SchedulerWorkerHealth[];
-  ai: {
-    dailyCost: number;
-    dailyBudget: number;
-    monthlyCost: number;
-    monthlyBudget: number;
-    budgetRemainingToday: number;
-    budgetRemainingMonth: number;
-    verifiedLeadsPerDollar: number | null;
-    readyToCallLeadsPerDollar: number | null;
-  };
   database: {
     staleClientReads: DbActivityWarning[];
   };
@@ -1007,14 +986,6 @@ export interface SchedulerOperationsSummary {
     googleToday: SchedulerApiUsageWindow;
     googleMonth: SchedulerApiUsageWindow;
     googleActiveRun: SchedulerApiUsageWindow;
-    aiDailyCost: number;
-    aiDailyBudget: number;
-    aiMonthlyCost: number;
-    aiMonthlyBudget: number;
-    aiBudgetRemainingToday: number;
-    aiBudgetRemainingMonth: number;
-    verifiedLeadsPerDollar: number | null;
-    readyToCallLeadsPerDollar: number | null;
   };
 }
 
@@ -1712,22 +1683,6 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
     updates.push("rate_limit_ms = ?");
     values.push(settings.rate_limit_ms);
   }
-  if (settings.max_calls_per_day !== undefined) {
-    updates.push("max_calls_per_day = ?");
-    values.push(settings.max_calls_per_day);
-  }
-  if (settings.max_calls_per_run !== undefined) {
-    updates.push("max_calls_per_run = ?");
-    values.push(settings.max_calls_per_run);
-  }
-  if (settings.max_monthly_api_spend !== undefined) {
-    updates.push("max_monthly_api_spend = ?");
-    values.push(settings.max_monthly_api_spend);
-  }
-  if (settings.stop_on_budget_limit !== undefined) {
-    updates.push("stop_on_budget_limit = ?");
-    values.push(settings.stop_on_budget_limit ? 1 : 0);
-  }
   if (settings.search_radius_km !== undefined) {
     updates.push("search_radius_km = ?");
     values.push(settings.search_radius_km);
@@ -1735,10 +1690,6 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
   if (settings.enrichment_enabled !== undefined) {
     updates.push("enrichment_enabled = ?");
     values.push(settings.enrichment_enabled ? 1 : 0);
-  }
-  if (settings.max_enrichment_per_run !== undefined) {
-    updates.push("max_enrichment_per_run = ?");
-    values.push(settings.max_enrichment_per_run);
   }
   if (settings.website_health_enabled !== undefined) {
     updates.push("website_health_enabled = ?");
@@ -1752,14 +1703,6 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
     updates.push("enrichment_stage_b_min_score = ?");
     values.push(settings.enrichment_stage_b_min_score);
   }
-  if (settings.max_atmosphere_enrichment_per_run !== undefined) {
-    updates.push("max_atmosphere_enrichment_per_run = ?");
-    values.push(settings.max_atmosphere_enrichment_per_run);
-  }
-  if (settings.cost_engine_v2_enabled !== undefined) {
-    updates.push("cost_engine_v2_enabled = ?");
-    values.push(settings.cost_engine_v2_enabled ? 1 : 0);
-  }
   if (settings.ai_enabled !== undefined) {
     updates.push("ai_enabled = ?");
     values.push(settings.ai_enabled ? 1 : 0);
@@ -1767,14 +1710,6 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
   if (settings.ai_model !== undefined) {
     updates.push("ai_model = ?");
     values.push(assertAllowedOpenAIModel(settings.ai_model));
-  }
-  if (settings.ai_daily_budget_usd !== undefined) {
-    updates.push("ai_daily_budget_usd = ?");
-    values.push(Math.max(0, settings.ai_daily_budget_usd));
-  }
-  if (settings.ai_monthly_budget_usd !== undefined) {
-    updates.push("ai_monthly_budget_usd = ?");
-    values.push(Math.max(0, settings.ai_monthly_budget_usd));
   }
   if (settings.ai_batch_limit !== undefined) {
     updates.push("ai_batch_limit = ?");
@@ -1827,18 +1762,6 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
   if (settings.scheduler_score_recompute_enabled !== undefined) {
     updates.push("scheduler_score_recompute_enabled = ?");
     values.push(settings.scheduler_score_recompute_enabled ? 1 : 0);
-  }
-  if (settings.google_text_search_monthly_cap !== undefined) {
-    updates.push("google_text_search_monthly_cap = ?");
-    values.push(Math.max(1, Math.floor(settings.google_text_search_monthly_cap)));
-  }
-  if (settings.google_enterprise_monthly_cap !== undefined) {
-    updates.push("google_enterprise_monthly_cap = ?");
-    values.push(Math.max(1, Math.floor(settings.google_enterprise_monthly_cap)));
-  }
-  if (settings.google_test_run_call_cap !== undefined) {
-    updates.push("google_test_run_call_cap = ?");
-    values.push(Math.max(1, Math.floor(settings.google_test_run_call_cap)));
   }
   if (settings.google_auto_pagination_enabled !== undefined) {
     updates.push("google_auto_pagination_enabled = ?");
@@ -1992,7 +1915,6 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
   await markStaleWorkerRunsInterrupted();
   const settings = await getSettings();
   const aiQueue = await getAiQueueStats();
-  const budget = await getAiBudgetStatus(settings, 0);
   const staleClientReads = await getStaleClientReadQueries(60);
   const db = await getDb();
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -2022,10 +1944,6 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
      WHERE archived_at IS NULL
        AND (last_quality_scored_at IS NULL OR julianday(updated_at) > julianday(last_quality_scored_at))`
   ).get() as { count: number };
-  const readyRow = await db.prepare(
-    "SELECT COUNT(*) as count FROM leads WHERE COALESCE(is_excluded, 0) = 0 AND archived_at IS NULL AND quality_bucket IN ('ready_to_call','broken_site_opportunity')"
-  ).get() as { count: number };
-
   const workers: Array<{ workerName: SchedulerWorkerName; label: string; queueDepth: number; cadenceMinutes: number }> =
     SCHEDULER_WORKER_METADATA.map((worker) => ({
       workerName: worker.workerName,
@@ -2110,21 +2028,8 @@ async function getSchedulerHealthInternal(): Promise<SchedulerHealth> {
     });
   }
 
-  const verifiedPerDollar = budget.monthlyCost > 0 ? roundOne(aiQueue.verified / budget.monthlyCost) : null;
-  const readyPerDollar = budget.monthlyCost > 0 ? roundOne(Number(readyRow.count ?? 0) / budget.monthlyCost) : null;
-
   return {
     workers: healthWorkers,
-    ai: {
-      dailyCost: budget.dailyCost,
-      dailyBudget: budget.dailyBudget,
-      monthlyCost: budget.monthlyCost,
-      monthlyBudget: budget.monthlyBudget,
-      budgetRemainingToday: roundCurrency(Math.max(0, budget.dailyBudget - budget.dailyCost)),
-      budgetRemainingMonth: roundCurrency(Math.max(0, budget.monthlyBudget - budget.monthlyCost)),
-      verifiedLeadsPerDollar: verifiedPerDollar,
-      readyToCallLeadsPerDollar: readyPerDollar,
-    },
     database: {
       staleClientReads,
     },
@@ -2153,16 +2058,6 @@ export function buildSchedulerHealthFallback(error: string): SchedulerHealth {
       },
       warning: `Scheduler health unavailable: ${error}`,
     })),
-    ai: {
-      dailyCost: 0,
-      dailyBudget: 0,
-      monthlyCost: 0,
-      monthlyBudget: 0,
-      budgetRemainingToday: 0,
-      budgetRemainingMonth: 0,
-      verifiedLeadsPerDollar: null,
-      readyToCallLeadsPerDollar: null,
-    },
     database: {
       staleClientReads: [],
     },
@@ -2310,10 +2205,6 @@ function sumStatusCounts(rows: Array<{ status: string; count: number }>): number
   return rows.reduce((sum, row) => sum + Number(row.count ?? 0), 0);
 }
 
-function roundOne(value: number): number {
-  return Math.round(value * 10) / 10;
-}
-
 export async function getSchedulerOperationsSummary(): Promise<SchedulerOperationsSummary> {
   try {
     return await getSchedulerOperationsSummaryInternal();
@@ -2325,13 +2216,11 @@ export async function getSchedulerOperationsSummary(): Promise<SchedulerOperatio
 }
 
 async function getSchedulerOperationsSummaryInternal(): Promise<SchedulerOperationsSummary> {
-  const [health, history, dashboardStats, settings] = await Promise.all([
+  const [health, history, dashboardStats] = await Promise.all([
     getSchedulerHealth(),
     getWorkerRunHistory(50),
     getDashboardStats(),
-    getSettings(),
   ]);
-  const aiBudget = await getAiBudgetStatus(settings, 0);
   const activeRun = await getActiveCrawlRun();
   const activeRunUsage = activeRun ? await getRunApiUsageSummary(activeRun.id) : emptyApiUsageSummary();
   const activeRunLastError = activeRun ? await getRunLastError(activeRun.id) : null;
@@ -2376,14 +2265,6 @@ async function getSchedulerOperationsSummaryInternal(): Promise<SchedulerOperati
       googleToday: toSchedulerApiUsageWindow(todayUsage),
       googleMonth: toSchedulerApiUsageWindow(monthUsage),
       googleActiveRun: toSchedulerApiUsageWindow(activeRunUsage),
-      aiDailyCost: aiBudget.dailyCost,
-      aiDailyBudget: aiBudget.dailyBudget,
-      aiMonthlyCost: aiBudget.monthlyCost,
-      aiMonthlyBudget: aiBudget.monthlyBudget,
-      aiBudgetRemainingToday: roundCurrency(Math.max(0, aiBudget.dailyBudget - aiBudget.dailyCost)),
-      aiBudgetRemainingMonth: roundCurrency(Math.max(0, aiBudget.monthlyBudget - aiBudget.monthlyCost)),
-      verifiedLeadsPerDollar: health.ai.verifiedLeadsPerDollar,
-      readyToCallLeadsPerDollar: health.ai.readyToCallLeadsPerDollar,
     },
   };
 }
@@ -2430,14 +2311,6 @@ export function buildSchedulerOperationsFallback(error: string): SchedulerOperat
       googleToday: emptyUsage,
       googleMonth: emptyUsage,
       googleActiveRun: emptyUsage,
-      aiDailyCost: health.ai.dailyCost,
-      aiDailyBudget: health.ai.dailyBudget,
-      aiMonthlyCost: health.ai.monthlyCost,
-      aiMonthlyBudget: health.ai.monthlyBudget,
-      aiBudgetRemainingToday: health.ai.budgetRemainingToday,
-      aiBudgetRemainingMonth: health.ai.budgetRemainingMonth,
-      verifiedLeadsPerDollar: health.ai.verifiedLeadsPerDollar,
-      readyToCallLeadsPerDollar: health.ai.readyToCallLeadsPerDollar,
     },
   };
 }
@@ -3882,17 +3755,6 @@ export async function markUnitFailed(unitId: string, error: string): Promise<voi
   ).run(nowISO(), error, unitId);
 }
 
-export async function releaseUnitForBudgetPause(unitId: string, error: string): Promise<void> {
-  const db = await getDb();
-  await db.prepare(
-    `UPDATE crawl_units
-     SET status = 'pending',
-         started_at = NULL,
-         last_error = ?
-     WHERE id = ? AND status = 'running'`
-  ).run(error.slice(0, 1000), unitId);
-}
-
 export async function updateUnitPageToken(unitId: string, token: string | null): Promise<void>{
   const db = await getDb();
   await db.prepare("UPDATE crawl_units SET next_page_token = ? WHERE id = ?").run(token, unitId);
@@ -3921,18 +3783,6 @@ export async function recordUnitPageFetch(
     Math.max(0, Math.floor(duplicatePlaces)),
     unitId,
   );
-}
-
-export async function markUnitBudgetBlocked(unitId: string, error: string): Promise<void> {
-  const db = await getDb();
-  await db.prepare(
-    `UPDATE crawl_units
-     SET status = 'pending',
-         started_at = NULL,
-         last_error = ?,
-         budget_blocked_at = ?
-     WHERE id = ? AND status = 'running'`
-  ).run(error.slice(0, 1000), nowISO(), unitId);
 }
 
 export async function retryFailedUnits(runId: string): Promise<number>{
@@ -5696,48 +5546,6 @@ export async function markLeadAiArtifactRetry(
   return { status, nextRetryAt: nextRetry, attemptCount: currentAttempts, maxAttempts: safeMaxAttempts };
 }
 
-export async function getAiBudgetStatus(settings: Settings, reservedCost: number): Promise<AiBudgetStatus>{
-  const dailyCost = await getAiUsageCostSince(startOfToday());
-  const monthlyCost = await getAiUsageCostSince(startOfCurrentMonth());
-  const safeReserved = roundCurrency(Math.max(0, reservedCost));
-  const dailyBudget = Math.max(0, settings.ai_daily_budget_usd);
-  const monthlyBudget = Math.max(0, settings.ai_monthly_budget_usd);
-
-  if (dailyBudget > 0 && dailyCost + safeReserved > dailyBudget) {
-    return {
-      dailyCost,
-      monthlyCost,
-      dailyBudget,
-      monthlyBudget,
-      reservedCost: safeReserved,
-      allowed: false,
-      reason: `Daily AI budget would be exceeded ($${(dailyCost + safeReserved).toFixed(2)} / $${dailyBudget.toFixed(2)}).`,
-    };
-  }
-
-  if (monthlyBudget > 0 && monthlyCost + safeReserved > monthlyBudget) {
-    return {
-      dailyCost,
-      monthlyCost,
-      dailyBudget,
-      monthlyBudget,
-      reservedCost: safeReserved,
-      allowed: false,
-      reason: `Monthly AI budget would be exceeded ($${(monthlyCost + safeReserved).toFixed(2)} / $${monthlyBudget.toFixed(2)}).`,
-    };
-  }
-
-  return {
-    dailyCost,
-    monthlyCost,
-    dailyBudget,
-    monthlyBudget,
-    reservedCost: safeReserved,
-    allowed: true,
-    reason: null,
-  };
-}
-
 export async function markLeadAiQueued(leadId: string, inputHash: string, resetAttempts = false): Promise<number> {
   const db = await getDb();
   const result = await db.prepare(
@@ -7326,42 +7134,6 @@ export async function getMonthlyApiUsageSummary(): Promise<ApiUsageSummary>{
   };
 }
 
-export async function getMonthlyApiCost(): Promise<number>{
-  return (await getMonthlyApiUsageSummary()).totalCost;
-}
-
-export async function isMonthlySpendLimitReached(limit: number): Promise<boolean>{
-  if (!Number.isFinite(limit) || limit <= 0) return false;
-  return await getMonthlyApiCost() >= limit;
-}
-
-export async function getRunAtmosphereEnrichmentCalls(runId: string): Promise<number>{
-  const db = await getDb();
-  const row = await db.prepare(
-    `SELECT COALESCE(SUM(billable_units), 0) as total
-     FROM api_usage_events
-     WHERE crawl_run_id = ?
-       AND endpoint = ?
-       AND sku = 'places_place_details_enterprise_plus_atmosphere'
-       AND success = 1
-       AND COALESCE(was_cached, 0) = 0`
-  ).get(runId, API_ENDPOINT_PLACE_DETAILS) as { total: number };
-  return row.total ?? 0;
-}
-
-export async function getRunEnrichmentCalls(runId: string): Promise<number>{
-  const db = await getDb();
-  const row = await db.prepare(
-    `SELECT COALESCE(SUM(billable_units), 0) as total
-     FROM api_usage_events
-     WHERE crawl_run_id = ?
-       AND endpoint = ?
-       AND success = 1
-       AND COALESCE(was_cached, 0) = 0`
-  ).get(runId, API_ENDPOINT_PLACE_DETAILS) as { total: number };
-  return row.total ?? 0;
-}
-
 export async function getMonthlyBillableEventsForSku(sku: GooglePlacesSku): Promise<number> {
   const db = await getDb();
   const monthStart = startOfCurrentMonth();
@@ -7373,23 +7145,6 @@ export async function getMonthlyBillableEventsForSku(sku: GooglePlacesSku): Prom
        AND created_at >= ?`
   ).get(sku, monthStart) as { total: number };
   return Number(row.total) || 0;
-}
-
-export async function getMonthlyFreeTierStatus(
-  sku: GooglePlacesSku,
-  units = 1,
-): Promise<{ sku: GooglePlacesSku; current: number; requested: number; freeCap: number; wouldExceed: boolean }> {
-  const requested = Math.max(0, Math.floor(units));
-  const current = await getMonthlyBillableEventsForSku(sku);
-  const freeCap = GOOGLE_PLACES_SKU_PRICING[sku].freeCap;
-
-  return {
-    sku,
-    current,
-    requested,
-    freeCap,
-    wouldExceed: freeCap > 0 && current + requested > freeCap,
-  };
 }
 
 export async function logApiUsageEvent(input: ApiUsageEventInput): Promise<{
@@ -7445,11 +7200,6 @@ export async function getRunLastError(runId: string): Promise<string | null>{
     "SELECT last_error FROM crawl_runs WHERE id = ?"
   ).get(runId) as { last_error: string | null } | undefined;
   return row?.last_error ?? null;
-}
-
-export async function setRunLastError(runId: string, error: string): Promise<void>{
-  const db = await getDb();
-  await db.prepare("UPDATE crawl_runs SET last_error = ? WHERE id = ?").run(error, runId);
 }
 
 // ─── Audit Logs ───
@@ -7752,18 +7502,6 @@ function normalizeAiQueueStatus(value: unknown): AiQueueStatus {
 
 function toBoolean(value: unknown): boolean {
   return value === true || value === 1 || value === "1";
-}
-
-async function getAiUsageCostSince(startDate: string): Promise<number> {
-  const db = await getDb();
-  const row = await db.prepare(
-    `SELECT COALESCE(SUM(estimated_cost), 0) as cost
-     FROM ai_usage_events
-     WHERE success = 1
-       AND COALESCE(was_cached, 0) = 0
-       AND created_at >= ?`
-  ).get(startDate) as { cost: number };
-  return roundCurrency(row.cost ?? 0);
 }
 
 function roundCurrency(value: number): number {

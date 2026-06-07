@@ -37,7 +37,7 @@ export function StatisticsClient({ summary }: { summary: StatisticsSummary }) {
   return (
     <PageShell
       title="Statistics"
-      description="Lead quality, funnel performance, business types, data coverage, and crawl economics."
+      description="Lead quality, funnel performance, business types, data coverage, and API usage."
       stats={[
         { label: "Range", value: summary.range.label },
         { label: "Discovered", value: String(summary.kpis.totalDiscovered) },
@@ -84,18 +84,18 @@ export function StatisticsClient({ summary }: { summary: StatisticsSummary }) {
       </section>
 
       <section className="grid gap-4 lg:grid-cols-4">
-        <MetricCard label="API Cost" value={formatCurrency(summary.economics.apiCost)} sub={`${summary.economics.apiCalls} billable calls`} />
-        <MetricCard label="Cost / Qualified" value={formatNullableCurrency(summary.economics.costPerQualifiedLead)} />
-        <MetricCard label="Cost / Contacted" value={formatNullableCurrency(summary.economics.costPerContactedLead)} />
-        <MetricCard label="Cost / Meeting" value={formatNullableCurrency(summary.economics.costPerMeeting)} />
+        <MetricCard label="API Calls" value={summary.economics.apiCalls} sub="Google/API activity in range" />
+        <MetricCard label="Qualified Leads" value={summary.kpis.qualifiedLeads} />
+        <MetricCard label="Contacted" value={summary.kpis.contactedLeads} />
+        <MetricCard label="Meetings" value={summary.kpis.meetings} />
       </section>
 
       <section className="grid gap-4 lg:grid-cols-5">
-        <MetricCard label="AI Spend" value={formatNullableCurrency(summary.ai.cost)} sub={`${summary.ai.calls} model calls`} />
+        <MetricCard label="AI Calls" value={summary.ai.calls} sub="model calls in range" />
         <MetricCard label="AI Verifications" value={summary.ai.verifications} sub={`${summary.ai.cachedResults} cache hits`} />
         <MetricCard label="AI Usable Sites" value={summary.ai.usableSiteFound} sub={`${summary.ai.uncertain} uncertain or mismatch`} />
         <MetricCard label="AI Opportunities" value={summary.ai.websiteOpportunityFound} sub={`${summary.ai.weakSiteFound} weak, broken, or parked`} />
-        <MetricCard label="Cost / AI Verified" value={formatNullableCurrency(summary.ai.costPerVerification)} />
+        <MetricCard label="AI Site Found" value={summary.ai.siteFound} />
       </section>
 
       <section className="grid gap-4 lg:grid-cols-5">
@@ -188,8 +188,8 @@ export function StatisticsClient({ summary }: { summary: StatisticsSummary }) {
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">
-        <CostPanel title="API by Endpoint" rows={summary.operations.apiByEndpoint} />
-        <CostPanel title="API by SKU" rows={summary.operations.apiBySku} />
+        <UsagePanel title="API by Endpoint" rows={summary.operations.apiByEndpoint} />
+        <UsagePanel title="API by SKU" rows={summary.operations.apiBySku} />
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">
@@ -233,7 +233,7 @@ function BreakdownPanel({ title, rows, empty = "No data in range" }: { title: st
   );
 }
 
-function CostPanel({ title, rows }: { title: string; rows: Array<{ key: string; calls: number; cost: number }> }) {
+function UsagePanel({ title, rows }: { title: string; rows: Array<{ key: string; calls: number; cost: number }> }) {
   return (
     <section className="glass rounded-2xl p-5">
       <h3 className="section-label">{title}</h3>
@@ -246,7 +246,6 @@ function CostPanel({ title, rows }: { title: string; rows: Array<{ key: string; 
               <tr>
                 <th>Name</th>
                 <th>Calls</th>
-                <th>Cost</th>
               </tr>
             </thead>
             <tbody>
@@ -254,7 +253,6 @@ function CostPanel({ title, rows }: { title: string; rows: Array<{ key: string; 
                 <tr key={row.key}>
                   <td>{row.key.replace(/_/g, " ")}</td>
                   <td>{row.calls}</td>
-                  <td>{formatCurrency(row.cost)}</td>
                 </tr>
               ))}
             </tbody>
@@ -299,10 +297,6 @@ function QualityValuePanel({ title, rows, valueLabel }: { title: string; rows: A
 
 function formatCurrency(value: number): string {
   return `$${Math.round(value).toLocaleString()}`;
-}
-
-function formatNullableCurrency(value: number | null): string {
-  return value == null ? "N/A" : `$${value.toFixed(2)}`;
 }
 
 function formatPercent(value: number): string {

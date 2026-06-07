@@ -22,22 +22,13 @@ interface Settings {
   social_hosts: string[];
   basic_hosts: string[];
   rate_limit_ms: number;
-  max_calls_per_day: number;
-  max_calls_per_run: number;
-  max_monthly_api_spend: number;
-  stop_on_budget_limit: boolean;
   search_radius_km: number;
   enrichment_enabled: boolean;
-  max_enrichment_per_run: number;
   website_health_enabled: boolean;
   cache_ttl_days: number;
   enrichment_stage_b_min_score: number;
-  max_atmosphere_enrichment_per_run: number;
-  cost_engine_v2_enabled: boolean;
   ai_enabled: boolean;
   ai_model: string;
-  ai_daily_budget_usd: number;
-  ai_monthly_budget_usd: number;
   ai_batch_limit: number;
   ai_cache_ttl_days: number;
   ai_manual_apply_required: boolean;
@@ -57,14 +48,32 @@ interface Settings {
   google_places_api_key_source: "ui" | "env" | "none";
   google_maps_browser_api_key_configured: boolean;
   google_maps_browser_api_key_source: "ui" | "env" | "none";
-  google_text_search_monthly_cap: number;
-  google_enterprise_monthly_cap: number;
-  google_test_run_call_cap: number;
   google_auto_pagination_enabled: boolean;
   google_auto_pagination_min_new_candidates: number;
   google_auto_pagination_max_duplicate_rate: number;
   google_default_discovery_mode: "coverage_probe" | "lead_harvest";
   google_default_pagination_policy: "first_page_only" | "auto_yield_based" | "manual_extra_pages";
+}
+
+const LEGACY_BUDGET_SETTING_KEYS = [
+  "max_calls_per_day",
+  "max_calls_per_run",
+  "max_monthly_api_spend",
+  "stop_on_budget_limit",
+  "max_enrichment_per_run",
+  "max_atmosphere_enrichment_per_run",
+  "cost_engine_v2_enabled",
+  "ai_daily_budget_usd",
+  "ai_monthly_budget_usd",
+  "google_text_search_monthly_cap",
+  "google_enterprise_monthly_cap",
+  "google_test_run_call_cap",
+] as const;
+
+function removeLegacyBudgetSettings(input: Settings): Settings {
+  const sanitized = { ...input } as Record<string, unknown>;
+  for (const key of LEGACY_BUDGET_SETTING_KEYS) delete sanitized[key];
+  return sanitized as unknown as Settings;
 }
 
 export function SettingsClient({
@@ -74,7 +83,7 @@ export function SettingsClient({
   initialSettings: Settings;
   loadWarning?: string | null;
 }) {
-  const [settings, setSettings] = useState<Settings>(initialSettings);
+  const [settings, setSettings] = useState<Settings>(() => removeLegacyBudgetSettings(initialSettings));
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
@@ -112,12 +121,12 @@ export function SettingsClient({
       const socialHosts = socialText.split("\n").map((s) => s.trim()).filter(Boolean);
       const basicHosts = basicText.split("\n").map((s) => s.trim()).filter(Boolean);
 
-      const updated: Settings = {
+      const updated: Settings = removeLegacyBudgetSettings({
         ...settings,
         niche_weights: nicheWeights,
         social_hosts: socialHosts,
         basic_hosts: basicHosts,
-      };
+      });
 
       await updateSettingsAction(updated);
       setSettings(updated);
@@ -138,7 +147,7 @@ export function SettingsClient({
     if ("error" in result) {
       setSaveMsg(result.error ?? "Error saving OpenAI key");
     } else {
-      setSettings(result.settings as Settings);
+      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
       setApiKeyInput("");
       setSaveMsg("OpenAI API key saved");
     }
@@ -150,7 +159,7 @@ export function SettingsClient({
     setApiKeyLoading(true);
     const result = await clearOpenAiApiKeyAction();
     if ("settings" in result) {
-      setSettings(result.settings as Settings);
+      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
       setApiKeyInput("");
       setSaveMsg(result.settings.openai_api_key_configured ? "UI key cleared; env key is still configured" : "OpenAI API key cleared");
     } else {
@@ -166,7 +175,7 @@ export function SettingsClient({
     if ("error" in result) {
       setSaveMsg(result.error ?? "Error saving Google Places key");
     } else {
-      setSettings(result.settings as Settings);
+      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
       setGoogleKeyInput("");
       setSaveMsg("Google Places API key saved");
     }
@@ -178,7 +187,7 @@ export function SettingsClient({
     setGoogleKeyLoading(true);
     const result = await clearGooglePlacesApiKeyAction();
     if ("settings" in result) {
-      setSettings(result.settings as Settings);
+      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
       setGoogleKeyInput("");
       setSaveMsg(result.settings.google_places_api_key_configured ? "UI Google key cleared; env key is still configured" : "Google Places API key cleared");
     } else {
@@ -194,7 +203,7 @@ export function SettingsClient({
     if ("error" in result) {
       setSaveMsg(result.error ?? "Error saving Google Maps browser key");
     } else {
-      setSettings(result.settings as Settings);
+      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
       setMapsKeyInput("");
       setSaveMsg("Google Maps browser key saved");
     }
@@ -206,7 +215,7 @@ export function SettingsClient({
     setMapsKeyLoading(true);
     const result = await clearGoogleMapsBrowserApiKeyAction();
     if ("settings" in result) {
-      setSettings(result.settings as Settings);
+      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
       setMapsKeyInput("");
       setSaveMsg(result.settings.google_maps_browser_api_key_configured ? "UI Maps key cleared; env key is still configured" : "Google Maps browser key cleared");
     } else {
@@ -217,7 +226,7 @@ export function SettingsClient({
   };
 
   return (
-    <PageShell title="Settings" description="Configure lead scoring, classification hosts, and budget guardrails.">
+    <PageShell title="Settings" description="Configure lead scoring, classification hosts, API keys, and worker behavior.">
       {loadWarning && (
         <section className="glass rounded-2xl p-4" style={{ border: "1px solid rgba(239,68,68,0.25)" }}>
           <p className="section-label">Settings are temporarily unavailable.</p>
@@ -227,7 +236,7 @@ export function SettingsClient({
           <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>Diagnostic: {loadWarning}</p>
         </section>
       )}
-      {/* Rate Limiting & Budget */}
+      {/* API Controls */}
       <section className="glass rounded-2xl p-6">
         <h3 className="section-label">API Controls</h3>
         <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
@@ -312,12 +321,6 @@ export function SettingsClient({
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <NumberField label="Rate Limit (ms)" value={settings.rate_limit_ms} onChange={(v) => update("rate_limit_ms", v)} />
-          <NumberField label="Google Calls / Day" value={settings.max_calls_per_day} onChange={(v) => update("max_calls_per_day", v)} />
-          <NumberField label="Google Calls / Run" value={settings.max_calls_per_run} onChange={(v) => update("max_calls_per_run", v)} />
-          <NumberField label="Max Monthly Spend ($)" value={settings.max_monthly_api_spend} onChange={(v) => update("max_monthly_api_spend", v)} step={1} />
-          <NumberField label="Text Search Pro / Month" value={settings.google_text_search_monthly_cap} onChange={(v) => update("google_text_search_monthly_cap", v)} />
-          <NumberField label="Enterprise / Month" value={settings.google_enterprise_monthly_cap} onChange={(v) => update("google_enterprise_monthly_cap", v)} />
-          <NumberField label="Test Run Call Cap" value={settings.google_test_run_call_cap} onChange={(v) => update("google_test_run_call_cap", v)} />
           <NumberField label="Next Page Min New" value={settings.google_auto_pagination_min_new_candidates} onChange={(v) => update("google_auto_pagination_min_new_candidates", v)} />
           <NumberField label="Max Duplicate Rate" value={settings.google_auto_pagination_max_duplicate_rate} onChange={(v) => update("google_auto_pagination_max_duplicate_rate", v)} step={0.05} />
         </div>
@@ -325,7 +328,7 @@ export function SettingsClient({
           <label className="text-sm" style={{ color: "var(--text-secondary)" }}>
             <span className="mb-1 block text-xs font-medium">Default discovery mode</span>
             <select className="glass-input w-full" value={settings.google_default_discovery_mode} onChange={(e) => update("google_default_discovery_mode", e.target.value as Settings["google_default_discovery_mode"])}>
-              <option value="coverage_probe">Coverage probe - cheaper</option>
+              <option value="coverage_probe">Coverage probe - preview inventory</option>
               <option value="lead_harvest">Lead harvest - richer data</option>
             </select>
           </label>
@@ -342,29 +345,11 @@ export function SettingsClient({
           <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
             <input
               type="checkbox"
-              checked={settings.stop_on_budget_limit}
-              onChange={(e) => update("stop_on_budget_limit", e.target.checked)}
-              className="rounded"
-            />
-            Stop run when budget limit is hit
-          </label>
-          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
-            <input
-              type="checkbox"
               checked={settings.google_auto_pagination_enabled}
               onChange={(e) => update("google_auto_pagination_enabled", e.target.checked)}
               className="rounded"
             />
             Allow yield-based next pages
-          </label>
-          <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
-            <input
-              type="checkbox"
-              checked={settings.cost_engine_v2_enabled}
-              onChange={(e) => update("cost_engine_v2_enabled", e.target.checked)}
-              className="rounded"
-            />
-            Enable pricing-accurate cost engine v2
           </label>
         </div>
       </section>
@@ -407,16 +392,10 @@ export function SettingsClient({
       {/* Search & Enrichment */}
       <section className="glass rounded-2xl p-6">
         <h3 className="section-label">Search & Enrichment</h3>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <NumberField label="Search Radius (km)" value={settings.search_radius_km} onChange={(v) => update("search_radius_km", v)} step={0.5} />
-          <NumberField label="Max Enrichments / Run" value={settings.max_enrichment_per_run} onChange={(v) => update("max_enrichment_per_run", v)} />
           <NumberField label="Cache TTL (days)" value={settings.cache_ttl_days} onChange={(v) => update("cache_ttl_days", v)} />
           <NumberField label="Stage-B Min Score" value={settings.enrichment_stage_b_min_score} onChange={(v) => update("enrichment_stage_b_min_score", v)} step={0.1} />
-          <NumberField
-            label="Max Atmosphere / Run"
-            value={settings.max_atmosphere_enrichment_per_run}
-            onChange={(v) => update("max_atmosphere_enrichment_per_run", v)}
-          />
         </div>
         <div className="mt-4 flex flex-col gap-3">
           <label className="flex items-center gap-2 text-sm" style={{ color: "var(--text-secondary)" }}>
@@ -485,8 +464,6 @@ export function SettingsClient({
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <TextField label="Locked Model" value={settings.ai_model} />
-          <NumberField label="Daily AI Budget ($)" value={settings.ai_daily_budget_usd} onChange={(v) => update("ai_daily_budget_usd", v)} step={0.25} />
-          <NumberField label="Monthly AI Budget ($)" value={settings.ai_monthly_budget_usd} onChange={(v) => update("ai_monthly_budget_usd", v)} step={1} />
           <NumberField label="AI Batch Limit" value={settings.ai_batch_limit} onChange={(v) => update("ai_batch_limit", v)} />
           <NumberField label="AI Result Cache (days)" value={settings.ai_cache_ttl_days} onChange={(v) => update("ai_cache_ttl_days", v)} />
           <NumberField label="AI Concurrency" value={settings.ai_verification_concurrency} onChange={(v) => update("ai_verification_concurrency", v)} />
@@ -601,7 +578,7 @@ export function SettingsClient({
         <button type="button" className="btn-primary" onClick={handleSave}>
           Save Settings
         </button>
-        <HelpTip>Persists scoring, budget, host list, and AI settings shown on this page.</HelpTip>
+        <HelpTip>Persists scoring, host list, API, and AI settings shown on this page.</HelpTip>
         <button type="button" className="btn-glass" onClick={async () => {
           const result = await recomputeAllScoresAction();
           setSaveMsg(`Recomputed scores for ${result.count} leads`);

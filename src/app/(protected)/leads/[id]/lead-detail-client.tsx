@@ -920,7 +920,7 @@ export function LeadDetailClient({
       } else if (result.status === "idle") {
         router.refresh();
         break;
-      } else if (result.status === "budget_limit" || result.status === "error") {
+      } else if (result.status === "error") {
         flash(result.error ?? "Lead intelligence generation failed");
         router.refresh();
         break;
@@ -1513,7 +1513,7 @@ export function LeadDetailClient({
               <div>
                 <h3 className="section-label">AI Verification</h3>
                 <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                  Uses the locked gpt-5.4-mini verifier with budget limits and manual apply.
+                  Uses the locked gpt-5.4-mini verifier with manual apply.
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">

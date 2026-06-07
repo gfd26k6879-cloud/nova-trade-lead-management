@@ -22,8 +22,6 @@ import {
   createAuditLog,
   getRunApiUsageSummary,
   getMonthlyApiUsageSummary,
-  getMonthlyBillableEventsForSku,
-  getTodayApiCalls,
   getRunLastError,
   getFailedUnitErrors,
   getStatesWithCounts,
@@ -67,12 +65,11 @@ import {
   type DashboardSummaryPanelsResult,
 } from "@/lib/dashboard-fallbacks";
 import {
-  estimateDiscoveryRunBudget,
-  getTextSearchSkuForDiscoveryMode,
+  estimateDiscoveryRunSize,
   normalizeDiscoveryMode,
   normalizePaginationPolicy,
-  type DiscoveryBudgetEstimate,
-} from "@/lib/discovery-budget";
+  type DiscoverySizeEstimate,
+} from "@/lib/discovery-sizing";
 import { startRouteTiming } from "@/lib/route-timing";
 
 const startPlannerSchema = z.object({
@@ -273,22 +270,19 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
     : marketSelection
       ? normalizeDistinct(marketSelection.cellIds).length
       : normalizeDistinct(plannerSelection!.zipCodes).length;
-  const sku = getTextSearchSkuForDiscoveryMode(discoveryMode);
-  const budgetEstimate = estimateDiscoveryRunBudget({
+  const sizeEstimate = estimateDiscoveryRunSize({
     cellCount: plannedCellCount,
     categoryCount: categories.length,
     mode: discoveryMode,
     paginationPolicy,
     testRun,
     settings,
-    monthlyUsedForSku: await getMonthlyBillableEventsForSku(sku),
-    todayCalls: await getTodayApiCalls(),
   });
 
-  if (!budgetEstimate.canStart) {
+  if (!sizeEstimate.canStart) {
     return {
-      error: budgetEstimate.warnings[0] ?? "Discovery would exceed Google Places budget guardrails.",
-      estimate: budgetEstimate,
+      error: sizeEstimate.warnings[0] ?? "Discovery selection is incomplete.",
+      estimate: sizeEstimate,
     };
   }
 
@@ -304,7 +298,7 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
       paginationPolicy,
       testRun,
       ...(marketSelection.promotedFromRunId ? { promotedFromRunId: marketSelection.promotedFromRunId } : {}),
-      budgetEstimate,
+      sizeEstimate,
     },
   } : {
     createdByUserId: actor.userId,
@@ -316,7 +310,7 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
       discoveryMode,
       paginationPolicy,
       testRun,
-      budgetEstimate,
+      sizeEstimate,
     },
   });
 
@@ -383,11 +377,11 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
     selectedState,
     selectedMarketId: marketSelection?.marketId ?? null,
     categories,
-    estimate: budgetEstimate,
+    estimate: sizeEstimate,
   };
 }
 
-export async function estimateDiscoveryRunAction(payload: EstimateCrawlPayload): Promise<DiscoveryBudgetEstimate | { error: string }> {
+export async function estimateDiscoveryRunAction(payload: EstimateCrawlPayload): Promise<DiscoverySizeEstimate | { error: string }> {
   await requirePermission("crawl:manage");
   const logActionTiming = startRouteTiming("action:estimateDiscoveryRunAction");
   try {
@@ -405,20 +399,13 @@ export async function estimateDiscoveryRunAction(payload: EstimateCrawlPayload):
         const cellCount = "cellIds" in selection ? normalizeDistinct(selection.cellIds).length : normalizeDistinct(selection.zipCodes).length;
         const mode = normalizeDiscoveryMode(selection.discoveryMode ?? settings.google_default_discovery_mode, settings.google_default_discovery_mode);
         const paginationPolicy = normalizePaginationPolicy(selection.paginationPolicy ?? settings.google_default_pagination_policy, settings.google_default_pagination_policy);
-        const sku = getTextSearchSkuForDiscoveryMode(mode);
-        const [monthlyUsedForSku, todayCalls] = await Promise.all([
-          getMonthlyBillableEventsForSku(sku),
-          getTodayApiCalls(),
-        ]);
-        return estimateDiscoveryRunBudget({
+        return estimateDiscoveryRunSize({
           cellCount,
           categoryCount: categories.length,
           mode,
           paginationPolicy,
           testRun: Boolean(selection.testRun),
           settings,
-          monthlyUsedForSku,
-          todayCalls,
         });
       }),
     );
@@ -427,15 +414,15 @@ export async function estimateDiscoveryRunAction(payload: EstimateCrawlPayload):
   } catch (error) {
     if (error instanceof ReadOnlyActionDeadlineError) {
       logActionTiming(503, { reason: "dashboard_action_deadline" });
-      return { error: "Google call estimate is taking too long. Try again in a moment." };
+      return { error: "Discovery estimate is taking too long. Try again in a moment." };
     }
     if (isDbStatementTimeoutError(error)) {
       logActionTiming(503, { reason: "db_statement_timeout" });
-      return { error: "Google call estimate is taking too long. Try again in a moment." };
+      return { error: "Discovery estimate is taking too long. Try again in a moment." };
     }
     if (isTransientDbError(error)) {
       logActionTiming(503, { reason: "transient_db_error" });
-      return { error: "Google call estimate is temporarily unavailable. Try again in a moment." };
+      return { error: "Discovery estimate is temporarily unavailable. Try again in a moment." };
     }
     logActionTiming(500, { reason: "estimate_action_error" });
     throw error;
@@ -636,7 +623,6 @@ async function getDashboardStatsActionInternal(): Promise<DashboardStatsResult> 
     googleDiscoveryDefaults: {
       discoveryMode: settings.google_default_discovery_mode,
       paginationPolicy: settings.google_default_pagination_policy,
-      testRunCallCap: settings.google_test_run_call_cap,
     },
   };
 }
@@ -665,13 +651,9 @@ export async function getDashboardAnalyticsAction(): Promise<Partial<DashboardSt
 async function getDashboardAnalyticsActionInternal(): Promise<Partial<DashboardStatsResult>> {
   const visibleRun = await timedDashboardAnalyticsStep("visible_run", () => getSelectedOrDefaultVisibleCrawlRun());
   let apiCallsUsed = 0;
-  let estimatedCost = 0;
   let discoveryApiCalls = 0;
-  let discoveryEstimatedCost = 0;
   let enrichmentApiCalls = 0;
-  let enrichmentEstimatedCost = 0;
   let atmosphereEnrichmentCalls = 0;
-  let atmosphereEstimatedCost = 0;
   let lastError: string | null = null;
 
   const todayFocus = await timedDashboardAnalyticsStep("today_focus", getTodayFocusCount);
@@ -681,49 +663,34 @@ async function getDashboardAnalyticsActionInternal(): Promise<Partial<DashboardS
   const qualifiedLeadCount = await timedDashboardAnalyticsStep("qualified_lead_count", () => getQualifiedLeadCount(5.0));
   const schedulerHealth = await timedDashboardAnalyticsStep("scheduler_health", getSchedulerHealth);
   const monthlyApiCalls = monthlyUsage.totalCalls;
-  const monthlyApiCost = monthlyUsage.totalCost;
-  let projectedMonthlyCost = monthlyApiCost;
-
-  if (monthlyApiCalls > 0) {
-    const now = new Date();
-    const daysElapsed = Math.max(now.getUTCDate(), 1);
-    const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
-    projectedMonthlyCost = Math.round(((monthlyApiCost / daysElapsed) * daysInMonth) * 100) / 100;
-  }
 
   if (visibleRun?.id) {
     const runUsage = await timedDashboardAnalyticsStep("run_api_usage", () => getRunApiUsageSummary(visibleRun.id));
     apiCallsUsed = runUsage.totalCalls;
-    estimatedCost = runUsage.totalCost;
     discoveryApiCalls = runUsage.discoveryCalls;
-    discoveryEstimatedCost = runUsage.discoveryCost;
     enrichmentApiCalls = runUsage.enrichmentCalls;
-    enrichmentEstimatedCost = runUsage.enrichmentCost;
     atmosphereEnrichmentCalls = runUsage.atmosphereCalls;
-    atmosphereEstimatedCost = runUsage.atmosphereCost;
     lastError = await timedDashboardAnalyticsStep("run_last_error", () => getRunLastError(visibleRun.id));
   }
-
-  const costPerQualifiedLead = qualifiedLeadCount > 0 ? Math.round((estimatedCost / qualifiedLeadCount) * 100) / 100 : null;
 
   return {
     todayFocus,
     needsFollowUp,
     conversionMetrics,
     apiCallsUsed,
-    estimatedCost,
+    estimatedCost: 0,
     discoveryApiCalls,
-    discoveryEstimatedCost,
+    discoveryEstimatedCost: 0,
     enrichmentApiCalls,
-    enrichmentEstimatedCost,
+    enrichmentEstimatedCost: 0,
     atmosphereEnrichmentCalls,
-    atmosphereEstimatedCost,
+    atmosphereEstimatedCost: 0,
     monthlyApiCalls,
-    monthlyApiCost,
-    projectedMonthlyCost,
+    monthlyApiCost: 0,
+    projectedMonthlyCost: 0,
     lastError,
     qualifiedLeadCount,
-    costPerQualifiedLead,
+    costPerQualifiedLead: null,
     schedulerHealth,
   };
 }
@@ -995,8 +962,8 @@ export async function getCoverageProbeCandidatesAction(runId?: string | null): P
 }
 
 export async function promoteProbeToLeadHarvestAction(runId: string): Promise<
-  | { runId: string; unitCount: number; selectedCellCount: number; categories: string[]; promotedFromRunId: string; estimate: DiscoveryBudgetEstimate }
-  | { error: string; estimate?: DiscoveryBudgetEstimate }
+  | { runId: string; unitCount: number; selectedCellCount: number; categories: string[]; promotedFromRunId: string; estimate: DiscoverySizeEstimate }
+  | { error: string; estimate?: DiscoverySizeEstimate }
 > {
   await requirePermission("crawl:manage");
   await ensureDbReady();
@@ -1032,7 +999,6 @@ export async function promoteProbeToLeadHarvestAction(runId: string): Promise<
     categories,
     discoveryMode: "lead_harvest",
     paginationPolicy: normalizePaginationPolicy(selection.paginationPolicy, "auto_yield_based"),
-    testRun: true,
     promotedFromRunId: run.id,
   });
 

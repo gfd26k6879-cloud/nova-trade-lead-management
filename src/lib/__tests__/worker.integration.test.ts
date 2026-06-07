@@ -106,7 +106,7 @@ describe("crawl worker integration", () => {
     expect(row.ai_input_hash).toBeTruthy();
   });
 
-  it("resumes from saved page token when a unit has remaining page budget", async () => {
+  it("resumes from saved page token when a unit has more pages available", async () => {
     const runId = seedTestRun(testDb);
     seedTestUnit(testDb, { runId, nextPageToken: "saved-token-123", maxPages: 3, pagesFetched: 1 });
 
@@ -160,25 +160,28 @@ describe("crawl worker integration", () => {
     expect(closedRow).toBeUndefined();
   });
 
-  it("pauses on budget limit (max_calls_per_run)", async () => {
+  it("processes despite legacy run call cap settings", async () => {
     const runId = seedTestRun(testDb);
     testDb.prepare("UPDATE settings SET max_calls_per_run = 1, stop_on_budget_limit = 1").run();
     testDb.prepare("UPDATE crawl_runs SET api_calls_used = 1 WHERE id = ?").run(runId);
 
     seedTestUnit(testDb, { runId });
+    const place = makePlaceResult({ id: "places/legacy-run-cap" });
+    mockTextSearch.mockResolvedValueOnce(mockTextSearchResponse([place]));
 
     const result = await processNextUnit();
 
-    expect(result.status).toBe("budget_limit");
+    expect(result.status).toBe("processed");
+    expect(mockTextSearch).toHaveBeenCalledTimes(1);
 
     const run = testDb.prepare("SELECT status FROM crawl_runs WHERE id = ?").get(runId) as { status: string };
-    expect(run.status).toBe("paused");
+    expect(run.status).toBe("running");
     const unit = testDb.prepare("SELECT status, started_at FROM crawl_units WHERE id = 'unit-1'").get() as Record<string, unknown>;
-    expect(unit.status).toBe("pending");
-    expect(unit.started_at).toBeNull();
+    expect(unit.status).toBe("done");
+    expect(unit.started_at).toBeTruthy();
   });
 
-  it("pauses before exceeding the monthly Text Search free-safe cap", async () => {
+  it("processes despite legacy monthly Text Search cap settings", async () => {
     const runId = seedTestRun(testDb);
     testDb.prepare("UPDATE settings SET max_calls_per_day = 2000, max_calls_per_run = 2000").run();
     seedTestUnit(testDb, { runId });
@@ -191,18 +194,19 @@ describe("crawl worker integration", () => {
     for (let i = 0; i < 900; i++) {
       insert.run(`usage-${i}`, now);
     }
+    const place = makePlaceResult({ id: "places/legacy-monthly-cap" });
+    mockTextSearch.mockResolvedValueOnce(mockTextSearchResponse([place]));
 
     const result = await processNextUnit();
 
-    expect(result.status).toBe("budget_limit");
-    expect(result.error).toContain("free-safe cap reached");
-    expect(mockTextSearch).not.toHaveBeenCalled();
+    expect(result.status).toBe("processed");
+    expect(mockTextSearch).toHaveBeenCalledTimes(1);
 
     const run = testDb.prepare("SELECT status FROM crawl_runs WHERE id = ?").get(runId) as { status: string };
-    expect(run.status).toBe("paused");
+    expect(run.status).toBe("running");
     const unit = testDb.prepare("SELECT status, started_at FROM crawl_units WHERE id = 'unit-1'").get() as Record<string, unknown>;
-    expect(unit.status).toBe("pending");
-    expect(unit.started_at).toBeNull();
+    expect(unit.status).toBe("done");
+    expect(unit.started_at).toBeTruthy();
   });
 
   it("prioritizes Denver county pending units before lower sorted zips", async () => {

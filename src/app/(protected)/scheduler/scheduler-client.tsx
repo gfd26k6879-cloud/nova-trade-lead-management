@@ -20,12 +20,12 @@ type SchedulerOperations = Awaited<ReturnType<typeof getSchedulerOperationsActio
 type SchedulerWorker = SchedulerOperations["health"]["workers"][number];
 type SchedulerStatusCounts = SchedulerOperations["backlogs"]["enrichment"];
 type WorkerRun = SchedulerOperations["history"][number];
-type SchedulerTab = "overview" | "workers" | "costs" | "history";
+type SchedulerTab = "overview" | "workers" | "usage" | "history";
 
 const TABS: Array<{ key: SchedulerTab; label: string }> = [
   { key: "overview", label: "Overview" },
   { key: "workers", label: "Workers" },
-  { key: "costs", label: "Costs & Backlog" },
+  { key: "usage", label: "Usage & Backlog" },
   { key: "history", label: "History" },
 ];
 
@@ -97,8 +97,8 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
       stats={[
         { label: "Workers On", value: `${activeWorkers} / ${operations.health.workers.length}`, hint: blockedWorkers > 0 ? `${blockedWorkers} need attention` : "healthy or idle" },
         { label: "Background Queue", value: formatNumber(queueDepth), hint: "pending across all workers" },
-        { label: "AI Month", value: money(operations.costs.aiMonthlyCost), hint: `${money(operations.costs.aiBudgetRemainingMonth)} remaining` },
-        { label: "Google Month", value: money(operations.costs.googleMonth.cost), hint: `${formatNumber(operations.costs.googleMonth.calls)} calls` },
+        { label: "AI Queue", value: formatNumber(operations.backlogs.aiQueue.queued + operations.backlogs.aiQueue.running), hint: `${formatNumber(operations.backlogs.aiQueue.verified)} verified` },
+        { label: "Google Calls", value: formatNumber(operations.costs.googleMonth.calls), hint: "this month" },
       ]}
     >
       <section className="glass rounded-2xl p-3">
@@ -224,13 +224,13 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
         </section>
       )}
 
-      {activeTab === "costs" && (
+      {activeTab === "usage" && (
         <section className="space-y-5">
           <section className="grid gap-4 lg:grid-cols-4">
-            <CostCard label="Google Today" usage={operations.costs.googleToday} />
-            <CostCard label="Google Month" usage={operations.costs.googleMonth} />
-            <CostCard label="AI Today" value={`${money(operations.costs.aiDailyCost)} / ${money(operations.costs.aiDailyBudget)}`} sub={`${money(operations.costs.aiBudgetRemainingToday)} remaining`} />
-            <CostCard label="AI Month" value={`${money(operations.costs.aiMonthlyCost)} / ${money(operations.costs.aiMonthlyBudget)}`} sub={`${money(operations.costs.aiBudgetRemainingMonth)} remaining`} />
+            <UsageCard label="Google Today" usage={operations.costs.googleToday} />
+            <UsageCard label="Google Month" usage={operations.costs.googleMonth} />
+            <MetricTile label="AI Queued" value={formatNumber(operations.backlogs.aiQueue.queued)} />
+            <MetricTile label="AI Verified" value={formatNumber(operations.backlogs.aiQueue.verified)} />
           </section>
 
           <section className="grid gap-4 lg:grid-cols-3">
@@ -245,10 +245,10 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
           </section>
 
           <section className="grid gap-4 lg:grid-cols-4">
-            <MetricTile label="Verified / $" value={operations.costs.verifiedLeadsPerDollar === null ? "N/A" : String(operations.costs.verifiedLeadsPerDollar)} />
-            <MetricTile label="Ready / $" value={operations.costs.readyToCallLeadsPerDollar === null ? "N/A" : String(operations.costs.readyToCallLeadsPerDollar)} />
             <MetricTile label="Usable Sites Found" value={formatNumber(operations.backlogs.leads.usableSiteFound)} />
             <MetricTile label="No-Site Verified" value={formatNumber(operations.backlogs.leads.noSiteVerified)} />
+            <MetricTile label="Ready to Call" value={formatNumber(operations.backlogs.leads.readyToCall)} />
+            <MetricTile label="Broken Sites" value={formatNumber(operations.backlogs.leads.brokenSiteOpportunities)} />
           </section>
         </section>
       )}
@@ -329,7 +329,7 @@ function WorkerCard({ worker, loading, onToggle }: { worker: SchedulerWorker; lo
         <InfoRow label="Internal endpoint" value={metadata.endpoint} mono />
         <InfoRow label="Paid API" value={metadata.externalApi} />
         <InfoRow label="Schedule" value={metadata.schedule} />
-        <InfoRow label="Cost source" value={metadata.costSource} />
+        <InfoRow label="Usage signal" value={metadata.costSource} />
         <InfoRow label="Input" value={metadata.inputLabel} />
         <InfoRow label="Output" value={metadata.outputLabel} />
       </div>
@@ -387,9 +387,9 @@ function InfoRow({ label, value, mono = false }: { label: string; value: string;
   );
 }
 
-function CostCard({ label, usage, value, sub }: { label: string; usage?: SchedulerOperations["costs"]["googleToday"]; value?: string; sub?: string }) {
-  const displayValue = usage ? money(usage.cost) : value ?? "N/A";
-  const displaySub = usage ? `${formatNumber(usage.calls)} calls · ${formatNumber(usage.discoveryCalls)} search / ${formatNumber(usage.enrichmentCalls)} details` : sub;
+function UsageCard({ label, usage, value, sub }: { label: string; usage?: SchedulerOperations["costs"]["googleToday"]; value?: string; sub?: string }) {
+  const displayValue = usage ? formatNumber(usage.calls) : value ?? "N/A";
+  const displaySub = usage ? `${formatNumber(usage.discoveryCalls)} search / ${formatNumber(usage.enrichmentCalls)} details` : sub;
   return <MetricTile label={label} value={displayValue} sub={displaySub} />;
 }
 
@@ -458,7 +458,7 @@ function StatusPill({ worker }: { worker?: SchedulerWorker }) {
 
 function StatusBadge({ status }: { status: string }) {
   const style = runStatusStyle(status);
-  return <span className="rounded-md px-2 py-1 text-xs font-medium" style={{ background: style.bg, color: style.fg }}>{titleCase(status)}</span>;
+  return <span className="rounded-md px-2 py-1 text-xs font-medium" style={{ background: style.bg, color: style.fg }}>{status === "budget_limit" ? "Stopped" : titleCase(status)}</span>;
 }
 
 function statusStyle(worker?: SchedulerWorker) {
@@ -517,10 +517,6 @@ function formatDateTime(value: string | null): string {
 
 function formatNumber(value: number): string {
   return Math.round(value).toLocaleString();
-}
-
-function money(value: number): string {
-  return `$${value.toFixed(2)}`;
 }
 
 function titleCase(value: string): string {

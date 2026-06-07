@@ -98,7 +98,6 @@ function normalizeTaskResult(result: unknown): WorkerTaskResult {
 function classifyWorkerStatus(result: WorkerTaskResult): SchedulerRunStatus {
   if (result.status === "idle" || result.status === "done" || result.status === "ok") return "idle";
   if (result.status === "disabled") return "disabled";
-  if (result.status === "budget_limit") return "budget_limit";
   if (result.status === "error") return "error";
   return "processed";
 }

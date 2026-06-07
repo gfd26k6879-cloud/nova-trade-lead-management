@@ -622,9 +622,9 @@ export function CoverageClient({
               })}>{busy === "stop" ? "Canceling..." : "Cancel this item's remaining units"}</button>}
               {(progress?.failed ?? failedUnits) > 0 && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handleRetry}>{busy === "retry" ? "Retrying..." : `Retry Failed (${progress?.failed ?? failedUnits})`}</button>}
               {canPromoteProbe && <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={() => setConfirmAction({
-                title: "Promote probe to capped lead harvest?",
-                message: `This creates a separate lead harvest using the same market, cell, and categories from ${run.name ?? "this probe"}. Test-run cap stays enabled. The original probe and Denver remain unchanged.`,
-                actionLabel: busy === "promote" ? "Creating..." : "Create capped lead harvest",
+                title: "Promote probe to lead harvest?",
+                message: `This creates a separate lead harvest using the same market, cell, and categories from ${run.name ?? "this probe"}. The original probe remains unchanged.`,
+                actionLabel: busy === "promote" ? "Creating..." : "Create lead harvest",
                 action: handlePromoteProbe,
               })}>{busy === "promote" ? "Creating harvest..." : "Promote to lead harvest"}</button>}
               <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Started {formatDateTime(run.started_at ?? run.created_at)}</span>
@@ -761,7 +761,7 @@ export function CoverageClient({
           <div className="overflow-x-auto">
             <table className="glass-table min-w-[980px]">
               <thead><tr><th>Status</th><th>Location</th><th>Country</th><th>Category</th><th>Attempts</th><th>Pages</th><th>Raw</th><th>New</th><th>Dupes</th><th>Leads</th><th>Last Activity</th><th>Notes</th></tr></thead>
-              <tbody>{filteredUnits.map((unit) => <tr key={unit.id}><td><StatusPill status={unit.status} /></td><td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{unit.query_location_label ?? unit.zip}</td><td>{unit.country_code ?? "US"}</td><td>{unit.category.replace(/_/g, " ")}</td><td>{unit.attempt_count}</td><td>{unit.pages_fetched}/{unit.max_pages}</td><td>{unit.raw_places_seen}</td><td>{unit.new_places_seen}</td><td>{unit.duplicate_places_seen}</td><td>{unit.discovered_count}</td><td>{formatDateTime(unit.started_at ?? unit.finished_at ?? unit.created_at)}</td><td className="max-w-72 truncate" title={unit.last_error ?? undefined}>{unit.last_error ?? (unit.budget_blocked_at ? "Budget blocked" : unit.next_page_token ? "More pages queued" : "")}</td></tr>)}</tbody>
+              <tbody>{filteredUnits.map((unit) => <tr key={unit.id}><td><StatusPill status={unit.status} /></td><td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{unit.query_location_label ?? unit.zip}</td><td>{unit.country_code ?? "US"}</td><td>{unit.category.replace(/_/g, " ")}</td><td>{unit.attempt_count}</td><td>{unit.pages_fetched}/{unit.max_pages}</td><td>{unit.raw_places_seen}</td><td>{unit.new_places_seen}</td><td>{unit.duplicate_places_seen}</td><td>{unit.discovered_count}</td><td>{formatDateTime(unit.started_at ?? unit.finished_at ?? unit.created_at)}</td><td className="max-w-72 truncate" title={unit.last_error ?? undefined}>{unit.last_error ?? (unit.budget_blocked_at ? "Previously paused" : unit.next_page_token ? "More pages queued" : "")}</td></tr>)}</tbody>
             </table>
           </div>
         )}

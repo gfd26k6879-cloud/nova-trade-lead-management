@@ -3,13 +3,12 @@ import { classifyWebsite } from "@/lib/classify-website";
 import { computeScore } from "@/lib/scoring";
 import { qualifyLead } from "@/lib/qualification";
 import {
-  getConfiguredMonthlyCapForSku,
   getTextSearchFieldMaskForDiscoveryMode,
   getTextSearchSkuForDiscoveryMode,
   normalizeDiscoveryMode,
   normalizePaginationPolicy,
   shouldFetchNextTextSearchPage,
-} from "@/lib/discovery-budget";
+} from "@/lib/discovery-sizing";
 import {
   getProcessingCrawlRun,
   leaseNextCrawlUnit,
@@ -21,27 +20,19 @@ import {
   upsertLead,
   leadExists,
   getSettings,
-  getTodayApiCalls,
-  getRunApiCalls,
-  getMonthlyBillableEventsForSku,
-  getMonthlyApiCost,
-  isMonthlySpendLimitReached,
-  setRunLastError,
-  createAuditLog,
   recordUnitPageFetch,
-  markUnitBudgetBlocked,
   API_ENDPOINT_TEXT_SEARCH,
   logApiUsageEvent,
   recordPlaceObservation,
   upsertPlaceMaster,
   placeMasterExists,
+  createAuditLog,
 } from "@/lib/db/queries";
 import { enqueueAiVerificationForLead } from "@/lib/ai/verification-worker";
-import type { GooglePlacesSku } from "@/lib/google-pricing";
 
 const SKIP_BUSINESS_STATUSES = new Set(["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"]);
 export interface ProcessResult {
-  status: "processed" | "idle" | "paused" | "done" | "error" | "budget_limit";
+  status: "processed" | "idle" | "paused" | "done" | "error";
   unitId?: string;
   zip?: string;
   category?: string;
@@ -90,20 +81,6 @@ export async function processNextUnit(): Promise<ProcessResult> {
   const policyMaxPages = paginationPolicy === "first_page_only" ? 1 : 3;
   const unitMaxPages = Math.max(configuredUnitMaxPages, policyMaxPages);
 
-  if (settings.stop_on_budget_limit) {
-    const budget = await getDiscoveryBudgetLimit(run.id, settings, discoverySku);
-    if (budget) {
-      await markUnitBudgetBlocked(unit.id, budget.error ?? "Budget limit reached.");
-      return {
-        ...budget,
-        unitId: unit.id,
-        zip: unit.zip,
-        category: unit.category,
-        progress: await getCrawlProgress(run.id),
-      };
-    }
-  }
-
   let leadsFound = 0;
   let leadsSkipped = 0;
   let apiCalls = 0;
@@ -125,23 +102,6 @@ export async function processNextUnit(): Promise<ProcessResult> {
     let pagesFetched = Math.max(0, Math.floor(unit.pages_fetched ?? 0));
 
     while (pagesFetched < unitMaxPages) {
-      if (settings.stop_on_budget_limit) {
-        const budget = await getDiscoveryBudgetLimit(run.id, settings, discoverySku);
-        if (budget) {
-          await markUnitBudgetBlocked(unit.id, budget.error ?? "Budget limit reached.");
-          return {
-            ...budget,
-            unitId: unit.id,
-            zip: unit.zip,
-            category: unit.category,
-            leadsFound,
-            leadsSkipped,
-            apiCalls,
-            progress: await getCrawlProgress(run.id),
-          };
-        }
-      }
-
       const result = await textSearch(
         query,
         pageToken,
@@ -407,72 +367,4 @@ function isLikelyBillableGoogleAttemptError(message: string): boolean {
 
 function formatPlacesApiErrorForOperator(error: PlacesApiError): string {
   return `Google Places request failed with status ${error.status}.`;
-}
-
-async function getDiscoveryBudgetLimit(
-  runId: string,
-  settings: Awaited<ReturnType<typeof getSettings>>,
-  sku: GooglePlacesSku,
-): Promise<ProcessResult | null> {
-  const runCalls = await getRunApiCalls(runId);
-  if (runCalls >= settings.max_calls_per_run) {
-    await pauseRunForBudgetLimit(runId, `Budget limit: max calls per run (${settings.max_calls_per_run}) reached`, {
-      reason: "max_calls_per_run",
-      limit: settings.max_calls_per_run,
-      currentCalls: runCalls,
-    });
-    return { status: "budget_limit", error: `Run paused: max calls per run (${settings.max_calls_per_run}) reached` };
-  }
-
-  const todayCalls = await getTodayApiCalls();
-  if (todayCalls >= settings.max_calls_per_day) {
-    await pauseRunForBudgetLimit(runId, `Budget limit: max calls per day (${settings.max_calls_per_day}) reached`, {
-      reason: "max_calls_per_day",
-      limit: settings.max_calls_per_day,
-      currentCalls: todayCalls,
-    });
-    return { status: "budget_limit", error: `Run paused: max calls per day (${settings.max_calls_per_day}) reached` };
-  }
-
-  const monthlyCap = getConfiguredMonthlyCapForSku(settings, sku);
-  const monthlyCalls = await getMonthlyBillableEventsForSku(sku);
-  if (monthlyCap !== null && monthlyCalls + 1 > monthlyCap) {
-    const message = `Google free-safe cap reached for ${sku} (${monthlyCalls}/${monthlyCap} monthly calls).`;
-    await pauseRunForBudgetLimit(runId, message, {
-      reason: "monthly_google_places_free_safe_cap",
-      sku,
-      currentCalls: monthlyCalls,
-      monthlyCap,
-    });
-    return { status: "budget_limit", error: `Run paused: ${message}` };
-  }
-
-  if (settings.cost_engine_v2_enabled && await isMonthlySpendLimitReached(settings.max_monthly_api_spend)) {
-    const current = await getMonthlyApiCost();
-    await pauseRunForBudgetLimit(
-      runId,
-      `Budget limit: max monthly spend ($${settings.max_monthly_api_spend.toFixed(2)}) reached`,
-      {
-        reason: "max_monthly_api_spend",
-        limit: settings.max_monthly_api_spend,
-        currentCost: current,
-      },
-    );
-    return {
-      status: "budget_limit",
-      error: `Run paused: monthly API spend reached ($${current.toFixed(2)} / $${settings.max_monthly_api_spend.toFixed(2)})`,
-    };
-  }
-
-  return null;
-}
-
-async function pauseRunForBudgetLimit(
-  runId: string,
-  message: string,
-  metadata: Record<string, unknown>,
-): Promise<void> {
-  await updateCrawlRunStatus(runId, "paused");
-  await setRunLastError(runId, message);
-  await createAuditLog("crawl_budget_limit", "crawl_run", runId, metadata);
 }

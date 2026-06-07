@@ -1006,7 +1006,6 @@ export async function runAiVerificationBatchAction(input: { limit?: number; busi
       cached: "cached" in result ? result.cached : false,
       error: "error" in result ? result.error : undefined,
     });
-    if ("error" in result && result.error?.includes("budget")) break;
   }
 
   await createAuditLog("ai_batch_verification", "leads", undefined, {
@@ -1081,7 +1080,6 @@ export async function runQualityAiVerificationBatchAction(input: {
       cached: "cached" in result ? result.cached : false,
       error: "error" in result ? result.error : undefined,
     });
-    if ("error" in result && result.error?.includes("budget")) break;
   }
 
   await createAuditLog("quality_ai_batch_verification", "leads", undefined, {

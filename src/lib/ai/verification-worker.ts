@@ -1,7 +1,6 @@
 import {
   createAuditLog,
   createAiLeadVerification,
-  getAiBudgetStatus,
   getAiVerificationBackfillCandidates,
   getAiQueueStats,
   getConfiguredOpenAiApiKey,
@@ -20,7 +19,7 @@ import {
   type Settings,
 } from "@/lib/db/queries";
 import type { WebsiteStatus } from "@/lib/classify-website";
-import { getAiCostReservationUsd, getConfiguredOpenAIModel, OPENAI_LEAD_VERIFICATION_MODEL } from "@/lib/ai/config";
+import { getConfiguredOpenAIModel, OPENAI_LEAD_VERIFICATION_MODEL } from "@/lib/ai/config";
 import {
   callOpenAILeadVerifier,
   createLeadVerificationInputHash,
@@ -38,7 +37,6 @@ export type AiVerificationWorkerResult =
   | { status: "verified"; leadId: string; leadName: string; cached: boolean }
   | { status: "idle"; reason?: string }
   | { status: "disabled"; reason: string }
-  | { status: "budget_limit"; leadId?: string; error: string }
   | { status: "error"; leadId?: string; error: string };
 
 export interface AiVerificationBackfillResult {
@@ -108,8 +106,7 @@ export async function processNextAiVerificationJob(): Promise<AiVerificationWork
   if ("error" in result) {
     const error = result.error ?? "AI verification failed.";
     await markLeadAiQueueError(lead.id, error, settings.ai_max_attempts);
-    const status = error.toLowerCase().includes("budget") ? "budget_limit" : "error";
-    return { status, leadId: lead.id, error };
+    return { status: "error", leadId: lead.id, error };
   }
 
   const verificationHash = result.verification.input_hash ?? inputHash;
@@ -199,10 +196,6 @@ export async function performAiVerification(lead: Lead, force: boolean, settings
     });
     return { success: true, cached: true, verification: latest };
   }
-
-  const reservedCost = getAiCostReservationUsd();
-  const budget = await getAiBudgetStatus(settings, reservedCost);
-  if (!budget.allowed) return { error: budget.reason ?? "AI budget guardrail blocked this request." };
 
   try {
     const ai = await callOpenAILeadVerifier(lead, await getConfiguredOpenAiApiKey());

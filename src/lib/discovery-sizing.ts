@@ -1,6 +1,5 @@
 import type { Settings } from "@/lib/db/queries";
 import {
-  getSkuSafeMonthlyCap,
   inferTextSearchSkuFromFieldMask,
   type GooglePlacesSku,
 } from "@/lib/google-pricing";
@@ -12,7 +11,7 @@ import {
 export type DiscoveryMode = "coverage_probe" | "lead_harvest";
 export type PaginationPolicy = "first_page_only" | "auto_yield_based" | "manual_extra_pages";
 
-export interface DiscoveryBudgetEstimate {
+export interface DiscoverySizeEstimate {
   mode: DiscoveryMode;
   paginationPolicy: PaginationPolicy;
   selectedCells: number;
@@ -21,37 +20,21 @@ export interface DiscoveryBudgetEstimate {
   estimatedSearchCalls: number;
   estimatedMaxRawPlaces: number;
   sku: GooglePlacesSku;
-  monthlyCap: number | null;
-  monthlyUsed: number;
-  monthlyRemaining: number | null;
-  dailyCap: number;
-  dailyUsed: number;
-  dailyRemaining: number;
-  runCap: number;
-  runRemaining: number;
   testRun: boolean;
   maxPages: number;
   warnings: string[];
   canStart: boolean;
 }
 
-export interface DiscoveryBudgetInput {
+export interface DiscoverySizeInput {
   cellCount: number;
   categoryCount: number;
   mode?: string | null;
   paginationPolicy?: string | null;
   testRun?: boolean;
   settings: Settings;
-  monthlyUsedForSku?: number;
-  todayCalls?: number;
-  runCalls?: number;
 }
 
-export const DEFAULT_GOOGLE_TEXT_SEARCH_PRO_MONTHLY_CAP = 4900;
-export const DEFAULT_GOOGLE_ENTERPRISE_MONTHLY_CAP = 900;
-export const DEFAULT_GOOGLE_CALLS_PER_DAY = 300;
-export const DEFAULT_GOOGLE_CALLS_PER_RUN = 500;
-export const DEFAULT_GOOGLE_TEST_RUN_CALL_CAP = 50;
 export const DEFAULT_AUTO_PAGINATION_MIN_NEW_CANDIDATES = 6;
 export const DEFAULT_AUTO_PAGINATION_MAX_DUPLICATE_RATE = 0.6;
 export const MAX_TEXT_SEARCH_PAGES = 3;
@@ -74,13 +57,7 @@ export function getTextSearchSkuForDiscoveryMode(mode: DiscoveryMode): GooglePla
   return inferTextSearchSkuFromFieldMask(getTextSearchFieldMaskForDiscoveryMode(mode));
 }
 
-export function getConfiguredMonthlyCapForSku(settings: Settings, sku: GooglePlacesSku): number | null {
-  if (sku === "places_text_search_pro") return positiveInt(settings.google_text_search_monthly_cap, DEFAULT_GOOGLE_TEXT_SEARCH_PRO_MONTHLY_CAP);
-  if (sku.includes("enterprise")) return positiveInt(settings.google_enterprise_monthly_cap, DEFAULT_GOOGLE_ENTERPRISE_MONTHLY_CAP);
-  return getSkuSafeMonthlyCap(sku);
-}
-
-export function estimateDiscoveryRunBudget(input: DiscoveryBudgetInput): DiscoveryBudgetEstimate {
+export function estimateDiscoveryRunSize(input: DiscoverySizeInput): DiscoverySizeEstimate {
   const mode = normalizeDiscoveryMode(input.mode, input.settings.google_default_discovery_mode);
   const paginationPolicy = normalizePaginationPolicy(input.paginationPolicy, input.settings.google_default_pagination_policy);
   const selectedCells = Math.max(0, Math.floor(input.cellCount));
@@ -89,30 +66,10 @@ export function estimateDiscoveryRunBudget(input: DiscoveryBudgetInput): Discove
   const maxPages = paginationPolicy === "first_page_only" ? 1 : MAX_TEXT_SEARCH_PAGES;
   const estimatedSearchCalls = estimatedUnits * maxPages;
   const sku = getTextSearchSkuForDiscoveryMode(mode);
-  const monthlyCap = getConfiguredMonthlyCapForSku(input.settings, sku);
-  const monthlyUsed = Math.max(0, Math.floor(input.monthlyUsedForSku ?? 0));
-  const monthlyRemaining = monthlyCap === null ? null : Math.max(0, monthlyCap - monthlyUsed);
-  const dailyCap = positiveInt(input.settings.max_calls_per_day, DEFAULT_GOOGLE_CALLS_PER_DAY);
-  const dailyUsed = Math.max(0, Math.floor(input.todayCalls ?? 0));
-  const dailyRemaining = Math.max(0, dailyCap - dailyUsed);
-  const normalRunCap = positiveInt(input.settings.max_calls_per_run, DEFAULT_GOOGLE_CALLS_PER_RUN);
-  const testRunCap = positiveInt(input.settings.google_test_run_call_cap, DEFAULT_GOOGLE_TEST_RUN_CALL_CAP);
-  const runCap = input.testRun ? Math.min(normalRunCap, testRunCap) : normalRunCap;
-  const runCalls = Math.max(0, Math.floor(input.runCalls ?? 0));
-  const runRemaining = Math.max(0, runCap - runCalls);
   const warnings: string[] = [];
 
   if (selectedCells === 0) warnings.push("Select at least one postal/postcode cell.");
   if (selectedCategories === 0) warnings.push("Select at least one category.");
-  if (monthlyRemaining !== null && estimatedSearchCalls > monthlyRemaining) {
-    warnings.push(`This run can use up to ${estimatedSearchCalls} ${sku} calls, but only ${monthlyRemaining} remain in the monthly free-safe cap.`);
-  }
-  if (estimatedSearchCalls > dailyRemaining) {
-    warnings.push(`This run can use up to ${estimatedSearchCalls} Google calls, but only ${dailyRemaining} remain today.`);
-  }
-  if (estimatedSearchCalls > runRemaining) {
-    warnings.push(`This run can use up to ${estimatedSearchCalls} Google calls, but only ${runRemaining} remain for this run.`);
-  }
 
   return {
     mode,
@@ -123,14 +80,6 @@ export function estimateDiscoveryRunBudget(input: DiscoveryBudgetInput): Discove
     estimatedSearchCalls,
     estimatedMaxRawPlaces: estimatedSearchCalls * TEXT_SEARCH_PAGE_SIZE,
     sku,
-    monthlyCap,
-    monthlyUsed,
-    monthlyRemaining,
-    dailyCap,
-    dailyUsed,
-    dailyRemaining,
-    runCap,
-    runRemaining,
     testRun: Boolean(input.testRun),
     maxPages,
     warnings,
@@ -157,9 +106,4 @@ export function shouldFetchNextTextSearchPage(input: {
   const duplicateRate = input.rawPlaces > 0 ? input.duplicatePlaces / input.rawPlaces : 1;
   const maxDuplicateRate = Math.max(0, Math.min(1, input.maxDuplicateRate ?? DEFAULT_AUTO_PAGINATION_MAX_DUPLICATE_RATE));
   return input.newPlaces >= minNew && duplicateRate <= maxDuplicateRate;
-}
-
-function positiveInt(value: number | null | undefined, fallback: number): number {
-  if (!Number.isFinite(value ?? Number.NaN)) return fallback;
-  return Math.max(1, Math.floor(value as number));
 }

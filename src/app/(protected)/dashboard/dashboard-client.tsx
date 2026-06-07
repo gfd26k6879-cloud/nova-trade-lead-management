@@ -21,7 +21,7 @@ import {
 } from "@/lib/crawl/actions";
 import { queueMissingAiVerificationsAction } from "@/lib/leads/actions";
 import type { AdminFulfillmentSummary, StatisticsSummary, TeamBoardSummary } from "@/lib/db/queries";
-import type { DiscoveryBudgetEstimate, DiscoveryMode, PaginationPolicy } from "@/lib/discovery-budget";
+import type { DiscoverySizeEstimate, DiscoveryMode, PaginationPolicy } from "@/lib/discovery-sizing";
 
 const CATEGORY_OPTIONS = [
   "dentist", "lawyer", "hvac", "plumber", "electrician", "roofing",
@@ -121,16 +121,6 @@ interface SchedulerWorkerHealth {
 
 interface SchedulerHealth {
   workers: SchedulerWorkerHealth[];
-  ai: {
-    dailyCost: number;
-    dailyBudget: number;
-    monthlyCost: number;
-    monthlyBudget: number;
-    budgetRemainingToday: number;
-    budgetRemainingMonth: number;
-    verifiedLeadsPerDollar: number | null;
-    readyToCallLeadsPerDollar: number | null;
-  };
 }
 
 interface DashboardStats {
@@ -174,7 +164,6 @@ interface DashboardStats {
   googleDiscoveryDefaults: {
     discoveryMode: DiscoveryMode;
     paginationPolicy: PaginationPolicy;
-    testRunCallCap: number;
   };
 }
 
@@ -253,10 +242,9 @@ export function DashboardClient({
   const [locationScope, setLocationScope] = useState<LocationScopeValue>({ state: "CO", counties: [], zipCodes: [] });
   const [discoveryMode, setDiscoveryMode] = useState<DiscoveryMode>(initialStats.googleDiscoveryDefaults.discoveryMode);
   const [paginationPolicy, setPaginationPolicy] = useState<PaginationPolicy>(initialStats.googleDiscoveryDefaults.paginationPolicy);
-  const [isTestRun, setIsTestRun] = useState(false);
-  const [budgetEstimate, setBudgetEstimate] = useState<DiscoveryBudgetEstimate | null>(null);
-  const [budgetEstimateStatus, setBudgetEstimateStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
-  const [budgetEstimateError, setBudgetEstimateError] = useState<string | null>(null);
+  const [sizeEstimate, setSizeEstimate] = useState<DiscoverySizeEstimate | null>(null);
+  const [sizeEstimateStatus, setSizeEstimateStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [sizeEstimateError, setSizeEstimateError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(stats.processingRunStatus === "running");
   const [loading, setLoading] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -459,9 +447,6 @@ export function DashboardClient({
       } else if (data.status === "done") {
         toast.success("Crawl run completed!");
         setIsProcessing(false);
-      } else if (data.status === "budget_limit") {
-        toast.warning(data.error || "Budget limit reached — run paused");
-        setIsProcessing(false);
       } else if (data.status === "error") {
         toast.error(`Error: ${data.error}`);
       } else if (data.status === "idle" || data.status === "paused") {
@@ -492,7 +477,6 @@ export function DashboardClient({
           categories: selectedCategories,
           discoveryMode,
           paginationPolicy,
-          testRun: isTestRun,
         }
       : {
           state: locationScope.state,
@@ -501,9 +485,8 @@ export function DashboardClient({
           categories: selectedCategories,
           discoveryMode,
           paginationPolicy,
-          testRun: isTestRun,
         }
-  ), [discoveryMode, isTestRun, locationScope, paginationPolicy, selectedCategories]);
+  ), [discoveryMode, locationScope, paginationPolicy, selectedCategories]);
 
   useEffect(() => {
     const selectedCells = locationScope.cellIds?.length ?? locationScope.zipCodes.length;
@@ -513,25 +496,25 @@ export function DashboardClient({
     let active = true;
     const timer = window.setTimeout(() => {
       if (!active) return;
-      setBudgetEstimateStatus("loading");
-      setBudgetEstimateError(null);
+      setSizeEstimateStatus("loading");
+      setSizeEstimateError(null);
       estimateDiscoveryRunAction(buildDiscoveryPayload())
         .then((result) => {
           if (!active) return;
           if ("error" in result) {
-            setBudgetEstimate(null);
-            setBudgetEstimateError(result.error);
-            setBudgetEstimateStatus("error");
+            setSizeEstimate(null);
+            setSizeEstimateError(result.error);
+            setSizeEstimateStatus("error");
           } else {
-            setBudgetEstimate(result);
-            setBudgetEstimateStatus("ready");
+            setSizeEstimate(result);
+            setSizeEstimateStatus("ready");
           }
         })
         .catch((error) => {
           if (!active) return;
-          setBudgetEstimate(null);
-          setBudgetEstimateError(error instanceof Error ? error.message : "Unable to estimate Google Places usage.");
-          setBudgetEstimateStatus("error");
+          setSizeEstimate(null);
+          setSizeEstimateError(error instanceof Error ? error.message : "Unable to estimate discovery size.");
+          setSizeEstimateStatus("error");
         });
     }, 0);
     return () => {
@@ -613,9 +596,6 @@ export function DashboardClient({
       if (data.status === "enriched") {
         setEnrichProgress(`Enriched: ${data.leadName}`);
         toast.info(`Enriched: ${data.leadName}`);
-      } else if (data.status === "budget_limit") {
-        toast.warning(data.error || "Enrichment paused by budget guardrail");
-        setIsEnriching(false);
       } else if (data.status === "idle") {
         toast.success("Enrichment complete — all top leads enriched");
         setIsEnriching(false);
@@ -651,9 +631,6 @@ export function DashboardClient({
       if (data.status === "verified") {
         setAiProgress(`${data.leadName}${data.cached ? " (cached)" : ""}`);
         toast.info(`AI verified: ${data.leadName}`);
-      } else if (data.status === "budget_limit") {
-        toast.warning(data.error || "AI verification paused by budget guardrail");
-        setIsAiVerifying(false);
       } else if (data.status === "idle" || data.status === "disabled") {
         setIsAiVerifying(false);
       } else if (data.status === "error") {
@@ -710,15 +687,13 @@ export function DashboardClient({
     : locationScope.marketId || locationScope.state || "No country";
   const estimatedUnitCount = selectedCellCount * selectedCategories.length;
   const hasEstimateSelection = selectedCellCount > 0 && selectedCategories.length > 0;
-  const activeBudgetEstimate = hasEstimateSelection ? budgetEstimate : null;
-  const activeBudgetEstimateStatus = hasEstimateSelection ? budgetEstimateStatus : "idle";
-  const activeBudgetEstimateError = hasEstimateSelection ? budgetEstimateError : null;
+  const activeSizeEstimate = hasEstimateSelection ? sizeEstimate : null;
+  const activeSizeEstimateStatus = hasEstimateSelection ? sizeEstimateStatus : "idle";
+  const activeSizeEstimateError = hasEstimateSelection ? sizeEstimateError : null;
   const startDisabled = coreStatus !== "ready"
     || loading
     || selectedCategories.length === 0
-    || selectedCellCount === 0
-    || activeBudgetEstimateStatus === "loading"
-    || !activeBudgetEstimate?.canStart;
+    || selectedCellCount === 0;
   const progress = stats.progress;
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
   const activeWorkerCount = stats.schedulerHealth.workers.filter((worker) => worker.enabled).length;
@@ -729,7 +704,7 @@ export function DashboardClient({
   const claimedActive = currentTeamSummary.members.reduce((sum, member) => sum + member.claimed_active, 0);
   const openStartConfirmation = () => setConfirmAction({
     title: "Start discovery run?",
-    message: `Country/area: ${selectedMarketLabel}. Cells selected: ${selectedCellCount}. Categories selected: ${selectedCategories.length}. Estimated crawl units: ${estimatedUnitCount}. Google calls: ${activeBudgetEstimate?.estimatedSearchCalls ?? "unknown"} max. Mode: ${discoveryMode.replace(/_/g, " ")}.`,
+    message: `Country/area: ${selectedMarketLabel}. Cells selected: ${selectedCellCount}. Categories selected: ${selectedCategories.length}. Estimated crawl units: ${estimatedUnitCount}. Google calls: ${activeSizeEstimate?.estimatedSearchCalls ?? "unknown"} max. Mode: ${discoveryMode.replace(/_/g, " ")}.`,
     action: handleStart,
   });
   const applyTestRunPreset = () => {
@@ -743,7 +718,6 @@ export function DashboardClient({
     setSelectedCategories(["dentist"]);
     setDiscoveryMode("coverage_probe");
     setPaginationPolicy("auto_yield_based");
-    setIsTestRun(true);
     setShowCategories(true);
   };
 
@@ -822,7 +796,7 @@ export function DashboardClient({
             <DiscoveryStatusBadge status={isRunning ? "running" : isQueued ? "queued" : "idle"} />
           </div>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            {selectedCellCount > 0 ? `${selectedCellCount} cells` : "No cells selected"} · {selectedCategories.length} categories · {activeBudgetEstimate?.estimatedSearchCalls ?? "select cells"} calls
+            {selectedCellCount > 0 ? `${selectedCellCount} cells` : "No cells selected"} · {selectedCategories.length} categories · {activeSizeEstimate?.estimatedSearchCalls ?? "select cells"} calls
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <a href="#discovery" className="btn-primary text-sm">Configure run</a>
@@ -920,7 +894,7 @@ export function DashboardClient({
             <label className="rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
               <span className="mb-1 block font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Discovery mode</span>
               <select className="glass-input w-full" value={discoveryMode} onChange={(event) => setDiscoveryMode(event.target.value as DiscoveryMode)} disabled={loading}>
-                <option value="coverage_probe">Coverage probe - cheaper</option>
+                <option value="coverage_probe">Coverage probe - preview</option>
                 <option value="lead_harvest">Lead harvest - creates leads</option>
               </select>
             </label>
@@ -932,23 +906,18 @@ export function DashboardClient({
                 <option value="manual_extra_pages">Manual extra pages</option>
               </select>
             </label>
-            <label className="flex items-center gap-2 rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
-              <input type="checkbox" checked={isTestRun} onChange={(event) => setIsTestRun(event.target.checked)} disabled={loading} />
-              Test-run cap
-            </label>
-            <div className="rounded-xl p-3 text-xs" style={{ background: activeBudgetEstimate?.canStart === false ? "rgba(239,68,68,0.08)" : "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
-              <p className="font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Google call estimate</p>
-              {activeBudgetEstimateStatus === "idle" && <p className="mt-1">Select cells and categories to estimate cost before starting.</p>}
-              {activeBudgetEstimateStatus === "loading" && <p className="mt-1">Estimating...</p>}
-              {activeBudgetEstimateStatus === "error" && <p className="mt-1 text-red-700">{activeBudgetEstimateError ?? "Unable to estimate."}</p>}
-              {activeBudgetEstimate && (
+            <div className="rounded-xl p-3 text-xs" style={{ background: activeSizeEstimate?.canStart === false ? "rgba(239,68,68,0.08)" : "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+              <p className="font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Discovery size estimate</p>
+              {activeSizeEstimateStatus === "idle" && <p className="mt-1">Select cells and categories to preview run size.</p>}
+              {activeSizeEstimateStatus === "loading" && <p className="mt-1">Estimating...</p>}
+              {activeSizeEstimateStatus === "error" && <p className="mt-1 text-red-700">{activeSizeEstimateError ?? "Unable to estimate."}</p>}
+              {activeSizeEstimate && (
                 <div className="mt-1 space-y-1">
-                  <p><strong>{activeBudgetEstimate.estimatedSearchCalls}</strong> max calls · up to {activeBudgetEstimate.estimatedMaxRawPlaces} raw places</p>
-                  <p>{activeBudgetEstimate.sku.replace(/_/g, " ")} · monthly remaining {activeBudgetEstimate.monthlyRemaining === null ? "unlimited" : activeBudgetEstimate.monthlyRemaining}</p>
-                  <p>Run remaining {activeBudgetEstimate.runRemaining} · daily remaining {activeBudgetEstimate.dailyRemaining}</p>
+                  <p><strong>{activeSizeEstimate.estimatedSearchCalls}</strong> max calls · up to {activeSizeEstimate.estimatedMaxRawPlaces} raw places</p>
+                  <p>{activeSizeEstimate.sku.replace(/_/g, " ")}</p>
                   {discoveryMode === "coverage_probe" && <p>Probe mode records candidates but does not add active leads.</p>}
                   {discoveryMode === "lead_harvest" && <p>Lead harvest creates active leads and uses richer Google fields.</p>}
-                  {activeBudgetEstimate.warnings.map((warning) => <p key={warning} className="text-red-700">{warning}</p>)}
+                  {activeSizeEstimate.warnings.map((warning) => <p key={warning} className="text-red-700">{warning}</p>)}
                 </div>
               )}
             </div>
@@ -1006,7 +975,7 @@ export function DashboardClient({
           <SummaryChip label={`Categories: ${selectedCategories.length}`} />
           <SummaryChip label={`Estimated units: ${estimatedUnitCount}`} />
           <SummaryChip label={`Mode: ${discoveryMode.replace(/_/g, " ")}`} />
-          <SummaryChip label={`Google calls: ${activeBudgetEstimate?.estimatedSearchCalls ?? "select cells"}`} />
+          <SummaryChip label={`Google calls: ${activeSizeEstimate?.estimatedSearchCalls ?? "select cells"}`} />
         </div>
 
         {progress && progress.total > 0 && (
@@ -1019,7 +988,7 @@ export function DashboardClient({
             </div>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
               <span>{progress.done} done / {progress.failed} failed / {progress.canceled} canceled / {progress.pending + progress.running} remaining of {progress.total} total</span>
-              {stats.apiCallsUsed > 0 && <span>Run API: {stats.apiCallsUsed} calls | ${stats.estimatedCost.toFixed(2)}</span>}
+              {stats.apiCallsUsed > 0 && <span>Run API: {stats.apiCallsUsed} calls</span>}
             </div>
           </div>
         )}
@@ -1166,7 +1135,7 @@ export function DashboardClient({
           <div>
             <h3 className="section-label">Advanced Operations</h3>
             <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-              Scheduler, AI queue, enrichment, costs, and conversion metrics.
+              Scheduler, AI queue, enrichment, and conversion metrics.
             </p>
           </div>
           <span className="btn-glass text-sm">Open advanced tools</span>
@@ -1177,7 +1146,7 @@ export function DashboardClient({
               <div>
                 <h3 className="section-label">Background Work</h3>
                 <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-                  Scheduler controls, worker explanations, costs, backlog counts, and recent run history live in the Scheduler operations center.
+                  Scheduler controls, worker explanations, usage counts, backlog counts, and recent run history live in the Scheduler operations center.
                 </p>
               </div>
               <Link href="/scheduler" className="btn-primary text-sm">Open Scheduler</Link>
@@ -1186,7 +1155,7 @@ export function DashboardClient({
               <MetricCard label="Workers On" value={`${activeWorkerCount} / ${stats.schedulerHealth.workers.length}`} sub={pausedWorkerCount > 0 ? `${pausedWorkerCount} paused` : "all active"} />
               <MetricCard label="Background Queue" value={backgroundQueueDepth.toLocaleString()} sub="all worker backlogs" />
               <MetricCard label="Worker Issues" value={String(workerIssueCount)} sub={workerIssueCount > 0 ? "needs review" : "none blocking"} />
-              <MetricCard label="AI Month" value={`$${stats.schedulerHealth.ai.monthlyCost.toFixed(2)}`} sub={`$${stats.schedulerHealth.ai.budgetRemainingMonth.toFixed(2)} remaining`} />
+              <MetricCard label="AI Queue" value={String(stats.aiQueueStats.queued + stats.aiQueueStats.running)} sub={`${stats.aiQueueStats.verified} verified`} />
             </div>
           </section>
 
@@ -1233,23 +1202,23 @@ export function DashboardClient({
             </div>
           </section>
 
-          {(stats.monthlyApiCalls > 0 || stats.monthlyApiCost > 0) && (
+          {stats.monthlyApiCalls > 0 && (
             <section className="glass rounded-2xl p-6">
-              <h3 className="section-label">API Cost Intelligence</h3>
+              <h3 className="section-label">API Usage</h3>
               <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <MetricCard label="Monthly Calls" value={String(stats.monthlyApiCalls)} />
-                <MetricCard label="Monthly Cost" value={`$${stats.monthlyApiCost.toFixed(2)}`} />
-                <MetricCard label="Projected Month-End" value={`$${stats.projectedMonthlyCost.toFixed(2)}`} />
-                <MetricCard label="Atmosphere Calls" value={String(stats.atmosphereEnrichmentCalls)} sub={`$${stats.atmosphereEstimatedCost.toFixed(2)} spend`} />
+                <MetricCard label="Discovery Calls" value={String(stats.discoveryApiCalls)} />
+                <MetricCard label="Enrichment Calls" value={String(stats.enrichmentApiCalls)} />
+                <MetricCard label="Atmosphere Calls" value={String(stats.atmosphereEnrichmentCalls)} />
               </div>
               <div className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                Discovery: {stats.discoveryApiCalls} calls (${stats.discoveryEstimatedCost.toFixed(2)}) · Enrichment: {stats.enrichmentApiCalls} calls (${stats.enrichmentEstimatedCost.toFixed(2)})
+                Google/OpenAI billing is handled outside the app; this panel only shows operational usage volume.
               </div>
             </section>
           )}
 
           {(stats.conversionMetrics.totalContacted > 0 || stats.qualifiedLeadCount > 0) && (
-            <ConversionPanel metrics={stats.conversionMetrics} qualifiedLeadCount={stats.qualifiedLeadCount} costPerQualifiedLead={stats.costPerQualifiedLead} />
+            <ConversionPanel metrics={stats.conversionMetrics} qualifiedLeadCount={stats.qualifiedLeadCount} />
           )}
         </div>
       </details>
@@ -1401,10 +1370,9 @@ function ActivityRow({ activity }: { activity: TeamBoardSummary["latestActivity"
   );
 }
 
-function ConversionPanel({ metrics, qualifiedLeadCount, costPerQualifiedLead }: {
+function ConversionPanel({ metrics, qualifiedLeadCount }: {
   metrics: ConversionMetrics;
   qualifiedLeadCount: number;
-  costPerQualifiedLead: number | null;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -1416,11 +1384,6 @@ function ConversionPanel({ metrics, qualifiedLeadCount, costPerQualifiedLead }: 
       {open && (
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <MetricCard label="Qualified Leads" value={String(qualifiedLeadCount)} sub="score >= 5.0" />
-          <MetricCard
-            label="Cost / Qualified Lead"
-            value={costPerQualifiedLead != null ? `$${costPerQualifiedLead.toFixed(2)}` : "N/A"}
-            sub="API cost efficiency"
-          />
           {metrics.totalContacted > 0 && (
             <>
               <MetricCard label="Contacted" value={String(metrics.totalContacted)} />

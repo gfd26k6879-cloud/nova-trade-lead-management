@@ -1,4 +1,4 @@
-import type { DiscoveryMode, PaginationPolicy } from "@/lib/discovery-budget";
+import type { DiscoveryMode, PaginationPolicy } from "@/lib/discovery-sizing";
 import {
   buildSchedulerHealthFallback,
   type AdminFulfillmentSummary,
@@ -65,7 +65,6 @@ export interface DashboardStatsResult {
   googleDiscoveryDefaults: {
     discoveryMode: DiscoveryMode;
     paginationPolicy: PaginationPolicy;
-    testRunCallCap: number;
   };
 }
 
@@ -132,7 +131,6 @@ export function emptyDashboardStats(reason = "Dashboard stats are temporarily un
     googleDiscoveryDefaults: {
       discoveryMode: "coverage_probe",
       paginationPolicy: "auto_yield_based",
-      testRunCallCap: 50,
     },
   };
 }

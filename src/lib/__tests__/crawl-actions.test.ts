@@ -251,7 +251,7 @@ describe("crawl discovery item actions", () => {
     ]);
   });
 
-  it("promotes a completed coverage probe into a separate capped lead harvest", async () => {
+  it("promotes a completed coverage probe into a separate lead harvest", async () => {
     seedTestRun(testDb, { id: "probe-run", status: "done" });
     seedTestUnit(testDb, { id: "probe-unit", runId: "probe-run" });
     testDb.prepare(
@@ -289,7 +289,7 @@ describe("crawl discovery item actions", () => {
       source: "promoted_probe",
       discoveryMode: "lead_harvest",
       paginationPolicy: "auto_yield_based",
-      testRun: true,
+      testRun: false,
       promotedFromRunId: "probe-run",
     });
     expect(testDb.prepare("SELECT COUNT(*) AS count FROM crawl_units WHERE crawl_run_id = ?").get(newRunId)).toMatchObject({ count: 1 });

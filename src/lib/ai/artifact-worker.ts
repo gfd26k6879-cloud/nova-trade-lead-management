@@ -1,7 +1,6 @@
 import {
   createAuditLog,
   createLeadAiArtifactJob,
-  getAiBudgetStatus,
   getConfiguredOpenAiApiKey,
   getLatestLeadAiArtifact,
   getLeadById,
@@ -15,7 +14,7 @@ import {
   type LeadAiArtifactType,
   type Settings,
 } from "@/lib/db/queries";
-import { getAiCostReservationUsd, getConfiguredOpenAIModel, OPENAI_LEAD_VERIFICATION_MODEL } from "@/lib/ai/config";
+import { getConfiguredOpenAIModel, OPENAI_LEAD_VERIFICATION_MODEL } from "@/lib/ai/config";
 import {
   buildLeadArtifactContext,
   callOpenAILeadArtifact,
@@ -29,7 +28,6 @@ export type LeadArtifactWorkerResult =
   | { status: "queued"; leadId: string; artifactType: LeadAiArtifactType; artifactId: string; skippedExisting: boolean }
   | { status: "idle"; reason?: string }
   | { status: "disabled"; reason: string }
-  | { status: "budget_limit"; artifactId?: string; leadId?: string; error: string }
   | { status: "retrying"; artifactId: string; leadId: string; error: string; nextRetryAt: string | null }
   | { status: "error"; artifactId?: string; leadId?: string; error: string };
 
@@ -104,13 +102,6 @@ export async function processNextLeadArtifactJob(): Promise<LeadArtifactWorkerRe
     const error = "AI model guardrail rejected the configured model.";
     await markArtifactError(artifact, error);
     return { status: "error", artifactId: artifact.id, leadId: lead.id, error };
-  }
-
-  const budget = await getAiBudgetStatus(settings, getAiCostReservationUsd() * 2);
-  if (!budget.allowed) {
-    const error = budget.reason ?? "AI budget guardrail blocked this request.";
-    await markArtifactRetry(artifact, error);
-    return { status: "budget_limit", artifactId: artifact.id, leadId: lead.id, error };
   }
 
   try {
