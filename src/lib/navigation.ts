@@ -13,13 +13,12 @@ export const PRIMARY_NAV_ITEMS: NavItem[] = [
 ];
 
 export const ADMIN_NAV_ITEMS: NavItem[] = [
-  { href: "/dashboard", label: "Overview", description: "Revenue, discovery controls, and admin shortcuts." },
+  { href: "/dashboard", label: "Admin Home", description: "Lead inventory, discovery, and fulfillment command center." },
+  { href: "/dashboard#discovery", label: "Discovery", description: "Configure and start a new discovery run." },
+  { href: "/coverage", label: "Monitor", description: "Inspect discovery items, run status, and coverage." },
   { href: "/fulfillment", label: "Fulfillment", description: "Website and quote requests from researchers.", badge: "fulfillment" },
-  { href: "/coverage", label: "Discovery", description: "Live crawl run status and market/cell unit health." },
-  { href: "/scheduler", label: "Scheduler", description: "Background workers, backlogs, and worker controls." },
-  { href: "/quality", label: "Quality", description: "AI verification and manual lead quality review." },
   { href: "/leads", label: "All Leads", description: "Full lead database, filters, Kanban, and export." },
-  { href: "/statistics", label: "Statistics", description: "Lead mix, quality, and conversion reporting." },
+  { href: "/quality", label: "Quality", description: "AI verification and manual lead quality review." },
   { href: "/settings", label: "Settings", description: "API keys, scoring, cost, and model settings." },
   { href: "/users", label: "Users", description: "Team roles, status, and team lead assignment." },
 ];

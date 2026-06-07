@@ -20,7 +20,7 @@ import {
   getDashboardSummaryPanelsAction,
 } from "@/lib/crawl/actions";
 import { queueMissingAiVerificationsAction } from "@/lib/leads/actions";
-import type { AdminFulfillmentSummary, AdminRequest, StatisticsSummary, TeamBoardSummary } from "@/lib/db/queries";
+import type { AdminFulfillmentSummary, StatisticsSummary, TeamBoardSummary } from "@/lib/db/queries";
 import type { DiscoveryBudgetEstimate, DiscoveryMode, PaginationPolicy } from "@/lib/discovery-budget";
 
 const CATEGORY_OPTIONS = [
@@ -279,7 +279,7 @@ export function DashboardClient({
   const [coreError, setCoreError] = useState<string | null>(null);
 
   useEffect(() => {
-    document.title = "Revenue Dashboard | NoSite Leads";
+    document.title = "Admin Command Center | NoSite Leads";
   }, []);
 
   const loadCoreStats = useCallback(async () => {
@@ -711,6 +711,12 @@ export function DashboardClient({
   const activeBudgetEstimate = hasEstimateSelection ? budgetEstimate : null;
   const activeBudgetEstimateStatus = hasEstimateSelection ? budgetEstimateStatus : "idle";
   const activeBudgetEstimateError = hasEstimateSelection ? budgetEstimateError : null;
+  const startDisabled = coreStatus !== "ready"
+    || loading
+    || selectedCategories.length === 0
+    || selectedCellCount === 0
+    || activeBudgetEstimateStatus === "loading"
+    || !activeBudgetEstimate?.canStart;
   const progress = stats.progress;
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
   const activeWorkerCount = stats.schedulerHealth.workers.filter((worker) => worker.enabled).length;
@@ -729,8 +735,8 @@ export function DashboardClient({
       state: "CO",
       counties: [],
       zipCodes: [],
-      marketId: "market-toronto",
-      cellIds: ["cell-ca-toronto-m5v"],
+      marketId: "market-colorado",
+      cellIds: ["cell-us-co-80202"],
     });
     setSelectedCategories(["dentist"]);
     setDiscoveryMode("coverage_probe");
@@ -741,14 +747,11 @@ export function DashboardClient({
 
   return (
     <PageShell
-      title="Revenue Dashboard"
-      description="Track pipeline, follow-ups, team accountability, and the work most likely to turn into paid clients."
+      title="Admin Command Center"
+      description="Start discovery, inspect inventory, and clear researcher requests from one focused workspace."
       stats={[
-        { label: "Pipeline", value: formatCurrency(currentWeeklyStats.economics.pipelineValue), hint: "last 7 days" },
-        { label: "Contacts This Week", value: String(contactsThisWeek) },
-        { label: "Meetings", value: String(currentWeeklyStats.kpis.meetings), hint: "last 7 days" },
-        { label: "Won / Lost", value: `${currentWeeklyStats.kpis.closedWon} / ${currentWeeklyStats.kpis.closedLost}`, hint: "last 7 days" },
-        { label: "Overdue Follow-ups", value: String(currentTeamSummary.overdueFollowUps) },
+        { label: "Leads", value: String(stats.leadsTotal), hint: `+${stats.leadsToday} today` },
+        { label: "Discovery", value: isRunning ? "Running" : isQueued ? "Queued" : "Idle", hint: progress ? `${pct}% complete` : `${discoveryItems.length} items` },
         { label: "Unclaimed Ready", value: String(currentTeamSummary.unassignedReady) },
         { label: "Steve Queue", value: String(currentFulfillmentSummary.openTotal), hint: "website + quote" },
       ]}
@@ -756,418 +759,120 @@ export function DashboardClient({
       {coreStatus !== "ready" && (
         <section className="rounded-2xl px-5 py-4" style={{ background: coreStatus === "loadingCore" ? "rgba(255,255,255,0.38)" : "rgba(245, 158, 11, 0.1)", border: "1px solid rgba(255,255,255,0.5)" }}>
           <p className="text-xs font-semibold" style={{ color: coreStatus === "loadingCore" ? "var(--text-primary)" : "#b45309" }}>
-            {coreStatus === "loadingCore" ? "Dashboard data is loading" : "Dashboard data is temporarily degraded"}
+            {coreStatus === "loadingCore" ? "Loading admin controls" : "Core admin data needs attention"}
           </p>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            {coreStatus === "loadingCore"
-              ? "Dashboard data is loading; discovery controls will appear when ready."
-              : coreError ?? "This panel is taking too long. Retry this panel."}
+            {coreStatus === "loadingCore" ? "Discovery controls will unlock as soon as core stats load." : coreError ?? "This panel is taking too long. Retry this panel."}
           </p>
           {coreStatus !== "loadingCore" && (
             <div className="mt-3 flex flex-wrap gap-2">
-              <button type="button" className="btn-primary text-sm" onClick={loadCoreStats}>Retry this panel</button>
-              <Link href="/coverage" className="btn-glass text-sm">Open Coverage</Link>
-              <Link href="/queue" className="btn-glass text-sm">Open Workbench</Link>
-              <Link href="/scheduler" className="btn-glass text-sm">Open Scheduler</Link>
+              <button type="button" className="btn-primary text-sm" onClick={loadCoreStats}>Retry core data</button>
+              <Link href="/coverage" className="btn-glass text-sm">Open Monitor</Link>
+              <Link href="/explore" className="btn-glass text-sm">Open Explore</Link>
             </div>
           )}
         </section>
       )}
-      {summaryPanelStatus !== "ready" && (
-        <section className="rounded-2xl px-5 py-4" style={{ background: summaryPanelStatus === "error" ? "rgba(245, 158, 11, 0.1)" : "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}>
-          <p className="text-xs font-semibold" style={{ color: summaryPanelStatus === "error" ? "#b45309" : "var(--text-primary)" }}>
-            {summaryPanelStatus === "loading" ? "Loading optional dashboard panels" : "Optional dashboard panels unavailable"}
-          </p>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            {summaryPanelStatus === "loading"
-              ? "Core discovery operations are available while team, statistics, and fulfillment summaries load in the background."
-              : summaryPanelError ?? "Team, statistics, and fulfillment summaries did not finish loading."}
-          </p>
-          {summaryPanelStatus === "error" && (
-            <button type="button" className="btn-glass mt-3 text-xs" onClick={loadSummaryPanels}>Retry this panel</button>
-          )}
-        </section>
-      )}
-      {analyticsPanelStatus !== "ready" && (
-        <section className="rounded-2xl px-5 py-4" style={{ background: analyticsPanelStatus === "error" ? "rgba(245, 158, 11, 0.1)" : "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}>
-          <p className="text-xs font-semibold" style={{ color: analyticsPanelStatus === "error" ? "#b45309" : "var(--text-primary)" }}>
-            {analyticsPanelStatus === "loading" ? "Loading dashboard analytics" : "Dashboard analytics unavailable"}
-          </p>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            {analyticsPanelStatus === "loading"
-              ? "Run controls are available while cost, conversion, and scheduler analytics load separately."
-              : analyticsPanelError ?? "Cost, conversion, and scheduler analytics did not finish loading."}
-          </p>
-          {analyticsPanelStatus === "error" && (
-            <button type="button" className="btn-glass mt-3 text-xs" onClick={loadAnalyticsPanel}>Retry this panel</button>
-          )}
-        </section>
-      )}
-      <section className="glass rounded-2xl p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="section-label">My Fulfillment Queue</h3>
-            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-              Website and quote requests sent by researchers for admin follow-through.
-            </p>
-          </div>
-          <Link href="/fulfillment" className="btn-primary text-sm">Open Fulfillment</Link>
-        </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <AttentionCard label="Website requests" value={currentFulfillmentSummary.openWebsiteRequests} href="/fulfillment?type=website_request" cta="Design queue" />
-          <AttentionCard label="Quote requests" value={currentFulfillmentSummary.openQuoteRequests} href="/fulfillment?type=quote_request" cta="Price leads" />
-          <AttentionCard label="Waiting on researcher" value={currentFulfillmentSummary.waitingOnResearcher} href="/fulfillment?status=waiting_on_researcher" cta="Unblock" />
-          <AttentionCard label="Overdue requests" value={currentFulfillmentSummary.overdueRequests} href="/fulfillment?status=open" cta="Review today" />
-        </div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          {currentFulfillmentSummary.latestRequests.length === 0 ? (
-            <p className="rounded-xl p-4 text-sm lg:col-span-2" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
-              No website or quote requests are waiting on Steve.
-            </p>
-          ) : currentFulfillmentSummary.latestRequests.slice(0, 4).map((request) => (
-            <FulfillmentMiniCard key={request.id} request={request} />
-          ))}
-        </div>
-      </section>
 
-      <section className="grid gap-5 lg:grid-cols-[1fr_1.2fr]">
-        <section className="glass rounded-2xl p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="section-label">Today needs attention</h3>
-              <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-                Clear these before starting more discovery.
-              </p>
-            </div>
-            <Link href="/queue" className="btn-primary text-sm">Open Workbench</Link>
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <AttentionCard label="Overdue follow-ups" value={currentTeamSummary.overdueFollowUps} href="/team" cta="Review owners" />
-            <AttentionCard label="Unclaimed ready leads" value={currentTeamSummary.unassignedReady} href="/leads?assigned=unassigned" cta="Assign or claim" />
-            <AttentionCard label="Needs follow-up" value={stats.needsFollowUp} href="/leads?status=contacted" cta="Open leads" />
-            <AttentionCard label="Claimed active" value={claimedActive} href="/team" cta="Team board" />
-          </div>
-        </section>
-
-        <section className="glass rounded-2xl p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="section-label">Latest activity</h3>
-              <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-                Recent outreach logged by the team.
-              </p>
-            </div>
-            <Link href="/team" className="btn-glass text-sm">Open Team Board</Link>
-          </div>
-          <div className="mt-4 space-y-3">
-            {currentTeamSummary.latestActivity.length === 0 ? (
-              <p className="rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
-                No outreach activity has been logged yet.
-              </p>
-            ) : currentTeamSummary.latestActivity.slice(0, 5).map((activity) => (
-              <ActivityRow key={activity.id} activity={activity} />
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="glass rounded-2xl p-5">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="section-label">Team performance</h3>
-            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-              Ownership, follow-up pressure, contacts, meetings, and closes by person.
-            </p>
-          </div>
-          <Link href="/team" className="btn-glass text-sm">Open full board</Link>
-        </div>
-        {currentTeamSummary.members.length === 0 ? (
-          <p className="rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
-            No active team members yet.
-          </p>
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {currentTeamSummary.members.map((member) => (
-              <TeamMemberCard key={member.user_id} member={member} />
-            ))}
-          </div>
-        )}
-      </section>
-
-      <details className="group">
-        <summary className="glass flex cursor-pointer list-none flex-wrap items-center justify-between gap-4 rounded-2xl p-5">
-          <div>
-            <h3 className="section-label">Operations</h3>
-            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-              Discovery, scheduler, AI queue, enrichment, cost, and run controls.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span style={{ color: "var(--text-tertiary)" }}>
-              {isRunning ? "Running" : isQueued ? "Queued" : "Idle"} · {backgroundQueueDepth.toLocaleString()} queued
-            </span>
-            <span className="btn-glass text-sm">Expand operations</span>
-          </div>
-        </summary>
-        <div className="mt-5 space-y-5">
-      <section className="glass rounded-2xl p-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h3 className="section-label">Background Work</h3>
-            <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-              Scheduler controls, worker explanations, costs, backlog counts, and recent run history now live in the Scheduler operations center.
-            </p>
-          </div>
-          <Link href="/scheduler" className="btn-primary text-sm">Open Scheduler</Link>
-        </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <MetricCard label="Workers On" value={`${activeWorkerCount} / ${stats.schedulerHealth.workers.length}`} sub={pausedWorkerCount > 0 ? `${pausedWorkerCount} paused` : "all active"} />
-          <MetricCard label="Background Queue" value={backgroundQueueDepth.toLocaleString()} sub="all worker backlogs" />
-          <MetricCard label="Worker Issues" value={String(workerIssueCount)} sub={workerIssueCount > 0 ? "needs review" : "none blocking"} />
-          <MetricCard label="AI Month" value={`$${stats.schedulerHealth.ai.monthlyCost.toFixed(2)}`} sub={`$${stats.schedulerHealth.ai.budgetRemainingMonth.toFixed(2)} remaining`} />
-        </div>
-      </section>
-
-      {pollError && (
+      {(summaryPanelStatus === "error" || analyticsPanelStatus === "error") && (
         <section className="rounded-2xl px-5 py-4" style={{ background: "rgba(245, 158, 11, 0.1)", border: "1px solid rgba(245, 158, 11, 0.2)" }}>
-          <p className="text-xs font-semibold" style={{ color: "#b45309" }}>Polling needs attention</p>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{pollError}</p>
-          <Link href="/scheduler" className="link-accent mt-2 inline-block text-sm">Open Scheduler</Link>
-        </section>
-      )}
-
-      <section className="glass rounded-2xl p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h3 className="section-label">Discovery Workflow</h3>
-            <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-              Start here when you want new businesses. Pick a market, postal/postcode cells, and categories below, then open Discovery Monitor to see the exact market/cell/category units being processed.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {isIdle && (
-              <a href="#run-controls" className="btn-primary text-sm">
-                Choose Cells & Start
-              </a>
-            )}
-            {isRunning && (
-              <button type="button" className="btn-glass text-sm" onClick={() => setConfirmAction({
-                title: "Pause Discovery",
-                message: "This will stop processing new market/cell/category units. You can resume the run later.",
-                action: handlePause,
-              })} disabled={loading}>
-                Pause Discovery
-              </button>
-            )}
-            {(isRunning || isQueued) && (
-              <button type="button" className="btn-glass text-sm" onClick={() => setConfirmAction({
-                title: "Cancel remaining units",
-                message: "This marks the processing item's unprocessed market/cell/category units as canceled. Completed leads stay saved.",
-                action: () => handleStop(stats.processingRunId),
-              })} disabled={loading}>
-                Cancel remaining units
-              </button>
-            )}
-            <Link href="/coverage" className="btn-glass text-sm">
-              Open Discovery Monitor
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* Progress bar */}
-      {progress && progress.total > 0 && (
-        <section className="glass rounded-2xl p-6">
-          <h3 className="section-label">Run Progress</h3>
-          <div className="mt-3 flex items-center gap-4">
-            <div className="h-2.5 flex-1 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }}>
-              <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${pct}%`, background: "var(--accent)" }}
-              />
-            </div>
-            <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{pct}%</span>
-          </div>
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            <span>{progress.done} done / {progress.failed} failed / {progress.canceled} canceled / {progress.pending + progress.running} remaining of {progress.total} total</span>
-            {stats.zipCodesSelected > 0 && (
-              <span>
-                Geography: {stats.zipCodesCompleted}/{stats.zipCodesSelected} selected cells completed, {stats.zipCodesNotStarted} selected cells not started, {stats.zipCodesNotSelected} active cells not selected
-              </span>
-            )}
-            {stats.apiCallsUsed > 0 && (
-              <span>
-                Run API: {stats.apiCallsUsed} calls | ${stats.estimatedCost.toFixed(2)}
-                {" "}({stats.discoveryApiCalls} discovery / {stats.enrichmentApiCalls} enrichment)
-              </span>
-            )}
+          <p className="text-xs font-semibold" style={{ color: "#92400e" }}>Secondary panels are partially unavailable</p>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+            {summaryPanelError ?? analyticsPanelError ?? "Team, analytics, or discovery history did not finish loading."}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {summaryPanelStatus === "error" && <button type="button" className="btn-glass text-xs" onClick={loadSummaryPanels}>Retry team panels</button>}
+            {analyticsPanelStatus === "error" && <button type="button" className="btn-glass text-xs" onClick={loadAnalyticsPanel}>Retry analytics</button>}
           </div>
         </section>
       )}
 
-      {(stats.monthlyApiCalls > 0 || stats.monthlyApiCost > 0) && (
-        <section className="glass rounded-2xl p-6">
-          <h3 className="section-label">API Cost Intelligence</h3>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <MetricCard label="Monthly Calls" value={String(stats.monthlyApiCalls)} />
-            <MetricCard label="Monthly Cost" value={`$${stats.monthlyApiCost.toFixed(2)}`} />
-            <MetricCard label="Projected Month-End" value={`$${stats.projectedMonthlyCost.toFixed(2)}`} />
-            <MetricCard
-              label="Atmosphere Calls"
-              value={String(stats.atmosphereEnrichmentCalls)}
-              sub={`$${stats.atmosphereEstimatedCost.toFixed(2)} spend`}
-            />
-          </div>
-          <div className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            Discovery: {stats.discoveryApiCalls} calls (${stats.discoveryEstimatedCost.toFixed(2)}) •
-            {" "}Enrichment: {stats.enrichmentApiCalls} calls (${stats.enrichmentEstimatedCost.toFixed(2)})
-          </div>
-        </section>
-      )}
-
-      {/* Last error */}
       {stats.lastError && (
         <section className="rounded-2xl px-5 py-4" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)" }}>
-          <p className="text-xs font-medium" style={{ color: "#991b1b" }}>Last Error</p>
+          <p className="text-xs font-medium" style={{ color: "#991b1b" }}>Latest discovery error</p>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{stats.lastError}</p>
         </section>
       )}
 
-      <section className="glass rounded-2xl p-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="section-label">Discovery Items</h3>
-            <p className="mt-1 max-w-3xl text-sm" style={{ color: "var(--text-secondary)" }}>
-              Each item is a saved market/cell/category discovery run. Paused items are preserved and do not block a new guarded probe.
-            </p>
-          </div>
-          <Link href="/coverage" className="btn-glass text-sm">Open Coverage</Link>
-        </div>
-        {!isRunning && !isQueued && pausedDiscoveryItems.length > 0 && (
-          <div className="mt-4 rounded-xl px-4 py-3" style={{ background: "rgba(22,101,52,0.08)", border: "1px solid rgba(22,101,52,0.14)" }}>
-            <p className="text-sm font-semibold" style={{ color: "#166534" }}>
-              Denver / Colorado is paused and preserved. Starting a new probe will create a separate discovery item.
-            </p>
-          </div>
-        )}
-        {discoveryItemsStatus === "loading" && discoveryItems.length === 0 ? (
-          <p className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
-            Loading discovery items...
+      <section className="grid gap-4 lg:grid-cols-3">
+        <section className="glass rounded-2xl p-5">
+          <h3 className="section-label">Lead Inventory</h3>
+          <p className="mt-2 text-3xl font-semibold" style={{ color: "var(--text-primary)" }}>{stats.leadsTotal.toLocaleString()}</p>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+            {currentTeamSummary.unassignedReady} ready and unclaimed. {claimedActive} currently claimed by the team.
           </p>
-        ) : discoveryItemsStatus === "error" && discoveryItems.length === 0 ? (
-          <div className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#92400e" }}>
-            <p className="font-semibold">Discovery items unavailable</p>
-            <p className="mt-1">{discoveryItemsError ?? "This panel did not finish loading. Core dashboard controls remain available."}</p>
-            <button type="button" className="btn-glass mt-3 text-xs" onClick={loadDiscoveryItems}>Retry items</button>
-          </div>
-        ) : discoveryItems.length === 0 ? (
-          <p className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
-            No discovery items exist yet.
+          <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+            Pipeline this week: {formatCurrency(currentWeeklyStats.economics.pipelineValue)}
           </p>
-        ) : (
-          <div className="mt-5 grid gap-3 xl:grid-cols-2">
-            {discoveryItems.map((item) => {
-              const itemCanPause = item.status === "running" || item.status === "queued";
-              const itemCanResume = item.status === "paused";
-              const itemCanCancel = item.status === "running" || item.status === "queued" || item.status === "paused";
-              const itemPct = item.totalUnits > 0 ? Math.round((item.doneUnits / item.totalUnits) * 100) : 0;
-              return (
-                <article key={item.id} className="rounded-2xl p-4" style={{ background: item.id === visibleRun?.id ? "rgba(79,70,229,0.08)" : "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.42)" }}>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{formatDiscoveryItemLabel(item)}</p>
-                      <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                        {item.scopeLabel} · Run {item.id.slice(0, 8)} · {formatDiscoveryMode(item.discoveryMode)} · {item.categories.length} categories
-                      </p>
-                    </div>
-                    <DiscoveryStatusBadge status={item.status} />
-                  </div>
-                  <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
-                    <DiscoveryMiniMetric label="Done" value={`${item.doneUnits}/${item.totalUnits}`} />
-                    <DiscoveryMiniMetric label="Open" value={String(item.openUnits + item.runningUnits)} />
-                    <DiscoveryMiniMetric label="Failed" value={String(item.failedUnits)} />
-                    <DiscoveryMiniMetric label={item.discoveryMode === "coverage_probe" ? "Candidates" : "Leads"} value={String(item.discoveryMode === "coverage_probe" ? item.newPlacesSeen : item.discoveredCount)} />
-                    <DiscoveryMiniMetric label="API calls" value={String(item.apiCallsUsed)} />
-                    <DiscoveryMiniMetric label="Complete" value={`${itemPct}%`} />
-                  </div>
-                  {item.discoveryMode === "coverage_probe" && item.rawPlacesSeen > 0 && (
-                    <p className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                      Probe stored {item.rawPlacesSeen} raw candidates in the directory database across {item.pagesFetched} page{item.pagesFetched === 1 ? "" : "s"}; it intentionally created 0 active leads.
-                    </p>
-                  )}
-                  {item.lastError && <p className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(239,68,68,0.08)", color: "#991b1b" }}>{item.lastError}</p>}
-                  <div className="mt-4 flex flex-wrap items-center gap-2">
-                    <Link href={`/coverage?run=${encodeURIComponent(item.id)}`} className="btn-glass text-xs">Inspect</Link>
-                    {itemCanPause && (
-                      <button type="button" className="btn-glass text-xs" disabled={loading} onClick={() => setConfirmAction({
-                        title: "Pause discovery item",
-                        message: "This preserves the discovery item and stops processing new units until it is resumed.",
-                        action: () => handlePause(item.id),
-                      })}>Pause</button>
-                    )}
-                    {itemCanResume && (
-                      <button type="button" className="btn-primary text-xs" disabled={loading} onClick={() => handleResume(item.id)}>Resume</button>
-                    )}
-                    {item.failedUnits > 0 && (
-                      <button type="button" className="btn-glass text-xs" disabled={loading} onClick={() => setConfirmAction({
-                        title: "Retry failed units",
-                        message: `This will retry ${item.failedUnits} failed units for this discovery item. API calls may be consumed.`,
-                        action: () => handleRetry(item.id),
-                      })}>Retry failed</button>
-                    )}
-                    {itemCanCancel && (
-                      <button type="button" className="btn-glass text-xs" disabled={loading} onClick={() => setConfirmAction({
-                        title: "Cancel remaining units",
-                        message: "This marks this item's unprocessed units as canceled. Completed leads and discovery history stay saved.",
-                        action: () => handleStop(item.id),
-                      })}>Cancel remaining units</button>
-                    )}
-                    <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Created {formatDateTime(item.createdAt)}</span>
-                  </div>
-                </article>
-              );
-            })}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link href="/explore" className="btn-primary text-sm">Find leads</Link>
+            <Link href="/leads" className="btn-glass text-sm">All leads</Link>
+            <Link href="/leads?assigned=me" className="btn-glass text-sm">My leads</Link>
           </div>
-        )}
+        </section>
+
+        <section className="glass rounded-2xl p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="section-label">Discovery</h3>
+              <p className="mt-2 text-3xl font-semibold capitalize" style={{ color: "var(--text-primary)" }}>{activeRunLabel}</p>
+            </div>
+            <DiscoveryStatusBadge status={isRunning ? "running" : isQueued ? "queued" : "idle"} />
+          </div>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+            {selectedCellCount > 0 ? `${selectedCellCount} cells` : "No cells selected"} · {selectedCategories.length} categories · {activeBudgetEstimate?.estimatedSearchCalls ?? "select cells"} calls
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <a href="#discovery" className="btn-primary text-sm">Configure run</a>
+            <Link href="/coverage" className="btn-glass text-sm">Monitor</Link>
+          </div>
+        </section>
+
+        <section className="glass rounded-2xl p-5">
+          <h3 className="section-label">Fulfillment</h3>
+          <p className="mt-2 text-3xl font-semibold" style={{ color: "var(--text-primary)" }}>{currentFulfillmentSummary.openTotal}</p>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+            {currentFulfillmentSummary.openWebsiteRequests} website requests and {currentFulfillmentSummary.openQuoteRequests} quote requests.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link href="/fulfillment" className="btn-primary text-sm">Open queue</Link>
+            <Link href="/team" className="btn-glass text-sm">Team view</Link>
+          </div>
+        </section>
       </section>
 
-      {/* Run controls */}
-      <section id="run-controls" className="glass rounded-2xl p-6 scroll-mt-24">
-        <h3 className="section-label">Start a New Discovery Item</h3>
+      <section id="discovery" className="glass scroll-mt-24 rounded-2xl p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h3 className="section-label">Start Discovery</h3>
+            <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+              Pick a market, choose location cells, and run either a cheap coverage probe or a lead harvest that creates active leads.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/coverage" className="btn-glass text-sm">Open Monitor</Link>
+            <Link href="/scheduler" className="btn-glass text-sm">Workers</Link>
+          </div>
+        </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
           {isIdle && (
             <>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={openStartConfirmation}
-                disabled={coreStatus !== "ready" || loading || selectedCategories.length === 0 || selectedCellCount === 0 || activeBudgetEstimateStatus === "loading" || !activeBudgetEstimate?.canStart}
-              >
+              <button type="button" className="btn-primary" onClick={openStartConfirmation} disabled={startDisabled}>
                 Start Discovery
               </button>
               <button type="button" className="btn-glass" onClick={applyTestRunPreset} disabled={loading}>
                 Use test run preset
               </button>
-              <HelpTip>Creates market/cell/category crawl work units for the selected geography and business types.</HelpTip>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-                {selectedCategories.length === CATEGORY_OPTIONS.length
-                  ? "All categories"
-                  : `${selectedCategories.length} of ${CATEGORY_OPTIONS.length} categories`}
-              </span>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-                {selectedCellCount > 0
-                  ? `${selectedCellCount} location cells selected`
-                  : "Select postal/postcode cells to start"}
-              </span>
               <button
                 type="button"
                 className="text-xs font-medium underline underline-offset-2"
                 style={{ color: "var(--accent)" }}
                 onClick={() => setShowCategories((o) => !o)}
               >
-                {showCategories ? "Hide" : "Customize"}
+                {showCategories ? "Hide categories" : "Choose categories"}
               </button>
+              <HelpTip>Coverage probes measure market yield without creating active leads. Lead harvest creates active leads with richer Google fields.</HelpTip>
             </>
           )}
           {isRunning && (
@@ -1209,12 +914,12 @@ export function DashboardClient({
         </div>
 
         {isIdle && (
-          <div className="mt-4 grid gap-3 lg:grid-cols-[0.8fr_0.8fr_0.7fr_1.3fr]">
+          <div className="mt-4 grid gap-3 lg:grid-cols-[0.9fr_0.9fr_0.7fr_1.4fr]">
             <label className="rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
               <span className="mb-1 block font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Discovery mode</span>
               <select className="glass-input w-full" value={discoveryMode} onChange={(event) => setDiscoveryMode(event.target.value as DiscoveryMode)} disabled={loading}>
                 <option value="coverage_probe">Coverage probe - cheaper</option>
-                <option value="lead_harvest">Lead harvest - richer data</option>
+                <option value="lead_harvest">Lead harvest - creates leads</option>
               </select>
             </label>
             <label className="rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
@@ -1239,7 +944,7 @@ export function DashboardClient({
                   <p><strong>{activeBudgetEstimate.estimatedSearchCalls}</strong> max calls · up to {activeBudgetEstimate.estimatedMaxRawPlaces} raw places</p>
                   <p>{activeBudgetEstimate.sku.replace(/_/g, " ")} · monthly remaining {activeBudgetEstimate.monthlyRemaining === null ? "unlimited" : activeBudgetEstimate.monthlyRemaining}</p>
                   <p>Run remaining {activeBudgetEstimate.runRemaining} · daily remaining {activeBudgetEstimate.dailyRemaining}</p>
-                  {discoveryMode === "coverage_probe" && <p>Probe mode records market/cell candidates and yield, but does not add active leads.</p>}
+                  {discoveryMode === "coverage_probe" && <p>Probe mode records candidates but does not add active leads.</p>}
                   {discoveryMode === "lead_harvest" && <p>Lead harvest creates active leads and uses richer Google fields.</p>}
                   {activeBudgetEstimate.warnings.map((warning) => <p key={warning} className="text-red-700">{warning}</p>)}
                 </div>
@@ -1253,30 +958,17 @@ export function DashboardClient({
             <p className="text-sm font-semibold" style={{ color: "#92400e" }}>
               A discovery item is {activeRunLabel}. Pause, cancel remaining units, or finish it before starting another Google-consuming run.
             </p>
-            <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-              The market/cell picker below is shown as a read-only preview so you can plan the next Canada, U.K., or Colorado batch without creating duplicate crawl units.
-            </p>
           </div>
         )}
 
         {isIdle && showCategories && (
           <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)" }}>
             <div className="mb-3 flex items-center gap-3">
-              <button
-                type="button"
-                className="text-xs font-medium"
-                style={{ color: "var(--accent)" }}
-                onClick={() => setSelectedCategories([...CATEGORY_OPTIONS])}
-              >
+              <button type="button" className="text-xs font-medium" style={{ color: "var(--accent)" }} onClick={() => setSelectedCategories([...CATEGORY_OPTIONS])}>
                 Select All
               </button>
               <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>|</span>
-              <button
-                type="button"
-                className="text-xs font-medium"
-                style={{ color: "var(--accent)" }}
-                onClick={() => setSelectedCategories([])}
-              >
+              <button type="button" className="text-xs font-medium" style={{ color: "var(--accent)" }} onClick={() => setSelectedCategories([])}>
                 Clear All
               </button>
             </div>
@@ -1315,6 +1007,21 @@ export function DashboardClient({
           <SummaryChip label={`Google calls: ${activeBudgetEstimate?.estimatedSearchCalls ?? "select cells"}`} />
         </div>
 
+        {progress && progress.total > 0 && (
+          <div className="mt-5">
+            <div className="flex items-center gap-4">
+              <div className="h-2.5 flex-1 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }}>
+                <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: "var(--accent)" }} />
+              </div>
+              <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{pct}%</span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+              <span>{progress.done} done / {progress.failed} failed / {progress.canceled} canceled / {progress.pending + progress.running} remaining of {progress.total} total</span>
+              {stats.apiCallsUsed > 0 && <span>Run API: {stats.apiCallsUsed} calls | ${stats.estimatedCost.toFixed(2)}</span>}
+            </div>
+          </div>
+        )}
+
         {isProcessing && (
           <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
             Discovery is processing market/cell/category units... polling every 3 seconds.
@@ -1322,91 +1029,226 @@ export function DashboardClient({
         )}
       </section>
 
-      {/* Enrichment controls */}
-      {isIdle && stats.leadsTotal > 0 && (
-        <section className="glass rounded-2xl p-6">
-          <h3 className="section-label">Lead Enrichment</h3>
-          <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            Enrich top leads with detailed reviews, website health checks, and competitive analysis.
-          </p>
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <button type="button" className="btn-primary text-sm" onClick={handleEnrich} disabled={loading || isEnriching}>
-              {isEnriching ? "Enriching..." : "Enrich Top Leads"}
-            </button>
-            <HelpTip>Runs deeper lead enrichment on the strongest existing leads.</HelpTip>
-            {isEnriching && (
-              <button type="button" className="btn-glass text-sm" onClick={() => setIsEnriching(false)}>
-                Stop Local Polling
-              </button>
-            )}
-            {enrichProgress && (
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-                Last: {enrichProgress}
-              </span>
-            )}
-          </div>
-          {isEnriching && (
-            <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-              Enriching leads... polling every 2 seconds.
-            </p>
-          )}
-        </section>
-      )}
-
       <section className="glass rounded-2xl p-6">
-        <h3 className="section-label">AI Verification Queue</h3>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <MetricCard label="Queued" value={String(stats.aiQueueStats.queued)} />
-          <MetricCard label="Running" value={String(stats.aiQueueStats.running)} />
-          <MetricCard label="Verified" value={String(stats.aiQueueStats.verified)} />
-          <MetricCard label="Errors" value={String(stats.aiQueueStats.error)} />
-          <MetricCard label="AI Not Run" value={String(stats.aiQueueStats.notChecked)} />
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="section-label">Recent Discovery Items</h3>
+            <p className="mt-1 max-w-3xl text-sm" style={{ color: "var(--text-secondary)" }}>
+              Saved market/cell/category runs. Coverage probes can store candidates without creating active leads.
+            </p>
+          </div>
+          <Link href="/coverage" className="btn-glass text-sm">Open full monitor</Link>
         </div>
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button type="button" className="btn-primary text-sm" onClick={handleAiVerify} disabled={loading || isAiVerifying || stats.aiQueueStats.queued === 0}>
-            {isAiVerifying ? "Verifying..." : "Process AI Queue"}
-          </button>
-          <HelpTip>Processes queued AI verification jobs for leads already waiting in the queue.</HelpTip>
-          {isAiVerifying && (
-            <button type="button" className="btn-glass text-sm" onClick={() => setIsAiVerifying(false)}>
-              Stop Local Polling
-            </button>
-          )}
-          <button type="button" className="btn-glass text-sm" onClick={handleQueueMissingAi} disabled={loading || aiBackfillLoading || stats.aiQueueStats.notChecked === 0}>
-            {aiBackfillLoading ? "Queueing..." : "Queue Missing AI Verifications"}
-          </button>
-          <HelpTip>Finds leads that have not been checked by AI yet and queues them for later processing.</HelpTip>
-          {aiProgress && (
-            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
-              Last: {aiProgress}
-            </span>
-          )}
-        </div>
-        {isAiVerifying && (
-          <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            Processing AI verification jobs... polling every 2.5 seconds.
+        {!isRunning && !isQueued && pausedDiscoveryItems.length > 0 && (
+          <div className="mt-4 rounded-xl px-4 py-3" style={{ background: "rgba(22,101,52,0.08)", border: "1px solid rgba(22,101,52,0.14)" }}>
+            <p className="text-sm font-semibold" style={{ color: "#166534" }}>
+              Paused items are preserved. Starting a new probe creates a separate discovery item.
+            </p>
+          </div>
+        )}
+        {discoveryItemsStatus === "loading" && discoveryItems.length === 0 ? (
+          <p className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+            Loading discovery items...
           </p>
+        ) : discoveryItemsStatus === "error" && discoveryItems.length === 0 ? (
+          <div className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#92400e" }}>
+            <p className="font-semibold">Discovery items unavailable</p>
+            <p className="mt-1">{discoveryItemsError ?? "This panel did not finish loading. Core dashboard controls remain available."}</p>
+            <button type="button" className="btn-glass mt-3 text-xs" onClick={loadDiscoveryItems}>Retry items</button>
+          </div>
+        ) : discoveryItems.length === 0 ? (
+          <p className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+            No discovery items exist yet.
+          </p>
+        ) : (
+          <div className="mt-5 grid gap-3 xl:grid-cols-2">
+            {discoveryItems.slice(0, 4).map((item) => (
+              <DiscoveryItemCard
+                key={item.id}
+                item={item}
+                isActive={item.id === visibleRun?.id}
+                loading={loading}
+                onPause={() => setConfirmAction({
+                  title: "Pause discovery item",
+                  message: "This preserves the discovery item and stops processing new units until it is resumed.",
+                  action: () => handlePause(item.id),
+                })}
+                onResume={() => handleResume(item.id)}
+                onRetry={() => setConfirmAction({
+                  title: "Retry failed units",
+                  message: `This will retry ${item.failedUnits} failed units for this discovery item. API calls may be consumed.`,
+                  action: () => handleRetry(item.id),
+                })}
+                onCancel={() => setConfirmAction({
+                  title: "Cancel remaining units",
+                  message: "This marks this item's unprocessed units as canceled. Completed leads and discovery history stay saved.",
+                  action: () => handleStop(item.id),
+                })}
+              />
+            ))}
+          </div>
         )}
       </section>
 
-      {/* Quick actions */}
-      <section className="glass rounded-2xl p-6">
-        <h3 className="section-label">Quick Actions</h3>
-        <div className="mt-3 flex flex-wrap gap-3">
-          <Link href="/coverage" className="btn-primary text-sm">Open Discovery Monitor</Link>
-          <Link href="/queue" className="btn-primary text-sm">Open Workbench</Link>
-          <Link href="/leads" className="btn-glass text-sm">Browse Leads</Link>
-        </div>
-      </section>
+      <details>
+        <summary className="glass flex cursor-pointer list-none flex-wrap items-center justify-between gap-4 rounded-2xl p-5">
+          <div>
+            <h3 className="section-label">Team and Activity</h3>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              Follow-up pressure, recent outreach, and researcher ownership. {contactsThisWeek} contacts logged this week.
+            </p>
+          </div>
+          <span className="btn-glass text-sm">Open team detail</span>
+        </summary>
+        <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_1.2fr]">
+          <section className="glass rounded-2xl p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="section-label">Today needs attention</h3>
+                <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>Workload before more discovery.</p>
+              </div>
+              <Link href="/queue" className="btn-primary text-sm">Open Workbench</Link>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <AttentionCard label="Overdue follow-ups" value={currentTeamSummary.overdueFollowUps} href="/team" cta="Review owners" />
+              <AttentionCard label="Unclaimed ready leads" value={currentTeamSummary.unassignedReady} href="/leads?assigned=unassigned" cta="Assign or claim" />
+              <AttentionCard label="Needs follow-up" value={stats.needsFollowUp} href="/leads?status=contacted" cta="Open leads" />
+              <AttentionCard label="Claimed active" value={claimedActive} href="/team" cta="Team board" />
+            </div>
+          </section>
 
-      {/* Conversion metrics */}
-      {(stats.conversionMetrics.totalContacted > 0 || stats.qualifiedLeadCount > 0) && (
-        <ConversionPanel
-          metrics={stats.conversionMetrics}
-          qualifiedLeadCount={stats.qualifiedLeadCount}
-          costPerQualifiedLead={stats.costPerQualifiedLead}
-        />
-      )}
+          <section className="glass rounded-2xl p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="section-label">Latest activity</h3>
+                <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>Recent outreach logged by the team.</p>
+              </div>
+              <Link href="/team" className="btn-glass text-sm">Open Team Board</Link>
+            </div>
+            <div className="mt-4 space-y-3">
+              {currentTeamSummary.latestActivity.length === 0 ? (
+                <p className="rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+                  No outreach activity has been logged yet.
+                </p>
+              ) : currentTeamSummary.latestActivity.slice(0, 5).map((activity) => (
+                <ActivityRow key={activity.id} activity={activity} />
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <section className="glass mt-5 rounded-2xl p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="section-label">Team performance</h3>
+              <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>Ownership, follow-ups, contacts, meetings, and closes by person.</p>
+            </div>
+            <Link href="/team" className="btn-glass text-sm">Open full board</Link>
+          </div>
+          {currentTeamSummary.members.length === 0 ? (
+            <p className="rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+              No active team members yet.
+            </p>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {currentTeamSummary.members.map((member) => (
+                <TeamMemberCard key={member.user_id} member={member} />
+              ))}
+            </div>
+          )}
+        </section>
+      </details>
+
+      <details>
+        <summary className="glass flex cursor-pointer list-none flex-wrap items-center justify-between gap-4 rounded-2xl p-5">
+          <div>
+            <h3 className="section-label">Advanced Operations</h3>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              Scheduler, AI queue, enrichment, costs, and conversion metrics.
+            </p>
+          </div>
+          <span className="btn-glass text-sm">Open advanced tools</span>
+        </summary>
+        <div className="mt-5 space-y-5">
+          <section className="glass rounded-2xl p-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h3 className="section-label">Background Work</h3>
+                <p className="mt-2 max-w-3xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                  Scheduler controls, worker explanations, costs, backlog counts, and recent run history live in the Scheduler operations center.
+                </p>
+              </div>
+              <Link href="/scheduler" className="btn-primary text-sm">Open Scheduler</Link>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <MetricCard label="Workers On" value={`${activeWorkerCount} / ${stats.schedulerHealth.workers.length}`} sub={pausedWorkerCount > 0 ? `${pausedWorkerCount} paused` : "all active"} />
+              <MetricCard label="Background Queue" value={backgroundQueueDepth.toLocaleString()} sub="all worker backlogs" />
+              <MetricCard label="Worker Issues" value={String(workerIssueCount)} sub={workerIssueCount > 0 ? "needs review" : "none blocking"} />
+              <MetricCard label="AI Month" value={`$${stats.schedulerHealth.ai.monthlyCost.toFixed(2)}`} sub={`$${stats.schedulerHealth.ai.budgetRemainingMonth.toFixed(2)} remaining`} />
+            </div>
+          </section>
+
+          {pollError && (
+            <section className="rounded-2xl px-5 py-4" style={{ background: "rgba(245, 158, 11, 0.1)", border: "1px solid rgba(245, 158, 11, 0.2)" }}>
+              <p className="text-xs font-semibold" style={{ color: "#b45309" }}>Polling needs attention</p>
+              <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{pollError}</p>
+              <Link href="/scheduler" className="link-accent mt-2 inline-block text-sm">Open Scheduler</Link>
+            </section>
+          )}
+
+          {isIdle && stats.leadsTotal > 0 && (
+            <section className="glass rounded-2xl p-6">
+              <h3 className="section-label">Lead Enrichment</h3>
+              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>Enrich top leads with detailed reviews, website health checks, and competitive analysis.</p>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button type="button" className="btn-primary text-sm" onClick={handleEnrich} disabled={loading || isEnriching}>
+                  {isEnriching ? "Enriching..." : "Enrich Top Leads"}
+                </button>
+                {isEnriching && <button type="button" className="btn-glass text-sm" onClick={() => setIsEnriching(false)}>Stop Local Polling</button>}
+                {enrichProgress && <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Last: {enrichProgress}</span>}
+              </div>
+            </section>
+          )}
+
+          <section className="glass rounded-2xl p-6">
+            <h3 className="section-label">AI Verification Queue</h3>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <MetricCard label="Queued" value={String(stats.aiQueueStats.queued)} />
+              <MetricCard label="Running" value={String(stats.aiQueueStats.running)} />
+              <MetricCard label="Verified" value={String(stats.aiQueueStats.verified)} />
+              <MetricCard label="Errors" value={String(stats.aiQueueStats.error)} />
+              <MetricCard label="AI Not Run" value={String(stats.aiQueueStats.notChecked)} />
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button type="button" className="btn-primary text-sm" onClick={handleAiVerify} disabled={loading || isAiVerifying || stats.aiQueueStats.queued === 0}>
+                {isAiVerifying ? "Verifying..." : "Process AI Queue"}
+              </button>
+              {isAiVerifying && <button type="button" className="btn-glass text-sm" onClick={() => setIsAiVerifying(false)}>Stop Local Polling</button>}
+              <button type="button" className="btn-glass text-sm" onClick={handleQueueMissingAi} disabled={loading || aiBackfillLoading || stats.aiQueueStats.notChecked === 0}>
+                {aiBackfillLoading ? "Queueing..." : "Queue Missing AI Verifications"}
+              </button>
+              {aiProgress && <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Last: {aiProgress}</span>}
+            </div>
+          </section>
+
+          {(stats.monthlyApiCalls > 0 || stats.monthlyApiCost > 0) && (
+            <section className="glass rounded-2xl p-6">
+              <h3 className="section-label">API Cost Intelligence</h3>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <MetricCard label="Monthly Calls" value={String(stats.monthlyApiCalls)} />
+                <MetricCard label="Monthly Cost" value={`$${stats.monthlyApiCost.toFixed(2)}`} />
+                <MetricCard label="Projected Month-End" value={`$${stats.projectedMonthlyCost.toFixed(2)}`} />
+                <MetricCard label="Atmosphere Calls" value={String(stats.atmosphereEnrichmentCalls)} sub={`$${stats.atmosphereEstimatedCost.toFixed(2)} spend`} />
+              </div>
+              <div className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                Discovery: {stats.discoveryApiCalls} calls (${stats.discoveryEstimatedCost.toFixed(2)}) · Enrichment: {stats.enrichmentApiCalls} calls (${stats.enrichmentEstimatedCost.toFixed(2)})
+              </div>
+            </section>
+          )}
+
+          {(stats.conversionMetrics.totalContacted > 0 || stats.qualifiedLeadCount > 0) && (
+            <ConversionPanel metrics={stats.conversionMetrics} qualifiedLeadCount={stats.qualifiedLeadCount} costPerQualifiedLead={stats.costPerQualifiedLead} />
+          )}
         </div>
       </details>
 
@@ -1438,31 +1280,64 @@ function AttentionCard({ label, value, href, cta }: { label: string; value: numb
   );
 }
 
-function FulfillmentMiniCard({ request }: { request: AdminRequest }) {
-  const owner = request.lead_owner_display_name || request.lead_owner_email || request.creator_display_name || request.creator_email || "Unassigned";
-  const teamLead = request.creator_team_lead_display_name || request.creator_team_lead_email || request.creator_team_label;
+function DiscoveryItemCard({
+  item,
+  isActive,
+  loading,
+  onPause,
+  onResume,
+  onRetry,
+  onCancel,
+}: {
+  item: DiscoveryItem;
+  isActive: boolean;
+  loading: boolean;
+  onPause: () => void;
+  onResume: () => void;
+  onRetry: () => void;
+  onCancel: () => void;
+}) {
+  const itemCanPause = item.status === "running" || item.status === "queued";
+  const itemCanResume = item.status === "paused";
+  const itemCanCancel = item.status === "running" || item.status === "queued" || item.status === "paused";
+  const itemPct = item.totalUnits > 0 ? Math.round((item.doneUnits / item.totalUnits) * 100) : 0;
+
   return (
     <article
-      className="rounded-xl p-4"
-      style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}
+      className="rounded-2xl p-4"
+      style={{ background: isActive ? "rgba(79,70,229,0.08)" : "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.42)" }}
     >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <Link className="link-accent break-words font-semibold" href={`/leads/${request.lead_id}`} prefetch={false}>
-            {request.lead_name ?? "Unknown business"}
-          </Link>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{formatDiscoveryItemLabel(item)}</p>
           <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            {formatAdminRequestType(request.request_type)} · {formatOutcome(request.status)}
+            {item.scopeLabel} · Run {item.id.slice(0, 8)} · {formatDiscoveryMode(item.discoveryMode)} · {item.categories.length} categories
           </p>
         </div>
-        <Link href="/fulfillment" className="btn-glass text-xs">Open</Link>
+        <DiscoveryStatusBadge status={item.status} />
       </div>
-      <p className="mt-3 line-clamp-2 text-sm" style={{ color: "var(--text-secondary)" }}>
-        {request.summary ?? request.next_step ?? "No summary yet."}
-      </p>
-      <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-        Owner: {owner}{teamLead ? ` · Team: ${teamLead}` : ""}
-      </p>
+      <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
+        <DiscoveryMiniMetric label="Done" value={`${item.doneUnits}/${item.totalUnits}`} />
+        <DiscoveryMiniMetric label="Open" value={String(item.openUnits + item.runningUnits)} />
+        <DiscoveryMiniMetric label="Failed" value={String(item.failedUnits)} />
+        <DiscoveryMiniMetric label={item.discoveryMode === "coverage_probe" ? "Candidates" : "Leads"} value={String(item.discoveryMode === "coverage_probe" ? item.newPlacesSeen : item.discoveredCount)} />
+        <DiscoveryMiniMetric label="API calls" value={String(item.apiCallsUsed)} />
+        <DiscoveryMiniMetric label="Complete" value={`${itemPct}%`} />
+      </div>
+      {item.discoveryMode === "coverage_probe" && item.rawPlacesSeen > 0 && (
+        <p className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>
+          Probe stored {item.rawPlacesSeen} raw candidates across {item.pagesFetched} page{item.pagesFetched === 1 ? "" : "s"}; it intentionally created 0 active leads.
+        </p>
+      )}
+      {item.lastError && <p className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(239,68,68,0.08)", color: "#991b1b" }}>{item.lastError}</p>}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <Link href={`/coverage?run=${encodeURIComponent(item.id)}`} className="btn-glass text-xs">Inspect</Link>
+        {itemCanPause && <button type="button" className="btn-glass text-xs" disabled={loading} onClick={onPause}>Pause</button>}
+        {itemCanResume && <button type="button" className="btn-primary text-xs" disabled={loading} onClick={onResume}>Resume</button>}
+        {item.failedUnits > 0 && <button type="button" className="btn-glass text-xs" disabled={loading} onClick={onRetry}>Retry failed</button>}
+        {itemCanCancel && <button type="button" className="btn-glass text-xs" disabled={loading} onClick={onCancel}>Cancel remaining</button>}
+        <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Created {formatDateTime(item.createdAt)}</span>
+      </div>
     </article>
   );
 }
@@ -1605,8 +1480,4 @@ function formatOutcome(outcome: string): string {
 
 function channelLabel(channel: string): string {
   return channel === "walkin" ? "in person" : channel;
-}
-
-function formatAdminRequestType(type: string): string {
-  return type === "quote_request" ? "Quote requested" : "Website needed";
 }

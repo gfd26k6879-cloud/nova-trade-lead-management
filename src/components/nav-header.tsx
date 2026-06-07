@@ -198,7 +198,8 @@ function NavBadge({ count }: { count: number }) {
 }
 
 function isActivePath(pathname: string, href: string, searchParams: { get(name: string): string | null }): boolean {
-  const [path, query] = href.split("?");
+  const [hrefWithoutHash] = href.split("#");
+  const [path, query] = hrefWithoutHash.split("?");
   const pathMatches = pathname === path || (path !== "/" && pathname.startsWith(`${path}/`));
   if (!pathMatches) return false;
   if (query?.includes("assigned=me")) return searchParams.get("assigned") === "me";
