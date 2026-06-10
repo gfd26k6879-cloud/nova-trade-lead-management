@@ -58,54 +58,40 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
               <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
             </Link>
           ))}
-          {isAdmin && (
-            <div className="relative">
-              <button
-                type="button"
-                className={`nav-link ${activeAdminItem ? "nav-link-active" : ""}`}
-                aria-expanded={adminOpen}
-                aria-controls="admin-nav-menu"
-                onClick={() => setAdminOpen((open) => !open)}
-              >
-                Admin{activeAdminItem ? `: ${activeAdminItem.label}` : ""}
-                {fulfillmentCount > 0 && <NavBadge count={fulfillmentCount} />}
-              </button>
-              {adminOpen && (
-                <div
-                  id="admin-nav-menu"
-                  className="absolute right-0 z-[70] mt-2 w-72 rounded-xl p-2"
-                  style={{
-                    background: "var(--menu-bg)",
-                    border: "1px solid var(--menu-border)",
-                    boxShadow: "var(--menu-shadow)",
-                  }}
-                >
-                  {ADMIN_NAV_ITEMS.map((item) => (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={`block rounded-lg px-3 py-2 text-sm transition ${isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}
-                      style={{ color: "var(--text-primary)" }}
-                      onClick={() => setAdminOpen(false)}
-                    >
-                      <span className="flex items-center justify-between gap-2 font-medium">
-                        <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
-                      </span>
-                      {item.description && (
-                        <span className="mt-0.5 block text-xs leading-snug" style={{ color: "var(--text-tertiary)" }}>
-                          {item.description}
-                        </span>
-                      )}
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
         </nav>
 
         <div className="flex items-center gap-2">
           <ThemeToggle />
+
+          {isAdmin && (
+            <div className="relative hidden md:block">
+              <button
+                type="button"
+                className={`btn-glass btn-icon relative ${activeAdminItem ? "nav-link-active" : ""}`}
+                aria-label="Admin menu"
+                aria-expanded={adminOpen}
+                aria-controls="admin-nav-menu"
+                title="Admin menu"
+                onClick={() => setAdminOpen((open) => !open)}
+              >
+                <MenuIcon />
+                {fulfillmentCount > 0 && (
+                  <span className="absolute -right-1 -top-1">
+                    <NavBadge count={fulfillmentCount} />
+                  </span>
+                )}
+              </button>
+              {adminOpen && (
+                <AdminMenu
+                  activeAdminHref={activeAdminItem?.href ?? null}
+                  fulfillmentCount={fulfillmentCount}
+                  searchParams={searchParams}
+                  pathname={pathname}
+                  onSelect={() => setAdminOpen(false)}
+                />
+              )}
+            </div>
+          )}
 
           <form action={logoutAction}>
             <button type="submit" className="btn-glass text-xs hidden md:inline-flex">
@@ -171,15 +157,58 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
               </>
             )}
           </nav>
-          <div className="mt-3">
-            <ThemeToggle className="w-full" />
-          </div>
           <form action={logoutAction} className="mt-2">
             <button type="submit" className="btn-glass text-xs w-full">Log out</button>
           </form>
         </div>
       )}
     </header>
+  );
+}
+
+function AdminMenu({
+  activeAdminHref,
+  fulfillmentCount,
+  pathname,
+  searchParams,
+  onSelect,
+}: {
+  activeAdminHref: string | null;
+  fulfillmentCount: number;
+  pathname: string;
+  searchParams: { get(name: string): string | null };
+  onSelect: () => void;
+}) {
+  return (
+    <div
+      id="admin-nav-menu"
+      className="absolute right-0 z-[70] mt-2 w-72 rounded-xl p-2"
+      style={{
+        background: "var(--menu-bg)",
+        border: "1px solid var(--menu-border)",
+        boxShadow: "var(--menu-shadow)",
+      }}
+    >
+      <p className="section-label px-3 pb-2 pt-1">Admin</p>
+      {ADMIN_NAV_ITEMS.map((item) => (
+        <Link
+          key={item.href}
+          href={item.href}
+          className={`block rounded-lg px-3 py-2 text-sm transition ${activeAdminHref === item.href || isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}
+          style={{ color: "var(--text-primary)" }}
+          onClick={onSelect}
+        >
+          <span className="flex items-center justify-between gap-2 font-medium">
+            <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
+          </span>
+          {item.description && (
+            <span className="mt-0.5 block text-xs leading-snug" style={{ color: "var(--text-tertiary)" }}>
+              {item.description}
+            </span>
+          )}
+        </Link>
+      ))}
+    </div>
   );
 }
 
@@ -200,6 +229,16 @@ function NavBadge({ count }: { count: number }) {
     >
       {count > 99 ? "99+" : count}
     </span>
+  );
+}
+
+function MenuIcon() {
+  return (
+    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <line x1="4" y1="7" x2="20" y2="7" />
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <line x1="4" y1="17" x2="20" y2="17" />
+    </svg>
   );
 }
 

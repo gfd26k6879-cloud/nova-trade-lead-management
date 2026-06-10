@@ -34,5 +34,7 @@ describe("global theme tokens", () => {
     expect(themeToggle).toContain('classList.toggle("dark", theme === "dark")');
     expect(themeToggle).toContain("window.localStorage.setItem(STORAGE_KEY, theme)");
     expect(themeToggle).toContain("Switch to");
+    expect(themeToggle).toContain("btn-icon");
+    expect(themeToggle).not.toContain('nextTheme === "dark" ? "Dark" : "Light"');
   });
 });

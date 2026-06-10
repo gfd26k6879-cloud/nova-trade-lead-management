@@ -134,7 +134,7 @@ export function ExploreTokenSearch({
 
       <div
         className="mt-3 min-h-14 rounded-2xl px-3 py-2"
-        style={{ background: "rgba(255,255,255,0.5)", border: "1px solid rgba(99,102,241,0.35)", boxShadow: open ? "0 0 0 3px rgba(99,102,241,0.14)" : undefined }}
+        style={{ background: "var(--search-surface)", border: "1px solid var(--search-border)", boxShadow: open ? "0 0 0 3px var(--search-focus-ring)" : undefined }}
         onClick={() => {
           inputRef.current?.focus();
           setOpen(true);
@@ -146,7 +146,8 @@ export function ExploreTokenSearch({
               key={`${token.key}:${token.value}`}
               className="inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium"
               style={{
-                background: token.locked ? "rgba(15,23,42,0.08)" : "rgba(79,70,229,0.1)",
+                background: token.locked ? "var(--chip-muted-bg)" : "var(--chip-bg)",
+                border: "1px solid var(--chip-border)",
                 color: token.locked ? "var(--text-secondary)" : "var(--accent)",
               }}
             >
@@ -179,7 +180,7 @@ export function ExploreTokenSearch({
             </span>
           ))}
           {hiddenTokenCount > 0 && (
-            <span className="rounded-full px-2.5 py-1 text-xs font-medium" style={{ background: "rgba(255,255,255,0.72)", color: "var(--text-secondary)" }}>
+            <span className="rounded-full px-2.5 py-1 text-xs font-medium" style={{ background: "var(--chip-muted-bg)", border: "1px solid var(--chip-border)", color: "var(--text-secondary)" }}>
               +{hiddenTokenCount} filters
             </span>
           )}
@@ -233,13 +234,13 @@ export function ExploreTokenSearch({
       </div>
 
       {errors.length > 0 && (
-        <div className="mt-2 rounded-xl px-3 py-2 text-sm" style={{ background: "rgba(239,68,68,0.1)", color: "#dc2626" }}>
+        <div className="mt-2 rounded-xl px-3 py-2 text-sm" style={{ background: "var(--danger-bg)", color: "var(--danger-text)" }}>
           {errors.map((error) => <p key={error}>{error}</p>)}
         </div>
       )}
 
       {(open || builderOpen) && (
-        <div className="absolute left-0 right-0 z-30 mt-2 rounded-2xl p-3 shadow-xl md:max-h-[32rem] md:overflow-auto" style={{ background: "rgba(255,255,255,0.95)", border: "1px solid rgba(226,232,240,0.9)" }}>
+        <div className="absolute left-0 right-0 z-30 mt-2 rounded-2xl p-3 shadow-xl md:max-h-[32rem] md:overflow-auto" style={{ background: "var(--search-surface-strong)", border: "1px solid var(--search-border)" }}>
           {builderOpen ? (
             <ExploreBuilder filters={filters} businessTypeCounts={businessTypeCounts} currentRole={currentRole} onApply={onApply} />
           ) : (
@@ -256,7 +257,7 @@ export function ExploreTokenSearch({
                           key={suggestion.id}
                           type="button"
                           className="w-full rounded-xl px-3 py-2 text-left text-sm transition"
-                          style={{ background: active ? "rgba(79,70,229,0.1)" : "rgba(255,255,255,0.48)", color: "var(--text-primary)" }}
+                          style={{ background: active ? "var(--suggestion-active-bg)" : "var(--suggestion-bg)", color: "var(--text-primary)" }}
                           onMouseEnter={() => setHighlightedIndex(index)}
                           onClick={() => acceptSuggestion(suggestion)}
                         >
@@ -269,7 +270,7 @@ export function ExploreTokenSearch({
                 </div>
               ))}
               {groups.length === 0 && (
-                <div className="rounded-xl px-3 py-2 text-sm" style={{ background: "rgba(255,255,255,0.55)", color: "var(--text-secondary)" }}>
+                <div className="rounded-xl px-3 py-2 text-sm" style={{ background: "var(--suggestion-bg)", color: "var(--text-secondary)" }}>
                   No suggestions match that text. Press Enter to run it as a search.
                 </div>
               )}
@@ -314,7 +315,7 @@ function ExploreBuilder({
         <BuilderSelect label="Assignment" value={filters.assigned ?? "any"} onChange={(value) => onApply({ assigned: value, page: null })} options={[["any", "Any owner"], ["unassigned", "Unclaimed"], ["me", "Mine"]]} />
         {currentRole === "admin" && <BuilderSelect label="Inventory" value={filters.archived ?? "active"} onChange={(value) => onApply({ archived: value, page: null })} options={[["active", "Active only"], ["archived", "Archived only"], ["all", "Active + archived"]]} />}
         {currentRole === "admin" && (
-          <label className="flex items-center gap-2 self-end rounded-xl px-3 py-3 text-sm" style={{ background: "rgba(255,255,255,0.6)", color: "var(--text-secondary)" }}>
+          <label className="flex items-center gap-2 self-end rounded-xl px-3 py-3 text-sm" style={{ background: "var(--search-surface)", border: "1px solid var(--search-border)", color: "var(--text-secondary)" }}>
             <input type="checkbox" checked={filters.includeExcluded === true || filters.includeExcluded === "true"} onChange={(event) => onApply({ includeExcluded: event.target.checked ? "true" : null, page: null })} />
             Include excluded/disqualified
           </label>

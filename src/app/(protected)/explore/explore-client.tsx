@@ -139,6 +139,13 @@ const SORT_OPTIONS = [
 ];
 const MAP_LIST_LIMIT = 80;
 const MAP_FETCH_TIMEOUT_MS = 10_000;
+type BadgeTone = "neutral" | "danger" | "success" | "warning" | "accent";
+
+interface BadgeMetadata {
+  label: string;
+  title: string;
+  tone?: BadgeTone;
+}
 
 export function ExploreClient({
   leads,
@@ -317,7 +324,7 @@ export function ExploreClient({
       stats={stats}
     >
       {message && (
-        <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(99,102,241,0.1)", color: "var(--text-primary)" }}>
+        <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "var(--surface-info)", border: "1px solid var(--surface-info-border)", color: "var(--text-primary)" }}>
           {message}
         </div>
       )}
@@ -351,7 +358,7 @@ export function ExploreClient({
             onRemoveChip={removeChip}
           />
 
-          <div className="flex flex-wrap items-end gap-3 rounded-xl px-3 py-3" style={{ background: "rgba(255,255,255,0.32)" }}>
+          <div className="flex flex-wrap items-end gap-3 rounded-xl px-3 py-3" style={{ background: "var(--search-surface)", border: "1px solid var(--search-border)" }}>
             <label className="flex min-w-48 flex-col gap-1">
               <span className="section-label">Sort</span>
               <select className="glass-select" value={filters.sortBy ?? "opportunity"} onChange={(event) => pushFilters({ sortBy: event.target.value })}>
@@ -367,7 +374,7 @@ export function ExploreClient({
               <SegmentButton active={mapOpen} onClick={() => pushFilters({ map: mapOpen ? null : "open" })}>
                 {mapOpen ? "Hide map" : "Show map"}
               </SegmentButton>
-              <span className="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium" style={{ background: "rgba(79,70,229,0.1)", color: "var(--accent)" }}>
+              <span className="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium" style={{ background: "var(--chip-bg)", border: "1px solid var(--chip-border)", color: "var(--accent)" }}>
                 {mapFetchState === "loading" && "Map loading"}
                 {mapFetchState === "ready" && `${mapData.points.length} shown / ${mapData.totalMapped} mapped`}
                 {mapFetchState === "error" && "Map error - retry"}
@@ -514,7 +521,7 @@ function LeadMap({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-lg px-3 py-1.5 text-xs font-medium" style={{ background: "rgba(255,255,255,0.58)", color: "var(--text-secondary)" }}>
+          <span className="rounded-lg px-3 py-1.5 text-xs font-medium" style={{ background: "var(--chip-bg)", border: "1px solid var(--chip-border)", color: "var(--text-secondary)" }}>
             {points.length} shown / {totalMapped} mapped
           </span>
           <button type="button" className={`btn-glass px-3 py-1.5 text-xs ${showCoverage ? "nav-link-active" : ""}`} onClick={() => setShowCoverage((value) => !value)}>
@@ -547,7 +554,7 @@ function LeadMap({
       )}
 
       {mapState === "ready" && !googleMapsEnabled && (
-        <div className="rounded-xl p-6 text-sm" style={{ background: "rgba(255,255,255,0.46)", color: "var(--text-secondary)" }}>
+        <div className="rounded-xl p-6 text-sm" style={{ background: "var(--search-surface)", border: "1px solid var(--search-border)", color: "var(--text-secondary)" }}>
           Google Maps is not configured for this environment. Add the browser key in Settings or Vercel, then reopen the drawer.
         </div>
       )}
@@ -565,19 +572,19 @@ function LeadMap({
         />
       )}
       {mapState === "ready" && googleMapsEnabled && points.length === 0 && (
-        <p className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.46)", color: "var(--text-tertiary)" }}>
+        <p className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: "var(--chip-muted-bg)", border: "1px solid var(--chip-border)", color: "var(--text-tertiary)" }}>
           {total > 0
             ? `${missingCoordinates} matching leads do not have stored coordinates. The list below still shows matching businesses.`
             : "No leads match the current filters."}
         </p>
       )}
       {mapState === "ready" && hasMore && (
-        <p className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.46)", color: "var(--text-tertiary)" }}>
+        <p className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: "var(--chip-muted-bg)", border: "1px solid var(--chip-border)", color: "var(--text-tertiary)" }}>
           Showing top {mapPointLimit} mapped leads by current sort. Narrow filters to inspect more on the map.
         </p>
       )}
       {mapState === "ready" && (
-      <div className="mt-3 flex flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.44)", color: "var(--text-secondary)" }}>
+      <div className="mt-3 flex flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "var(--search-surface)", border: "1px solid var(--search-border)", color: "var(--text-secondary)" }}>
         <LegendDot color="#e2e8f0" label={`Not started ${coverageSummary.notStarted}`} />
         <LegendDot color="#f59e0b" label={`Partial ${coverageSummary.partial}`} />
         <LegendDot color="#0f766e" label={`Covered ${coverageSummary.complete}`} />
@@ -605,7 +612,7 @@ function MapLoadState({
   onHide: () => void;
 }) {
   return (
-    <div className="rounded-xl p-6 text-sm" style={{ background: "rgba(255,255,255,0.5)", color: "var(--text-secondary)" }}>
+    <div className="rounded-xl p-6 text-sm" style={{ background: "var(--search-surface)", border: "1px solid var(--search-border)", color: "var(--text-secondary)" }}>
       <h4 className="font-semibold" style={{ color: "var(--text-primary)" }}>{title}</h4>
       <p className="mt-2">{detail}</p>
       <div className="mt-4 flex flex-wrap gap-2">
@@ -644,7 +651,7 @@ function ExploreEmptyState({
   const cityTorontoActive = chips.some((chip) => chip.key === "city" && chip.value.toLowerCase() === "toronto");
 
   return (
-    <div className="rounded-2xl p-8 text-center" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.5)" }}>
+    <div className="rounded-2xl p-8 text-center" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}>
       <p className="section-label">No matching leads</p>
       <h3 className="mt-2 text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
         No {formatLabel(mode)} leads match {filterSummary}.
@@ -659,7 +666,7 @@ function ExploreEmptyState({
         {currentRole === "admin" ? (
           <Link href="/dashboard" className="btn-glass text-sm">Start discovery / harvest</Link>
         ) : (
-          <span className="rounded-full px-3 py-2 text-sm" style={{ background: "rgba(255,255,255,0.38)", color: "var(--text-secondary)" }}>
+          <span className="rounded-full px-3 py-2 text-sm" style={{ background: "var(--chip-muted-bg)", border: "1px solid var(--chip-border)", color: "var(--text-secondary)" }}>
             Ask an admin to harvest this market
           </span>
         )}
@@ -828,17 +835,17 @@ function GoogleLeadMap({
   }, [loadState, selectedPoint]);
 
   return (
-    <div className="relative h-[32rem] overflow-hidden rounded-xl" style={{ border: "1px solid rgba(255,255,255,0.58)" }}>
+    <div className="relative h-[32rem] overflow-hidden rounded-xl" style={{ border: "1px solid var(--search-border)" }}>
       <div ref={containerRef} className="absolute inset-0" />
       {loadState !== "ready" && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/75 px-6 text-center text-sm" style={{ color: "var(--text-secondary)" }}>
+        <div className="absolute inset-0 z-10 flex items-center justify-center px-6 text-center text-sm" style={{ background: "var(--search-surface-strong)", color: "var(--text-secondary)" }}>
           {loadState === "error" ? loadError ?? "Google Maps failed to load." : "Loading Google Maps..."}
         </div>
       )}
-      <div className="absolute left-4 top-4 z-20 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.88)", color: "var(--text-secondary)" }}>
+      <div className="absolute left-4 top-4 z-20 rounded-lg px-3 py-2 text-xs" style={{ background: "var(--search-surface-strong)", border: "1px solid var(--search-border)", color: "var(--text-secondary)" }}>
         {points.length} shown / {zipCoverage.length} cells
       </div>
-      <div className="absolute bottom-4 left-4 z-20 flex max-w-[calc(100%-2rem)] flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.88)", color: "var(--text-secondary)" }}>
+      <div className="absolute bottom-4 left-4 z-20 flex max-w-[calc(100%-2rem)] flex-wrap gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "var(--search-surface-strong)", border: "1px solid var(--search-border)", color: "var(--text-secondary)" }}>
         <LegendDot color="#e2e8f0" label="Not started" />
         <LegendDot color="#f59e0b" label="Partial cell" />
         <LegendDot color="#0f766e" label="Covered cell" />
@@ -897,7 +904,7 @@ function MapSidePanel({
         )}
       </div>
 
-      <div className="mt-5 border-t pt-4" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
+      <div className="mt-5 border-t pt-4" style={{ borderColor: "var(--glass-border-light)" }}>
         <div className="flex items-center justify-between gap-3">
           <h3 className="section-label">Mapped list</h3>
           <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
@@ -911,8 +918,11 @@ function MapSidePanel({
             <button
               key={point.id}
               type="button"
-              className={`w-full rounded-xl border px-3 py-2 text-left transition ${point.id === selectedLeadId ? "bg-white/70" : "bg-white/35 hover:bg-white/55"}`}
-              style={{ borderColor: point.id === selectedLeadId ? "rgba(79,70,229,0.32)" : "rgba(255,255,255,0.5)" }}
+              className="w-full rounded-xl border px-3 py-2 text-left transition hover:opacity-85"
+              style={{
+                background: point.id === selectedLeadId ? "var(--chip-bg)" : "var(--chip-muted-bg)",
+                borderColor: point.id === selectedLeadId ? "var(--accent)" : "var(--chip-border)",
+              }}
               onClick={() => onSelect(point.id)}
             >
               <div className="flex items-start gap-2">
@@ -958,8 +968,16 @@ function MapPointCard({
   onClaim: (leadId: string) => void;
 }) {
   const owner = ownerLabel(point, currentUserId);
+  const cardBadges = [
+    getWebsiteBadge(point.website_status),
+    getQualityBadge(point.quality_bucket),
+    getAiBadge(point),
+    getRatingBadge(point.rating),
+    getReviewBadge(point.review_count),
+    getDealValueBadge(point.estimated_deal_value),
+  ];
   return (
-    <article className="rounded-xl border bg-white/45 p-4" style={{ borderColor: "rgba(255,255,255,0.55)" }}>
+    <article className="rounded-xl border p-4" style={{ background: "var(--surface-card)", borderColor: "var(--surface-card-border)" }}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <Link href={`/leads/${point.id}`} prefetch={false} className="link-accent block break-words font-semibold leading-snug">
@@ -971,21 +989,12 @@ function MapPointCard({
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <Badge label={formatLabel(point.website_status)} style={websiteBadgeStyle(point.website_status)} />
-        <Badge label={formatLabel(point.quality_bucket)} />
-        <AiVerificationBadge
-          status={point.ai_verification_status}
-          checkedAt={point.ai_checked_at}
-          queueStatus={point.ai_queue_status}
-          viability={point.ai_website_viability_status}
-          compact
-        />
-        <Badge label={point.rating ? `${point.rating.toFixed(1)} rating` : "No rating"} />
-        <Badge label={`${point.review_count ?? 0} reviews`} />
-        <Badge label={formatMoney(point.estimated_deal_value)} />
+        {cardBadges.map((badge) => (
+          <Badge key={`${badge.label}:${badge.title}`} {...badge} />
+        ))}
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
+      <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "var(--glass-border-light)" }}>
         <OwnerPill label={owner} mine={point.assigned_to_user_id === currentUserId} />
         <Link href={`/leads/${point.id}`} prefetch={false} className="btn-glass ml-auto text-sm">Details</Link>
         {!point.assigned_to_user_id && (
@@ -1021,6 +1030,17 @@ function LeadCard({
   onClaim: (leadId: string) => void;
 }) {
   const owner = ownerLabel(lead, currentUserId);
+  const websiteBadge = getWebsiteBadge(lead.website_status);
+  const qualityBadge = getQualityBadge(lead.quality_bucket);
+  const aiBadge = getAiBadge(lead);
+  const cardBadges = [
+    websiteBadge,
+    qualityBadge,
+    aiBadge,
+    getRatingBadge(lead.rating),
+    getReviewBadge(lead.review_count),
+    getDealValueBadge(lead.estimated_deal_value),
+  ];
   return (
     <article className="glass rounded-2xl p-4">
       <div className="flex items-start justify-between gap-3">
@@ -1037,28 +1057,19 @@ function LeadCard({
         {lead.next_best_action ?? lead.quality_reason ?? "Review, claim, and verify the opportunity before outreach."}
       </p>
       <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-        Why this result: {resultReason(lead)}
+        Why this is shown: {resultReason(lead)}
       </p>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <Badge label={formatLabel(lead.website_status)} style={websiteBadgeStyle(lead.website_status)} />
-        <Badge label={formatLabel(lead.quality_bucket)} />
-        <AiVerificationBadge
-          status={lead.ai_verification_status}
-          checkedAt={lead.ai_checked_at}
-          queueStatus={lead.ai_queue_status}
-          viability={lead.ai_website_viability_status}
-          compact
-        />
-        <Badge label={lead.rating ? `${lead.rating.toFixed(1)} rating` : "No rating"} />
-        <Badge label={`${lead.review_count ?? 0} reviews`} />
-        <Badge label={formatMoney(lead.estimated_deal_value)} />
+        {cardBadges.map((badge) => (
+          <Badge key={`${badge.label}:${badge.title}`} {...badge} />
+        ))}
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
+      <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "var(--glass-border-light)" }}>
         <OwnerPill label={owner} mine={lead.assigned_to_user_id === currentUserId} />
         <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass ml-auto text-sm">Details</Link>
-        <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass text-sm">Website found</Link>
+        <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass text-sm">Website review</Link>
         <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass text-sm">Work update</Link>
         <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass text-sm">Archive</Link>
         {!lead.assigned_to_user_id && (
@@ -1104,42 +1115,70 @@ function LeadTable({
           </thead>
           <tbody>
             {leads.map((lead) => (
-              <tr key={lead.id}>
-                <td>
-                  <Link href={`/leads/${lead.id}`} prefetch={false} className="link-accent font-medium">{lead.name ?? "Unknown"}</Link>
-                  <div className="text-xs" style={{ color: "var(--text-tertiary)" }}>{getBusinessTypeLabel(lead.business_type)}</div>
-                </td>
-                <td>{formatPlace(lead.address)}</td>
-                <td><span style={websiteBadgeStyle(lead.website_status)}>{formatLabel(lead.website_status)}</span></td>
-                <td>{formatLabel(lead.quality_bucket)}</td>
-                <td>
-                  <AiVerificationBadge
-                    status={lead.ai_verification_status}
-                    checkedAt={lead.ai_checked_at}
-                    queueStatus={lead.ai_queue_status}
-                    viability={lead.ai_website_viability_status}
-                    confidence={lead.ai_confidence}
-                    showDetail
-                  />
-                </td>
-                <td>{lead.review_count ?? 0}</td>
-                <td><ScoreBandBadge score={lead.score} thresholds={scoreThresholds} compact /></td>
-                <td>{ownerLabel(lead, currentUserId)}</td>
-                <td>
-                  {!lead.assigned_to_user_id ? (
-                    <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={busyLeadId === lead.id} onClick={() => onClaim(lead.id)}>
-                      {busyLeadId === lead.id ? "Claiming..." : "Claim"}
-                    </button>
-                  ) : (
-                    <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass px-3 py-1.5 text-xs">Details</Link>
-                  )}
-                </td>
-              </tr>
+              <LeadTableRow
+                key={lead.id}
+                lead={lead}
+                currentUserId={currentUserId}
+                scoreThresholds={scoreThresholds}
+                busy={busyLeadId === lead.id}
+                onClaim={onClaim}
+              />
             ))}
           </tbody>
         </table>
       </div>
     </section>
+  );
+}
+
+function LeadTableRow({
+  lead,
+  currentUserId,
+  scoreThresholds,
+  busy,
+  onClaim,
+}: {
+  lead: Lead;
+  currentUserId: string;
+  scoreThresholds: ScoreBandThresholds;
+  busy: boolean;
+  onClaim: (leadId: string) => void;
+}) {
+  const websiteBadge = getWebsiteBadge(lead.website_status);
+  const qualityBadge = getQualityBadge(lead.quality_bucket);
+
+  return (
+    <tr>
+      <td>
+        <Link href={`/leads/${lead.id}`} prefetch={false} className="link-accent font-medium">{lead.name ?? "Unknown"}</Link>
+        <div className="text-xs" style={{ color: "var(--text-tertiary)" }}>{getBusinessTypeLabel(lead.business_type)}</div>
+      </td>
+      <td>{formatPlace(lead.address)}</td>
+      <td><Badge {...websiteBadge} /></td>
+      <td><Badge {...qualityBadge} /></td>
+      <td>
+        <AiVerificationBadge
+          status={lead.ai_verification_status}
+          checkedAt={lead.ai_checked_at}
+          queueStatus={lead.ai_queue_status}
+          viability={lead.ai_website_viability_status}
+          confidence={lead.ai_confidence}
+          showDetail
+        />
+      </td>
+      <td>{lead.review_count ?? 0}</td>
+      <td><ScoreBandBadge score={lead.score} thresholds={scoreThresholds} compact /></td>
+      <td>{ownerLabel(lead, currentUserId)}</td>
+      <td>
+        {!lead.assigned_to_user_id ? (
+          <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={busy} onClick={() => onClaim(lead.id)}>
+            {busy ? "Claiming..." : "Claim"}
+          </button>
+        ) : (
+          <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass px-3 py-1.5 text-xs">Details</Link>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -1151,9 +1190,15 @@ function SegmentButton({ active, onClick, children }: { active: boolean; onClick
   );
 }
 
-function Badge({ label, style }: { label: string; style?: React.CSSProperties }) {
+function Badge({ label, title, tone = "neutral" }: BadgeMetadata) {
   return (
-    <span className="rounded-md px-2 py-1 text-xs font-medium" style={style ?? { background: "rgba(255,255,255,0.62)", color: "var(--text-secondary)" }}>
+    <span
+      className="rounded-md px-2 py-1 text-xs font-medium"
+      style={badgeToneStyle(tone)}
+      title={title}
+      aria-label={`${label}: ${title}`}
+      tabIndex={0}
+    >
       {label}
     </span>
   );
@@ -1163,7 +1208,7 @@ function OwnerPill({ label, mine }: { label: string; mine: boolean }) {
   return (
     <span
       className="rounded-md px-2 py-1 text-xs font-medium"
-      style={mine ? { background: "rgba(34,197,94,0.12)", color: "#166534" } : { background: "rgba(255,255,255,0.62)", color: "var(--text-secondary)" }}
+      style={mine ? { background: "var(--badge-mine-bg)", color: "var(--badge-mine-text)" } : { background: "var(--chip-muted-bg)", border: "1px solid var(--chip-border)", color: "var(--text-secondary)" }}
     >
       {label}
     </span>
@@ -1172,7 +1217,7 @@ function OwnerPill({ label, mine }: { label: string; mine: boolean }) {
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <div className="rounded-xl p-6 text-center text-sm" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-tertiary)" }}>
+    <div className="rounded-xl p-6 text-center text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)", color: "var(--text-tertiary)" }}>
       {text}
     </div>
   );
@@ -1383,30 +1428,162 @@ function ownerLabel(lead: LeadOwner, currentUserId: string): string {
 }
 
 function resultReason(lead: Pick<Lead, "website_status" | "rating" | "review_count" | "quality_bucket" | "ai_verification_status" | "ai_queue_status" | "ai_checked_at" | "ai_website_viability_status">): string {
-  const parts = [
-    formatLabel(lead.website_status),
-    lead.rating ? `${lead.rating.toFixed(1)} rating` : null,
-    `${lead.review_count ?? 0} reviews`,
-    formatLabel(lead.quality_bucket),
-  ].filter(Boolean);
+  const reasons: string[] = [];
+
+  if (lead.website_status === "none") reasons.push("no official website found");
+  else if (lead.website_status === "social") reasons.push("only social or directory presence found");
+  else if (lead.website_status === "basic") reasons.push("only a basic website was found");
+  else if (lead.website_status === "custom") reasons.push("an official website exists");
+
+  if ((lead.rating ?? 0) >= 4.5 && (lead.review_count ?? 0) >= 10) reasons.push("strong reviews");
+  else if ((lead.review_count ?? 0) > 0) reasons.push(`${lead.review_count} reviews recorded`);
+
+  if (lead.quality_bucket === "ready_to_call") reasons.push("marked ready for outreach");
+  else if (lead.quality_bucket === "broken_site_opportunity") reasons.push("website appears weak or broken");
+  else if (lead.quality_bucket === "needs_ai_verify") reasons.push("waiting on AI verification");
+  else if (lead.quality_bucket === "needs_manual_review") reasons.push("needs manual review before outreach");
+
+  if (reasons.length === 0) return "the filters match this business and it is available for review.";
+  return `${joinReadableList(reasons)}.`;
+}
+
+function getWebsiteBadge(status: string | null | undefined): BadgeMetadata {
+  const labels: Record<string, BadgeMetadata> = {
+    none: {
+      label: "No website",
+      title: "No official business website is recorded for this lead.",
+      tone: "danger",
+    },
+    social: {
+      label: "Social only",
+      title: "The business appears to rely on a social, directory, or marketplace page instead of its own site.",
+      tone: "warning",
+    },
+    basic: {
+      label: "Basic site",
+      title: "A lightweight or limited website exists; review whether it is still an opportunity.",
+      tone: "accent",
+    },
+    custom: {
+      label: "Website found",
+      title: "An official business website is recorded. Review before treating this as a no-site opportunity.",
+      tone: "success",
+    },
+  };
+  return labels[status ?? ""] ?? {
+    label: formatLabel(status),
+    title: "Website status from the lead record.",
+  };
+}
+
+function getQualityBadge(bucket: string | null | undefined): BadgeMetadata {
+  const labels: Record<string, BadgeMetadata> = {
+    ready_to_call: {
+      label: "Ready to call",
+      title: "This lead passed the current quality checks and is ready for outreach.",
+      tone: "success",
+    },
+    broken_site_opportunity: {
+      label: "Weak site",
+      title: "The business appears to have a broken, placeholder, or weak website opportunity.",
+      tone: "warning",
+    },
+    needs_ai_verify: {
+      label: "AI review needed",
+      title: "AI verification has not completed or needs another pass before outreach.",
+      tone: "accent",
+    },
+    needs_manual_review: {
+      label: "Manual review",
+      title: "A person should review the website and lead quality before outreach.",
+      tone: "warning",
+    },
+    not_a_fit: {
+      label: "Not a fit",
+      title: "This lead is currently marked as a poor fit for outreach.",
+      tone: "neutral",
+    },
+  };
+  return labels[bucket ?? ""] ?? {
+    label: formatLabel(bucket),
+    title: "Quality bucket from the lead record.",
+  };
+}
+
+function getAiBadge(lead: Pick<Lead, "ai_verification_status" | "ai_queue_status" | "ai_checked_at" | "ai_website_viability_status">): BadgeMetadata {
   const aiDisplay = getAiVerificationDisplay({
     status: lead.ai_verification_status,
     checkedAt: lead.ai_checked_at,
     queueStatus: lead.ai_queue_status,
     viability: lead.ai_website_viability_status,
   });
-  if (!aiDisplay.hasRun) parts.push(aiDisplay.label);
-  return parts.join(" + ");
+
+  if (lead.ai_website_viability_status === "directory_only" || lead.ai_verification_status === "no_site_found") {
+    return {
+      label: "AI: no usable site",
+      title: "AI checked public sources and did not find a usable official website.",
+      tone: "success",
+    };
+  }
+  if (lead.ai_verification_status === "weak_site_found" || lead.ai_website_viability_status === "broken" || lead.ai_website_viability_status === "placeholder" || lead.ai_website_viability_status === "parked") {
+    return {
+      label: "AI: weak site",
+      title: "AI found a site, but it appears broken, parked, placeholder, or otherwise weak.",
+      tone: "warning",
+    };
+  }
+  if (lead.ai_verification_status === "site_found") {
+    return {
+      label: "AI: usable site",
+      title: "AI found what appears to be a usable official website.",
+      tone: "neutral",
+    };
+  }
+  return {
+    label: aiDisplay.label,
+    title: "Current AI verification state for this lead.",
+    tone: aiDisplay.hasRun ? "neutral" : "accent",
+  };
 }
 
-function websiteBadgeStyle(status: string): React.CSSProperties {
-  const colors: Record<string, React.CSSProperties> = {
-    none: { background: "rgba(239,68,68,0.1)", color: "#991b1b" },
-    social: { background: "rgba(245,158,11,0.1)", color: "#92400e" },
-    basic: { background: "rgba(99,102,241,0.1)", color: "#4338ca" },
-    custom: { background: "rgba(34,197,94,0.1)", color: "#166534" },
+function getRatingBadge(rating: number | null | undefined): BadgeMetadata {
+  return {
+    label: rating ? `${rating.toFixed(1)} rating` : "No rating",
+    title: rating ? `Google rating is ${rating.toFixed(1)} out of 5.` : "No Google rating is recorded.",
   };
-  return { ...(colors[status] ?? { background: "rgba(0,0,0,0.05)", color: "var(--text-secondary)" }), padding: "2px 8px", borderRadius: "6px", fontSize: "0.75rem", fontWeight: 500 };
+}
+
+function getReviewBadge(reviewCount: number | null | undefined): BadgeMetadata {
+  const count = reviewCount ?? 0;
+  return {
+    label: `${count} reviews`,
+    title: count > 0 ? `${count} Google reviews are recorded for this business.` : "No Google reviews are recorded.",
+  };
+}
+
+function getDealValueBadge(value: number | null | undefined): BadgeMetadata {
+  const amount = Number(value ?? 0);
+  return {
+    label: amount ? `${formatMoney(amount)} est.` : "No value estimate",
+    title: amount ? `Estimated opportunity value is ${formatMoney(amount)}.` : "No estimated deal value is recorded.",
+  };
+}
+
+function badgeToneStyle(tone: BadgeTone): React.CSSProperties {
+  const styles: Record<BadgeTone, React.CSSProperties> = {
+    neutral: { background: "var(--chip-muted-bg)", border: "1px solid var(--chip-border)", color: "var(--text-secondary)" },
+    danger: { background: "var(--danger-bg)", border: "1px solid var(--chip-border)", color: "var(--danger-text)" },
+    success: { background: "var(--badge-mine-bg)", border: "1px solid var(--chip-border)", color: "var(--badge-mine-text)" },
+    warning: { background: "var(--badge-taken-bg)", border: "1px solid var(--chip-border)", color: "var(--badge-taken-text)" },
+    accent: { background: "var(--chip-bg)", border: "1px solid var(--chip-border)", color: "var(--accent)" },
+  };
+  return styles[tone];
+}
+
+function joinReadableList(parts: string[]): string {
+  if (parts.length <= 1) return parts[0] ?? "";
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
 }
 
 function formatLabel(value: string | null | undefined): string {

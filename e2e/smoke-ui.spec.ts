@@ -21,7 +21,7 @@ test.describe("UI Smoke Test", () => {
     await expect(page.getByRole("link", { name: "Explore", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "My Leads", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Team", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /^Admin/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Admin menu" })).toBeVisible();
     await openAdminPage(page, "Admin Home");
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Admin Command Center", exact: true })).toBeVisible({ timeout: 5000 });
@@ -38,13 +38,13 @@ test.describe("UI Smoke Test", () => {
 
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(page.getByRole("button", { name: "Switch to light theme" }).first()).toBeVisible();
-    await page.getByRole("button", { name: /^Admin/ }).click();
+    await page.getByRole("button", { name: "Admin menu" }).click();
     await expect(page.getByRole("link", { name: /^Settings(?:\s|$)/ })).toBeVisible({ timeout: 5000 });
-    await page.getByRole("button", { name: /^Admin/ }).click();
+    await page.getByRole("button", { name: "Admin menu" }).click();
 
     await page.getByRole("button", { name: "Switch to light theme" }).first().click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-    await page.getByRole("button", { name: /^Admin/ }).click();
+    await page.getByRole("button", { name: "Admin menu" }).click();
     await expect(page.getByRole("link", { name: /^Users(?:\s|$)/ })).toBeVisible({ timeout: 5000 });
   });
 
@@ -61,6 +61,17 @@ test.describe("UI Smoke Test", () => {
     await expect(page.getByRole("link", { name: /^Settings(?:\s|$)/ })).toBeVisible();
     await expect(page.getByRole("link", { name: /^Users(?:\s|$)/ })).toBeVisible();
     await expect(page.getByRole("button", { name: "Switch to light theme" }).first()).toBeVisible();
+  });
+
+  test("2d. Explore renders in dark mode", async ({ page }) => {
+  skipIfMissingAuth();
+    await page.evaluate(() => localStorage.setItem("nosite-theme", "dark"));
+    await page.goto(`${BASE_URL}/explore`, { waitUntil: "networkidle" });
+
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(page.getByText("Lead Finder", { exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("Sort", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Builder" })).toBeVisible();
   });
 
   test("3. Dashboard discovery preflight controls", async ({ page }) => {
@@ -165,7 +176,7 @@ test.describe("UI Smoke Test", () => {
     await expect(page.getByLabel("Business type")).toHaveValue("dental");
     await expect(page.getByRole("link", { name: "Export CSV" })).toHaveAttribute("href", /businessType=dental/);
 
-    await openAdminPage(page, "Statistics");
+    await page.goto(`${BASE_URL}/statistics`, { waitUntil: "networkidle" });
     await page.waitForURL(/\/statistics/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Statistics", exact: true })).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Business Type Breakdown", exact: true })).toBeVisible();

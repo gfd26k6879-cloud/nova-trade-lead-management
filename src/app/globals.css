@@ -41,6 +41,15 @@
   --surface-modal: rgba(255, 252, 248, 0.98);
   --surface-info: rgba(255, 247, 237, 0.92);
   --surface-info-border: rgba(181, 83, 61, 0.18);
+  --search-surface: rgba(255, 252, 248, 0.64);
+  --search-surface-strong: rgba(255, 252, 248, 0.96);
+  --search-border: rgba(181, 83, 61, 0.22);
+  --search-focus-ring: rgba(181, 83, 61, 0.16);
+  --chip-bg: rgba(181, 83, 61, 0.12);
+  --chip-muted-bg: rgba(41, 41, 39, 0.07);
+  --chip-border: rgba(41, 41, 39, 0.1);
+  --suggestion-bg: rgba(255, 252, 248, 0.58);
+  --suggestion-active-bg: rgba(181, 83, 61, 0.12);
   --danger-bg: rgba(239, 68, 68, 0.12);
   --danger-text: #dc2626;
   --badge-muted-bg: rgba(107, 114, 128, 0.1);
@@ -119,6 +128,15 @@
   --surface-modal: rgba(41, 41, 39, 0.98);
   --surface-info: rgba(80, 58, 48, 0.72);
   --surface-info-border: rgba(221, 143, 117, 0.24);
+  --search-surface: rgba(240, 234, 228, 0.08);
+  --search-surface-strong: rgba(41, 41, 39, 0.98);
+  --search-border: rgba(221, 143, 117, 0.28);
+  --search-focus-ring: rgba(221, 143, 117, 0.2);
+  --chip-bg: rgba(221, 143, 117, 0.18);
+  --chip-muted-bg: rgba(240, 234, 228, 0.1);
+  --chip-border: rgba(240, 234, 228, 0.13);
+  --suggestion-bg: rgba(240, 234, 228, 0.065);
+  --suggestion-active-bg: rgba(221, 143, 117, 0.17);
   --danger-bg: rgba(248, 113, 113, 0.16);
   --danger-text: #fca5a5;
   --badge-muted-bg: rgba(209, 213, 219, 0.12);
@@ -342,6 +360,13 @@ body {
   opacity: 0.45;
   cursor: not-allowed;
   transform: none;
+}
+
+.btn-icon {
+  height: 2.5rem;
+  width: 2.5rem;
+  flex: 0 0 auto;
+  padding: 0;
 }
 
 /* ---- Glass table ---- */

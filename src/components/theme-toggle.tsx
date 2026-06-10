@@ -14,7 +14,7 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
   return (
     <button
       type="button"
-      className={`btn-glass text-xs ${className}`}
+      className={`btn-glass btn-icon ${className}`}
       aria-label={`Switch to ${nextTheme} theme`}
       title={`Switch to ${nextTheme} theme`}
       onClick={() => {
@@ -22,7 +22,6 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
       }}
     >
       {theme === "dark" ? <SunIcon /> : <MoonIcon />}
-      <span suppressHydrationWarning>{nextTheme === "dark" ? "Dark" : "Light"}</span>
     </button>
   );
 }
