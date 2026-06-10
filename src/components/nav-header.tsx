@@ -93,34 +93,36 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
             </div>
           )}
 
-          <form action={logoutAction}>
-            <button type="submit" className="btn-glass text-xs hidden md:inline-flex">
+          <form action={logoutAction} className="hidden md:block">
+            <button type="submit" className="btn-glass text-xs">
               Log out
             </button>
           </form>
 
           {/* Hamburger button */}
-          <button
-            type="button"
-            className="btn-glass md:hidden"
-            onClick={() => setMobileOpen(!mobileOpen)}
-            aria-label="Toggle menu"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              {mobileOpen ? (
-                <>
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </>
-              ) : (
-                <>
-                  <line x1="3" y1="6" x2="21" y2="6" />
-                  <line x1="3" y1="12" x2="21" y2="12" />
-                  <line x1="3" y1="18" x2="21" y2="18" />
-                </>
-              )}
-            </svg>
-          </button>
+          <div className="md:hidden">
+            <button
+              type="button"
+              className="btn-glass"
+              onClick={() => setMobileOpen(!mobileOpen)}
+              aria-label="Toggle menu"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                {mobileOpen ? (
+                  <>
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </>
+                ) : (
+                  <>
+                    <line x1="3" y1="6" x2="21" y2="6" />
+                    <line x1="3" y1="12" x2="21" y2="12" />
+                    <line x1="3" y1="18" x2="21" y2="18" />
+                  </>
+                )}
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 

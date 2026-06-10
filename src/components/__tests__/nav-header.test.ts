@@ -18,7 +18,15 @@ describe("NavHeader source contract", () => {
     const source = readFileSync(join(process.cwd(), "src/components/nav-header.tsx"), "utf8");
 
     expect(source).toContain('aria-label="Toggle menu"');
+    expect(source).toContain('className="md:hidden"');
     expect(source).toContain("PRIMARY_NAV_ITEMS.map");
     expect(source).toContain("<p className=\"section-label px-3 pt-3\">Admin</p>");
+  });
+
+  it("does not mix custom glass button display with responsive hidden utilities", () => {
+    const source = readFileSync(join(process.cwd(), "src/components/nav-header.tsx"), "utf8");
+
+    expect(source).not.toMatch(/className="[^"]*btn-glass[^"]*(?:hidden|md:hidden|md:inline|md:flex)/);
+    expect(source).not.toMatch(/className="[^"]*(?:hidden|md:hidden|md:inline|md:flex)[^"]*btn-glass/);
   });
 });
