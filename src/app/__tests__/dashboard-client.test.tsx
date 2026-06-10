@@ -55,6 +55,9 @@ describe("DashboardClient admin command center", () => {
     expect(html).toContain("Test capped run");
     expect(html).toContain("Dentists");
     expect(html).toContain("All categories");
+    expect(html).toContain("Discovery is waiting for:");
+    expect(html).toContain("Choose at least one category");
+    expect(html).toContain("Choose at least one postal/postcode cell");
     expect(html).toContain("Recent Discovery Items");
     expect(html).toContain("Fulfillment");
     expect(html).toContain("Advanced Operations");

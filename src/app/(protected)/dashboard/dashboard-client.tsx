@@ -752,6 +752,13 @@ export function DashboardClient({
   const startConfirmationMessage = activeSizeEstimate
     ? `Area: ${selectedMarketLabel}. Cells: ${selectedCellSummary}. Categories: ${selectedCategorySummary}. ${activeSizeEstimate.estimatedSearchCalls.toLocaleString()} max Google calls, ${activeSizeEstimate.estimatedMaxRawPlaces.toLocaleString()} max raw places, ${formatCurrencyPrecise(activeSizeEstimate.estimatedMarginalCostUsd)} estimated marginal cost, ${formatDuration(activeSizeEstimate.estimatedDurationSeconds)} estimated runtime. Cap: ${activeSizeEstimate.remainingMonthlyCallCap === null ? "external quota" : `${activeSizeEstimate.remainingMonthlyCallCap.toLocaleString()} calls remaining under ${formatCapSourceLabel(activeSizeEstimate.capSource)}`}.`
     : "Select cells and categories, then wait for the run scope estimate before starting discovery.";
+  const startDisabledReasons = [
+    ...(coreStatus !== "ready" ? ["Admin controls are still loading."] : []),
+    ...(selectedCategories.length === 0 ? ["Choose at least one category, such as Dentists."] : []),
+    ...(selectedCellCount === 0 ? ["Choose at least one postal/postcode cell."] : []),
+    ...(hasEstimateSelection && activeSizeEstimateStatus !== "ready" ? ["Wait for the run scope estimate to finish."] : []),
+    ...(activeSizeEstimate?.blockingReasons ?? []),
+  ];
   const openStartConfirmation = () => setConfirmAction({
     title: "Start discovery run?",
     message: startConfirmationMessage,
@@ -888,7 +895,13 @@ export function DashboardClient({
         <div className="mt-4 flex flex-wrap items-center gap-3">
           {isIdle && (
             <>
-              <button type="button" className="btn-primary" onClick={openStartConfirmation} disabled={startDisabled}>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={openStartConfirmation}
+                disabled={startDisabled}
+                title={startDisabledReasons.length > 0 ? startDisabledReasons.join(" ") : "Start discovery"}
+              >
                 Start Discovery
               </button>
               <button type="button" className="btn-glass" onClick={applyTestRunPreset} disabled={loading}>
@@ -934,6 +947,24 @@ export function DashboardClient({
             </button>
           )}
         </div>
+
+        {isIdle && startDisabledReasons.length > 0 && (
+          <div
+            className="mt-3 flex flex-wrap items-center gap-2 rounded-xl px-3 py-2 text-xs"
+            style={{
+              background: "var(--warning-bg)",
+              border: "1px solid var(--warning-border)",
+              color: "var(--warning-text)",
+            }}
+          >
+            <span className="font-semibold">Discovery is waiting for:</span>
+            {startDisabledReasons.slice(0, 3).map((reason) => (
+              <span key={reason} className="rounded-full px-2 py-1" style={{ background: "var(--surface-card)" }}>
+                {reason}
+              </span>
+            ))}
+          </div>
+        )}
 
         {isIdle && (
           <div className="mt-4 grid gap-3 lg:grid-cols-[0.9fr_0.9fr_0.9fr]">

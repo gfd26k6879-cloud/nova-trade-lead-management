@@ -2766,6 +2766,7 @@ const STARTER_LOCATION_CELLS = [
   { id: "cell-ca-vancouver-v6e", marketId: "market-vancouver", countryCode: "CA", adminArea1: "BC", locality: "Vancouver", postalCode: "V6E", cellType: "postal_fsa", label: "Vancouver, BC V6E", lat: 49.287, lng: -123.126, radiusMeters: 3000 },
   { id: "cell-gb-london-sw1a", marketId: "market-london-gb", countryCode: "GB", adminArea1: "England", locality: "London", postalCode: "SW1A", cellType: "postcode_outward", label: "London SW1A", lat: 51.501, lng: -0.142, radiusMeters: 2500 },
   { id: "cell-gb-london-ec1", marketId: "market-london-gb", countryCode: "GB", adminArea1: "England", locality: "London", postalCode: "EC1", cellType: "postcode_outward", label: "London EC1", lat: 51.523, lng: -0.101, radiusMeters: 2500 },
+  { id: "cell-gb-london-nw9", marketId: "market-london-gb", countryCode: "GB", adminArea1: "England", locality: "London", postalCode: "NW9", cellType: "postcode_outward", label: "London NW9", lat: 51.586, lng: -0.257, radiusMeters: 2500 },
   { id: "cell-gb-london-w1", marketId: "market-london-gb", countryCode: "GB", adminArea1: "England", locality: "London", postalCode: "W1", cellType: "postcode_outward", label: "London W1", lat: 51.514, lng: -0.143, radiusMeters: 2500 },
 ] as const;
 

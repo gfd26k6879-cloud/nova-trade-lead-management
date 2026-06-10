@@ -59,6 +59,8 @@
   --badge-taken-bg: rgba(245, 158, 11, 0.12);
   --badge-taken-text: #92400e;
   --success-text: #166534;
+  --warning-bg: rgba(245, 158, 11, 0.1);
+  --warning-border: rgba(245, 158, 11, 0.2);
   --warning-text: #92400e;
   --selection-bg: rgba(181, 83, 61, 0.13);
   --row-group-bg: rgba(255, 252, 248, 0.5);
@@ -164,6 +166,8 @@
   --badge-taken-bg: rgba(251, 191, 36, 0.16);
   --badge-taken-text: #fde68a;
   --success-text: #86efac;
+  --warning-bg: rgba(251, 191, 36, 0.11);
+  --warning-border: rgba(251, 191, 36, 0.22);
   --warning-text: #fde68a;
   --selection-bg: rgba(221, 143, 117, 0.18);
   --row-group-bg: rgba(240, 234, 228, 0.085);

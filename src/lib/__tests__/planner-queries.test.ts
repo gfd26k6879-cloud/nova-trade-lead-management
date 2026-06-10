@@ -153,6 +153,20 @@ describe("state county zip planner queries", () => {
     ]));
   });
 
+  it("seeds London NW9 as a UK discovery cell", async () => {
+    await ensureGeographyBackfill();
+
+    const cells = await getPlannerCells("market-london-gb", ["dentist"]);
+    expect(cells).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "cell-gb-london-nw9",
+        country_code: "GB",
+        postal_code_normalized: "NW9",
+        cell_label: "London NW9",
+      }),
+    ]));
+  });
+
   it("aggregates coverage by county and state correctly", async () => {
     const runId = seedTestRun(testDb);
     await createCrawlUnitsForSelection(runId, ["dentist", "plumber"], ["80202", "80123"]);
