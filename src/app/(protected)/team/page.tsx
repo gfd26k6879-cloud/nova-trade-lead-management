@@ -108,7 +108,7 @@ export default async function TeamBoardPage() {
             <article
               key={activity.id}
               className="rounded-xl px-4 py-3"
-              style={{ background: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.5)" }}
+              style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <Link className="link-accent font-medium" href={`/leads/${activity.lead_id}`} prefetch={false}>
@@ -138,12 +138,6 @@ function ResearcherTeamBoard({ summary }: { summary: TeamBoardSummary }) {
     <PageShell
       title="My Team Board"
       description="Your claimed leads, follow-ups, and recent outreach."
-      stats={[
-        { label: "Claimed Active", value: String(member?.claimed_active ?? 0) },
-        { label: "Due Today", value: String(member?.due_today ?? 0) },
-        { label: "Stale", value: String(member?.stale_claimed ?? 0) },
-        { label: "Contacts 7 Days", value: String(member?.contacts_7d ?? 0) },
-      ]}
     >
       <section className="glass rounded-2xl p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -160,7 +154,7 @@ function ResearcherTeamBoard({ summary }: { summary: TeamBoardSummary }) {
           </div>
         </div>
         {member ? (
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <ResearcherMetric label="Claimed active" value={member.claimed_active} />
             <ResearcherMetric label="Due today" value={member.due_today} />
             <ResearcherMetric label="Stale claimed" value={member.stale_claimed} />
@@ -171,7 +165,7 @@ function ResearcherTeamBoard({ summary }: { summary: TeamBoardSummary }) {
             <ResearcherMetric label="Quote requests" value={member.quote_requests_open} />
           </div>
         ) : (
-          <p className="mt-5 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+          <p className="mt-5 rounded-xl p-4 text-sm" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)", color: "var(--text-tertiary)" }}>
             Your researcher profile is active, but no workload row was found yet.
           </p>
         )}
@@ -186,7 +180,7 @@ function ResearcherTeamBoard({ summary }: { summary: TeamBoardSummary }) {
             <article
               key={activity.id}
               className="rounded-xl px-4 py-3"
-              style={{ background: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.5)" }}
+              style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <Link className="link-accent font-medium" href={`/leads/${activity.lead_id}`} prefetch={false}>
@@ -212,9 +206,11 @@ function ResearcherTeamBoard({ summary }: { summary: TeamBoardSummary }) {
 
 function ResearcherMetric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
-      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
-      <p className="mt-0.5 text-lg font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
+    <div className="rounded-lg px-3 py-2" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}>
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="min-w-0 truncate text-xs" style={{ color: "var(--text-secondary)" }}>{label}</span>
+        <p className="text-lg font-semibold leading-none" style={{ color: "var(--text-primary)" }}>{value}</p>
+      </div>
     </div>
   );
 }

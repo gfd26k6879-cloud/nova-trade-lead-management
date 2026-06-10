@@ -77,15 +77,15 @@ const WEBSITE_OPTIONS = ["", "none", "social", "basic", "custom"];
 
 const statusBadgeStyle = (status: string): React.CSSProperties => {
   const colors: Record<string, { bg: string; color: string }> = {
-    new: { bg: "rgba(99,102,241,0.1)", color: "#4338ca" },
-    verified: { bg: "rgba(34,197,94,0.1)", color: "#166534" },
-    contacted: { bg: "rgba(245,158,11,0.1)", color: "#92400e" },
-    preview_sent: { bg: "rgba(168,85,247,0.1)", color: "#9333ea" },
-    meeting_set: { bg: "rgba(14,165,233,0.1)", color: "#0284c7" },
-    closed_won: { bg: "rgba(34,197,94,0.15)", color: "#166534" },
-    closed_lost: { bg: "rgba(239,68,68,0.1)", color: "#991b1b" },
-    excluded: { bg: "rgba(107,114,128,0.14)", color: "#374151" },
-    archived: { bg: "rgba(15,23,42,0.12)", color: "#0f172a" },
+    new: { bg: "rgba(99,102,241,0.16)", color: "var(--text-primary)" },
+    verified: { bg: "rgba(34,197,94,0.14)", color: "var(--success-text)" },
+    contacted: { bg: "rgba(245,158,11,0.14)", color: "var(--warning-text)" },
+    preview_sent: { bg: "rgba(168,85,247,0.16)", color: "var(--text-primary)" },
+    meeting_set: { bg: "rgba(14,165,233,0.16)", color: "var(--text-primary)" },
+    closed_won: { bg: "rgba(34,197,94,0.16)", color: "var(--success-text)" },
+    closed_lost: { bg: "var(--danger-bg)", color: "var(--danger-text)" },
+    excluded: { bg: "var(--badge-muted-bg)", color: "var(--badge-muted-text)" },
+    archived: { bg: "var(--badge-muted-bg)", color: "var(--badge-muted-text)" },
   };
   const c = colors[status] ?? { bg: "rgba(0,0,0,0.05)", color: "var(--text-secondary)" };
   return { background: c.bg, color: c.color, padding: "2px 8px", borderRadius: "6px", fontSize: "0.75rem", fontWeight: 500 };
@@ -93,10 +93,10 @@ const statusBadgeStyle = (status: string): React.CSSProperties => {
 
 const websiteBadgeStyle = (ws: string): React.CSSProperties => {
   const colors: Record<string, { bg: string; color: string }> = {
-    none: { bg: "rgba(239,68,68,0.1)", color: "#991b1b" },
-    social: { bg: "rgba(245,158,11,0.1)", color: "#92400e" },
-    basic: { bg: "rgba(99,102,241,0.1)", color: "#4338ca" },
-    custom: { bg: "rgba(34,197,94,0.1)", color: "#166534" },
+    none: { bg: "var(--danger-bg)", color: "var(--danger-text)" },
+    social: { bg: "rgba(245,158,11,0.14)", color: "var(--warning-text)" },
+    basic: { bg: "rgba(99,102,241,0.16)", color: "var(--text-primary)" },
+    custom: { bg: "rgba(34,197,94,0.14)", color: "var(--success-text)" },
   };
   const c = colors[ws] ?? { bg: "rgba(0,0,0,0.05)", color: "var(--text-secondary)" };
   return { background: c.bg, color: c.color, padding: "2px 8px", borderRadius: "6px", fontSize: "0.75rem", fontWeight: 500 };
@@ -212,8 +212,8 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
         { label: "Page", value: `${page} / ${Math.max(1, totalPages)}` },
       ]}
     >
-      <section className="glass rounded-2xl p-6">
-        <div className="mb-5 flex flex-wrap items-center gap-3">
+      <section className="glass rounded-2xl p-4 sm:p-5">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
           <form onSubmit={handleSearchSubmit} className="flex gap-2">
             <input
               type="text"
@@ -324,8 +324,8 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
         </div>
 
         {showAdvanced && (
-          <div className="mb-5 flex flex-wrap items-end gap-3 rounded-xl px-4 py-3"
-            style={{ background: "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.35)" }}>
+          <div className="mb-4 flex flex-wrap items-end gap-3 rounded-xl px-3 py-3"
+            style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}>
             <label className="flex flex-col gap-1">
               <span className="text-[0.65rem] font-medium" style={{ color: "var(--text-tertiary)" }}>Min Reviews</span>
               <input
@@ -376,7 +376,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
           </div>
         )}
 
-        <div className="mb-5">
+        <div className="mb-4">
           <ScoreBandLegend thresholds={scoreThresholds} />
         </div>
 
@@ -405,7 +405,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
         {leads.length === 0 ? (
           <div
             className="rounded-xl p-5 text-center text-sm"
-            style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-tertiary)" }}
+            style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)", color: "var(--text-tertiary)" }}
           >
             {total === 0 ? "No leads yet. Start a crawl run from the Dashboard." : "No leads match current filters."}
           </div>
@@ -484,7 +484,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
                           <span
                             className="ml-1 inline-block rounded px-1.5 py-0.5 text-[0.65rem] font-medium"
                             title={lead.archive_reason}
-                            style={{ background: "rgba(15,23,42,0.1)", color: "#0f172a" }}
+                            style={{ background: "var(--badge-muted-bg)", color: "var(--badge-muted-text)" }}
                           >
                             reason
                           </span>
@@ -493,7 +493,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
                           <span
                             className="ml-1 inline-block rounded px-1.5 py-0.5 text-[0.65rem] font-medium"
                             title={lead.exclusion_reason}
-                            style={{ background: "rgba(107,114,128,0.12)", color: "#4b5563" }}
+                            style={{ background: "var(--badge-muted-bg)", color: "var(--badge-muted-text)" }}
                           >
                             reason
                           </span>

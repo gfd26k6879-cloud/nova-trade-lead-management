@@ -10,16 +10,11 @@ import {
 export function ScoreBandLegend({ thresholds }: { thresholds: ScoreBandThresholds }) {
   return (
     <section
-      className="rounded-xl px-4 py-3"
-      style={{ background: "rgba(255,255,255,0.28)", border: "1px solid rgba(255,255,255,0.4)" }}
+      className="flex flex-wrap items-center gap-2 rounded-xl px-3 py-2"
+      style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}
     >
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <span className="section-label">Score Bands</span>
-        <span className="text-[0.68rem]" style={{ color: "var(--text-tertiary)" }}>
-          {thresholds.usesFallback ? "Fallback thresholds" : `Dynamic from ${thresholds.sampleSize} leads`}
-        </span>
-      </div>
-      <div className="flex flex-wrap gap-2">
+      <span className="section-label mr-1">Score Bands</span>
+      <div className="flex min-w-0 flex-1 flex-wrap gap-2">
         {SCORE_BAND_DEFINITIONS.map((band) => {
           const style = getScoreBandStyle(band.key);
           return (
@@ -39,6 +34,9 @@ export function ScoreBandLegend({ thresholds }: { thresholds: ScoreBandThreshold
           );
         })}
       </div>
+      <span className="text-[0.68rem]" style={{ color: "var(--text-tertiary)" }}>
+        {thresholds.usesFallback ? "Fallback thresholds" : `${thresholds.sampleSize} lead sample`}
+      </span>
     </section>
   );
 }
