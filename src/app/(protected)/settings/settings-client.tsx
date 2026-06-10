@@ -48,6 +48,9 @@ interface Settings {
   google_places_api_key_source: "ui" | "env" | "none";
   google_maps_browser_api_key_configured: boolean;
   google_maps_browser_api_key_source: "ui" | "env" | "none";
+  google_text_search_monthly_cap: number;
+  google_enterprise_monthly_cap: number;
+  google_test_run_call_cap: number;
   google_auto_pagination_enabled: boolean;
   google_auto_pagination_min_new_candidates: number;
   google_auto_pagination_max_duplicate_rate: number;
@@ -65,9 +68,6 @@ const LEGACY_BUDGET_SETTING_KEYS = [
   "cost_engine_v2_enabled",
   "ai_daily_budget_usd",
   "ai_monthly_budget_usd",
-  "google_text_search_monthly_cap",
-  "google_enterprise_monthly_cap",
-  "google_test_run_call_cap",
 ] as const;
 
 function removeLegacyBudgetSettings(input: Settings): Settings {
@@ -321,6 +321,11 @@ export function SettingsClient({
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <NumberField label="Rate Limit (ms)" value={settings.rate_limit_ms} onChange={(v) => update("rate_limit_ms", v)} />
+          <NumberField label="Test Run Call Cap" value={settings.google_test_run_call_cap} onChange={(v) => update("google_test_run_call_cap", v)} />
+          <NumberField label="Text Search Monthly Cap" value={settings.google_text_search_monthly_cap} onChange={(v) => update("google_text_search_monthly_cap", v)} />
+          <NumberField label="Enterprise Monthly Cap" value={settings.google_enterprise_monthly_cap} onChange={(v) => update("google_enterprise_monthly_cap", v)} />
+        </div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <NumberField label="Next Page Min New" value={settings.google_auto_pagination_min_new_candidates} onChange={(v) => update("google_auto_pagination_min_new_candidates", v)} />
           <NumberField label="Max Duplicate Rate" value={settings.google_auto_pagination_max_duplicate_rate} onChange={(v) => update("google_auto_pagination_max_duplicate_rate", v)} step={0.05} />
         </div>
@@ -335,9 +340,9 @@ export function SettingsClient({
           <label className="text-sm" style={{ color: "var(--text-secondary)" }}>
             <span className="mb-1 block text-xs font-medium">Default pagination</span>
             <select className="glass-input w-full" value={settings.google_default_pagination_policy} onChange={(e) => update("google_default_pagination_policy", e.target.value as Settings["google_default_pagination_policy"])}>
-              <option value="auto_yield_based">Auto yield-based</option>
               <option value="first_page_only">First page only</option>
-              <option value="manual_extra_pages">Manual extra pages</option>
+              <option value="auto_yield_based">Auto if yield is strong</option>
+              <option value="manual_extra_pages">Always fetch up to 3 pages</option>
             </select>
           </label>
         </div>

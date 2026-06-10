@@ -424,6 +424,7 @@ export function ExploreClient({
             <div className="md:col-span-2 xl:col-span-3">
               <ExploreEmptyState
                 mode={mode}
+                currentRole={currentUser.role}
                 chips={leadFilterChips}
                 onDirectory={() => pushFilters({ mode: "directory", page: null })}
                 onClearLocation={() => pushFilters({ city: null, zip: null, marketId: null, locationCellId: null, countryCode: null, page: null })}
@@ -623,12 +624,14 @@ function shouldShowColoradoAreaPresets(filters: Props["filters"]): boolean {
 
 function ExploreEmptyState({
   mode,
+  currentRole,
   chips,
   onDirectory,
   onClearLocation,
   onTorontoMarket,
 }: {
   mode: ExploreMode;
+  currentRole: AppRole;
   chips: ExploreFilterChip[];
   onDirectory: () => void;
   onClearLocation: () => void;
@@ -653,7 +656,13 @@ function ExploreEmptyState({
         {mode !== "directory" && <button type="button" className="btn-primary text-sm" onClick={onDirectory}>Search Directory</button>}
         {locationActive && <button type="button" className="btn-glass text-sm" onClick={onClearLocation}>Clear location</button>}
         {cityTorontoActive && <button type="button" className="btn-glass text-sm" onClick={onTorontoMarket}>Switch to Toronto market</button>}
-        <Link href="/dashboard" className="btn-glass text-sm">Start discovery / harvest</Link>
+        {currentRole === "admin" ? (
+          <Link href="/dashboard" className="btn-glass text-sm">Start discovery / harvest</Link>
+        ) : (
+          <span className="rounded-full px-3 py-2 text-sm" style={{ background: "rgba(255,255,255,0.38)", color: "var(--text-secondary)" }}>
+            Ask an admin to harvest this market
+          </span>
+        )}
         <Link href="/explore" className="btn-glass text-sm">Reset all</Link>
       </div>
     </div>

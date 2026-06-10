@@ -67,6 +67,8 @@ export type LocationScopeValue = {
   countryCode?: CountryCode;
   marketId?: string;
   cellIds?: string[];
+  marketLabel?: string;
+  cellLabels?: string[];
 };
 
 type LocationScopePickerProps = {
@@ -100,6 +102,8 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
   const [postalFeedback, setPostalFeedback] = useState<string | null>(null);
   const [incompleteOnly, setIncompleteOnly] = useState(false);
   const [legacyZips, setLegacyZips] = useState<LegacyPlannerZipOption[]>([]);
+  const [cellsLoading, setCellsLoading] = useState(true);
+  const [countryCellsLoading, setCountryCellsLoading] = useState(true);
 
   const categoryKey = useMemo(() => toKey(categories), [categories]);
   const selectedCellSet = useMemo(() => new Set(selectedCellIds), [selectedCellIds]);
@@ -117,13 +121,19 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
   }, [countryCells, postalEntry, selectedCountry]);
 
   useEffect(() => {
+    const selectedCells = cells.filter((cell) => selectedCellSet.has(cell.id));
+    const cellLabels = selectedCells.length > 0
+      ? selectedCells.map((cell) => cell.cell_label)
+      : selectedCellIds;
     onChange({
       state: selectedMarket?.admin_area1 ?? value.state ?? "CO",
       counties: [],
-      zipCodes: cells.filter((cell) => selectedCellSet.has(cell.id)).map((cell) => cell.postal_code_normalized ?? cell.postal_code ?? cell.id),
+      zipCodes: selectedCells.map((cell) => cell.postal_code_normalized ?? cell.postal_code ?? cell.id),
       countryCode: selectedCountry,
       marketId: selectedMarketId || undefined,
       cellIds: selectedCellIds,
+      marketLabel: selectedMarket ? formatMarketLabel(selectedMarket) : undefined,
+      cellLabels,
     });
   }, [cells, onChange, selectedCellIds, selectedCellSet, selectedCountry, selectedMarket, selectedMarketId, value.state]);
 
@@ -149,6 +159,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
       setCells(rows);
       const allowed = new Set(rows.map((cell) => cell.id));
       setSelectedCellIds((previous) => previous.filter((id) => allowed.has(id)));
+      setCellsLoading(false);
     });
     return () => { ignore = true; };
   }, [selectedMarketId, categoryKey, categories]);
@@ -159,7 +170,10 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
     if (countryMarkets.length === 0) {
       let ignore = false;
       Promise.resolve([] as PlannerCellOption[]).then((rows) => {
-        if (!ignore) setCountryCells(rows);
+        if (!ignore) {
+          setCountryCells(rows);
+          setCountryCellsLoading(false);
+        }
       });
       return () => { ignore = true; };
     }
@@ -167,6 +181,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
     Promise.all(countryMarkets.map((market) => getPlannerCellsAction(market.id, categories))).then((groups) => {
       if (ignore) return;
       setCountryCells(groups.flat());
+      setCountryCellsLoading(false);
     });
     return () => { ignore = true; };
   }, [markets, selectedCountry, categoryKey, categories]);
@@ -209,6 +224,10 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
     }
     const match = selectedCountryCellMatches[0];
     if (!match) {
+      if (countryCellsLoading) {
+        setPostalFeedback(`Still loading active ${COUNTRY_NAMES[selectedCountry]} discovery cells. Try again in a moment.`);
+        return;
+      }
       setPostalFeedback(`No active discovery cell exists for ${normalized} yet.`);
       return;
     }
@@ -217,6 +236,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
     setSelectedMarketId(match.market_id);
     setSelectedCellIds([match.id]);
     setCellFilter(normalized);
+    setCellsLoading(true);
   };
 
   const selectedZipCount = selectedMarketId === "market-colorado"
@@ -252,6 +272,8 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
               setCells([]);
               setCellFilter("");
               setPostalFeedback(null);
+              setCellsLoading(true);
+              setCountryCellsLoading(true);
             }}
           >
             {COUNTRY_OPTIONS.map((country) => (
@@ -308,6 +330,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
                     setSelectedCellIds([cell.id]);
                     setCellFilter(cell.postal_code_normalized ?? cell.postal_code ?? "");
                     setPostalFeedback(`Selected ${cell.cell_label}.`);
+                    setCellsLoading(true);
                   }}
                 >
                   {cell.cell_label}
@@ -330,6 +353,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
               setSelectedCellIds([]);
               setCells([]);
               setCellFilter("");
+              setCellsLoading(true);
             }}
           >
             {marketsForCountry.map((market) => (
@@ -371,7 +395,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
           <div className="max-h-64 space-y-1 overflow-auto pr-1">
             {visibleCells.length === 0 ? (
               <p className="rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.3)", color: "var(--text-tertiary)" }}>
-                No active cells for this market yet.
+                {cellsLoading ? "Loading active cells for this area..." : "No active cells for this market yet."}
               </p>
             ) : visibleCells.map((cell) => {
               const checked = selectedCellSet.has(cell.id);
@@ -393,6 +417,24 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
               );
             })}
           </div>
+        </div>
+        <div className="rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.28)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+          <p className="font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>
+            Selected cells
+          </p>
+          <p className="mt-2 text-lg font-semibold" style={{ color: "var(--text-primary)" }}>
+            {selectedCellIds.length}
+          </p>
+          <p className="mt-1 leading-5">
+            {selectedCellIds.length === 0
+              ? "Pick one or more postal cells before starting discovery."
+              : cells.filter((cell) => selectedCellSet.has(cell.id)).map((cell) => cell.cell_label).join(", ") || "Selected cells are loading."}
+          </p>
+          {postalFeedback && (
+            <p className="mt-3 rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.35)", color: postalFeedback.startsWith("Selected") ? "#166534" : "#92400e" }}>
+              {postalFeedback}
+            </p>
+          )}
         </div>
       </div>
     </div>

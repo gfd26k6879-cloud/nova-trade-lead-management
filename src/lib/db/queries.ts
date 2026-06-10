@@ -1775,6 +1775,18 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
     updates.push("google_auto_pagination_max_duplicate_rate = ?");
     values.push(Math.max(0, Math.min(1, settings.google_auto_pagination_max_duplicate_rate)));
   }
+  if (settings.google_test_run_call_cap !== undefined) {
+    updates.push("google_test_run_call_cap = ?");
+    values.push(Math.max(1, Math.floor(settings.google_test_run_call_cap)));
+  }
+  if (settings.google_text_search_monthly_cap !== undefined) {
+    updates.push("google_text_search_monthly_cap = ?");
+    values.push(Math.max(1, Math.floor(settings.google_text_search_monthly_cap)));
+  }
+  if (settings.google_enterprise_monthly_cap !== undefined) {
+    updates.push("google_enterprise_monthly_cap = ?");
+    values.push(Math.max(1, Math.floor(settings.google_enterprise_monthly_cap)));
+  }
   if (settings.google_default_discovery_mode !== undefined) {
     updates.push("google_default_discovery_mode = ?");
     values.push(settings.google_default_discovery_mode === "lead_harvest" ? "lead_harvest" : "coverage_probe");
@@ -3791,6 +3803,31 @@ export async function retryFailedUnits(runId: string): Promise<number>{
     "UPDATE crawl_units SET status = 'pending', started_at = NULL, last_error = NULL WHERE crawl_run_id = ? AND status = 'failed'"
   ).run(runId);
   return result.changes;
+}
+
+export async function getCrawlRunRemainingSearchCalls(
+  runId: string,
+  mode: "open" | "failed" | "open_or_failed" = "open_or_failed",
+): Promise<number> {
+  const db = await getDb();
+  const statusSql = mode === "open"
+    ? "status IN ('pending','running','retry_wait')"
+    : mode === "failed"
+      ? "status = 'failed'"
+      : "status IN ('pending','running','retry_wait','failed')";
+  const row = await db.prepare(
+    `SELECT COALESCE(SUM(
+       CASE
+         WHEN COALESCE(max_pages, 1) > COALESCE(pages_fetched, 0)
+           THEN COALESCE(max_pages, 1) - COALESCE(pages_fetched, 0)
+         ELSE 0
+       END
+     ), 0) as calls
+     FROM crawl_units
+     WHERE crawl_run_id = ?
+       AND ${statusSql}`
+  ).get(runId) as { calls: number } | undefined;
+  return Number(row?.calls ?? 0);
 }
 
 export async function getCrawlProgress(runId: string): Promise<CrawlProgress> {
@@ -8591,6 +8628,105 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
     })),
     unassignedReady: Number(unassignedRow?.count ?? 0),
     overdueFollowUps: Number(overdueRow?.count ?? 0),
+    latestActivity: activityRows.map((row) => ({
+      id: String(row.id),
+      lead_id: String(row.lead_id),
+      lead_name: (row.lead_name as string | null) ?? null,
+      actor_email: (row.actor_email as string | null) ?? null,
+      channel: String(row.channel),
+      outcome: normalizeOutreachOutcome(row.outcome),
+      note: (row.note as string | null) ?? null,
+      created_at: String(row.created_at),
+    })),
+  };
+}
+
+export async function getResearcherTeamBoardSummary(userId: string): Promise<TeamBoardSummary> {
+  const db = await getDb();
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const staleBefore = weekAgo;
+
+  const memberRow = await db.prepare(
+    `SELECT
+       au.user_id,
+       au.email,
+       au.display_name,
+       au.role,
+       au.is_team_lead,
+       au.team_lead_user_id,
+       au.team_label,
+       tl.email as team_lead_email,
+       tl.display_name as team_lead_display_name,
+       COALESCE(COUNT(CASE WHEN l.status NOT IN ('closed_won','closed_lost') THEN l.id END), 0) as claimed_active,
+       COALESCE(SUM(CASE WHEN l.reminder_date IS NOT NULL AND l.reminder_date <= ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as due_today,
+       COALESCE(SUM(CASE WHEN l.updated_at < ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as stale_claimed,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+       ), 0) as contacts_7d,
+       COALESCE(SUM(CASE WHEN l.status = 'meeting_set' THEN 1 ELSE 0 END), 0) as meetings,
+       COALESCE(SUM(CASE WHEN l.status = 'closed_won' THEN 1 ELSE 0 END), 0) as closed_won,
+       COALESCE(SUM(CASE WHEN l.status = 'closed_lost' THEN 1 ELSE 0 END), 0) as closed_lost,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM admin_requests ar
+         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+           AND ar.request_type = 'website_request'
+           AND ar.created_by_user_id = au.user_id
+       ), 0) as website_requests_open,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM admin_requests ar
+         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+           AND ar.request_type = 'quote_request'
+           AND ar.created_by_user_id = au.user_id
+       ), 0) as quote_requests_open
+     FROM app_users au
+     LEFT JOIN app_users tl ON tl.user_id = au.team_lead_user_id
+     LEFT JOIN leads l ON l.assigned_to_user_id = au.user_id AND COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL
+     WHERE au.status = 'active' AND au.user_id = ?
+     GROUP BY au.user_id, au.email, au.display_name, au.role, au.is_team_lead, au.team_lead_user_id, au.team_label, tl.email, tl.display_name`
+  ).get<Record<string, unknown>>(today, staleBefore, weekAgo, userId);
+
+  const activityRows = await db.prepare(
+    `SELECT oe.id, oe.lead_id, l.name as lead_name, COALESCE(oe.actor_email, au.email) as actor_email,
+       oe.channel, oe.outcome, oe.note, oe.created_at
+     FROM outreach_events oe
+     LEFT JOIN leads l ON l.id = oe.lead_id
+     LEFT JOIN app_users au ON au.user_id = oe.actor_user_id
+     WHERE oe.actor_user_id = ?
+     ORDER BY oe.created_at DESC
+     LIMIT 25`
+  ).all<Record<string, unknown>>(userId);
+
+  const member: TeamBoardMember | null = memberRow ? {
+    user_id: String(memberRow.user_id),
+    email: String(memberRow.email),
+    display_name: memberRow.display_name ? String(memberRow.display_name) : null,
+    role: String(memberRow.role),
+    is_team_lead: toBoolean(memberRow.is_team_lead),
+    team_lead_user_id: (memberRow.team_lead_user_id as string | null) ?? null,
+    team_lead_email: (memberRow.team_lead_email as string | null) ?? null,
+    team_lead_display_name: (memberRow.team_lead_display_name as string | null) ?? null,
+    team_label: (memberRow.team_label as string | null) ?? null,
+    claimed_active: Number(memberRow.claimed_active ?? 0),
+    due_today: Number(memberRow.due_today ?? 0),
+    stale_claimed: Number(memberRow.stale_claimed ?? 0),
+    contacts_7d: Number(memberRow.contacts_7d ?? 0),
+    meetings: Number(memberRow.meetings ?? 0),
+    closed_won: Number(memberRow.closed_won ?? 0),
+    closed_lost: Number(memberRow.closed_lost ?? 0),
+    website_requests_open: Number(memberRow.website_requests_open ?? 0),
+    quote_requests_open: Number(memberRow.quote_requests_open ?? 0),
+    fulfillment_open: Number(memberRow.website_requests_open ?? 0) + Number(memberRow.quote_requests_open ?? 0),
+  } : null;
+
+  return {
+    members: member ? [member] : [],
+    unassignedReady: 0,
+    overdueFollowUps: member?.due_today ?? 0,
     latestActivity: activityRows.map((row) => ({
       id: String(row.id),
       lead_id: String(row.lead_id),

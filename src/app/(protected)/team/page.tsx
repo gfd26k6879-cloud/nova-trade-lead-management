@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { requirePermission } from "@/lib/auth";
 import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
-import { ensureDbReady, getTeamBoardSummary, type TeamBoardSummary } from "@/lib/db/queries";
+import { ensureDbReady, getResearcherTeamBoardSummary, getTeamBoardSummary, type TeamBoardSummary } from "@/lib/db/queries";
 import { PageShell } from "@/components/page-shell";
 import { startRouteTiming } from "@/lib/route-timing";
 
@@ -10,19 +10,24 @@ export const metadata: Metadata = { title: "Team Board | NoSite Leads" };
 
 export default async function TeamBoardPage() {
   const logRouteTiming = startRouteTiming("/team");
-  await requirePermission("view:workspace");
+  const session = await requirePermission("view:workspace");
   let summary: TeamBoardSummary;
   try {
     summary = await withDbStatementTimeout(10_000, async () => {
       await ensureDbReady();
-      return getTeamBoardSummary();
+      return session.role === "admin" ? getTeamBoardSummary() : getResearcherTeamBoardSummary(session.userId);
     });
     logRouteTiming(200);
   } catch (error) {
     const reason = routeFailureReason(error);
     logRouteTiming(503, { reason });
-    return <TeamUnavailable reason={reason} />;
+    return <TeamUnavailable reason={reason} canOpenDashboard={session.role === "admin"} />;
   }
+
+  if (session.role !== "admin") {
+    return <ResearcherTeamBoard summary={summary} />;
+  }
+
   const contacts7d = summary.members.reduce((sum, member) => sum + member.contacts_7d, 0);
   const claimed = summary.members.reduce((sum, member) => sum + member.claimed_active, 0);
   const fulfillmentOpen = summary.members.reduce((sum, member) => sum + member.fulfillment_open, 0);
@@ -127,13 +132,100 @@ export default async function TeamBoardPage() {
   );
 }
 
+function ResearcherTeamBoard({ summary }: { summary: TeamBoardSummary }) {
+  const member = summary.members[0] ?? null;
+  return (
+    <PageShell
+      title="My Team Board"
+      description="Your claimed leads, follow-ups, and recent outreach."
+      stats={[
+        { label: "Claimed Active", value: String(member?.claimed_active ?? 0) },
+        { label: "Due Today", value: String(member?.due_today ?? 0) },
+        { label: "Stale", value: String(member?.stale_claimed ?? 0) },
+        { label: "Contacts 7 Days", value: String(member?.contacts_7d ?? 0) },
+      ]}
+    >
+      <section className="glass rounded-2xl p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="section-label">My workload</h3>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              Your assigned leads and follow-ups. Team-wide workload is admin-only.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/queue" className="btn-primary text-sm">Open Workbench</Link>
+            <Link href="/leads?assigned=me" className="btn-glass text-sm">My leads</Link>
+            <Link href="/explore" className="btn-glass text-sm">Explore</Link>
+          </div>
+        </div>
+        {member ? (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <ResearcherMetric label="Claimed active" value={member.claimed_active} />
+            <ResearcherMetric label="Due today" value={member.due_today} />
+            <ResearcherMetric label="Stale claimed" value={member.stale_claimed} />
+            <ResearcherMetric label="Contacts 7d" value={member.contacts_7d} />
+            <ResearcherMetric label="Meetings" value={member.meetings} />
+            <ResearcherMetric label="Steve queue" value={member.fulfillment_open} />
+            <ResearcherMetric label="Website requests" value={member.website_requests_open} />
+            <ResearcherMetric label="Quote requests" value={member.quote_requests_open} />
+          </div>
+        ) : (
+          <p className="mt-5 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+            Your researcher profile is active, but no workload row was found yet.
+          </p>
+        )}
+      </section>
+
+      <section className="glass rounded-2xl p-5">
+        <h3 className="section-label">My latest activity</h3>
+        <div className="mt-4 space-y-3">
+          {summary.latestActivity.length === 0 ? (
+            <p className="text-sm" style={{ color: "var(--text-tertiary)" }}>No outreach activity logged by you yet.</p>
+          ) : summary.latestActivity.map((activity) => (
+            <article
+              key={activity.id}
+              className="rounded-xl px-4 py-3"
+              style={{ background: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.5)" }}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Link className="link-accent font-medium" href={`/leads/${activity.lead_id}`} prefetch={false}>
+                  {activity.lead_name ?? "Unknown lead"}
+                </Link>
+                <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
+                  {new Date(activity.created_at).toLocaleString()}
+                </span>
+              </div>
+              <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+                You logged {channelLabel(activity.channel)} as {activity.outcome.replace(/_/g, " ")}.
+              </p>
+              {activity.note && (
+                <p className="mt-2 text-sm" style={{ color: "var(--text-primary)" }}>{activity.note}</p>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
+    </PageShell>
+  );
+}
+
+function ResearcherMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
+      <p className="mt-0.5 text-lg font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
+    </div>
+  );
+}
+
 function routeFailureReason(error: unknown): string {
   if (isDbStatementTimeoutError(error)) return "db_statement_timeout";
   if (isTransientDbError(error)) return "transient_db_error";
   return "team_load_error";
 }
 
-function TeamUnavailable({ reason }: { reason: string }) {
+function TeamUnavailable({ reason, canOpenDashboard }: { reason: string; canOpenDashboard: boolean }) {
   return (
     <PageShell
       title="Team Board"
@@ -154,7 +246,7 @@ function TeamUnavailable({ reason }: { reason: string }) {
         <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>Diagnostic: {reason}</p>
         <div className="mt-4 flex flex-wrap gap-2">
           <Link href="/team" className="btn-primary text-sm">Retry Team Board</Link>
-          <Link href="/dashboard" className="btn-glass text-sm">Open Dashboard</Link>
+          {canOpenDashboard && <Link href="/dashboard" className="btn-glass text-sm">Open Dashboard</Link>}
         </div>
       </section>
     </PageShell>

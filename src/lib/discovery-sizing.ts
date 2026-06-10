@@ -1,5 +1,6 @@
 import type { Settings } from "@/lib/db/queries";
 import {
+  estimateMarginalSkuCost,
   inferTextSearchSkuFromFieldMask,
   type GooglePlacesSku,
 } from "@/lib/google-pricing";
@@ -10,6 +11,7 @@ import {
 
 export type DiscoveryMode = "coverage_probe" | "lead_harvest";
 export type PaginationPolicy = "first_page_only" | "auto_yield_based" | "manual_extra_pages";
+export type DiscoveryCapSource = "test_run" | "text_search_monthly" | "enterprise_monthly" | "uncapped";
 
 export interface DiscoverySizeEstimate {
   mode: DiscoveryMode;
@@ -23,7 +25,16 @@ export interface DiscoverySizeEstimate {
   testRun: boolean;
   maxPages: number;
   warnings: string[];
+  blockingReasons: string[];
   canStart: boolean;
+  estimatedDurationSeconds: number;
+  searchRadiusKm: number;
+  monthlyBillableEventsForSku: number;
+  safeMonthlyCallCap: number | null;
+  remainingMonthlyCallCap: number | null;
+  estimatedMarginalCostUsd: number;
+  estimatedUnitCostUsd: number;
+  capSource: DiscoveryCapSource;
 }
 
 export interface DiscoverySizeInput {
@@ -32,6 +43,8 @@ export interface DiscoverySizeInput {
   mode?: string | null;
   paginationPolicy?: string | null;
   testRun?: boolean;
+  monthlyBillableEventsForSku?: number;
+  searchCallCountOverride?: number;
   settings: Settings;
 }
 
@@ -57,6 +70,35 @@ export function getTextSearchSkuForDiscoveryMode(mode: DiscoveryMode): GooglePla
   return inferTextSearchSkuFromFieldMask(getTextSearchFieldMaskForDiscoveryMode(mode));
 }
 
+function getDiscoveryCap(input: {
+  sku: GooglePlacesSku;
+  testRun: boolean;
+  settings: Settings;
+}): { capSource: DiscoveryCapSource; safeMonthlyCallCap: number | null } {
+  if (input.testRun) {
+    return {
+      capSource: "test_run",
+      safeMonthlyCallCap: Math.max(1, Math.floor(input.settings.google_test_run_call_cap ?? 50)),
+    };
+  }
+  if (input.sku === "places_text_search_pro") {
+    return {
+      capSource: "text_search_monthly",
+      safeMonthlyCallCap: Math.max(1, Math.floor(input.settings.google_text_search_monthly_cap ?? 4900)),
+    };
+  }
+  if (
+    input.sku === "places_text_search_enterprise"
+    || input.sku === "places_text_search_enterprise_plus_atmosphere"
+  ) {
+    return {
+      capSource: "enterprise_monthly",
+      safeMonthlyCallCap: Math.max(1, Math.floor(input.settings.google_enterprise_monthly_cap ?? 900)),
+    };
+  }
+  return { capSource: "uncapped", safeMonthlyCallCap: null };
+}
+
 export function estimateDiscoveryRunSize(input: DiscoverySizeInput): DiscoverySizeEstimate {
   const mode = normalizeDiscoveryMode(input.mode, input.settings.google_default_discovery_mode);
   const paginationPolicy = normalizePaginationPolicy(input.paginationPolicy, input.settings.google_default_pagination_policy);
@@ -64,12 +106,36 @@ export function estimateDiscoveryRunSize(input: DiscoverySizeInput): DiscoverySi
   const selectedCategories = Math.max(0, Math.floor(input.categoryCount));
   const estimatedUnits = selectedCells * selectedCategories;
   const maxPages = paginationPolicy === "first_page_only" ? 1 : MAX_TEXT_SEARCH_PAGES;
-  const estimatedSearchCalls = estimatedUnits * maxPages;
+  const estimatedSearchCalls = Math.max(
+    0,
+    Math.floor(input.searchCallCountOverride ?? (estimatedUnits * maxPages)),
+  );
   const sku = getTextSearchSkuForDiscoveryMode(mode);
   const warnings: string[] = [];
+  const blockingReasons: string[] = [];
+  const testRun = Boolean(input.testRun);
+  const monthlyBillableEventsForSku = Math.max(0, Math.floor(input.monthlyBillableEventsForSku ?? 0));
+  const { capSource, safeMonthlyCallCap } = getDiscoveryCap({ sku, testRun, settings: input.settings });
+  const remainingMonthlyCallCap = safeMonthlyCallCap === null
+    ? null
+    : Math.max(0, safeMonthlyCallCap - monthlyBillableEventsForSku);
+  const marginalCost = estimateMarginalSkuCost(sku, monthlyBillableEventsForSku, estimatedSearchCalls);
+  const searchRadiusKm = Math.max(0, Number(input.settings.search_radius_km ?? 0));
+  const rateLimitMs = Math.max(0, Math.floor(input.settings.rate_limit_ms ?? 0));
 
-  if (selectedCells === 0) warnings.push("Select at least one postal/postcode cell.");
-  if (selectedCategories === 0) warnings.push("Select at least one category.");
+  if (selectedCells === 0) blockingReasons.push("Select at least one postal/postcode cell.");
+  if (selectedCategories === 0) blockingReasons.push("Select at least one category.");
+  if (remainingMonthlyCallCap !== null && estimatedSearchCalls > remainingMonthlyCallCap) {
+    blockingReasons.push(`This run needs ${estimatedSearchCalls.toLocaleString()} Google Text Search calls, but only ${remainingMonthlyCallCap.toLocaleString()} remain under the ${capSource.replace(/_/g, " ")} cap.`);
+  }
+  if (
+    remainingMonthlyCallCap !== null
+    && blockingReasons.length === 0
+    && estimatedSearchCalls > 0
+    && estimatedSearchCalls >= Math.floor(remainingMonthlyCallCap * 0.8)
+  ) {
+    warnings.push(`This run will use most of the remaining ${capSource.replace(/_/g, " ")} cap.`);
+  }
 
   return {
     mode,
@@ -80,10 +146,19 @@ export function estimateDiscoveryRunSize(input: DiscoverySizeInput): DiscoverySi
     estimatedSearchCalls,
     estimatedMaxRawPlaces: estimatedSearchCalls * TEXT_SEARCH_PAGE_SIZE,
     sku,
-    testRun: Boolean(input.testRun),
+    testRun,
     maxPages,
     warnings,
-    canStart: warnings.length === 0,
+    blockingReasons,
+    canStart: blockingReasons.length === 0,
+    estimatedDurationSeconds: Math.ceil((estimatedSearchCalls * rateLimitMs) / 1000),
+    searchRadiusKm,
+    monthlyBillableEventsForSku,
+    safeMonthlyCallCap,
+    remainingMonthlyCallCap,
+    estimatedMarginalCostUsd: marginalCost.estimatedCost,
+    estimatedUnitCostUsd: marginalCost.estimatedUnitPrice,
+    capSource,
   };
 }
 

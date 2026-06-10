@@ -79,7 +79,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
   const discoverySku = getTextSearchSkuForDiscoveryMode(discoveryMode);
   const configuredUnitMaxPages = Math.max(1, Math.min(3, Math.floor(Number(unit.max_pages) || 1)));
   const policyMaxPages = paginationPolicy === "first_page_only" ? 1 : 3;
-  const unitMaxPages = Math.max(configuredUnitMaxPages, policyMaxPages);
+  const unitMaxPages = Math.min(configuredUnitMaxPages, policyMaxPages);
 
   let leadsFound = 0;
   let leadsSkipped = 0;

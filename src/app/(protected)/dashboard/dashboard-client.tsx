@@ -30,6 +30,12 @@ const CATEGORY_OPTIONS = [
   "contractor", "cleaning", "pest_control", "gym",
 ];
 
+const CATEGORY_PRESETS = [
+  { label: "Dentists", categories: ["dentist"] },
+  { label: "Auto repair", categories: ["auto_repair"] },
+  { label: "Contractors", categories: ["contractor", "hvac", "plumber", "electrician", "roofing"] },
+];
+
 interface ConversionMetrics {
   totalContacted: number;
   totalReplies: number;
@@ -58,6 +64,36 @@ function formatDiscoveryMode(mode: DiscoveryItem["discoveryMode"]): string {
   if (mode === "coverage_probe") return "coverage probe";
   if (mode === "lead_harvest") return "lead harvest";
   return "legacy discovery";
+}
+
+function formatCategoryLabel(category: string): string {
+  return category.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatDiscoveryModeLabel(mode: DiscoveryMode): string {
+  return mode === "coverage_probe" ? "Coverage probe" : "Lead harvest";
+}
+
+function formatPaginationPolicyLabel(policy: PaginationPolicy): string {
+  if (policy === "first_page_only") return "First page only";
+  if (policy === "manual_extra_pages") return "Always fetch up to 3 pages";
+  return "Auto if yield is strong";
+}
+
+function formatCapSourceLabel(source: DiscoverySizeEstimate["capSource"]): string {
+  if (source === "test_run") return "test run cap";
+  if (source === "text_search_monthly") return "Text Search monthly cap";
+  if (source === "enterprise_monthly") return "Enterprise monthly cap";
+  return "external quota";
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds <= 0) return "under 1 min";
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder > 0 ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
 function DiscoveryStatusBadge({ status }: { status: string }) {
@@ -238,10 +274,12 @@ export function DashboardClient({
   const [discoveryItems, setDiscoveryItems] = useState<DiscoveryItem[]>(initialStats.discoveryItems);
   const [discoveryItemsStatus, setDiscoveryItemsStatus] = useState<DashboardPanelStatus>("loading");
   const [discoveryItemsError, setDiscoveryItemsError] = useState<string | null>(null);
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([...CATEGORY_OPTIONS]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [locationScope, setLocationScope] = useState<LocationScopeValue>({ state: "CO", counties: [], zipCodes: [] });
   const [discoveryMode, setDiscoveryMode] = useState<DiscoveryMode>(initialStats.googleDiscoveryDefaults.discoveryMode);
   const [paginationPolicy, setPaginationPolicy] = useState<PaginationPolicy>(initialStats.googleDiscoveryDefaults.paginationPolicy);
+  const [testRun, setTestRun] = useState(false);
+  const [locationPickerResetKey, setLocationPickerResetKey] = useState(0);
   const [sizeEstimate, setSizeEstimate] = useState<DiscoverySizeEstimate | null>(null);
   const [sizeEstimateStatus, setSizeEstimateStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [sizeEstimateError, setSizeEstimateError] = useState<string | null>(null);
@@ -477,6 +515,7 @@ export function DashboardClient({
           categories: selectedCategories,
           discoveryMode,
           paginationPolicy,
+          testRun,
         }
       : {
           state: locationScope.state,
@@ -485,8 +524,9 @@ export function DashboardClient({
           categories: selectedCategories,
           discoveryMode,
           paginationPolicy,
+          testRun,
         }
-  ), [discoveryMode, locationScope, paginationPolicy, selectedCategories]);
+  ), [discoveryMode, locationScope, paginationPolicy, selectedCategories, testRun]);
 
   useEffect(() => {
     const selectedCells = locationScope.cellIds?.length ?? locationScope.zipCodes.length;
@@ -586,8 +626,6 @@ export function DashboardClient({
     setLoading(false);
   };
 
-  const [showCategories, setShowCategories] = useState(false);
-
   const pollEnrichment = useCallback(async () => {
     try {
       const res = await fetch("/api/crawl/enrich-next", { method: "POST" });
@@ -682,9 +720,16 @@ export function DashboardClient({
   const visibleRun = discoveryItems.find((item) => item.id === stats.runId) ?? null;
   const pausedDiscoveryItems = discoveryItems.filter((item) => item.status === "paused");
   const selectedCellCount = locationScope.cellIds?.length ?? locationScope.zipCodes.length;
-  const selectedMarketLabel = locationScope.countryCode
+  const selectedMarketLabel = locationScope.marketLabel ?? (locationScope.countryCode
     ? `${locationScope.countryCode}${locationScope.marketId ? ` · ${locationScope.marketId}` : ""}`
-    : locationScope.marketId || locationScope.state || "No country";
+    : locationScope.marketId || locationScope.state || "No country");
+  const selectedCellLabels = locationScope.cellLabels ?? [];
+  const selectedCellSummary = selectedCellLabels.length > 0
+    ? selectedCellLabels.slice(0, 3).join(", ") + (selectedCellLabels.length > 3 ? ` +${selectedCellLabels.length - 3} more` : "")
+    : selectedCellCount > 0 ? `${selectedCellCount} selected` : "No cells selected";
+  const selectedCategorySummary = selectedCategories.length > 0
+    ? selectedCategories.map(formatCategoryLabel).slice(0, 4).join(", ") + (selectedCategories.length > 4 ? ` +${selectedCategories.length - 4} more` : "")
+    : "No categories selected";
   const estimatedUnitCount = selectedCellCount * selectedCategories.length;
   const hasEstimateSelection = selectedCellCount > 0 && selectedCategories.length > 0;
   const activeSizeEstimate = hasEstimateSelection ? sizeEstimate : null;
@@ -693,7 +738,9 @@ export function DashboardClient({
   const startDisabled = coreStatus !== "ready"
     || loading
     || selectedCategories.length === 0
-    || selectedCellCount === 0;
+    || selectedCellCount === 0
+    || activeSizeEstimateStatus !== "ready"
+    || activeSizeEstimate?.canStart !== true;
   const progress = stats.progress;
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
   const activeWorkerCount = stats.schedulerHealth.workers.filter((worker) => worker.enabled).length;
@@ -702,9 +749,12 @@ export function DashboardClient({
   const workerIssueCount = stats.schedulerHealth.workers.filter((worker) => worker.enabled && worker.warning).length;
   const contactsThisWeek = currentTeamSummary.members.reduce((sum, member) => sum + member.contacts_7d, 0);
   const claimedActive = currentTeamSummary.members.reduce((sum, member) => sum + member.claimed_active, 0);
+  const startConfirmationMessage = activeSizeEstimate
+    ? `Area: ${selectedMarketLabel}. Cells: ${selectedCellSummary}. Categories: ${selectedCategorySummary}. ${activeSizeEstimate.estimatedSearchCalls.toLocaleString()} max Google calls, ${activeSizeEstimate.estimatedMaxRawPlaces.toLocaleString()} max raw places, ${formatCurrencyPrecise(activeSizeEstimate.estimatedMarginalCostUsd)} estimated marginal cost, ${formatDuration(activeSizeEstimate.estimatedDurationSeconds)} estimated runtime. Cap: ${activeSizeEstimate.remainingMonthlyCallCap === null ? "external quota" : `${activeSizeEstimate.remainingMonthlyCallCap.toLocaleString()} calls remaining under ${formatCapSourceLabel(activeSizeEstimate.capSource)}`}.`
+    : "Select cells and categories, then wait for the run scope estimate before starting discovery.";
   const openStartConfirmation = () => setConfirmAction({
     title: "Start discovery run?",
-    message: `Country/area: ${selectedMarketLabel}. Cells selected: ${selectedCellCount}. Categories selected: ${selectedCategories.length}. Estimated crawl units: ${estimatedUnitCount}. Google calls: ${activeSizeEstimate?.estimatedSearchCalls ?? "unknown"} max. Mode: ${discoveryMode.replace(/_/g, " ")}.`,
+    message: startConfirmationMessage,
     action: handleStart,
   });
   const applyTestRunPreset = () => {
@@ -712,13 +762,17 @@ export function DashboardClient({
       state: "CO",
       counties: [],
       zipCodes: [],
+      countryCode: "US",
       marketId: "market-colorado",
+      marketLabel: "Colorado, CO",
       cellIds: ["cell-us-co-80202"],
+      cellLabels: ["Denver CO 80202"],
     });
     setSelectedCategories(["dentist"]);
     setDiscoveryMode("coverage_probe");
     setPaginationPolicy("auto_yield_based");
-    setShowCategories(true);
+    setTestRun(true);
+    setLocationPickerResetKey((value) => value + 1);
   };
 
   return (
@@ -838,15 +892,7 @@ export function DashboardClient({
                 Start Discovery
               </button>
               <button type="button" className="btn-glass" onClick={applyTestRunPreset} disabled={loading}>
-                Use test run preset
-              </button>
-              <button
-                type="button"
-                className="text-xs font-medium underline underline-offset-2"
-                style={{ color: "var(--accent)" }}
-                onClick={() => setShowCategories((o) => !o)}
-              >
-                {showCategories ? "Hide categories" : "Choose categories"}
+                Denver dentist preset
               </button>
               <HelpTip>Coverage probes measure market yield without creating active leads. Lead harvest creates active leads with richer Google fields.</HelpTip>
             </>
@@ -890,7 +936,7 @@ export function DashboardClient({
         </div>
 
         {isIdle && (
-          <div className="mt-4 grid gap-3 lg:grid-cols-[0.9fr_0.9fr_0.7fr_1.4fr]">
+          <div className="mt-4 grid gap-3 lg:grid-cols-[0.9fr_0.9fr_0.9fr]">
             <label className="rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
               <span className="mb-1 block font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Discovery mode</span>
               <select className="glass-input w-full" value={discoveryMode} onChange={(event) => setDiscoveryMode(event.target.value as DiscoveryMode)} disabled={loading}>
@@ -901,26 +947,21 @@ export function DashboardClient({
             <label className="rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
               <span className="mb-1 block font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Pagination</span>
               <select className="glass-input w-full" value={paginationPolicy} onChange={(event) => setPaginationPolicy(event.target.value as PaginationPolicy)} disabled={loading}>
-                <option value="auto_yield_based">Auto yield-based</option>
                 <option value="first_page_only">First page only</option>
-                <option value="manual_extra_pages">Manual extra pages</option>
+                <option value="auto_yield_based">Auto if yield is strong</option>
+                <option value="manual_extra_pages">Always fetch up to 3 pages</option>
               </select>
             </label>
-            <div className="rounded-xl p-3 text-xs" style={{ background: activeSizeEstimate?.canStart === false ? "rgba(239,68,68,0.08)" : "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
-              <p className="font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Discovery size estimate</p>
-              {activeSizeEstimateStatus === "idle" && <p className="mt-1">Select cells and categories to preview run size.</p>}
-              {activeSizeEstimateStatus === "loading" && <p className="mt-1">Estimating...</p>}
-              {activeSizeEstimateStatus === "error" && <p className="mt-1 text-red-700">{activeSizeEstimateError ?? "Unable to estimate."}</p>}
-              {activeSizeEstimate && (
-                <div className="mt-1 space-y-1">
-                  <p><strong>{activeSizeEstimate.estimatedSearchCalls}</strong> max calls · up to {activeSizeEstimate.estimatedMaxRawPlaces} raw places</p>
-                  <p>{activeSizeEstimate.sku.replace(/_/g, " ")}</p>
-                  {discoveryMode === "coverage_probe" && <p>Probe mode records candidates but does not add active leads.</p>}
-                  {discoveryMode === "lead_harvest" && <p>Lead harvest creates active leads and uses richer Google fields.</p>}
-                  {activeSizeEstimate.warnings.map((warning) => <p key={warning} className="text-red-700">{warning}</p>)}
-                </div>
-              )}
-            </div>
+            <label className="rounded-xl p-3 text-xs" style={{ background: testRun ? "rgba(22,101,52,0.08)" : "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+              <span className="mb-2 block font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Safety</span>
+              <span className="flex items-center gap-2">
+                <input type="checkbox" checked={testRun} disabled={loading} onChange={(event) => setTestRun(event.target.checked)} />
+                Test capped run
+              </span>
+              <span className="mt-2 block leading-5" style={{ color: "var(--text-tertiary)" }}>
+                Uses the smaller test-run cap before the monthly Google cap.
+              </span>
+            </label>
           </div>
         )}
 
@@ -932,16 +973,24 @@ export function DashboardClient({
           </div>
         )}
 
-        {isIdle && showCategories && (
+        {isIdle && (
           <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)" }}>
-            <div className="mb-3 flex items-center gap-3">
-              <button type="button" className="text-xs font-medium" style={{ color: "var(--accent)" }} onClick={() => setSelectedCategories([...CATEGORY_OPTIONS])}>
-                Select All
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <p className="mr-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Categories</p>
+              {CATEGORY_PRESETS.map((preset) => (
+                <button key={preset.label} type="button" className="btn-glass text-xs" onClick={() => setSelectedCategories(preset.categories)}>
+                  {preset.label}
+                </button>
+              ))}
+              <button type="button" className="btn-glass text-xs" onClick={() => setSelectedCategories([])}>
+                Clear
               </button>
-              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>|</span>
-              <button type="button" className="text-xs font-medium" style={{ color: "var(--accent)" }} onClick={() => setSelectedCategories([])}>
-                Clear All
+              <button type="button" className="btn-glass text-xs" onClick={() => setSelectedCategories([...CATEGORY_OPTIONS])}>
+                All categories
               </button>
+              <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
+                {selectedCategories.length} selected
+              </span>
             </div>
             <div className="flex flex-wrap gap-2">
               {CATEGORY_OPTIONS.map((cat) => (
@@ -956,7 +1005,7 @@ export function DashboardClient({
                     border: `1px solid ${selectedCategories.includes(cat) ? "var(--accent)" : "rgba(255,255,255,0.5)"}`,
                   }}
                 >
-                  {cat.replace(/_/g, " ")}
+                  {formatCategoryLabel(cat)}
                 </button>
               ))}
             </div>
@@ -964,18 +1013,34 @@ export function DashboardClient({
         )}
 
         <LocationScopePicker
+          key={locationPickerResetKey}
           value={locationScope}
           categories={selectedCategories}
           disabled={loading || !isIdle}
           onChange={setLocationScope}
         />
+        <RunScopePanel
+          estimate={activeSizeEstimate}
+          status={activeSizeEstimateStatus}
+          error={activeSizeEstimateError}
+          selectedMarketLabel={selectedMarketLabel}
+          selectedCellSummary={selectedCellSummary}
+          selectedCellCount={selectedCellCount}
+          selectedCategorySummary={selectedCategorySummary}
+          selectedCategoryCount={selectedCategories.length}
+          estimatedUnitCount={estimatedUnitCount}
+          discoveryMode={discoveryMode}
+          paginationPolicy={paginationPolicy}
+          testRun={testRun}
+        />
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
-          <SummaryChip label={`Country/area: ${selectedMarketLabel}`} />
+          <SummaryChip label={`Area: ${selectedMarketLabel}`} />
           <SummaryChip label={`Cells: ${selectedCellCount}`} />
           <SummaryChip label={`Categories: ${selectedCategories.length}`} />
           <SummaryChip label={`Estimated units: ${estimatedUnitCount}`} />
-          <SummaryChip label={`Mode: ${discoveryMode.replace(/_/g, " ")}`} />
-          <SummaryChip label={`Google calls: ${activeSizeEstimate?.estimatedSearchCalls ?? "select cells"}`} />
+          <SummaryChip label={`Mode: ${formatDiscoveryModeLabel(discoveryMode)}`} />
+          <SummaryChip label={`Pagination: ${formatPaginationPolicyLabel(paginationPolicy)}`} />
+          <SummaryChip label={`Google calls: ${activeSizeEstimate?.estimatedSearchCalls.toLocaleString() ?? "select cells"}`} />
         </div>
 
         {progress && progress.total > 0 && (
@@ -1313,6 +1378,102 @@ function DiscoveryItemCard({
   );
 }
 
+function RunScopePanel({
+  estimate,
+  status,
+  error,
+  selectedMarketLabel,
+  selectedCellSummary,
+  selectedCellCount,
+  selectedCategorySummary,
+  selectedCategoryCount,
+  estimatedUnitCount,
+  discoveryMode,
+  paginationPolicy,
+  testRun,
+}: {
+  estimate: DiscoverySizeEstimate | null;
+  status: "idle" | "loading" | "ready" | "error";
+  error: string | null;
+  selectedMarketLabel: string;
+  selectedCellSummary: string;
+  selectedCellCount: number;
+  selectedCategorySummary: string;
+  selectedCategoryCount: number;
+  estimatedUnitCount: number;
+  discoveryMode: DiscoveryMode;
+  paginationPolicy: PaginationPolicy;
+  testRun: boolean;
+}) {
+  const blocked = estimate?.canStart === false;
+  return (
+    <section
+      className="mt-4 rounded-xl p-4"
+      style={{
+        background: blocked ? "rgba(239,68,68,0.08)" : "rgba(255,255,255,0.28)",
+        border: blocked ? "1px solid rgba(239,68,68,0.18)" : "1px solid rgba(255,255,255,0.38)",
+      }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="section-label">Run scope</h3>
+          <p className="mt-1 max-w-3xl text-sm" style={{ color: "var(--text-secondary)" }}>
+            {selectedMarketLabel} · {selectedCellSummary} · {selectedCategorySummary}
+          </p>
+        </div>
+        <DiscoveryStatusBadge status={blocked ? "error" : status === "ready" ? "ready" : status} />
+      </div>
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <DiscoveryMiniMetric label="Cells" value={selectedCellCount.toLocaleString()} />
+        <DiscoveryMiniMetric label="Categories" value={selectedCategoryCount.toLocaleString()} />
+        <DiscoveryMiniMetric label="Units" value={estimatedUnitCount.toLocaleString()} />
+        <DiscoveryMiniMetric label="Mode" value={formatDiscoveryModeLabel(discoveryMode)} />
+        <DiscoveryMiniMetric label="Pagination" value={formatPaginationPolicyLabel(paginationPolicy)} />
+        <DiscoveryMiniMetric label="Test capped" value={testRun ? "On" : "Off"} />
+        <DiscoveryMiniMetric label="Max calls" value={estimate ? estimate.estimatedSearchCalls.toLocaleString() : "select scope"} />
+        <DiscoveryMiniMetric label="Max raw places" value={estimate ? estimate.estimatedMaxRawPlaces.toLocaleString() : "select scope"} />
+        <DiscoveryMiniMetric label="Search radius" value={estimate ? `${estimate.searchRadiusKm} km` : "select scope"} />
+        <DiscoveryMiniMetric label="Duration" value={estimate ? formatDuration(estimate.estimatedDurationSeconds) : "select scope"} />
+        <DiscoveryMiniMetric label="Estimated cost" value={estimate ? formatCurrencyPrecise(estimate.estimatedMarginalCostUsd) : "select scope"} />
+        <DiscoveryMiniMetric
+          label="Cap remaining"
+          value={estimate
+            ? estimate.remainingMonthlyCallCap === null
+              ? formatCapSourceLabel(estimate.capSource)
+              : `${estimate.remainingMonthlyCallCap.toLocaleString()} calls`
+            : "select scope"}
+        />
+      </div>
+
+      {status === "idle" && (
+        <p className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>
+          Select at least one postal cell and one category to preview Google calls, cost, cap, radius, and duration.
+        </p>
+      )}
+      {status === "loading" && (
+        <p className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>Estimating run scope...</p>
+      )}
+      {status === "error" && (
+        <p className="mt-3 text-xs text-red-700">{error ?? "Unable to estimate discovery size."}</p>
+      )}
+      {estimate && (
+        <div className="mt-3 space-y-1 text-xs">
+          <p style={{ color: "var(--text-tertiary)" }}>
+            SKU: {estimate.sku.replace(/_/g, " ")} · Cap source: {formatCapSourceLabel(estimate.capSource)} · Current month for SKU: {estimate.monthlyBillableEventsForSku.toLocaleString()} billable calls.
+          </p>
+          {estimate.blockingReasons.map((reason) => (
+            <p key={reason} className="font-medium text-red-700">{reason}</p>
+          ))}
+          {estimate.warnings.map((warning) => (
+            <p key={warning} style={{ color: "#92400e" }}>{warning}</p>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function TeamMemberCard({ member }: { member: TeamBoardSummary["members"][number] }) {
   return (
     <article
@@ -1423,6 +1584,16 @@ function SummaryChip({ label }: { label: string }) {
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
+function formatCurrencyPrecise(value: number): string {
+  const maximumFractionDigits = value > 0 && value < 1 ? 4 : 2;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits,
+  }).format(value);
 }
 
 function formatDateTime(value: string): string {

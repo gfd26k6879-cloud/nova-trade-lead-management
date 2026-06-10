@@ -283,6 +283,32 @@ describe("crawl worker integration", () => {
     expect(secondCallArgs[1]).toBe("page2-token");
   });
 
+  it("does not let pagination policy exceed the stored unit page cap", async () => {
+    const runId = seedTestRun(testDb);
+    testDb.prepare(
+      "UPDATE crawl_runs SET selection_json = ? WHERE id = ?",
+    ).run(JSON.stringify({ discoveryMode: "lead_harvest", paginationPolicy: "manual_extra_pages" }), runId);
+    seedTestUnit(testDb, { runId, maxPages: 1 });
+
+    const page1Places = Array.from({ length: 6 }, (_, index) => makePlaceResult({ id: `places/capped-page1-${index}` }));
+    const page2Place = makePlaceResult({ id: "places/capped-page2" });
+
+    mockTextSearch
+      .mockResolvedValueOnce(mockTextSearchResponse(page1Places, "page2-token"))
+      .mockResolvedValueOnce(mockTextSearchResponse([page2Place]));
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("processed");
+    expect(result.apiCalls).toBe(1);
+    expect(mockTextSearch).toHaveBeenCalledTimes(1);
+
+    const unit = testDb.prepare("SELECT max_pages, pages_fetched, next_page_token FROM crawl_units WHERE id = 'unit-1'").get() as Record<string, unknown>;
+    expect(unit.max_pages).toBe(1);
+    expect(unit.pages_fetched).toBe(1);
+    expect(unit.next_page_token).toBeNull();
+  });
+
   it("records multi-page coverage probes without creating active leads", async () => {
     const runId = seedTestRun(testDb);
     testDb.prepare(

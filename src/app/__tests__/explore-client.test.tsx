@@ -64,4 +64,15 @@ describe("ExploreClient search surface", () => {
     expect(renderExplore("admin")).toContain("Add Lead");
     expect(renderExplore("researcher")).not.toContain("Add Lead");
   });
+
+  it("keeps discovery launch links admin-only in the empty state", () => {
+    currentParams = new URLSearchParams("city=nowhere");
+
+    const adminHtml = renderExplore("admin");
+    const researcherHtml = renderExplore("researcher");
+
+    expect(adminHtml).toContain("Start discovery / harvest");
+    expect(researcherHtml).not.toContain("Start discovery / harvest");
+    expect(researcherHtml).toContain("Ask an admin to harvest this market");
+  });
 });

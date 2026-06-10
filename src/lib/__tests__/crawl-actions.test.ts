@@ -33,6 +33,7 @@ import {
   getCoverageSelectedRunAction,
   getDashboardAnalyticsAction,
   getDashboardStatsAction,
+  estimateDiscoveryRunAction,
   promoteProbeToLeadHarvestAction,
   resumeCrawlRunAction,
   retryFailedUnitsAction,
@@ -53,6 +54,47 @@ afterEach(() => {
 });
 
 describe("crawl discovery item actions", () => {
+  it("returns a blocked estimate when the Text Search cap is exhausted", async () => {
+    testDb.prepare(
+      `INSERT INTO api_usage_events (id, endpoint, sku, billable_units)
+       VALUES ('usage-1', 'places.searchText', 'places_text_search_pro', 4900)`,
+    ).run();
+
+    const result = await estimateDiscoveryRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: false,
+    });
+
+    expect("error" in result).toBe(false);
+    expect("canStart" in result ? result.canStart : true).toBe(false);
+    expect("blockingReasons" in result ? result.blockingReasons[0] : "").toContain("only 0 remain");
+  });
+
+  it("blocks starting a discovery item before creating a run when the cap is exhausted", async () => {
+    testDb.prepare(
+      `INSERT INTO api_usage_events (id, endpoint, sku, billable_units)
+       VALUES ('usage-1', 'places.searchText', 'places_text_search_pro', 4900)`,
+    ).run();
+
+    const result = await startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: false,
+    });
+
+    expect("error" in result ? result.error : "").toContain("only 0 remain");
+    expect(testDb.prepare("SELECT COUNT(*) AS count FROM crawl_runs").get()).toMatchObject({ count: 0 });
+  });
+
   it("starts a new discovery item when only a paused item exists", async () => {
     seedTestRun(testDb, { id: "paused-run", status: "paused" });
 
@@ -126,6 +168,21 @@ describe("crawl discovery item actions", () => {
     expect(result).toMatchObject({ retriedCount: 1 });
     expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'paused-unit'").get()).toMatchObject({ status: "pending" });
     expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'other-unit'").get()).toMatchObject({ status: "failed" });
+  });
+
+  it("blocks retrying failed units when the cap is exhausted", async () => {
+    seedTestRun(testDb, { id: "failed-run", status: "error" });
+    seedTestUnit(testDb, { id: "failed-unit", runId: "failed-run" });
+    testDb.prepare("UPDATE crawl_units SET status = 'failed' WHERE id = 'failed-unit'").run();
+    testDb.prepare(
+      `INSERT INTO api_usage_events (id, endpoint, sku, billable_units)
+       VALUES ('usage-1', 'places.searchText', 'places_text_search_pro', 4900)`,
+    ).run();
+
+    const result = await retryFailedUnitsAction("failed-run");
+
+    expect("error" in result ? result.error : "").toContain("only 0 remain");
+    expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'failed-unit'").get()).toMatchObject({ status: "failed" });
   });
 
   it("loads selected discovery item metadata without mutating the run", async () => {

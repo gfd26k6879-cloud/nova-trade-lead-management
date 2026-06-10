@@ -1,8 +1,8 @@
 "use client";
 
-import { type FormEvent, useEffect, useState } from "react";
+import { type CSSProperties, type FormEvent, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { HelpTip } from "@/components/help-tip";
 import { PageShell } from "@/components/page-shell";
@@ -20,6 +20,7 @@ interface Props {
 }
 
 type ContactChannel = "call" | "text" | "email" | "walkin";
+type WorkbenchView = "cards" | "sheet";
 
 type LogDraft = {
   channel: ContactChannel;
@@ -41,13 +42,30 @@ const OUTCOME_OPTIONS: Array<{ value: OutreachOutcome; label: string }> = [
   { value: "not_interested", label: "Not interested" },
 ];
 
+const stickyColumnStyle: CSSProperties = {
+  position: "sticky",
+  left: 0,
+  zIndex: 2,
+  minWidth: "19rem",
+  background: "rgba(255,255,255,0.97)",
+  boxShadow: "1px 0 0 rgba(15,23,42,0.08)",
+};
+
 export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [busyLeadId, setBusyLeadId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [activeLogLead, setActiveLogLead] = useState<QueueLead | null>(null);
   const [logDraft, setLogDraft] = useState<LogDraft>(createLogDraft("call"));
   const [requestBusy, setRequestBusy] = useState<AdminRequestType | null>(null);
+  const view = normalizeWorkbenchView(searchParams.get("view"));
+
+  const setView = useCallback((nextView: WorkbenchView) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("view", nextView);
+    router.push(`/queue?${params.toString()}`);
+  }, [router, searchParams]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -79,9 +97,11 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
     setBusyLeadId(null);
   };
 
-  const openLogSheet = (lead: QueueLead, channel: ContactChannel) => {
+  const openLogSheet = (lead: QueueLead, channel: ContactChannel, outcome?: OutreachOutcome) => {
     setActiveLogLead(lead);
-    setLogDraft(createLogDraft(channel, lead.next_best_action ?? undefined));
+    const nextDraft = createLogDraft(channel, lead.next_best_action ?? undefined);
+    if (outcome) nextDraft.outcome = outcome;
+    setLogDraft(nextDraft);
   };
 
   const closeLogSheet = () => {
@@ -153,56 +173,85 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
         </div>
       )}
 
-      <section className="glass rounded-2xl p-5">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <section className="glass rounded-2xl p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="section-label">Your next action</h3>
+            <h3 className="section-label">Workbench view</h3>
             <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-              Start here, then use Log outcome after every call, text, email, or in-person visit.
+              Use Cards for the guided workflow or Sheet for fast row-by-row outreach.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Link href="/leads?assigned=me" className="btn-glass text-sm">Open My Leads</Link>
-            <Link href="/explore" className="btn-primary text-sm">Find Leads</Link>
+          <div className="flex flex-wrap gap-2" aria-label="Workbench view">
+            <SegmentButton active={view === "cards"} onClick={() => setView("cards")}>Cards</SegmentButton>
+            <SegmentButton active={view === "sheet"} onClick={() => setView("sheet")}>Sheet</SegmentButton>
           </div>
         </div>
-        {workbench.nextAction ? (
-          <LeadActionCard
-            lead={workbench.nextAction}
-            scoreThresholds={scoreThresholds}
-            busy={busyLeadId === workbench.nextAction.id}
-            currentUserId={currentUser.userId}
-            onClaim={claimLead}
-            onRelease={releaseLead}
-            onOpenLogSheet={openLogSheet}
-            prominent
-          />
-        ) : (
-          <EmptyState text="No claimed lead needs action yet. Use Lead Explorer to find and claim your next lead." />
-        )}
       </section>
 
-      <section className="glass rounded-2xl p-5">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="section-label">My claimed leads</h3>
-            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-              This page only shows leads assigned to you.
-            </p>
-          </div>
-          <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>{workbench.myLeads.length}</span>
-        </div>
-        <LeadList
-          leads={workbench.myLeads}
+      {view === "sheet" ? (
+        <WorkbenchSheetView
+          workbench={workbench}
           scoreThresholds={scoreThresholds}
           busyLeadId={busyLeadId}
           currentUserId={currentUser.userId}
           onClaim={claimLead}
           onRelease={releaseLead}
           onOpenLogSheet={openLogSheet}
-          emptyText="You have no claimed leads. Use Lead Explorer to claim one."
         />
-      </section>
+      ) : (
+        <>
+          <section className="glass rounded-2xl p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="section-label">Your next action</h3>
+                <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+                  Start here, then use Log outcome after every call, text, email, or in-person visit.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Link href="/leads?assigned=me" className="btn-glass text-sm">Open My Leads</Link>
+                <Link href="/explore" className="btn-primary text-sm">Find Leads</Link>
+              </div>
+            </div>
+            {workbench.nextAction ? (
+              <LeadActionCard
+                lead={workbench.nextAction}
+                scoreThresholds={scoreThresholds}
+                busy={busyLeadId === workbench.nextAction.id}
+                currentUserId={currentUser.userId}
+                onClaim={claimLead}
+                onRelease={releaseLead}
+                onOpenLogSheet={openLogSheet}
+                prominent
+              />
+            ) : (
+              <EmptyState text="No claimed lead needs action yet. Use Lead Explorer to find and claim your next lead." />
+            )}
+          </section>
+
+          <section className="glass rounded-2xl p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="section-label">My claimed leads</h3>
+                <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+                  This page only shows leads assigned to you.
+                </p>
+              </div>
+              <span className="text-sm" style={{ color: "var(--text-tertiary)" }}>{workbench.myLeads.length}</span>
+            </div>
+            <LeadList
+              leads={workbench.myLeads}
+              scoreThresholds={scoreThresholds}
+              busyLeadId={busyLeadId}
+              currentUserId={currentUser.userId}
+              onClaim={claimLead}
+              onRelease={releaseLead}
+              onOpenLogSheet={openLogSheet}
+              emptyText="You have no claimed leads. Use Lead Explorer to claim one."
+            />
+          </section>
+        </>
+      )}
 
       <LogOutcomeSheet
         lead={activeLogLead}
@@ -234,7 +283,7 @@ function LeadList({
   currentUserId: string;
   onClaim: (leadId: string) => void;
   onRelease: (leadId: string) => void;
-  onOpenLogSheet: (lead: QueueLead, channel: ContactChannel) => void;
+  onOpenLogSheet: (lead: QueueLead, channel: ContactChannel, outcome?: OutreachOutcome) => void;
   emptyText: string;
 }) {
   if (leads.length === 0) return <EmptyState text={emptyText} />;
@@ -256,6 +305,252 @@ function LeadList({
   );
 }
 
+function WorkbenchSheetView({
+  workbench,
+  scoreThresholds,
+  busyLeadId,
+  currentUserId,
+  onClaim,
+  onRelease,
+  onOpenLogSheet,
+}: {
+  workbench: ResearcherWorkbench;
+  scoreThresholds: ScoreBandThresholds;
+  busyLeadId: string | null;
+  currentUserId: string;
+  onClaim: (leadId: string) => void;
+  onRelease: (leadId: string) => void;
+  onOpenLogSheet: (lead: QueueLead, channel: ContactChannel, outcome?: OutreachOutcome) => void;
+}) {
+  const hasRows = workbench.myLeads.length > 0 || workbench.unclaimedLeads.length > 0;
+
+  return (
+    <section className="glass rounded-2xl p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="section-label">Sheet view</h3>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+            Scan claimed and unclaimed leads in rows. Claim first, then log outcomes from the row.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/leads?assigned=me" className="btn-glass text-sm">Open My Leads</Link>
+          <Link href="/explore" className="btn-primary text-sm">Find Leads</Link>
+        </div>
+      </div>
+
+      {!hasRows ? (
+        <EmptyState text="No workbench leads yet. Use Lead Explorer to claim your next lead." />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="glass-table min-w-[1380px]" aria-label="Workbench sheet">
+            <thead>
+              <tr>
+                <th style={stickyColumnStyle}>Business / phone</th>
+                <th>Address</th>
+                <th>Owner</th>
+                <th>Website</th>
+                <th>AI</th>
+                <th>Quality</th>
+                <th>Score</th>
+                <th>Last touch</th>
+                <th>Follow-up</th>
+                <th>Next step</th>
+                <th>Outcome</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <SheetGroupRows
+                label="Mine"
+                leads={workbench.myLeads}
+                scoreThresholds={scoreThresholds}
+                busyLeadId={busyLeadId}
+                currentUserId={currentUserId}
+                onClaim={onClaim}
+                onRelease={onRelease}
+                onOpenLogSheet={onOpenLogSheet}
+              />
+              <SheetGroupRows
+                label="Unclaimed"
+                leads={workbench.unclaimedLeads}
+                scoreThresholds={scoreThresholds}
+                busyLeadId={busyLeadId}
+                currentUserId={currentUserId}
+                onClaim={onClaim}
+                onRelease={onRelease}
+                onOpenLogSheet={onOpenLogSheet}
+              />
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SheetGroupRows({
+  label,
+  leads,
+  scoreThresholds,
+  busyLeadId,
+  currentUserId,
+  onClaim,
+  onRelease,
+  onOpenLogSheet,
+}: {
+  label: string;
+  leads: QueueLead[];
+  scoreThresholds: ScoreBandThresholds;
+  busyLeadId: string | null;
+  currentUserId: string;
+  onClaim: (leadId: string) => void;
+  onRelease: (leadId: string) => void;
+  onOpenLogSheet: (lead: QueueLead, channel: ContactChannel, outcome?: OutreachOutcome) => void;
+}) {
+  if (leads.length === 0) return null;
+
+  return (
+    <>
+      <tr>
+        <td colSpan={12} className="text-xs font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)", background: "rgba(255,255,255,0.38)" }}>
+          {label} ({leads.length})
+        </td>
+      </tr>
+      {leads.map((lead) => (
+        <WorkbenchSheetRow
+          key={`${label}-${lead.id}`}
+          lead={lead}
+          scoreThresholds={scoreThresholds}
+          busy={busyLeadId === lead.id}
+          currentUserId={currentUserId}
+          onClaim={onClaim}
+          onRelease={onRelease}
+          onOpenLogSheet={onOpenLogSheet}
+        />
+      ))}
+    </>
+  );
+}
+
+function WorkbenchSheetRow({
+  lead,
+  scoreThresholds,
+  busy,
+  currentUserId,
+  onClaim,
+  onRelease,
+  onOpenLogSheet,
+}: {
+  lead: QueueLead;
+  scoreThresholds: ScoreBandThresholds;
+  busy: boolean;
+  currentUserId: string;
+  onClaim: (leadId: string) => void;
+  onRelease: (leadId: string) => void;
+  onOpenLogSheet: (lead: QueueLead, channel: ContactChannel, outcome?: OutreachOutcome) => void;
+}) {
+  const isMine = lead.assigned_to_user_id === currentUserId;
+  const phoneHref = getPhoneHref(lead.phone);
+
+  return (
+    <tr>
+      <td style={stickyColumnStyle}>
+        <Link href={`/leads/${lead.id}`} prefetch={false} className="link-accent block max-w-[19rem] break-words font-semibold">
+          {lead.name ?? "Unknown business"}
+        </Link>
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+          {phoneHref ? (
+            <a href={phoneHref} className="link-accent">{lead.phone}</a>
+          ) : (
+            <span style={{ color: "var(--text-tertiary)" }}>No phone</span>
+          )}
+          <span style={{ color: "var(--text-tertiary)" }}>{formatLabel(lead.business_type)}</span>
+        </div>
+      </td>
+      <td className="max-w-[16rem] break-words">{lead.address ?? "No address"}</td>
+      <td><OwnerBadge lead={lead} currentUserId={currentUserId} /></td>
+      <td>
+        <div className="space-y-1">
+          <span>{formatLabel(lead.website_status)}</span>
+          {lead.demo_slug && <div className="text-xs" style={{ color: "var(--text-tertiary)" }}>Demo ready</div>}
+        </div>
+      </td>
+      <td>
+        <AiVerificationBadge
+          status={lead.ai_verification_status}
+          checkedAt={lead.ai_checked_at}
+          queueStatus={lead.ai_queue_status}
+          viability={lead.ai_website_viability_status}
+          confidence={lead.ai_confidence}
+          compact
+        />
+      </td>
+      <td>
+        <div className="space-y-1">
+          <div>{formatLabel(lead.quality_bucket)}</div>
+          <div className="text-xs" style={{ color: "var(--text-tertiary)" }}>{formatCurrency(lead.estimated_deal_value)}</div>
+        </div>
+      </td>
+      <td>
+        <div className="space-y-1">
+          <ScoreBandBadge score={lead.score} thresholds={scoreThresholds} compact />
+          <div className="text-xs" style={{ color: "var(--text-tertiary)" }}>Priority {Math.round(lead.sales_priority_score)}</div>
+        </div>
+      </td>
+      <td>{lead.last_contacted_at ? formatDate(lead.last_contacted_at) : "Never"}</td>
+      <td>{lead.reminder_date ? formatDate(lead.reminder_date) : "—"}</td>
+      <td className="max-w-[18rem] break-words">{lead.next_best_action ?? lead.quality_reason ?? "Call and confirm owner interest."}</td>
+      <td>
+        {isMine ? (
+          <select
+            className="glass-select min-w-40 text-xs"
+            aria-label={`Outcome for ${lead.name ?? "lead"}`}
+            value=""
+            disabled={busy}
+            onChange={(event) => {
+              const outcome = event.target.value as OutreachOutcome;
+              if (outcome) onOpenLogSheet(lead, "call", outcome);
+            }}
+          >
+            <option value="">Choose outcome</option>
+            {OUTCOME_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        ) : (
+          <select className="glass-select min-w-36 text-xs" aria-label={`Outcome for ${lead.name ?? "lead"}`} disabled defaultValue="">
+            <option value="">Claim first</option>
+          </select>
+        )}
+      </td>
+      <td>
+        <div className="flex min-w-[24rem] flex-wrap gap-2">
+          {isMine ? (
+            <>
+              {phoneHref ? <a className="btn-primary px-3 py-1.5 text-xs" href={phoneHref}>Call</a> : <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled>No phone</button>}
+              <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onOpenLogSheet(lead, "text")}>Text</button>
+              <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onOpenLogSheet(lead, "email")}>Email</button>
+              <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onOpenLogSheet(lead, "walkin")}>In person</button>
+              <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass px-3 py-1.5 text-xs">Open</Link>
+              <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onRelease(lead.id)}>
+                {busy ? "Releasing..." : "Release"}
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={busy} onClick={() => onClaim(lead.id)}>
+                {busy ? "Claiming..." : "Claim"}
+              </button>
+              <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass px-3 py-1.5 text-xs">Open</Link>
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 function LeadActionCard({
   lead,
   scoreThresholds,
@@ -272,7 +567,7 @@ function LeadActionCard({
   currentUserId: string;
   onClaim: (leadId: string) => void;
   onRelease: (leadId: string) => void;
-  onOpenLogSheet: (lead: QueueLead, channel: ContactChannel) => void;
+  onOpenLogSheet: (lead: QueueLead, channel: ContactChannel, outcome?: OutreachOutcome) => void;
   prominent?: boolean;
 }) {
   const isMine = lead.assigned_to_user_id === currentUserId;
@@ -583,6 +878,41 @@ function formatDate(value: string): string {
     day: "numeric",
     year: "numeric",
   }).format(date);
+}
+
+function formatLabel(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatCurrency(value: number): string {
+  if (!value) return "No value estimate";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function getPhoneHref(phone: string | null): string | null {
+  if (!phone) return null;
+  const clean = phone.replace(/[^\d+]/g, "");
+  return clean ? `tel:${clean}` : null;
+}
+
+function normalizeWorkbenchView(value: string | null): WorkbenchView {
+  return value === "sheet" ? "sheet" : "cards";
+}
+
+function SegmentButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" className={`btn-glass text-sm ${active ? "nav-link-active" : ""}`} onClick={onClick}>
+      {children}
+    </button>
+  );
 }
 
 function MetaChip({ label }: { label: string }) {

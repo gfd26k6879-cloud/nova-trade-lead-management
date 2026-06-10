@@ -22,6 +22,7 @@ import {
   createAuditLog,
   getRunApiUsageSummary,
   getMonthlyApiUsageSummary,
+  getMonthlyBillableEventsForSku,
   getRunLastError,
   getFailedUnitErrors,
   getStatesWithCounts,
@@ -40,6 +41,7 @@ import {
   getDiscoveryRunCandidates,
   getSelectedOrDefaultVisibleCrawlRun,
   getLatestPausedCrawlRun,
+  getCrawlRunRemainingSearchCalls,
   listDiscoveryItems,
   type DiscoveryItemSummary,
   getSettings,
@@ -68,6 +70,7 @@ import {
   estimateDiscoveryRunSize,
   normalizeDiscoveryMode,
   normalizePaginationPolicy,
+  type DiscoverySizeInput,
   type DiscoverySizeEstimate,
 } from "@/lib/discovery-sizing";
 import { startRouteTiming } from "@/lib/route-timing";
@@ -98,6 +101,38 @@ const schedulerWorkerSchema = z.enum(["ai_verification", "crawl", "enrichment", 
 
 function normalizeDistinct(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)));
+}
+
+async function estimateDiscoveryRunSizeWithUsage(
+  input: Omit<DiscoverySizeInput, "monthlyBillableEventsForSku">,
+): Promise<DiscoverySizeEstimate> {
+  const preliminary = estimateDiscoveryRunSize({ ...input, monthlyBillableEventsForSku: 0 });
+  const monthlyBillableEventsForSku = await getMonthlyBillableEventsForSku(preliminary.sku);
+  return estimateDiscoveryRunSize({ ...input, monthlyBillableEventsForSku });
+}
+
+function discoveryBlockMessage(estimate: DiscoverySizeEstimate, fallback = "Discovery run is blocked by the current Google safety cap."): string {
+  return estimate.blockingReasons[0] ?? fallback;
+}
+
+async function estimateRemainingDiscoveryRun(
+  run: CrawlRun,
+  remainingMode: "open" | "failed" | "open_or_failed",
+): Promise<DiscoverySizeEstimate> {
+  const settings = await getSettings();
+  const selection = run.selection_json ?? {};
+  const discoveryMode = normalizeDiscoveryMode(selection.discoveryMode, settings.google_default_discovery_mode);
+  const paginationPolicy = normalizePaginationPolicy(selection.paginationPolicy, settings.google_default_pagination_policy);
+  const remainingSearchCalls = await getCrawlRunRemainingSearchCalls(run.id, remainingMode);
+  return estimateDiscoveryRunSizeWithUsage({
+    cellCount: 1,
+    categoryCount: 1,
+    mode: discoveryMode,
+    paginationPolicy,
+    testRun: Boolean(selection.testRun),
+    searchCallCountOverride: remainingSearchCalls,
+    settings,
+  });
 }
 
 function classifyDashboardActionFailure(error: unknown): "db_statement_timeout" | "transient_db_error" | "dashboard_stats_unavailable" {
@@ -270,7 +305,7 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
     : marketSelection
       ? normalizeDistinct(marketSelection.cellIds).length
       : normalizeDistinct(plannerSelection!.zipCodes).length;
-  const sizeEstimate = estimateDiscoveryRunSize({
+  const sizeEstimate = await estimateDiscoveryRunSizeWithUsage({
     cellCount: plannedCellCount,
     categoryCount: categories.length,
     mode: discoveryMode,
@@ -281,7 +316,7 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
 
   if (!sizeEstimate.canStart) {
     return {
-      error: sizeEstimate.warnings[0] ?? "Discovery selection is incomplete.",
+      error: discoveryBlockMessage(sizeEstimate, "Discovery selection is blocked by the current Google safety cap."),
       estimate: sizeEstimate,
     };
   }
@@ -399,7 +434,7 @@ export async function estimateDiscoveryRunAction(payload: EstimateCrawlPayload):
         const cellCount = "cellIds" in selection ? normalizeDistinct(selection.cellIds).length : normalizeDistinct(selection.zipCodes).length;
         const mode = normalizeDiscoveryMode(selection.discoveryMode ?? settings.google_default_discovery_mode, settings.google_default_discovery_mode);
         const paginationPolicy = normalizePaginationPolicy(selection.paginationPolicy ?? settings.google_default_pagination_policy, settings.google_default_pagination_policy);
-        return estimateDiscoveryRunSize({
+        return estimateDiscoveryRunSizeWithUsage({
           cellCount,
           categoryCount: categories.length,
           mode,
@@ -504,9 +539,13 @@ export async function resumeCrawlRunAction(runId?: string) {
   if (processing) return { error: "Another discovery item is already processing. Pause or complete it before resuming this item." };
   const latest = runId ? await getSelectedOrDefaultVisibleCrawlRun(runId) : await getLatestPausedCrawlRun();
   if (!latest || latest.status !== "paused") return { error: "No paused run to resume." };
+  const estimate = await estimateRemainingDiscoveryRun(latest, "open");
+  if (!estimate.canStart) {
+    return { error: discoveryBlockMessage(estimate, "This paused discovery item exceeds the current Google safety cap."), estimate };
+  }
   await updateCrawlRunStatus(latest.id, "running");
   await createAuditLog("crawl_run_resumed", "crawl_run", latest.id);
-  return { success: true };
+  return { success: true, estimate };
 }
 
 export async function retryFailedUnitsAction(runId?: string) {
@@ -515,11 +554,15 @@ export async function retryFailedUnitsAction(runId?: string) {
   const run = await getSelectedOrDefaultVisibleCrawlRun(runId);
   if (!run) return { error: "No run found." };
   if (run.status === "canceled") return { error: "This run was stopped. Start a new discovery instead of retrying it." };
+  const estimate = await estimateRemainingDiscoveryRun(run, "failed");
+  if (!estimate.canStart) {
+    return { error: discoveryBlockMessage(estimate, "Retrying failed units exceeds the current Google safety cap."), estimate };
+  }
   const count = await retryFailed(run.id);
   if (run.status === "done" || run.status === "error") {
     await updateCrawlRunStatus(run.id, "running");
   }
-  return { retriedCount: count };
+  return { retriedCount: count, estimate };
 }
 
 export async function updateSchedulerWorkerEnabledAction(workerName: SchedulerWorkerName, enabled: boolean) {

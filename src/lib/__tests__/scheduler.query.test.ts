@@ -75,6 +75,30 @@ describe("scheduler v2 query behavior", () => {
     expect(artifact?.warning).toContain("Paused in Scheduler Settings");
   });
 
+  it("persists Google discovery safety caps", async () => {
+    await updateSettings({
+      google_test_run_call_cap: 25.8,
+      google_text_search_monthly_cap: 3200.4,
+      google_enterprise_monthly_cap: 450.9,
+    });
+
+    const settings = await getSettings();
+    expect(settings.google_test_run_call_cap).toBe(25);
+    expect(settings.google_text_search_monthly_cap).toBe(3200);
+    expect(settings.google_enterprise_monthly_cap).toBe(450);
+
+    await updateSettings({
+      google_test_run_call_cap: 0,
+      google_text_search_monthly_cap: -5,
+      google_enterprise_monthly_cap: 0.2,
+    });
+
+    const clamped = await getSettings();
+    expect(clamped.google_test_run_call_cap).toBe(1);
+    expect(clamped.google_text_search_monthly_cap).toBe(1);
+    expect(clamped.google_enterprise_monthly_cap).toBe(1);
+  });
+
   it("records worker runs for operations health", async () => {
     const run = await startWorkerRun("ai_verification", "cron");
     await completeWorkerRun(run.id, "processed", { status: "processed", leadId: "lead-1" }, 200);

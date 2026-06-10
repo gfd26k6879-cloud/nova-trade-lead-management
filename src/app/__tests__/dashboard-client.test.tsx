@@ -51,10 +51,18 @@ describe("DashboardClient admin command center", () => {
     expect(html).toContain("Lead Inventory");
     expect(html).toContain("Start Discovery");
     expect(html).toContain("Postal / postcode search");
+    expect(html).toContain("Run scope");
+    expect(html).toContain("Test capped run");
+    expect(html).toContain("Dentists");
+    expect(html).toContain("All categories");
     expect(html).toContain("Recent Discovery Items");
     expect(html).toContain("Fulfillment");
     expect(html).toContain("Advanced Operations");
+    expect(html).toContain("0 selected");
     expect(html).not.toContain("Discovery Workflow");
     expect(html).not.toContain("Quick Actions");
+    expect(html).not.toContain("Use test run preset");
+    expect(html).not.toContain("Manual extra pages");
+    expect(html).not.toContain("Auto yield-based");
   });
 });

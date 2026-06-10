@@ -93,6 +93,24 @@ test.describe("Smoke pass", () => {
       await expect(page.getByRole("button", { name: /Quote requested|Already in admin queue/ }).first()).toBeVisible();
       await page.getByRole("button", { name: "Close" }).click();
     }
+
+    await page.goto(`${BASE_URL}/queue?view=sheet`, { waitUntil: "networkidle" });
+    await expect(page.getByRole("heading", { name: "Workbench", exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("button", { name: "Sheet" })).toBeVisible();
+    await expect(page.getByRole("table", { name: "Workbench sheet" })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("columnheader", { name: "Business / phone" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Outcome" })).toBeVisible();
+    await expect(page.getByText("Send to Steve")).toHaveCount(0);
+
+    const outcomeSelect = page.locator('select[aria-label^="Outcome for"]:not([disabled])').first();
+    if (await outcomeSelect.isVisible().catch(() => false)) {
+      await outcomeSelect.selectOption("not_reached");
+      await expect(page.getByRole("dialog", { name: "Log outcome" })).toBeVisible({ timeout: 5000 });
+      await expect(page.getByLabel("Outcome")).toHaveValue("not_reached");
+      await page.getByRole("button", { name: "Close" }).click();
+    } else {
+      await expect(page.getByText("Claim first").first()).toBeVisible();
+    }
     expect(errors).toHaveLength(0);
   });
 
@@ -102,15 +120,14 @@ test.describe("Smoke pass", () => {
 
     await page.getByRole("link", { name: "Workbench", exact: true }).click();
     await page.waitForURL(/\/queue/, { timeout: 5000 });
-    await openAdminPage(page, "Overview");
+    await openAdminPage(page, "Admin Home");
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
-    await expect(page.getByRole("heading", { name: "Revenue Dashboard", exact: true })).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole("heading", { name: "Team performance", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Latest activity", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "My Fulfillment Queue", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Operations", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Open Workbench", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Open Fulfillment", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Admin Command Center", exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("heading", { name: "Lead Inventory", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Start Discovery", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Run scope", exact: true })).toBeVisible();
+    await expect(page.getByText("Test capped run", { exact: true })).toBeVisible();
+    await expect(page.getByText("All categories", { exact: true })).toBeVisible();
   });
 
   test("8. Fulfillment page and Users team controls render", async ({ page }) => {

@@ -19,6 +19,7 @@ import {
   getAdminRequests,
   getLeadById,
   getOutreachEvents,
+  getResearcherTeamBoardSummary,
   getResearcherWorkbench,
   getTeamBoardSummary,
   updateAdminRequestStatus,
@@ -177,5 +178,44 @@ describe("researcher workbench queries", () => {
     const updated = await updateAdminRequestStatus(first.request.id, "done");
     expect(updated?.status).toBe("done");
     expect(updated?.completed_at).toBeTruthy();
+  });
+
+  it("returns only the current researcher workload and activity for the researcher team board", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    insertLead({ id: "mine", assignedTo: "user-1", reminder: today });
+    insertLead({ id: "theirs", assignedTo: "user-2", reminder: today });
+
+    await createOutreachEvent({
+      leadId: "mine",
+      channel: "call",
+      actorUserId: "user-1",
+      actorEmail: "one@example.com",
+      outcome: "contacted",
+    });
+    await createOutreachEvent({
+      leadId: "theirs",
+      channel: "call",
+      actorUserId: "user-2",
+      actorEmail: "two@example.com",
+      outcome: "contacted",
+    });
+    testDb.prepare("UPDATE outreach_events SET created_at = ?").run(new Date().toISOString());
+
+    const summary = await getResearcherTeamBoardSummary("user-1");
+
+    expect(summary.members).toHaveLength(1);
+    expect(summary.members[0]).toMatchObject({
+      user_id: "user-1",
+      claimed_active: 1,
+      due_today: 1,
+      contacts_7d: 1,
+    });
+    expect(summary.members.find((member) => member.user_id === "user-2")).toBeUndefined();
+    expect(summary.latestActivity).toHaveLength(1);
+    expect(summary.latestActivity[0]).toMatchObject({
+      lead_id: "mine",
+      actor_email: "one@example.com",
+    });
+    expect(summary.unassignedReady).toBe(0);
   });
 });

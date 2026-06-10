@@ -22,49 +22,28 @@ test.describe("UI Smoke Test", () => {
     await expect(page.getByRole("link", { name: "My Leads", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Team", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /^Admin/ })).toBeVisible();
-    await openAdminPage(page, "Overview");
+    await openAdminPage(page, "Admin Home");
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
-    await expect(page.getByRole("heading", { name: "Revenue Dashboard", exact: true })).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole("heading", { name: "Team performance", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Latest activity", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "My Fulfillment Queue", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Operations", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Open Workbench", exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Open Fulfillment", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Admin Command Center", exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("heading", { name: "Lead Inventory", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Start Discovery", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Run scope", exact: true })).toBeVisible();
+    await expect(page.getByText("Test capped run", { exact: true })).toBeVisible();
   });
 
-  test("3. Dashboard cost breakdown / monthly cost intelligence", async ({ page }) => {
+  test("3. Dashboard discovery preflight controls", async ({ page }) => {
   skipIfMissingAuth();
-    await openAdminPage(page, "Overview");
+    await openAdminPage(page, "Admin Home");
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
-    await page.getByText("Expand operations", { exact: true }).click();
-    const runCostText = page.getByText(/Run API:.*calls.*\$/);
-    const apiCostSection = page.getByRole("heading", { name: "API Cost Intelligence" });
-    const discoveryEnrichment = page.getByText(/Discovery:.*calls.*Enrichment:.*calls/);
-    const monthlyCalls = page.getByText("Monthly Calls");
-    const monthlyCost = page.getByText("Monthly Cost");
-    const projectedMonthEnd = page.getByText("Projected Month-End");
-    const atmosphereCalls = page.getByText("Atmosphere Calls");
-
-    const runLevelVisible = await runCostText.isVisible().catch(() => false);
-    const monthlySectionVisible = await apiCostSection.isVisible().catch(() => false);
-
-    if (!runLevelVisible && !monthlySectionVisible) {
-      test.info().annotations.push({ type: "note", description: "No cost sections visible (empty state)" });
-    }
-
-    if (runLevelVisible) {
-      const text = await runCostText.textContent();
-      expect(text).toMatch(/\d+.*calls/);
-    }
-    if (monthlySectionVisible) {
-      await expect(apiCostSection).toBeVisible();
-      const hasMonthly = (await monthlyCalls.isVisible()) || (await monthlyCost.isVisible());
-      const hasProjected = await projectedMonthEnd.isVisible();
-      const hasAtmosphere = await atmosphereCalls.isVisible();
-      const hasSplit = await discoveryEnrichment.isVisible();
-      expect(hasMonthly || hasProjected || hasAtmosphere || hasSplit).toBeTruthy();
-    }
+    await expect(page.getByRole("heading", { name: "Run scope", exact: true })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("Max calls", { exact: true })).toBeVisible();
+    await expect(page.getByText("Max raw places", { exact: true })).toBeVisible();
+    await expect(page.getByText("Search radius", { exact: true })).toBeVisible();
+    await expect(page.getByText("Estimated cost", { exact: true })).toBeVisible();
+    await expect(page.getByText("Cap remaining", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Dentists" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Auto repair" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Contractors" })).toBeVisible();
   });
 
   test("4. Settings controls present and interactable", async ({ page }) => {
@@ -135,11 +114,11 @@ test.describe("UI Smoke Test", () => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
-    await openAdminPage(page, "Overview");
+    await openAdminPage(page, "Admin Home");
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
     await openAdminPage(page, "Settings");
     await page.waitForURL(/\/settings/, { timeout: 5000 });
-    await openAdminPage(page, "Overview");
+    await openAdminPage(page, "Admin Home");
 
     expect(errors).toHaveLength(0);
   });
