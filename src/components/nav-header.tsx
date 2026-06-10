@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { ADMIN_NAV_ITEMS, PRIMARY_NAV_ITEMS } from "@/lib/navigation";
 import type { AppRole } from "@/lib/permissions";
 
@@ -18,11 +19,11 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
     <header
       className="sticky top-0 z-50"
       style={{
-        background: "rgba(255, 255, 255, 0.55)",
+        background: "var(--nav-bg)",
         backdropFilter: "blur(24px)",
         WebkitBackdropFilter: "blur(24px)",
-        borderBottom: "1px solid rgba(255, 255, 255, 0.45)",
-        boxShadow: "0 1px 8px rgba(0, 0, 0, 0.04)",
+        borderBottom: "1px solid var(--nav-border)",
+        boxShadow: "var(--nav-shadow)",
       }}
     >
       <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-3.5">
@@ -72,11 +73,11 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
               {adminOpen && (
                 <div
                   id="admin-nav-menu"
-                  className="absolute right-0 mt-2 w-72 rounded-xl p-2"
+                  className="absolute right-0 z-[70] mt-2 w-72 rounded-xl p-2"
                   style={{
-                    background: "rgba(255,255,255,0.96)",
-                    border: "1px solid rgba(255,255,255,0.72)",
-                    boxShadow: "0 18px 60px rgba(15,23,42,0.16)",
+                    background: "var(--menu-bg)",
+                    border: "1px solid var(--menu-border)",
+                    boxShadow: "var(--menu-shadow)",
                   }}
                 >
                   {ADMIN_NAV_ITEMS.map((item) => (
@@ -104,6 +105,8 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
         </nav>
 
         <div className="flex items-center gap-2">
+          <ThemeToggle />
+
           <form action={logoutAction}>
             <button type="submit" className="btn-glass text-xs hidden md:inline-flex">
               Log out
@@ -138,8 +141,8 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
       {/* Mobile menu */}
       {mobileOpen && (
         <div
-          className="border-t px-6 py-3 md:hidden"
-          style={{ borderColor: "rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.55)" }}
+          className="relative z-[60] border-t px-6 py-3 md:hidden"
+          style={{ borderColor: "var(--menu-border)", background: "var(--menu-bg)", boxShadow: "var(--menu-shadow)" }}
         >
           <nav className="flex flex-col gap-1">
             {PRIMARY_NAV_ITEMS.map((item) => (
@@ -168,6 +171,9 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
               </>
             )}
           </nav>
+          <div className="mt-3">
+            <ThemeToggle className="w-full" />
+          </div>
           <form action={logoutAction} className="mt-2">
             <button type="submit" className="btn-glass text-xs w-full">Log out</button>
           </form>
@@ -190,7 +196,7 @@ function NavBadge({ count }: { count: number }) {
   return (
     <span
       className="rounded-full px-1.5 py-0.5 text-[0.65rem] font-semibold leading-none"
-      style={{ background: "rgba(239,68,68,0.12)", color: "#dc2626" }}
+      style={{ background: "var(--danger-bg)", color: "var(--danger-text)" }}
     >
       {count > 99 ? "99+" : count}
     </span>

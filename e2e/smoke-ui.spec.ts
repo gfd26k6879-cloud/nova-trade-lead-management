@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-import { login, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
 
 test.describe("UI Smoke Test", () => {
   skipIfMissingAuth();
@@ -29,6 +29,38 @@ test.describe("UI Smoke Test", () => {
     await expect(page.getByRole("heading", { name: "Start Discovery", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Run scope", exact: true })).toBeVisible();
     await expect(page.getByText("Test capped run", { exact: true })).toBeVisible();
+  });
+
+  test("2b. Theme toggle and desktop Admin menu work in both themes", async ({ page }) => {
+  skipIfMissingAuth();
+    await page.evaluate(() => localStorage.setItem("nosite-theme", "dark"));
+    await page.reload({ waitUntil: "networkidle" });
+
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(page.getByRole("button", { name: "Switch to light theme" }).first()).toBeVisible();
+    await page.getByRole("button", { name: /^Admin/ }).click();
+    await expect(page.getByRole("link", { name: /^Settings(?:\s|$)/ })).toBeVisible({ timeout: 5000 });
+    await page.getByRole("button", { name: /^Admin/ }).click();
+
+    await page.getByRole("button", { name: "Switch to light theme" }).first().click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await page.getByRole("button", { name: /^Admin/ }).click();
+    await expect(page.getByRole("link", { name: /^Users(?:\s|$)/ })).toBeVisible({ timeout: 5000 });
+  });
+
+  test("2c. Mobile hamburger opens primary and Admin links", async ({ page }) => {
+  skipIfMissingAuth();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => localStorage.setItem("nosite-theme", "dark"));
+    await page.goto(`${BASE_URL}/queue`, { waitUntil: "networkidle" });
+
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await page.getByRole("button", { name: "Toggle menu" }).click();
+    await expect(page.getByRole("link", { name: "Workbench", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Explore", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: /^Settings(?:\s|$)/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: /^Users(?:\s|$)/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Switch to light theme" }).first()).toBeVisible();
   });
 
   test("3. Dashboard discovery preflight controls", async ({ page }) => {

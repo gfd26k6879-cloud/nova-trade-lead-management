@@ -244,7 +244,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
     : selectedCellIds.length;
 
   return (
-    <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)" }}>
+    <div className="mt-4 rounded-xl p-4" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
         <span>{COUNTRY_NAMES[selectedCountry]}</span>
         <span>•</span>
@@ -312,7 +312,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
             </button>
           </div>
           {postalFeedback && (
-            <p className="text-xs leading-5" style={{ color: postalFeedback.startsWith("Selected") ? "#166534" : "#92400e" }}>
+            <p className="text-xs leading-5" style={{ color: postalFeedback.startsWith("Selected") ? "var(--success-text)" : "var(--warning-text)" }}>
               {postalFeedback}
             </p>
           )}
@@ -323,7 +323,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
                   key={cell.id}
                   type="button"
                   className="rounded-full px-2.5 py-1 text-xs"
-                  style={{ background: "rgba(99,102,241,0.12)", color: "var(--accent)" }}
+                  style={{ background: "var(--accent-light)", color: "var(--accent)" }}
                   disabled={disabled}
                   onClick={() => {
                     setSelectedMarketId(cell.market_id);
@@ -394,7 +394,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
           </div>
           <div className="max-h-64 space-y-1 overflow-auto pr-1">
             {visibleCells.length === 0 ? (
-              <p className="rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(255,255,255,0.3)", color: "var(--text-tertiary)" }}>
+              <p className="rounded-lg px-3 py-2 text-xs" style={{ background: "var(--surface-muted)", color: "var(--text-tertiary)" }}>
                 {cellsLoading ? "Loading active cells for this area..." : "No active cells for this market yet."}
               </p>
             ) : visibleCells.map((cell) => {
@@ -403,14 +403,14 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
                 <label
                   key={cell.id}
                   className="flex items-center justify-between gap-3 rounded-lg px-2 py-1 text-xs"
-                  style={{ background: checked ? "rgba(99,102,241,0.18)" : "rgba(255,255,255,0.3)", color: "var(--text-secondary)" }}
+                  style={{ background: checked ? "var(--selection-bg)" : "var(--surface-muted)", color: "var(--text-secondary)" }}
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggleCell(cell.id)} />
                     <span className="truncate">{cell.cell_label}</span>
                     <span style={{ color: "var(--text-tertiary)" }}>{cell.cell_type.replace(/_/g, " ")}</span>
                   </span>
-                  <span className="shrink-0" style={{ color: cell.coverage.completed ? "#16a34a" : "var(--text-tertiary)" }}>
+                  <span className="shrink-0" style={{ color: cell.coverage.completed ? "var(--success-text)" : "var(--text-tertiary)" }}>
                     {cell.coverage.total > 0 ? `${cell.coverage.done}/${cell.coverage.total}` : "new"}
                   </span>
                 </label>
@@ -418,7 +418,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
             })}
           </div>
         </div>
-        <div className="rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.28)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+        <div className="rounded-xl p-3 text-xs" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)", color: "var(--text-secondary)" }}>
           <p className="font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>
             Selected cells
           </p>
@@ -431,7 +431,7 @@ export function LocationScopePicker({ value, categories, onChange, disabled = fa
               : cells.filter((cell) => selectedCellSet.has(cell.id)).map((cell) => cell.cell_label).join(", ") || "Selected cells are loading."}
           </p>
           {postalFeedback && (
-            <p className="mt-3 rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.35)", color: postalFeedback.startsWith("Selected") ? "#166534" : "#92400e" }}>
+            <p className="mt-3 rounded-lg px-3 py-2" style={{ background: "var(--surface-card)", color: postalFeedback.startsWith("Selected") ? "var(--success-text)" : "var(--warning-text)" }}>
               {postalFeedback}
             </p>
           )}

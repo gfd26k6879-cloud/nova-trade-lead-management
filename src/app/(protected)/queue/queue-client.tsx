@@ -47,8 +47,8 @@ const stickyColumnStyle: CSSProperties = {
   left: 0,
   zIndex: 2,
   minWidth: "19rem",
-  background: "rgba(255,255,255,0.97)",
-  boxShadow: "1px 0 0 rgba(15,23,42,0.08)",
+  background: "var(--sticky-cell-bg)",
+  boxShadow: "var(--sticky-cell-shadow)",
 };
 
 export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) {
@@ -168,7 +168,7 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
       ]}
     >
       {message && (
-        <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(99,102,241,0.1)", color: "var(--text-primary)" }}>
+        <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "var(--surface-info)", border: "1px solid var(--surface-info-border)", color: "var(--text-primary)" }}>
           {message}
         </div>
       )}
@@ -194,7 +194,6 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
           scoreThresholds={scoreThresholds}
           busyLeadId={busyLeadId}
           currentUserId={currentUser.userId}
-          onClaim={claimLead}
           onRelease={releaseLead}
           onOpenLogSheet={openLogSheet}
         />
@@ -310,7 +309,6 @@ function WorkbenchSheetView({
   scoreThresholds,
   busyLeadId,
   currentUserId,
-  onClaim,
   onRelease,
   onOpenLogSheet,
 }: {
@@ -318,11 +316,10 @@ function WorkbenchSheetView({
   scoreThresholds: ScoreBandThresholds;
   busyLeadId: string | null;
   currentUserId: string;
-  onClaim: (leadId: string) => void;
   onRelease: (leadId: string) => void;
   onOpenLogSheet: (lead: QueueLead, channel: ContactChannel, outcome?: OutreachOutcome) => void;
 }) {
-  const hasRows = workbench.myLeads.length > 0 || workbench.unclaimedLeads.length > 0;
+  const hasRows = workbench.myLeads.length > 0;
 
   return (
     <section className="glass rounded-2xl p-5">
@@ -330,7 +327,7 @@ function WorkbenchSheetView({
         <div>
           <h3 className="section-label">Sheet view</h3>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            Scan claimed and unclaimed leads in rows. Claim first, then log outcomes from the row.
+            Scan the same leads assigned to you in Cards, with row-level outcome logging.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -340,7 +337,7 @@ function WorkbenchSheetView({
       </div>
 
       {!hasRows ? (
-        <EmptyState text="No workbench leads yet. Use Lead Explorer to claim your next lead." />
+        <EmptyState text="You have no claimed leads. Use Lead Explorer to claim one." />
       ) : (
         <div className="overflow-x-auto">
           <table className="glass-table min-w-[1380px]" aria-label="Workbench sheet">
@@ -367,17 +364,6 @@ function WorkbenchSheetView({
                 scoreThresholds={scoreThresholds}
                 busyLeadId={busyLeadId}
                 currentUserId={currentUserId}
-                onClaim={onClaim}
-                onRelease={onRelease}
-                onOpenLogSheet={onOpenLogSheet}
-              />
-              <SheetGroupRows
-                label="Unclaimed"
-                leads={workbench.unclaimedLeads}
-                scoreThresholds={scoreThresholds}
-                busyLeadId={busyLeadId}
-                currentUserId={currentUserId}
-                onClaim={onClaim}
                 onRelease={onRelease}
                 onOpenLogSheet={onOpenLogSheet}
               />
@@ -395,7 +381,6 @@ function SheetGroupRows({
   scoreThresholds,
   busyLeadId,
   currentUserId,
-  onClaim,
   onRelease,
   onOpenLogSheet,
 }: {
@@ -404,7 +389,6 @@ function SheetGroupRows({
   scoreThresholds: ScoreBandThresholds;
   busyLeadId: string | null;
   currentUserId: string;
-  onClaim: (leadId: string) => void;
   onRelease: (leadId: string) => void;
   onOpenLogSheet: (lead: QueueLead, channel: ContactChannel, outcome?: OutreachOutcome) => void;
 }) {
@@ -413,7 +397,7 @@ function SheetGroupRows({
   return (
     <>
       <tr>
-        <td colSpan={12} className="text-xs font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)", background: "rgba(255,255,255,0.38)" }}>
+        <td colSpan={12} className="text-xs font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--text-tertiary)", background: "var(--row-group-bg)" }}>
           {label} ({leads.length})
         </td>
       </tr>
@@ -424,7 +408,6 @@ function SheetGroupRows({
           scoreThresholds={scoreThresholds}
           busy={busyLeadId === lead.id}
           currentUserId={currentUserId}
-          onClaim={onClaim}
           onRelease={onRelease}
           onOpenLogSheet={onOpenLogSheet}
         />
@@ -438,7 +421,6 @@ function WorkbenchSheetRow({
   scoreThresholds,
   busy,
   currentUserId,
-  onClaim,
   onRelease,
   onOpenLogSheet,
 }: {
@@ -446,11 +428,9 @@ function WorkbenchSheetRow({
   scoreThresholds: ScoreBandThresholds;
   busy: boolean;
   currentUserId: string;
-  onClaim: (leadId: string) => void;
   onRelease: (leadId: string) => void;
   onOpenLogSheet: (lead: QueueLead, channel: ContactChannel, outcome?: OutreachOutcome) => void;
 }) {
-  const isMine = lead.assigned_to_user_id === currentUserId;
   const phoneHref = getPhoneHref(lead.phone);
 
   return (
@@ -502,49 +482,32 @@ function WorkbenchSheetRow({
       <td>{lead.reminder_date ? formatDate(lead.reminder_date) : "—"}</td>
       <td className="max-w-[18rem] break-words">{lead.next_best_action ?? lead.quality_reason ?? "Call and confirm owner interest."}</td>
       <td>
-        {isMine ? (
-          <select
-            className="glass-select min-w-40 text-xs"
-            aria-label={`Outcome for ${lead.name ?? "lead"}`}
-            value=""
-            disabled={busy}
-            onChange={(event) => {
-              const outcome = event.target.value as OutreachOutcome;
-              if (outcome) onOpenLogSheet(lead, "call", outcome);
-            }}
-          >
-            <option value="">Choose outcome</option>
-            {OUTCOME_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        ) : (
-          <select className="glass-select min-w-36 text-xs" aria-label={`Outcome for ${lead.name ?? "lead"}`} disabled defaultValue="">
-            <option value="">Claim first</option>
-          </select>
-        )}
+        <select
+          className="glass-select min-w-40 text-xs"
+          aria-label={`Outcome for ${lead.name ?? "lead"}`}
+          value=""
+          disabled={busy}
+          onChange={(event) => {
+            const outcome = event.target.value as OutreachOutcome;
+            if (outcome) onOpenLogSheet(lead, "call", outcome);
+          }}
+        >
+          <option value="">Choose outcome</option>
+          {OUTCOME_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
       </td>
       <td>
         <div className="flex min-w-[24rem] flex-wrap gap-2">
-          {isMine ? (
-            <>
-              {phoneHref ? <a className="btn-primary px-3 py-1.5 text-xs" href={phoneHref}>Call</a> : <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled>No phone</button>}
-              <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onOpenLogSheet(lead, "text")}>Text</button>
-              <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onOpenLogSheet(lead, "email")}>Email</button>
-              <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onOpenLogSheet(lead, "walkin")}>In person</button>
-              <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass px-3 py-1.5 text-xs">Open</Link>
-              <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onRelease(lead.id)}>
-                {busy ? "Releasing..." : "Release"}
-              </button>
-            </>
-          ) : (
-            <>
-              <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={busy} onClick={() => onClaim(lead.id)}>
-                {busy ? "Claiming..." : "Claim"}
-              </button>
-              <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass px-3 py-1.5 text-xs">Open</Link>
-            </>
-          )}
+          {phoneHref ? <a className="btn-primary px-3 py-1.5 text-xs" href={phoneHref}>Call</a> : <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled>No phone</button>}
+          <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onOpenLogSheet(lead, "text")}>Text</button>
+          <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onOpenLogSheet(lead, "email")}>Email</button>
+          <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onOpenLogSheet(lead, "walkin")}>In person</button>
+          <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass px-3 py-1.5 text-xs">Open</Link>
+          <button type="button" className="btn-glass px-3 py-1.5 text-xs" disabled={busy} onClick={() => onRelease(lead.id)}>
+            {busy ? "Releasing..." : "Release"}
+          </button>
         </div>
       </td>
     </tr>
@@ -576,7 +539,7 @@ function LeadActionCard({
   return (
     <article
       className="rounded-xl p-3 sm:p-4"
-      style={{ background: "rgba(255,255,255,0.5)", border: "1px solid rgba(255,255,255,0.55)" }}
+      style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}
     >
       <div className="space-y-3">
         <div className="min-w-0">
@@ -615,7 +578,7 @@ function LeadActionCard({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 border-t pt-3" style={{ borderColor: "rgba(255,255,255,0.45)" }}>
+        <div className="flex flex-wrap gap-2 border-t pt-3" style={{ borderColor: "var(--glass-border-light)" }}>
           {!lead.assigned_to_user_id && (
             <ActionWithHelp help="Assigns this lead to you so teammates know you own the next outreach step.">
               <button type="button" className="btn-primary flex-1 text-sm sm:flex-none" disabled={busy} onClick={() => onClaim(lead.id)}>
@@ -688,7 +651,7 @@ function LogOutcomeSheet({
       <form
         onSubmit={onSubmit}
         className="glass-lg max-h-[90vh] w-full max-w-lg overflow-auto rounded-2xl p-5"
-        style={{ background: "rgba(255,255,255,0.98)", boxShadow: "0 24px 80px rgba(15,23,42,0.28)" }}
+        style={{ background: "var(--surface-modal)", boxShadow: "var(--glass-shadow-lg)" }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="workbench-log-outcome-title"
@@ -765,7 +728,7 @@ function LogOutcomeSheet({
           </label>
         </div>
 
-        <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(238,242,255,0.96)", border: "1px solid rgba(99,102,241,0.18)" }}>
+        <div className="mt-4 rounded-xl p-4" style={{ background: "var(--surface-info)", border: "1px solid var(--surface-info-border)" }}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Send to Steve</h4>
@@ -846,10 +809,10 @@ function OwnerBadge({ lead, currentUserId }: { lead: QueueLead; currentUserId: s
       : ownerName(lead);
   const mine = lead.assigned_to_user_id === currentUserId;
   const color = !lead.assigned_to_user_id
-    ? { bg: "rgba(107,114,128,0.1)", text: "#4b5563" }
+    ? { bg: "var(--badge-muted-bg)", text: "var(--badge-muted-text)" }
     : mine
-      ? { bg: "rgba(34,197,94,0.12)", text: "#166534" }
-      : { bg: "rgba(245,158,11,0.12)", text: "#92400e" };
+      ? { bg: "var(--badge-mine-bg)", text: "var(--badge-mine-text)" }
+      : { bg: "var(--badge-taken-bg)", text: "var(--badge-taken-text)" };
   return (
     <span className="rounded-md px-2 py-1 text-xs font-semibold" style={{ background: color.bg, color: color.text }}>
       {label}
@@ -859,7 +822,7 @@ function OwnerBadge({ lead, currentUserId }: { lead: QueueLead; currentUserId: s
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <div className="rounded-xl p-5 text-center text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+    <div className="rounded-xl p-5 text-center text-sm" style={{ background: "var(--surface-muted)", color: "var(--text-tertiary)" }}>
       {text}
     </div>
   );
@@ -919,7 +882,7 @@ function MetaChip({ label }: { label: string }) {
   return (
     <span
       className="max-w-full break-words rounded-md px-2 py-1 text-xs"
-      style={{ background: "rgba(255,255,255,0.45)", color: "var(--text-tertiary)" }}
+      style={{ background: "var(--surface-muted)", color: "var(--text-tertiary)" }}
     >
       {label}
     </span>

@@ -23,4 +23,16 @@ describe("global theme tokens", () => {
     expect(layout).toContain('headers()).get("x-nonce")');
     expect(layout).toContain("<script nonce={nonce}");
   });
+
+  it("exposes a header control that changes the same persisted theme contract", () => {
+    const navHeader = readFileSync(join(process.cwd(), "src/components/nav-header.tsx"), "utf8");
+    const themeToggle = readFileSync(join(process.cwd(), "src/components/theme-toggle.tsx"), "utf8");
+
+    expect(navHeader).toContain("ThemeToggle");
+    expect(themeToggle).toContain('const STORAGE_KEY = "nosite-theme"');
+    expect(themeToggle).toContain("document.documentElement.dataset.theme = theme");
+    expect(themeToggle).toContain('classList.toggle("dark", theme === "dark")');
+    expect(themeToggle).toContain("window.localStorage.setItem(STORAGE_KEY, theme)");
+    expect(themeToggle).toContain("Switch to");
+  });
 });

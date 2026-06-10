@@ -130,7 +130,7 @@ describe("QueueClient workbench views", () => {
     expect(html).not.toContain("Business / phone");
   });
 
-  it("renders the URL-backed sheet view with owned and unclaimed rows", () => {
+  it("renders the URL-backed sheet view with owned rows only", () => {
     currentParams = new URLSearchParams("view=sheet");
 
     const html = renderQueue(makeWorkbench());
@@ -139,22 +139,31 @@ describe("QueueClient workbench views", () => {
     expect(html).toContain("Business / phone");
     expect(html).toContain("Outcome");
     expect(html).toContain("Owned Dental");
-    expect(html).toContain("Unclaimed Auto");
     expect(html).toContain("Choose outcome");
-    expect(html).toContain("Claim first");
     expect(html).toContain("Call and ask for the owner.");
+    expect(html).not.toContain("Unclaimed Auto");
+    expect(html).not.toContain("Claim first");
+    expect(html).not.toContain(">Claim</button>");
     expect(html).not.toContain("Your next action");
     expect(html).not.toContain("Send to Steve");
   });
 
-  it("keeps unclaimed sheet rows claim-first instead of exposing log controls", () => {
+  it("keeps sheet empty when there are no owned leads even if unclaimed leads exist", () => {
     currentParams = new URLSearchParams("view=sheet");
+    const workbench = makeWorkbench();
 
-    const html = renderQueue(makeWorkbench());
+    const html = renderQueue({
+      ...workbench,
+      nextAction: null,
+      myLeads: [],
+      summary: { ...workbench.summary, myClaimed: 0 },
+    });
 
-    expect(html).toContain("Outcome for Unclaimed Auto");
-    expect(html).toContain("Claim first");
-    expect(html).toContain(">Claim</button>");
+    expect(html).toContain("You have no claimed leads. Use Lead Explorer to claim one.");
+    expect(html).not.toContain("Workbench sheet");
+    expect(html).not.toContain("Unclaimed Auto");
+    expect(html).not.toContain("Claim first");
+    expect(html).not.toContain(">Claim</button>");
     expect(html).not.toContain("Website needed");
     expect(html).not.toContain("Quote requested");
   });

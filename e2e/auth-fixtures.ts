@@ -28,7 +28,9 @@ export async function login(page: Page): Promise<void> {
 export async function openAdminPage(page: Page, label: string | RegExp): Promise<void> {
   await page.getByRole("button", { name: /^Admin/ }).click();
   const name = typeof label === "string" ? new RegExp(`^${escapeRegExp(label)}(?:\\s|$)`) : label;
-  await page.getByRole("link", { name }).click();
+  const link = page.getByRole("link", { name });
+  await expect(link).toBeVisible({ timeout: 5000 });
+  await link.click();
 }
 
 function escapeRegExp(value: string): string {

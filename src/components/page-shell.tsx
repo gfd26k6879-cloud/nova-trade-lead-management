@@ -29,8 +29,8 @@ export function PageShell({ title, description, stats = [], children }: PageShel
                 key={stat.label}
                 className="min-w-0 rounded-xl p-3 sm:p-4"
                 style={{
-                  background: "rgba(255, 255, 255, 0.4)",
-                  border: "1px solid rgba(255, 255, 255, 0.5)",
+                  background: "var(--surface-card)",
+                  border: "1px solid var(--surface-card-border)",
                 }}
               >
                 <p className="section-label break-words">{stat.label}</p>

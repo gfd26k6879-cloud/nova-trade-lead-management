@@ -97,10 +97,19 @@ test.describe("Smoke pass", () => {
     await page.goto(`${BASE_URL}/queue?view=sheet`, { waitUntil: "networkidle" });
     await expect(page.getByRole("heading", { name: "Workbench", exact: true })).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole("button", { name: "Sheet" })).toBeVisible();
-    await expect(page.getByRole("table", { name: "Workbench sheet" })).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole("columnheader", { name: "Business / phone" })).toBeVisible();
-    await expect(page.getByRole("columnheader", { name: "Outcome" })).toBeVisible();
     await expect(page.getByText("Send to Steve")).toHaveCount(0);
+
+    const sheetTable = page.getByRole("table", { name: "Workbench sheet" });
+    if (await sheetTable.isVisible().catch(() => false)) {
+      await expect(page.getByRole("columnheader", { name: "Business / phone" })).toBeVisible();
+      await expect(page.getByRole("columnheader", { name: "Outcome" })).toBeVisible();
+      await expect(page.getByText("Claim first")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Claim", exact: true })).toHaveCount(0);
+    } else {
+      await expect(page.getByText("You have no claimed leads. Use Lead Explorer to claim one.")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText("Claim first")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Claim", exact: true })).toHaveCount(0);
+    }
 
     const outcomeSelect = page.locator('select[aria-label^="Outcome for"]:not([disabled])').first();
     if (await outcomeSelect.isVisible().catch(() => false)) {
@@ -108,8 +117,6 @@ test.describe("Smoke pass", () => {
       await expect(page.getByRole("dialog", { name: "Log outcome" })).toBeVisible({ timeout: 5000 });
       await expect(page.getByLabel("Outcome")).toHaveValue("not_reached");
       await page.getByRole("button", { name: "Close" }).click();
-    } else {
-      await expect(page.getByText("Claim first").first()).toBeVisible();
     }
     expect(errors).toHaveLength(0);
   });
