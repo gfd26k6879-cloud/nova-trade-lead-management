@@ -6,6 +6,7 @@ describe("NavHeader source contract", () => {
   it("uses one admin-only operations menu on desktop", () => {
     const source = readFileSync(join(process.cwd(), "src/components/nav-header.tsx"), "utf8");
 
+    expect(source).toContain("BrandMark");
     expect(source).toContain('aria-label="Admin menu"');
     expect(source).toContain('className="relative hidden md:block"');
     expect(source).toContain("{isAdmin && (");

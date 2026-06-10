@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { BrandMark } from "@/components/brand-mark";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ADMIN_NAV_ITEMS, PRIMARY_NAV_ITEMS } from "@/lib/navigation";
 import type { AppRole } from "@/lib/permissions";
@@ -28,19 +29,7 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
     >
       <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-3.5">
         <div className="flex items-center gap-3">
-          <div
-            className="flex h-8 w-8 items-center justify-center rounded-xl"
-            style={{
-              background: "var(--accent)",
-              boxShadow: "0 2px 8px var(--accent-glow)",
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
-              <path d="M2 12l10 5 10-5" />
-            </svg>
-          </div>
+          <BrandMark />
           <div>
             <h1 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
               NoSite Leads

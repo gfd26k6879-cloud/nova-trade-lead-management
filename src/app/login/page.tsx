@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { BrandMark } from "@/components/brand-mark";
 import { loginAction } from "./actions";
 
 export const metadata: Metadata = {
@@ -26,13 +27,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
     <div className="flex min-h-screen items-center justify-center px-6 py-12">
       <main className="glass-lg w-full max-w-sm rounded-3xl p-10">
         <div className="mb-8">
-          <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--accent)] shadow-[0_4px_12px_var(--accent-glow)]">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
-              <path d="M2 12l10 5 10-5" />
-            </svg>
-          </div>
+          <BrandMark size="login" className="mb-4" priority />
           <h1 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
             NoSite Leads
           </h1>
