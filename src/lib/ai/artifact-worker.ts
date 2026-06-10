@@ -2,8 +2,10 @@ import {
   createAuditLog,
   createLeadAiArtifactJob,
   getConfiguredOpenAiApiKey,
+  getLeadAiArtifactById,
   getLatestLeadAiArtifact,
   getLeadById,
+  leaseLeadAiArtifactJobById,
   leaseNextLeadAiArtifactJob,
   getSettings,
   logAiUsageEvent,
@@ -31,10 +33,17 @@ export type LeadArtifactWorkerResult =
   | { status: "retrying"; artifactId: string; leadId: string; error: string; nextRetryAt: string | null }
   | { status: "error"; artifactId?: string; leadId?: string; error: string };
 
+export interface LeadArtifactRunOptions {
+  force?: boolean;
+  settings?: Settings;
+  actorUserId?: string | null;
+  requestSource?: string | null;
+}
+
 export async function queueLeadAiArtifact(
   leadId: string,
   artifactType: LeadAiArtifactType,
-  options: { force?: boolean; settings?: Settings } = {},
+  options: LeadArtifactRunOptions = {},
 ): Promise<LeadArtifactWorkerResult> {
   const settings = options.settings ?? await getSettings();
   if (!settings.ai_enabled) return { status: "disabled", reason: "AI is disabled in Settings." };
@@ -63,8 +72,16 @@ export async function queueLeadAiArtifact(
     model: OPENAI_LEAD_VERIFICATION_MODEL,
     input_hash: inputHash,
     prompt_version: LEAD_INTELLIGENCE_PROMPT_VERSION,
+    requested_by_user_id: options.actorUserId ?? null,
+    request_source: options.requestSource ?? null,
   });
-  await createAuditLog("lead_ai_artifact_queued", "lead", leadId, { artifactId: artifact.id, artifactType, force: !!options.force });
+  await createAuditLog("lead_ai_artifact_queued", "lead", leadId, {
+    artifactId: artifact.id,
+    artifactType,
+    force: !!options.force,
+    actorUserId: options.actorUserId ?? null,
+    requestSource: options.requestSource ?? null,
+  });
   return {
     status: "queued",
     leadId,
@@ -76,7 +93,7 @@ export async function queueLeadAiArtifact(
 
 export async function queueLeadPitchPack(
   leadId: string,
-  options: { force?: boolean; settings?: Settings } = {},
+  options: LeadArtifactRunOptions = {},
 ): Promise<{ businessDetail: LeadArtifactWorkerResult; competitiveReport: LeadArtifactWorkerResult }> {
   const settings = options.settings ?? await getSettings();
   const businessDetail = await queueLeadAiArtifact(leadId, "business_detail", { ...options, settings });
@@ -91,6 +108,41 @@ export async function processNextLeadArtifactJob(): Promise<LeadArtifactWorkerRe
   const artifact = await leaseNextLeadAiArtifactJob(3);
   if (!artifact) return { status: "idle", reason: "No lead intelligence jobs are queued." };
 
+  return processLeadArtifact(artifact);
+}
+
+export async function processLeadArtifactJobById(
+  artifactId: string,
+  options: { actorUserId?: string | null; requestSource?: string | null } = {},
+): Promise<LeadArtifactWorkerResult> {
+  const settings = await getSettings();
+  if (!settings.ai_enabled) return { status: "disabled", reason: "AI is disabled in Settings." };
+
+  const existing = await getLeadAiArtifactById(artifactId);
+  if (!existing) return { status: "error", artifactId, error: "Lead intelligence job not found." };
+  if (existing.status === "complete") {
+    const lead = await getLeadById(existing.lead_id);
+    return {
+      status: "complete",
+      leadId: existing.lead_id,
+      leadName: lead?.name ?? "Unknown lead",
+      artifactType: existing.artifact_type,
+      artifactId: existing.id,
+    };
+  }
+  if (existing.status !== "queued") {
+    return { status: "queued", leadId: existing.lead_id, artifactType: existing.artifact_type, artifactId: existing.id, skippedExisting: true };
+  }
+
+  const artifact = await leaseLeadAiArtifactJobById(artifactId, 3);
+  if (!artifact) return { status: "idle", reason: "Lead intelligence job is not ready." };
+  return processLeadArtifact(artifact, options);
+}
+
+async function processLeadArtifact(
+  artifact: LeadAiArtifact,
+  options: { actorUserId?: string | null; requestSource?: string | null } = {},
+): Promise<LeadArtifactWorkerResult> {
   const lead = await getLeadById(artifact.lead_id);
   if (!lead) {
     await markArtifactError(artifact, "Lead not found.");
@@ -120,6 +172,8 @@ export async function processNextLeadArtifactJob(): Promise<LeadArtifactWorkerRe
       input_tokens: result.inputTokens,
       output_tokens: result.outputTokens,
       estimated_cost: result.estimatedCost,
+      actor_user_id: options.actorUserId ?? artifact.requested_by_user_id,
+      request_source: options.requestSource ?? artifact.request_source,
       metadata: {
         artifactId: artifact.id,
         artifactType: artifact.artifact_type,
@@ -143,6 +197,8 @@ export async function processNextLeadArtifactJob(): Promise<LeadArtifactWorkerRe
       model,
       success: false,
       estimated_cost: 0,
+      actor_user_id: options.actorUserId ?? artifact.requested_by_user_id,
+      request_source: options.requestSource ?? artifact.request_source,
       metadata: {
         artifactId: artifact.id,
         artifactType: artifact.artifact_type,

@@ -99,6 +99,30 @@ describe("scheduler v2 query behavior", () => {
     expect(clamped.google_enterprise_monthly_cap).toBe(1);
   });
 
+  it("persists researcher AI safety caps", async () => {
+    await updateSettings({
+      researcher_ai_daily_run_cap: 12.8,
+      researcher_ai_daily_budget_usd: 3.25,
+      researcher_ai_monthly_budget_usd: 42.5,
+    });
+
+    const settings = await getSettings();
+    expect(settings.researcher_ai_daily_run_cap).toBe(12);
+    expect(settings.researcher_ai_daily_budget_usd).toBe(3.25);
+    expect(settings.researcher_ai_monthly_budget_usd).toBe(42.5);
+
+    await updateSettings({
+      researcher_ai_daily_run_cap: 0,
+      researcher_ai_daily_budget_usd: 0,
+      researcher_ai_monthly_budget_usd: -5,
+    });
+
+    const clamped = await getSettings();
+    expect(clamped.researcher_ai_daily_run_cap).toBe(1);
+    expect(clamped.researcher_ai_daily_budget_usd).toBe(0.01);
+    expect(clamped.researcher_ai_monthly_budget_usd).toBe(0.01);
+  });
+
   it("records worker runs for operations health", async () => {
     const run = await startWorkerRun("ai_verification", "cron");
     await completeWorkerRun(run.id, "processed", { status: "processed", leadId: "lead-1" }, 200);

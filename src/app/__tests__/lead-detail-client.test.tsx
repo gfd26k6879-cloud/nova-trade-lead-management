@@ -25,6 +25,7 @@ vi.mock("@/lib/leads/actions", () => ({
   createDemoForLeadAction: vi.fn(),
   updateLeadVerificationAction: vi.fn(),
   runAiVerificationAction: vi.fn(),
+  runResearcherAiCheckAction: vi.fn(),
   applyAiRecommendationAction: vi.fn(),
   repairLeadAiWebsiteViabilityAction: vi.fn(),
   addLeadNoteAction: vi.fn(),
@@ -34,7 +35,9 @@ vi.mock("@/lib/leads/actions", () => ({
   updateLeadPhoneVerificationStatusAction: vi.fn(),
   queueLeadAiArtifactAction: vi.fn(),
   queueLeadPitchPackAction: vi.fn(),
+  generateResearcherPitchPackAction: vi.fn(),
   updateLeadAiFeedbackAction: vi.fn(),
+  submitResearcherAiFeedbackAction: vi.fn(),
 }));
 
 import { ArchiveConfirmDialog, LeadDetailClient } from "@/app/(protected)/leads/[id]/lead-detail-client";
@@ -49,6 +52,9 @@ function renderLead(
   related: {
     events?: Array<Record<string, unknown>>;
     leadNotes?: Array<Record<string, unknown>>;
+    initialAiVerification?: Record<string, unknown> | null;
+    initialAiArtifacts?: Array<Record<string, unknown>>;
+    initialTab?: "work" | "overview" | "verification" | "intelligence" | "admin";
   } = {},
 ) {
   const lead = {
@@ -140,10 +146,11 @@ function renderLead(
       initialAdminRequests={[]}
       initialLeadNotes={(related.leadNotes ?? []) as never}
       initialDemo={null}
-      initialAiVerification={null}
-      initialAiArtifacts={[]}
+      initialAiVerification={(related.initialAiVerification ?? null) as never}
+      initialAiArtifacts={(related.initialAiArtifacts ?? []) as never}
       scoreThresholds={{ high: 20, medium: 10 }}
       currentUser={currentUser}
+      initialTab={related.initialTab}
     />,
   );
 }
@@ -226,6 +233,152 @@ describe("LeadDetailClient archive UX", () => {
     );
 
     expect(html).toContain("Claim this lead before changing workflow, notes, follow-ups, or contact history.");
+  });
+
+  it("keeps admin AI verification controls on the verification tab", () => {
+    const html = renderLead({}, { userId: "admin-1", email: "admin@example.com", role: "admin" }, { initialTab: "verification" });
+
+    expect(html).toContain("Run AI Verify");
+    expect(html).toContain("Refresh");
+    expect(html).toContain("Re-check Website Viability");
+    expect(html).toContain("Advanced AI Accuracy Feedback");
+  });
+
+  it("renders researcher-safe AI check controls without admin-only actions", () => {
+    const html = renderLead(
+      { assigned_to_user_id: "researcher-1", assigned_user_email: "researcher@example.com" },
+      { userId: "researcher-1", email: "researcher@example.com", role: "researcher" },
+      { initialTab: "verification" },
+    );
+
+    expect(html).toContain("Run AI check");
+    expect(html).toContain("Creates research evidence only");
+    expect(html).not.toContain("Run AI Verify");
+    expect(html).not.toContain("Re-check Website Viability");
+    expect(html).not.toContain("Advanced AI Accuracy Feedback");
+    expect(html).not.toContain("Mark Broken Site Opportunity");
+  });
+
+  it("renders verification evidence and researcher feedback controls", () => {
+    const html = renderLead(
+      { assigned_to_user_id: "researcher-1", assigned_user_email: "researcher@example.com" },
+      { userId: "researcher-1", email: "researcher@example.com", role: "researcher" },
+      {
+        initialTab: "verification",
+        initialAiVerification: {
+          id: "verification-1",
+          lead_id: "lead-1",
+          model: "gpt-5.4-mini",
+          status: "uncertain",
+          confidence: 0.58,
+          found_website_url: "https://candidate.example",
+          found_email: null,
+          found_phone: null,
+          social_profiles: [],
+          sources: [],
+          recommendation: "manual_review",
+          reason: "Candidate evidence is weak.",
+          summary: "Needs admin review.",
+          website_viability_status: "unknown",
+          website_health_json: null,
+          website_viability_reason: "Website loaded but did not contain enough matching business signals.",
+          raw_json: {
+            evidence: {
+              evidenceGrade: "weak",
+              candidateAssessment: {
+                score: 42,
+                recommendation: "manual_review",
+                reasons: ["Domain name does not strongly match the lead."],
+              },
+              identityMatch: {
+                summary: "Name match is weak and no phone match was found.",
+              },
+              officialSiteEvidence: ["Candidate domain loaded."],
+              contradictingEvidence: ["No address or phone match."],
+              manualReviewReason: "Weak identity evidence.",
+            },
+          },
+          estimated_cost: 0.01,
+          error: null,
+          created_at: "2026-06-02T00:00:00.000Z",
+        },
+      },
+    );
+
+    expect(html).toContain("Evidence");
+    expect(html).toContain("Weak");
+    expect(html).toContain("42");
+    expect(html).toContain("Name match is weak");
+    expect(html).toContain("AI was wrong");
+    expect(html).toContain("Pitch was useful");
+  });
+
+  it("requires unclaimed researchers to claim before using AI tools", () => {
+    const html = renderLead(
+      {},
+      { userId: "researcher-1", email: "researcher@example.com", role: "researcher" },
+      { initialTab: "intelligence" },
+    );
+
+    expect(html).toContain("Generate Pitch Pack");
+    expect(html).toContain("Claim this lead to run AI check or generate a pitch pack.");
+  });
+
+  it("renders operator-ready pitch snippets in intelligence artifacts", () => {
+    const html = renderLead(
+      {},
+      { userId: "admin-1", email: "admin@example.com", role: "admin" },
+      {
+        initialTab: "intelligence",
+        initialAiArtifacts: [
+          {
+            id: "artifact-1",
+            lead_id: "lead-1",
+            artifact_type: "competitive_report",
+            status: "complete",
+            model: "gpt-5.4-mini",
+            input_hash: "hash-1",
+            prompt_version: "lead-intelligence-v2",
+            content_json: {
+              artifact_type: "competitive_report",
+              competitor_count: 4,
+              competitor_examples: [],
+              website_status_mix: { none: 2, social: 0, basic: 1, custom: 1, usable_ai_site: 1, weak_or_broken: 0, unknown: 0 },
+              opportunity_angle: "No usable site angle.",
+              monthly_revenue_upside_range: { low: 300, high: 900, currency: "USD" },
+              assumptions: ["Conservative", "Local data only"],
+              objection_handling: ["They may have a hidden site.", "They may not want a site."],
+              pitch_bullets: ["Strong reviews.", "No usable official site found.", "Calls are valuable."],
+              data_gaps: [],
+              confidence: 0.72,
+              sources: [],
+              pitchAngleType: "no_usable_site",
+              verificationCaveat: "Use cautious wording.",
+              callOpener: "I could not find a usable official site.",
+              smsOpener: "Hi, I could not find a usable official site.",
+              voicemailScript: "I noticed a possible visibility gap.",
+              followUpMessage: "Following up on the visibility gap.",
+              claimSupport: ["AI evidence supports no usable official site."],
+            },
+            sources_json: [],
+            confidence: 0.72,
+            usage_input_tokens: 0,
+            usage_output_tokens: 0,
+            estimated_cost: 0,
+            error: null,
+            created_at: "2026-06-02T00:00:00.000Z",
+            updated_at: "2026-06-02T00:00:00.000Z",
+          },
+        ],
+      },
+    );
+
+    expect(html).toContain("Pitch stance");
+    expect(html).toContain("Use cautious wording.");
+    expect(html).toContain("Call opener");
+    expect(html).toContain("SMS opener");
+    expect(html).toContain("Voicemail");
+    expect(html).toContain("Follow-up");
   });
 
   it("renders the custom archive confirmation modal", () => {

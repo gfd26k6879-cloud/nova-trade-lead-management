@@ -21,11 +21,13 @@ import {
 import type { WebsiteStatus } from "@/lib/classify-website";
 import { getConfiguredOpenAIModel, OPENAI_LEAD_VERIFICATION_MODEL } from "@/lib/ai/config";
 import {
+  callOpenAILeadVerificationAdjudicator,
   callOpenAILeadVerifier,
   createLeadVerificationInputHash,
   isAiVerificationFresh,
   type AiVerificationResult,
 } from "@/lib/ai/lead-verification";
+import { applyWebsiteCandidateAssessment, extractVerificationEvidence, scoreWebsiteCandidate } from "@/lib/ai/lead-evidence";
 import {
   assessWebsiteViability,
   normalizeAiVerificationForWebsiteSales,
@@ -44,6 +46,12 @@ export interface AiVerificationBackfillResult {
   queued: number;
   skippedFresh: number;
   skippedIneligible: number;
+}
+
+export interface AiVerificationRunOptions {
+  applyToLead?: boolean;
+  actorUserId?: string | null;
+  requestSource?: string | null;
 }
 
 export async function enqueueAiVerificationForLead(
@@ -166,9 +174,17 @@ export async function queueMissingAiVerifications(limit = 10000): Promise<AiVeri
   return { scanned: leads.length, queued, skippedFresh, skippedIneligible };
 }
 
-export async function performAiVerification(lead: Lead, force: boolean, settingsArg?: Settings) {
+export async function performAiVerification(
+  lead: Lead,
+  force: boolean,
+  settingsArg?: Settings,
+  options: AiVerificationRunOptions = {},
+) {
   const settings = settingsArg ?? await getSettings();
   if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
+  const applyToLead = options.applyToLead ?? true;
+  const actorUserId = options.actorUserId ?? null;
+  const requestSource = options.requestSource ?? null;
 
   const model = getConfiguredOpenAIModel();
   if (model !== OPENAI_LEAD_VERIFICATION_MODEL) return { error: "AI model guardrail rejected the configured model." };
@@ -192,20 +208,54 @@ export async function performAiVerification(lead: Lead, force: boolean, settings
       model,
       was_cached: true,
       estimated_cost: 0,
+      actor_user_id: actorUserId,
+      request_source: requestSource,
       metadata: { cacheHit: true, inputHash },
     });
     return { success: true, cached: true, verification: latest };
   }
 
   try {
-    const ai = await callOpenAILeadVerifier(lead, await getConfiguredOpenAiApiKey());
+    const apiKey = await getConfiguredOpenAiApiKey();
+    const ai = await callOpenAILeadVerifier(lead, apiKey);
     const websiteViability = ai.result.foundWebsiteUrl
       ? await assessWebsiteViability(lead, ai.result.foundWebsiteUrl)
       : null;
     const normalized = normalizeAiVerificationForWebsiteSales(lead, ai.result, websiteViability);
-    const normalizedResult = normalized.result;
-    const normalizedViability = normalized.websiteViability;
+    const candidateAssessment = scoreWebsiteCandidate(
+      lead,
+      normalized.result.foundWebsiteUrl,
+      normalized.result.sources,
+      normalized.websiteViability,
+    );
+    let normalizedResult = applyWebsiteCandidateAssessment(normalized.result, candidateAssessment);
+    let normalizedViability = normalized.websiteViability;
+    let adjudicationRaw: Record<string, unknown> | null = null;
+    let adjudicationError: string | null = null;
+    let adjudicationInputTokens = 0;
+    let adjudicationOutputTokens = 0;
+    try {
+      const adjudicated = await callOpenAILeadVerificationAdjudicator(
+        lead,
+        normalizedResult,
+        normalizedViability,
+        candidateAssessment,
+        apiKey,
+      );
+      normalizedResult = applyWebsiteCandidateAssessment(adjudicated.result, candidateAssessment);
+      adjudicationRaw = adjudicated.raw;
+      adjudicationInputTokens = adjudicated.inputTokens;
+      adjudicationOutputTokens = adjudicated.outputTokens;
+    } catch (error) {
+      adjudicationError = error instanceof Error ? error.message : "AI adjudication failed.";
+    }
+    if (!normalizedResult.foundWebsiteUrl && normalizedViability?.status === "usable") {
+      normalizedViability = null;
+    }
     const winProbabilityScore = computeLeadWinProbability(lead, normalizedResult, normalizedViability?.status ?? null);
+    const usageInputTokens = ai.inputTokens + adjudicationInputTokens;
+    const usageOutputTokens = ai.outputTokens + adjudicationOutputTokens;
+    const estimatedCost = ai.estimatedCost;
 
     const verification = await createAiLeadVerification({
       lead_id: lead.id,
@@ -225,36 +275,57 @@ export async function performAiVerification(lead: Lead, force: boolean, settings
       website_viability_reason: normalizedViability?.reason ?? null,
       raw_json: {
         openai: ai.raw,
+        adjudication: adjudicationRaw,
+        adjudicationError,
         identityResearchResult: ai.result,
+        adjudicatedResult: normalizedResult,
+        evidence: {
+          candidateAssessment,
+          candidateWebsites: normalizedResult.candidateWebsites,
+          identityMatch: normalizedResult.identityMatch,
+          officialSiteEvidence: normalizedResult.officialSiteEvidence,
+          contradictingEvidence: normalizedResult.contradictingEvidence,
+          siteQualityFlags: normalizedResult.siteQualityFlags,
+          manualReviewReason: normalizedResult.manualReviewReason,
+          evidenceGrade: normalizedResult.evidenceGrade,
+        },
         websiteViability: normalizedViability,
       },
       input_hash: ai.inputHash,
-      usage_input_tokens: ai.inputTokens,
-      usage_output_tokens: ai.outputTokens,
-      estimated_cost: ai.estimatedCost,
+      usage_input_tokens: usageInputTokens,
+      usage_output_tokens: usageOutputTokens,
+      estimated_cost: estimatedCost,
+      requested_by_user_id: actorUserId,
+      request_source: requestSource,
     });
 
     await logAiUsageEvent({
       lead_id: lead.id,
       verification_id: verification.id,
       model,
-      input_tokens: ai.inputTokens,
-      output_tokens: ai.outputTokens,
-      estimated_cost: ai.estimatedCost,
+      input_tokens: usageInputTokens,
+      output_tokens: usageOutputTokens,
+      estimated_cost: estimatedCost,
+      actor_user_id: actorUserId,
+      request_source: requestSource,
       metadata: {
         status: normalizedResult.status,
         originalStatus: ai.result.status,
         recommendation: normalizedResult.recommendation,
         websiteViability: normalizedViability?.status ?? null,
+        candidateAssessment,
+        adjudicationError,
         inputHash: ai.inputHash,
       },
     });
-    await updateLeadAiVerificationSummary(lead.id, verification, winProbabilityScore);
-    await createAuditLog("ai_lead_verified", "lead", lead.id, {
-      verificationId: verification.id,
-      status: verification.status,
-      websiteViability: verification.website_viability_status,
-    });
+    if (applyToLead) {
+      await updateLeadAiVerificationSummary(lead.id, verification, winProbabilityScore);
+      await createAuditLog("ai_lead_verified", "lead", lead.id, {
+        verificationId: verification.id,
+        status: verification.status,
+        websiteViability: verification.website_viability_status,
+      });
+    }
     return { success: true, cached: false, verification };
   } catch (error) {
     const message = error instanceof Error ? error.message : "AI verification failed.";
@@ -267,6 +338,8 @@ export async function performAiVerification(lead: Lead, force: boolean, settings
       summary: message,
       input_hash: inputHash,
       error: message,
+      requested_by_user_id: actorUserId,
+      request_source: requestSource,
     });
     await logAiUsageEvent({
       lead_id: lead.id,
@@ -274,10 +347,14 @@ export async function performAiVerification(lead: Lead, force: boolean, settings
       model,
       success: false,
       estimated_cost: 0,
+      actor_user_id: actorUserId,
+      request_source: requestSource,
       metadata: { error: message, inputHash },
     });
-    await markLeadAiError(lead.id, message);
-    await createAuditLog("ai_lead_verification_failed", "lead", lead.id, { verificationId: verification.id, error: message });
+    if (applyToLead) {
+      await markLeadAiError(lead.id, message);
+      await createAuditLog("ai_lead_verification_failed", "lead", lead.id, { verificationId: verification.id, error: message });
+    }
     return { error: message, verification };
   }
 }
@@ -363,6 +440,17 @@ export function isWeakWebsiteOpportunity(status: WebsiteViabilityStatus | null):
 }
 
 function aiResultFromVerification(verification: AiLeadVerification): AiVerificationResult {
+  const evidence = extractVerificationEvidence(verification.raw_json);
+  const identityEvidence = evidence.identityMatch && typeof evidence.identityMatch === "object" && !Array.isArray(evidence.identityMatch)
+    ? evidence.identityMatch as Record<string, unknown>
+    : {};
+  const identityMatch: AiVerificationResult["identityMatch"] = {
+    name: normalizeIdentityMatchValue(identityEvidence.name),
+    location: normalizeIdentityMatchValue(identityEvidence.location),
+    phone: normalizeIdentityMatchValue(identityEvidence.phone),
+    category: normalizeIdentityMatchValue(identityEvidence.category),
+    summary: typeof identityEvidence.summary === "string" ? identityEvidence.summary : "No structured identity evidence recorded.",
+  };
   return {
     status: verification.status === "error" || verification.status === "not_checked" ? "uncertain" : verification.status,
     confidence: verification.confidence,
@@ -374,7 +462,19 @@ function aiResultFromVerification(verification: AiLeadVerification): AiVerificat
     recommendation: verification.recommendation,
     reason: verification.reason,
     summary: verification.summary,
+    candidateWebsites: Array.isArray(evidence.candidateWebsites) ? evidence.candidateWebsites as AiVerificationResult["candidateWebsites"] : [],
+    identityMatch,
+    officialSiteEvidence: Array.isArray(evidence.officialSiteEvidence) ? evidence.officialSiteEvidence.map(String) : [],
+    contradictingEvidence: Array.isArray(evidence.contradictingEvidence) ? evidence.contradictingEvidence.map(String) : [],
+    siteQualityFlags: Array.isArray(evidence.siteQualityFlags) ? evidence.siteQualityFlags.map(String) : [],
+    manualReviewReason: typeof evidence.manualReviewReason === "string" ? evidence.manualReviewReason : null,
+    evidenceGrade: evidence.evidenceGrade === "strong" || evidence.evidenceGrade === "moderate" || evidence.evidenceGrade === "conflicting" ? evidence.evidenceGrade : "weak",
   };
+}
+
+function normalizeIdentityMatchValue(value: unknown): AiVerificationResult["identityMatch"]["name"] {
+  if (value === "exact" || value === "near" || value === "weak" || value === "mismatch") return value;
+  return "unknown";
 }
 
 function isLeadEligibleForAiVerification(lead: Lead): boolean {

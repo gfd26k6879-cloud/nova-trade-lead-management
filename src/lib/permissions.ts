@@ -14,6 +14,7 @@ export type Permission =
   | "admin_request:manage"
   | "demo:create"
   | "ai:verify"
+  | "ai:researcher_tools"
   | "crawl:manage"
   | "settings:manage"
   | "export:csv"
@@ -34,6 +35,7 @@ const ADMIN_PERMISSIONS = new Set<Permission>([
   "admin_request:manage",
   "demo:create",
   "ai:verify",
+  "ai:researcher_tools",
   "crawl:manage",
   "settings:manage",
   "export:csv",
@@ -47,6 +49,7 @@ const RESEARCHER_PERMISSIONS = new Set<Permission>([
   "lead:assign",
   "outreach:create",
   "admin_request:create",
+  "ai:researcher_tools",
 ]);
 
 export function hasPermission(role: AppRole, permission: Permission): boolean {

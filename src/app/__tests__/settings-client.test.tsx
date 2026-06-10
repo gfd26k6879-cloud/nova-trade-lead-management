@@ -32,6 +32,9 @@ const settings = {
   ai_enabled: false,
   ai_model: "gpt-4o-mini",
   ai_batch_limit: 25,
+  researcher_ai_daily_run_cap: 10,
+  researcher_ai_daily_budget_usd: 2,
+  researcher_ai_monthly_budget_usd: 25,
   ai_cache_ttl_days: 30,
   ai_manual_apply_required: true,
   ai_auto_verify_enabled: true,
@@ -71,5 +74,14 @@ describe("SettingsClient", () => {
     expect(html).toContain('value="50"');
     expect(html).toContain('value="4900"');
     expect(html).toContain('value="900"');
+  });
+
+  it("renders researcher AI safety caps in AI controls", () => {
+    const html = renderToStaticMarkup(<SettingsClient initialSettings={settings} />);
+
+    expect(html).toContain("Researcher AI Daily Runs");
+    expect(html).toContain("Researcher AI Daily $");
+    expect(html).toContain("Researcher AI Monthly $");
+    expect(html).toContain('aria-label="Researcher AI Daily Runs"');
   });
 });

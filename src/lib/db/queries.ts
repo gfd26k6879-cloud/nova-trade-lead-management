@@ -560,6 +560,9 @@ export interface Settings {
   ai_daily_budget_usd: number;
   ai_monthly_budget_usd: number;
   ai_batch_limit: number;
+  researcher_ai_daily_run_cap: number;
+  researcher_ai_daily_budget_usd: number;
+  researcher_ai_monthly_budget_usd: number;
   ai_cache_ttl_days: number;
   ai_manual_apply_required: boolean;
   ai_auto_verify_enabled: boolean;
@@ -704,6 +707,8 @@ export interface AiLeadVerification {
   usage_input_tokens: number;
   usage_output_tokens: number;
   estimated_cost: number;
+  requested_by_user_id: string | null;
+  request_source: string | null;
   error: string | null;
   created_at: string;
 }
@@ -729,6 +734,8 @@ export interface AiLeadVerificationInput {
   usage_input_tokens?: number;
   usage_output_tokens?: number;
   estimated_cost?: number;
+  requested_by_user_id?: string | null;
+  request_source?: string | null;
   error?: string | null;
 }
 
@@ -742,7 +749,14 @@ export interface AiUsageEventInput {
   input_tokens?: number;
   output_tokens?: number;
   estimated_cost?: number;
+  actor_user_id?: string | null;
+  request_source?: string | null;
   metadata?: Record<string, unknown>;
+}
+
+export interface ActorAiUsageSummary {
+  calls: number;
+  cost: number;
 }
 
 export interface ApiUsageSummary {
@@ -1017,6 +1031,8 @@ export interface LeadAiArtifact {
   usage_input_tokens: number;
   usage_output_tokens: number;
   estimated_cost: number;
+  requested_by_user_id: string | null;
+  request_source: string | null;
   error: string | null;
   attempt_count: number;
   last_error: string | null;
@@ -1038,6 +1054,8 @@ export interface LeadAiArtifactInput {
   usage_input_tokens?: number;
   usage_output_tokens?: number;
   estimated_cost?: number;
+  requested_by_user_id?: string | null;
+  request_source?: string | null;
   error?: string | null;
 }
 
@@ -1051,6 +1069,44 @@ export interface LeadAiFeedbackInput {
   correctedWebsiteUrl?: string | null;
   falsePositiveReason?: string | null;
   reviewerNotes?: string | null;
+}
+
+export type AiFeedbackKind = "verification" | "pitch";
+export type AiFeedbackVerdict = "correct" | "incorrect" | "uncertain" | "useful" | "not_useful";
+
+export interface AiFeedbackEvent {
+  id: string;
+  lead_id: string;
+  verification_id: string | null;
+  artifact_id: string | null;
+  actor_user_id: string | null;
+  feedback_kind: AiFeedbackKind;
+  verdict: AiFeedbackVerdict;
+  corrected_website_url: string | null;
+  reason: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AiFeedbackEventInput {
+  lead_id: string;
+  verification_id?: string | null;
+  artifact_id?: string | null;
+  actor_user_id?: string | null;
+  feedback_kind: AiFeedbackKind;
+  verdict: AiFeedbackVerdict;
+  corrected_website_url?: string | null;
+  reason?: string | null;
+  metadata_json?: Record<string, unknown>;
+}
+
+export interface AiFeedbackEvaluationSummary {
+  total: number;
+  verificationCorrect: number;
+  verificationIncorrect: number;
+  verificationUncertain: number;
+  pitchUseful: number;
+  pitchNotUseful: number;
 }
 
 export type ManualWebsiteCorrectionResolution =
@@ -1443,6 +1499,15 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
     "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS last_error text",
     "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS next_retry_at timestamptz",
     "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 3",
+    "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS requested_by_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL",
+    "ALTER TABLE lead_ai_artifacts ADD COLUMN IF NOT EXISTS request_source text",
+    "ALTER TABLE ai_lead_verifications ADD COLUMN IF NOT EXISTS requested_by_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL",
+    "ALTER TABLE ai_lead_verifications ADD COLUMN IF NOT EXISTS request_source text",
+    "ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS actor_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL",
+    "ALTER TABLE ai_usage_events ADD COLUMN IF NOT EXISTS request_source text",
+    "ALTER TABLE settings ADD COLUMN IF NOT EXISTS researcher_ai_daily_run_cap integer NOT NULL DEFAULT 10",
+    "ALTER TABLE settings ADD COLUMN IF NOT EXISTS researcher_ai_daily_budget_usd double precision NOT NULL DEFAULT 2.0",
+    "ALTER TABLE settings ADD COLUMN IF NOT EXISTS researcher_ai_monthly_budget_usd double precision NOT NULL DEFAULT 25.0",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS assigned_to_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL",
     "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS actor_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL",
     "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS actor_email text",
@@ -1489,8 +1554,27 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )`,
+    `CREATE TABLE IF NOT EXISTS ai_feedback_events (
+      id text PRIMARY KEY,
+      lead_id text NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      verification_id text REFERENCES ai_lead_verifications(id) ON DELETE SET NULL,
+      artifact_id text REFERENCES lead_ai_artifacts(id) ON DELETE SET NULL,
+      actor_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+      feedback_kind text NOT NULL CHECK (feedback_kind IN ('verification','pitch')),
+      verdict text NOT NULL CHECK (verdict IN ('correct','incorrect','uncertain','useful','not_useful')),
+      corrected_website_url text,
+      reason text,
+      metadata_json text NOT NULL DEFAULT '{}',
+      created_at timestamptz NOT NULL DEFAULT now()
+    )`,
     "CREATE INDEX IF NOT EXISTS idx_leads_assigned_to_user ON leads(assigned_to_user_id, updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_outreach_events_actor_created ON outreach_events(actor_user_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_usage_actor_created ON ai_usage_events(actor_user_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_verifications_requester_created ON ai_lead_verifications(requested_by_user_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_requester_created ON lead_ai_artifacts(requested_by_user_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_lead_created ON ai_feedback_events(lead_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_actor_created ON ai_feedback_events(actor_user_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_kind_verdict ON ai_feedback_events(feedback_kind, verdict, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_lead_notes_lead_created ON lead_notes(lead_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_lead_notes_author_created ON lead_notes(author_user_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_app_users_team_lead ON app_users(team_lead_user_id, status)",
@@ -1501,7 +1585,8 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_requests_open_unique ON admin_requests(lead_id, request_type) WHERE status IN ('new','seen','in_progress','waiting_on_researcher')",
     "ALTER TABLE IF EXISTS lead_notes ENABLE ROW LEVEL SECURITY",
     "ALTER TABLE IF EXISTS admin_requests ENABLE ROW LEVEL SECURITY",
-    "REVOKE ALL ON TABLE lead_notes, admin_requests FROM anon, authenticated",
+    "ALTER TABLE IF EXISTS ai_feedback_events ENABLE ROW LEVEL SECURITY",
+    "REVOKE ALL ON TABLE lead_notes, admin_requests, ai_feedback_events FROM anon, authenticated",
     "CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_retry_ready ON lead_ai_artifacts(status, next_retry_at, created_at) WHERE status = 'queued'",
     "CREATE INDEX IF NOT EXISTS idx_leads_ai_queue_ready ON leads(ai_queue_status, ai_next_retry_at, sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at) WHERE ai_queue_status = 'queued'",
     "CREATE INDEX IF NOT EXISTS idx_leads_score_recompute_stale ON leads(updated_at DESC, last_quality_scored_at)",
@@ -1628,6 +1713,9 @@ export async function getSettings(): Promise<Settings>{
     ai_daily_budget_usd: (row.ai_daily_budget_usd as number) ?? 2.0,
     ai_monthly_budget_usd: (row.ai_monthly_budget_usd as number) ?? 25.0,
     ai_batch_limit: (row.ai_batch_limit as number) ?? 25,
+    researcher_ai_daily_run_cap: Math.max(1, Math.floor((row.researcher_ai_daily_run_cap as number) ?? 10)),
+    researcher_ai_daily_budget_usd: Math.max(0.01, Number((row.researcher_ai_daily_budget_usd as number) ?? 2.0)),
+    researcher_ai_monthly_budget_usd: Math.max(0.01, Number((row.researcher_ai_monthly_budget_usd as number) ?? 25.0)),
     ai_cache_ttl_days: (row.ai_cache_ttl_days as number) ?? 30,
     ai_manual_apply_required: ((row.ai_manual_apply_required as number) ?? 1) === 1,
     ai_auto_verify_enabled: ((row.ai_auto_verify_enabled as number) ?? 1) === 1,
@@ -1714,6 +1802,18 @@ export async function updateSettings(settings: Partial<Settings>): Promise<void>
   if (settings.ai_batch_limit !== undefined) {
     updates.push("ai_batch_limit = ?");
     values.push(Math.max(1, Math.min(100, Math.floor(settings.ai_batch_limit))));
+  }
+  if (settings.researcher_ai_daily_run_cap !== undefined) {
+    updates.push("researcher_ai_daily_run_cap = ?");
+    values.push(Math.max(1, Math.min(100, Math.floor(settings.researcher_ai_daily_run_cap))));
+  }
+  if (settings.researcher_ai_daily_budget_usd !== undefined) {
+    updates.push("researcher_ai_daily_budget_usd = ?");
+    values.push(Math.max(0.01, settings.researcher_ai_daily_budget_usd));
+  }
+  if (settings.researcher_ai_monthly_budget_usd !== undefined) {
+    updates.push("researcher_ai_monthly_budget_usd = ?");
+    values.push(Math.max(0.01, settings.researcher_ai_monthly_budget_usd));
   }
   if (settings.ai_cache_ttl_days !== undefined) {
     updates.push("ai_cache_ttl_days = ?");
@@ -5220,8 +5320,9 @@ export async function createAiLeadVerification(input: AiLeadVerificationInput): 
       id, lead_id, model, status, confidence, found_website_url, found_email, found_phone,
       social_profiles, sources, recommendation, reason, summary, raw_json, input_hash,
       website_viability_status, website_health_json, website_viability_reason,
-      usage_input_tokens, usage_output_tokens, estimated_cost, error, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      usage_input_tokens, usage_output_tokens, estimated_cost, error,
+      requested_by_user_id, request_source, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     input.lead_id,
@@ -5245,6 +5346,8 @@ export async function createAiLeadVerification(input: AiLeadVerificationInput): 
     Math.max(0, Math.floor(input.usage_output_tokens ?? 0)),
     roundCurrency(input.estimated_cost ?? 0),
     input.error ?? null,
+    input.requested_by_user_id ?? null,
+    input.request_source ?? null,
     now,
   );
 
@@ -5342,8 +5445,9 @@ export async function logAiUsageEvent(input: AiUsageEventInput): Promise<void>{
   await db.prepare(
     `INSERT INTO ai_usage_events (
       id, lead_id, verification_id, model, endpoint, success, was_cached,
-      input_tokens, output_tokens, total_tokens, estimated_cost, metadata, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      input_tokens, output_tokens, total_tokens, estimated_cost, metadata,
+      actor_user_id, request_source, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     generateId(),
     input.lead_id ?? null,
@@ -5357,8 +5461,100 @@ export async function logAiUsageEvent(input: AiUsageEventInput): Promise<void>{
     inputTokens + outputTokens,
     roundCurrency(input.estimated_cost ?? 0),
     JSON.stringify(input.metadata ?? {}),
+    input.actor_user_id ?? null,
+    input.request_source ?? null,
     nowISO(),
   );
+}
+
+export async function getAiUsageForActor(
+  actorUserId: string,
+  sinceIso: string,
+  requestSources: string[] = ["researcher_ai_check", "researcher_pitch_pack"],
+): Promise<ActorAiUsageSummary> {
+  const db = await getDb();
+  const sources = requestSources.map((source) => source.trim()).filter(Boolean);
+  if (!actorUserId || sources.length === 0) return { calls: 0, cost: 0 };
+  const placeholders = sources.map(() => "?").join(",");
+  const row = await db.prepare(
+    `SELECT COALESCE(COUNT(*), 0) as calls,
+            COALESCE(SUM(estimated_cost), 0) as cost
+     FROM ai_usage_events
+     WHERE actor_user_id = ?
+       AND request_source IN (${placeholders})
+       AND created_at >= ?
+       AND COALESCE(success, 1) = 1`
+  ).get(actorUserId, ...sources, sinceIso) as { calls: number; cost: number } | undefined;
+  return {
+    calls: Number(row?.calls ?? 0),
+    cost: Number(row?.cost ?? 0),
+  };
+}
+
+export async function createAiFeedbackEvent(input: AiFeedbackEventInput): Promise<AiFeedbackEvent> {
+  const db = await getDb();
+  const id = generateId();
+  const now = nowISO();
+  await db.prepare(
+    `INSERT INTO ai_feedback_events (
+      id, lead_id, verification_id, artifact_id, actor_user_id, feedback_kind, verdict,
+      corrected_website_url, reason, metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    input.lead_id,
+    input.verification_id ?? null,
+    input.artifact_id ?? null,
+    input.actor_user_id ?? null,
+    normalizeAiFeedbackKind(input.feedback_kind),
+    normalizeAiFeedbackVerdict(input.verdict),
+    input.corrected_website_url?.trim() || null,
+    input.reason?.trim().slice(0, 1000) || null,
+    JSON.stringify(input.metadata_json ?? {}),
+    now,
+  );
+  const event = await getAiFeedbackEventById(id);
+  if (!event) throw new Error("Unable to load created AI feedback event.");
+  return event;
+}
+
+export async function getAiFeedbackEventsForLead(leadId: string): Promise<AiFeedbackEvent[]> {
+  const db = await getDb();
+  const rows = await db.prepare(
+    `SELECT *
+     FROM ai_feedback_events
+     WHERE lead_id = ?
+     ORDER BY created_at DESC`
+  ).all(leadId) as Array<Record<string, unknown>>;
+  return rows.map(parseAiFeedbackEventRow);
+}
+
+export async function getAiFeedbackEvaluationSummary(): Promise<AiFeedbackEvaluationSummary> {
+  const db = await getDb();
+  const row = await db.prepare(
+    `SELECT
+       COUNT(*) as total,
+       COALESCE(SUM(CASE WHEN feedback_kind = 'verification' AND verdict = 'correct' THEN 1 ELSE 0 END), 0) as verificationCorrect,
+       COALESCE(SUM(CASE WHEN feedback_kind = 'verification' AND verdict = 'incorrect' THEN 1 ELSE 0 END), 0) as verificationIncorrect,
+       COALESCE(SUM(CASE WHEN feedback_kind = 'verification' AND verdict = 'uncertain' THEN 1 ELSE 0 END), 0) as verificationUncertain,
+       COALESCE(SUM(CASE WHEN feedback_kind = 'pitch' AND verdict = 'useful' THEN 1 ELSE 0 END), 0) as pitchUseful,
+       COALESCE(SUM(CASE WHEN feedback_kind = 'pitch' AND verdict = 'not_useful' THEN 1 ELSE 0 END), 0) as pitchNotUseful
+     FROM ai_feedback_events`
+  ).get() as Record<string, unknown> | undefined;
+  return {
+    total: Number(row?.total ?? 0),
+    verificationCorrect: Number(row?.verificationCorrect ?? 0),
+    verificationIncorrect: Number(row?.verificationIncorrect ?? 0),
+    verificationUncertain: Number(row?.verificationUncertain ?? 0),
+    pitchUseful: Number(row?.pitchUseful ?? 0),
+    pitchNotUseful: Number(row?.pitchNotUseful ?? 0),
+  };
+}
+
+async function getAiFeedbackEventById(id: string): Promise<AiFeedbackEvent | null> {
+  const db = await getDb();
+  const row = await db.prepare("SELECT * FROM ai_feedback_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  return row ? parseAiFeedbackEventRow(row) : null;
 }
 
 // ─── Lead AI Artifacts ───
@@ -5397,8 +5593,8 @@ export async function createLeadAiArtifactJob(input: LeadAiArtifactInput): Promi
     `INSERT INTO lead_ai_artifacts (
       id, lead_id, artifact_type, status, model, input_hash, prompt_version,
       content_json, sources_json, confidence, usage_input_tokens, usage_output_tokens,
-      estimated_cost, error, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      estimated_cost, error, requested_by_user_id, request_source, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     input.lead_id,
@@ -5414,6 +5610,8 @@ export async function createLeadAiArtifactJob(input: LeadAiArtifactInput): Promi
     Math.max(0, Math.floor(input.usage_output_tokens ?? 0)),
     roundCurrency(input.estimated_cost ?? 0),
     input.error ?? null,
+    input.requested_by_user_id ?? null,
+    input.request_source ?? null,
     now,
     now,
   );
@@ -5481,6 +5679,29 @@ export async function leaseNextLeadAiArtifactJob(maxAttempts = 3): Promise<LeadA
        AND status = 'queued'
      RETURNING *`
   ).get(safeMaxAttempts, safeMaxAttempts, now, now) as Record<string, unknown> | undefined;
+
+  return row ? parseLeadAiArtifactRow(row) : null;
+}
+
+export async function leaseLeadAiArtifactJobById(id: string, maxAttempts = 3): Promise<LeadAiArtifact | null> {
+  const db = await getDb();
+  const safeMaxAttempts = Math.max(1, Math.floor(maxAttempts));
+  const now = nowISO();
+  const row = await db.prepare(
+    `UPDATE lead_ai_artifacts
+     SET status = 'running',
+         attempt_count = attempt_count + 1,
+         error = NULL,
+         last_error = NULL,
+         next_retry_at = NULL,
+         max_attempts = CASE WHEN max_attempts < ? THEN ? ELSE max_attempts END,
+         updated_at = ?
+     WHERE id = ?
+       AND status = 'queued'
+       AND (next_retry_at IS NULL OR next_retry_at <= ?)
+       AND attempt_count < max_attempts
+     RETURNING *`
+  ).get(safeMaxAttempts, safeMaxAttempts, now, id, now) as Record<string, unknown> | undefined;
 
   return row ? parseLeadAiArtifactRow(row) : null;
 }
@@ -7322,6 +7543,8 @@ function parseAiLeadVerificationRow(row: Record<string, unknown>): AiLeadVerific
     usage_input_tokens: (row.usage_input_tokens as number | null) ?? 0,
     usage_output_tokens: (row.usage_output_tokens as number | null) ?? 0,
     estimated_cost: (row.estimated_cost as number | null) ?? 0,
+    requested_by_user_id: (row.requested_by_user_id as string | null) ?? null,
+    request_source: (row.request_source as string | null) ?? null,
     error: (row.error as string | null) ?? null,
     created_at: row.created_at as string,
   };
@@ -7342,6 +7565,8 @@ function parseLeadAiArtifactRow(row: Record<string, unknown>): LeadAiArtifact {
     usage_input_tokens: Number(row.usage_input_tokens ?? 0),
     usage_output_tokens: Number(row.usage_output_tokens ?? 0),
     estimated_cost: Number(row.estimated_cost ?? 0),
+    requested_by_user_id: (row.requested_by_user_id as string | null) ?? null,
+    request_source: (row.request_source as string | null) ?? null,
     error: (row.error as string | null) ?? null,
     attempt_count: Number(row.attempt_count ?? 0),
     last_error: (row.last_error as string | null) ?? null,
@@ -7349,6 +7574,22 @@ function parseLeadAiArtifactRow(row: Record<string, unknown>): LeadAiArtifact {
     max_attempts: Number(row.max_attempts ?? 3),
     created_at: row.created_at as string,
     updated_at: (row.updated_at as string | null) ?? (row.created_at as string),
+  };
+}
+
+function parseAiFeedbackEventRow(row: Record<string, unknown>): AiFeedbackEvent {
+  return {
+    id: row.id as string,
+    lead_id: row.lead_id as string,
+    verification_id: (row.verification_id as string | null) ?? null,
+    artifact_id: (row.artifact_id as string | null) ?? null,
+    actor_user_id: (row.actor_user_id as string | null) ?? null,
+    feedback_kind: normalizeAiFeedbackKind(row.feedback_kind),
+    verdict: normalizeAiFeedbackVerdict(row.verdict),
+    corrected_website_url: (row.corrected_website_url as string | null) ?? null,
+    reason: (row.reason as string | null) ?? null,
+    metadata_json: safeParseJson<Record<string, unknown>>(row.metadata_json as string | null, {}),
+    created_at: row.created_at as string,
   };
 }
 
@@ -7364,6 +7605,15 @@ function normalizeLeadAiArtifactStatus(value: unknown): LeadAiArtifactStatus {
 function normalizeNullableLeadAiArtifactStatus(value: unknown): LeadAiArtifactStatus | null {
   if (value == null || value === "") return null;
   return normalizeLeadAiArtifactStatus(value);
+}
+
+function normalizeAiFeedbackKind(value: unknown): AiFeedbackKind {
+  return value === "pitch" ? "pitch" : "verification";
+}
+
+function normalizeAiFeedbackVerdict(value: unknown): AiFeedbackVerdict {
+  if (value === "correct" || value === "incorrect" || value === "uncertain" || value === "useful" || value === "not_useful") return value;
+  return "uncertain";
 }
 
 export async function batchUpdateScores(updates: Array<{ id: string; score: number }>): Promise<void>{

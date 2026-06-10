@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildLeadVerificationRequest, createLeadVerificationInputHash, parseAiVerificationResponse } from "@/lib/ai/lead-verification";
+import {
+  buildLeadVerificationAdjudicationRequest,
+  buildLeadVerificationRequest,
+  createLeadVerificationInputHash,
+  parseAiVerificationResponse,
+} from "@/lib/ai/lead-verification";
+import {
+  buildLeadIdentityEvidencePacket,
+  scoreWebsiteCandidate,
+} from "@/lib/ai/lead-evidence";
 import type { Lead } from "@/lib/db/queries";
 
 function makeLead(): Lead {
@@ -116,6 +125,13 @@ describe("AI lead verification request", () => {
       recommendation: "exclude",
       reason: "Found an official site.",
       summary: "The business appears to have an official website.",
+      candidateWebsites: [],
+      identityMatch: { name: "near", location: "unknown", phone: "unknown", category: "unknown", summary: "Near business name match." },
+      officialSiteEvidence: [],
+      contradictingEvidence: [],
+      siteQualityFlags: [],
+      manualReviewReason: null,
+      evidenceGrade: "strong",
     }))).toThrow(/source URLs/);
   });
 
@@ -133,6 +149,8 @@ describe("AI lead verification request", () => {
       summary: "No official website was found in the checked sources.",
     }));
     expect(parsed.status).toBe("no_site_found");
+    expect(parsed.evidenceGrade).toBe("weak");
+    expect(parsed.candidateWebsites).toEqual([]);
   });
 
   it("changes the input hash when identity-critical fields change", () => {
@@ -142,5 +160,105 @@ describe("AI lead verification request", () => {
 
     expect(createLeadVerificationInputHash(renamed)).not.toBe(createLeadVerificationInputHash(original));
     expect(createLeadVerificationInputHash(moved)).not.toBe(createLeadVerificationInputHash(original));
+  });
+
+  it("keeps the paid web-search verifier boundary locked", () => {
+    const request = buildLeadVerificationRequest(makeLead());
+
+    expect(request.max_tool_calls).toBe(2);
+    expect(request.include).toEqual(["web_search_call.action.sources"]);
+    expect(request.tools).toEqual([
+      expect.objectContaining({ type: "web_search" }),
+    ]);
+    expect(JSON.stringify(request.input)).toContain("identityEvidence");
+  });
+
+  it("builds normalized evidence packets before web search", () => {
+    const lead = {
+      ...makeLead(),
+      address: "123 Main St, Denver, CO 80202",
+      ai_website_feedback_status: "incorrect",
+      ai_corrected_website_url: "https://correct-gateway.example",
+    };
+
+    const packet = buildLeadIdentityEvidencePacket(lead);
+
+    expect(packet.name.normalized).toBe("gateway park dental");
+    expect(packet.name.tokens).toEqual(expect.arrayContaining(["gateway", "park", "dental"]));
+    expect(packet.phone.normalized).toBe("3035550100");
+    expect(packet.location.zip).toBe("80202");
+    expect(packet.location.city).toBe("Denver");
+    expect(packet.category.synonyms).toEqual(expect.arrayContaining(["dentist", "dental clinic"]));
+    expect(packet.knownDirectoryOrSocialHosts).toEqual(expect.arrayContaining(["yelp.com", "facebook.com"]));
+    expect(packet.feedback.correctedWebsiteUrl).toBe("https://correct-gateway.example");
+  });
+
+  it("scores official candidates higher than directory and weak identity matches", () => {
+    const lead = {
+      ...makeLead(),
+      address: "123 Main St, Denver, CO 80202",
+    };
+
+    const official = scoreWebsiteCandidate(lead, "https://gatewayparkdental.com", [], {
+      status: "usable",
+      reason: "Website is reachable and contains matching business signals.",
+      health: {
+        requestedUrl: "https://gatewayparkdental.com",
+        finalUrl: "https://gatewayparkdental.com",
+        statusCode: 200,
+        method: "GET",
+        responseMs: 100,
+        redirected: false,
+        ssl: true,
+        title: "Gateway Park Dental",
+        contentLength: 5000,
+        businessSignalScore: 5,
+        matchedSignals: ["name", "phone"],
+        classifierSignals: [],
+      },
+    });
+    const directory = scoreWebsiteCandidate(lead, "https://www.yelp.com/biz/gateway-park-dental-denver", [], null);
+
+    expect(official.score).toBeGreaterThanOrEqual(75);
+    expect(official.recommendation).toBe("accept");
+    expect(directory.score).toBeLessThan(30);
+    expect(directory.flags).toContain("directory_or_social_host");
+    expect(directory.recommendation).toBe("reject");
+  });
+
+  it("builds a no-tool adjudication request", () => {
+    const lead = makeLead();
+    const base = parseAiVerificationResponse(JSON.stringify({
+      status: "site_found",
+      confidence: 0.8,
+      foundWebsiteUrl: "https://gatewayparkdental.com",
+      foundEmail: null,
+      foundPhone: null,
+      socialProfiles: [],
+      sources: [{ url: "https://gatewayparkdental.com", title: "Gateway Park Dental", evidence: "Official homepage." }],
+      recommendation: "exclude",
+      reason: "Candidate site found.",
+      summary: "The business appears to have an official site.",
+      candidateWebsites: [{ url: "https://gatewayparkdental.com", title: "Gateway Park Dental", sourceUrl: "https://gatewayparkdental.com", evidence: "Official homepage.", isOfficialCandidate: true }],
+      identityMatch: { name: "near", location: "unknown", phone: "unknown", category: "unknown", summary: "Near business name match." },
+      officialSiteEvidence: ["Official homepage found."],
+      contradictingEvidence: [],
+      siteQualityFlags: [],
+      manualReviewReason: null,
+      evidenceGrade: "moderate",
+    }));
+    const request = buildLeadVerificationAdjudicationRequest(lead, base, null, {
+      url: "https://gatewayparkdental.com",
+      score: 82,
+      recommendation: "accept",
+      flags: ["domain_name_match"],
+      reasons: ["Domain tokens match the business name."],
+      hostType: "official_candidate",
+    });
+
+    expect(request).not.toHaveProperty("tools");
+    expect(request).not.toHaveProperty("include");
+    expect(request).not.toHaveProperty("max_tool_calls");
+    expect(JSON.stringify(request)).toContain("candidateAssessment");
   });
 });

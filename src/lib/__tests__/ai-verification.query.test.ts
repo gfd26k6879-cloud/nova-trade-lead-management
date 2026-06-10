@@ -19,6 +19,10 @@ import {
   getConfiguredGooglePlacesApiKey,
   getConfiguredGoogleMapsBrowserApiKey,
   getLatestAiVerification,
+  getAiUsageForActor,
+  createAiFeedbackEvent,
+  getAiFeedbackEvaluationSummary,
+  getAiFeedbackEventsForLead,
   getAiWebsiteViabilityRepairLeads,
   getSettings,
   logAiUsageEvent,
@@ -164,10 +168,23 @@ describe("AI verification queries", () => {
       input_tokens: 120,
       output_tokens: 80,
       estimated_cost: 0.05,
+      actor_user_id: "researcher-1",
+      request_source: "researcher_ai_check",
     });
 
     const usage = testDb.prepare("SELECT COALESCE(SUM(estimated_cost), 0) as cost FROM ai_usage_events").get() as { cost: number };
     expect(usage.cost).toBe(0.05);
+    await logAiUsageEvent({
+      lead_id: "lead-1",
+      model: "gpt-5.4-mini",
+      input_tokens: 40,
+      output_tokens: 20,
+      estimated_cost: 0.01,
+      actor_user_id: "researcher-2",
+      request_source: "researcher_ai_check",
+    });
+    const actorUsage = await getAiUsageForActor("researcher-1", "2000-01-01T00:00:00.000Z");
+    expect(actorUsage).toEqual({ calls: 1, cost: 0.05 });
 
     const changed = await applyAiFoundWebsite("lead-1", "https://gatewayparkdental.example");
     const lead = testDb.prepare("SELECT website_uri, website_status, qualification_status, score, win_probability_score FROM leads WHERE id = 'lead-1'").get() as Record<string, unknown>;
@@ -177,6 +194,87 @@ describe("AI verification queries", () => {
     expect(lead.qualification_status).toBe("disqualified");
     expect(lead.score).toBe(0);
     expect(lead.win_probability_score).toBe(0);
+  });
+
+  it("stores researcher attribution on verification rows", async () => {
+    const verification = await createAiLeadVerification({
+      lead_id: "lead-1",
+      model: "gpt-5.4-mini",
+      status: "no_site_found",
+      confidence: 0.74,
+      recommendation: "keep",
+      reason: "No official website found.",
+      summary: "Researcher check found no official site.",
+      requested_by_user_id: "researcher-1",
+      request_source: "researcher_ai_check",
+    });
+
+    expect(verification.requested_by_user_id).toBe("researcher-1");
+    expect(verification.request_source).toBe("researcher_ai_check");
+    const latest = await getLatestAiVerification("lead-1");
+    expect(latest?.requested_by_user_id).toBe("researcher-1");
+    expect(latest?.request_source).toBe("researcher_ai_check");
+  });
+
+  it("stores advisory researcher AI feedback separately from admin canonical feedback", async () => {
+    const verification = await createAiLeadVerification({
+      lead_id: "lead-1",
+      model: "gpt-5.4-mini",
+      status: "site_found",
+      confidence: 0.88,
+      found_website_url: "https://wrong-gateway.example",
+      sources: [{ url: "https://wrong-gateway.example", title: "Wrong Gateway", evidence: "Candidate page." }],
+      recommendation: "manual_review",
+      reason: "Candidate official site found.",
+      summary: "Candidate needs review.",
+    });
+
+    const event = await createAiFeedbackEvent({
+      lead_id: "lead-1",
+      verification_id: verification.id,
+      artifact_id: null,
+      actor_user_id: "researcher-1",
+      feedback_kind: "verification",
+      verdict: "incorrect",
+      corrected_website_url: "https://gatewayparkdental.example",
+      reason: "The returned website is a different business.",
+      metadata_json: { source: "lead_detail" },
+    });
+    const events = await getAiFeedbackEventsForLead("lead-1");
+    const lead = testDb.prepare("SELECT ai_website_feedback_status, ai_corrected_website_url FROM leads WHERE id = 'lead-1'").get() as Record<string, unknown>;
+
+    expect(event.verdict).toBe("incorrect");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.actor_user_id).toBe("researcher-1");
+    expect(lead.ai_website_feedback_status).toBeNull();
+    expect(lead.ai_corrected_website_url).toBeNull();
+  });
+
+  it("summarizes advisory AI feedback for offline evaluation", async () => {
+    await createAiFeedbackEvent({
+      lead_id: "lead-1",
+      actor_user_id: "researcher-1",
+      feedback_kind: "verification",
+      verdict: "incorrect",
+      corrected_website_url: null,
+      reason: "Wrong website.",
+      metadata_json: { aiStatus: "site_found" },
+    });
+    await createAiFeedbackEvent({
+      lead_id: "lead-1",
+      actor_user_id: "researcher-1",
+      feedback_kind: "pitch",
+      verdict: "useful",
+      corrected_website_url: null,
+      reason: "Good opener.",
+      metadata_json: { artifactType: "competitive_report" },
+    });
+
+    const summary = await getAiFeedbackEvaluationSummary();
+
+    expect(summary.total).toBe(2);
+    expect(summary.verificationIncorrect).toBe(1);
+    expect(summary.pitchUseful).toBe(1);
   });
 
   it("stores OpenAI API keys encrypted and falls back to env after clearing", async () => {

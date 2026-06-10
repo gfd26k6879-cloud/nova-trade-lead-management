@@ -73,6 +73,9 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "settings", column: "ai_daily_budget_usd", type: "REAL NOT NULL DEFAULT 2.0" },
   { table: "settings", column: "ai_monthly_budget_usd", type: "REAL NOT NULL DEFAULT 25.0" },
   { table: "settings", column: "ai_batch_limit", type: "INTEGER NOT NULL DEFAULT 25" },
+  { table: "settings", column: "researcher_ai_daily_run_cap", type: "INTEGER NOT NULL DEFAULT 10" },
+  { table: "settings", column: "researcher_ai_daily_budget_usd", type: "REAL NOT NULL DEFAULT 2.0" },
+  { table: "settings", column: "researcher_ai_monthly_budget_usd", type: "REAL NOT NULL DEFAULT 25.0" },
   { table: "settings", column: "ai_cache_ttl_days", type: "INTEGER NOT NULL DEFAULT 30" },
   { table: "settings", column: "ai_manual_apply_required", type: "INTEGER NOT NULL DEFAULT 1" },
   { table: "settings", column: "ai_auto_verify_enabled", type: "INTEGER NOT NULL DEFAULT 1" },
@@ -104,11 +107,17 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "ai_lead_verifications", column: "website_viability_status", type: "TEXT" },
   { table: "ai_lead_verifications", column: "website_health_json", type: "TEXT" },
   { table: "ai_lead_verifications", column: "website_viability_reason", type: "TEXT" },
+  { table: "ai_lead_verifications", column: "requested_by_user_id", type: "TEXT" },
+  { table: "ai_lead_verifications", column: "request_source", type: "TEXT" },
+  { table: "ai_usage_events", column: "actor_user_id", type: "TEXT" },
+  { table: "ai_usage_events", column: "request_source", type: "TEXT" },
   { table: "lead_ai_artifacts", column: "updated_at", type: "TEXT" },
   { table: "lead_ai_artifacts", column: "attempt_count", type: "INTEGER NOT NULL DEFAULT 0" },
   { table: "lead_ai_artifacts", column: "last_error", type: "TEXT" },
   { table: "lead_ai_artifacts", column: "next_retry_at", type: "TEXT" },
   { table: "lead_ai_artifacts", column: "max_attempts", type: "INTEGER NOT NULL DEFAULT 3" },
+  { table: "lead_ai_artifacts", column: "requested_by_user_id", type: "TEXT" },
+  { table: "lead_ai_artifacts", column: "request_source", type: "TEXT" },
   { table: "outreach_events", column: "actor_user_id", type: "TEXT" },
   { table: "outreach_events", column: "actor_email", type: "TEXT" },
   { table: "outreach_events", column: "contact_person_name", type: "TEXT" },
@@ -436,6 +445,9 @@ CREATE TABLE IF NOT EXISTS settings (
   ai_daily_budget_usd REAL NOT NULL DEFAULT 2.0,
   ai_monthly_budget_usd REAL NOT NULL DEFAULT 25.0,
   ai_batch_limit INTEGER NOT NULL DEFAULT 25,
+  researcher_ai_daily_run_cap INTEGER NOT NULL DEFAULT 10,
+  researcher_ai_daily_budget_usd REAL NOT NULL DEFAULT 2.0,
+  researcher_ai_monthly_budget_usd REAL NOT NULL DEFAULT 25.0,
   ai_cache_ttl_days INTEGER NOT NULL DEFAULT 30,
   ai_manual_apply_required INTEGER NOT NULL DEFAULT 1,
   ai_auto_verify_enabled INTEGER NOT NULL DEFAULT 1,
@@ -564,6 +576,8 @@ CREATE TABLE IF NOT EXISTS ai_lead_verifications (
   usage_output_tokens INTEGER NOT NULL DEFAULT 0,
   estimated_cost REAL NOT NULL DEFAULT 0,
   error TEXT,
+  requested_by_user_id TEXT,
+  request_source TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -580,6 +594,8 @@ CREATE TABLE IF NOT EXISTS ai_usage_events (
   total_tokens INTEGER NOT NULL DEFAULT 0,
   estimated_cost REAL NOT NULL DEFAULT 0,
   metadata TEXT NOT NULL DEFAULT '{}',
+  actor_user_id TEXT,
+  request_source TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -602,8 +618,24 @@ CREATE TABLE IF NOT EXISTS lead_ai_artifacts (
   last_error TEXT,
   next_retry_at TEXT,
   max_attempts INTEGER NOT NULL DEFAULT 3,
+  requested_by_user_id TEXT,
+  request_source TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS ai_feedback_events (
+  id TEXT PRIMARY KEY,
+  lead_id TEXT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  verification_id TEXT REFERENCES ai_lead_verifications(id) ON DELETE SET NULL,
+  artifact_id TEXT REFERENCES lead_ai_artifacts(id) ON DELETE SET NULL,
+  actor_user_id TEXT,
+  feedback_kind TEXT NOT NULL CHECK(feedback_kind IN ('verification','pitch')),
+  verdict TEXT NOT NULL CHECK(verdict IN ('correct','incorrect','uncertain','useful','not_useful')),
+  corrected_website_url TEXT,
+  reason TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS worker_runs (
@@ -685,10 +717,16 @@ CREATE INDEX IF NOT EXISTS idx_api_usage_run_created ON api_usage_events(crawl_r
 CREATE INDEX IF NOT EXISTS idx_api_usage_endpoint_created ON api_usage_events(endpoint, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_verifications_lead_created ON ai_lead_verifications(lead_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_verifications_status_created ON ai_lead_verifications(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_verifications_requester_created ON ai_lead_verifications(requested_by_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage_events(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_model_created ON ai_usage_events(model, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_actor_created ON ai_usage_events(actor_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_lead_type_created ON lead_ai_artifacts(lead_id, artifact_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_status_created ON lead_ai_artifacts(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_requester_created ON lead_ai_artifacts(requested_by_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_lead_created ON ai_feedback_events(lead_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_actor_created ON ai_feedback_events(actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_kind_verdict ON ai_feedback_events(feedback_kind, verdict, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_score_recompute_stale ON leads(updated_at DESC, last_quality_scored_at);
 CREATE INDEX IF NOT EXISTS idx_worker_runs_worker_started ON worker_runs(worker_name, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_worker_runs_status_started ON worker_runs(status, started_at DESC);

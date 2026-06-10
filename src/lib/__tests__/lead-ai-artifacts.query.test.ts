@@ -15,6 +15,7 @@ vi.mock("@/lib/db/index", () => {
 import {
   createLeadAiArtifactJob,
   getLeadAiArtifacts,
+  leaseLeadAiArtifactJobById,
   getNextLeadAiArtifactJob,
   leaseNextLeadAiArtifactJob,
   markLeadAiArtifactComplete,
@@ -53,6 +54,8 @@ describe("lead AI artifact queries", () => {
       model: "gpt-5.4-mini",
       input_hash: "hash-1",
       prompt_version: "lead-intelligence-v1",
+      requested_by_user_id: "researcher-1",
+      request_source: "researcher_pitch_pack",
     });
     const second = await createLeadAiArtifactJob({
       lead_id: "lead-1",
@@ -79,6 +82,8 @@ describe("lead AI artifact queries", () => {
     expect(artifacts).toHaveLength(2);
     expect(artifacts.map((artifact) => artifact.id)).toContain(second.id);
     expect(artifacts.find((artifact) => artifact.id === first.id)?.status).toBe("complete");
+    expect(artifacts.find((artifact) => artifact.id === first.id)?.requested_by_user_id).toBe("researcher-1");
+    expect(artifacts.find((artifact) => artifact.id === first.id)?.request_source).toBe("researcher_pitch_pack");
   });
 
   it("atomically leases artifact jobs and schedules retries", async () => {
@@ -109,5 +114,31 @@ describe("lead AI artifact queries", () => {
     expect(retryingRow.status).toBe("queued");
     expect(retryingRow.last_error).toBe("budget exhausted");
     expect(retryingRow.next_retry_at).toBeTruthy();
+  });
+
+  it("leases a specific researcher artifact job without taking the global queue", async () => {
+    await createLeadAiArtifactJob({
+      lead_id: "lead-1",
+      artifact_type: "business_detail",
+      model: "gpt-5.4-mini",
+      input_hash: "hash-first",
+      prompt_version: "lead-intelligence-v1",
+    });
+    const target = await createLeadAiArtifactJob({
+      lead_id: "lead-1",
+      artifact_type: "competitive_report",
+      model: "gpt-5.4-mini",
+      input_hash: "hash-target",
+      prompt_version: "lead-intelligence-v1",
+      requested_by_user_id: "researcher-1",
+      request_source: "researcher_pitch_pack",
+    });
+
+    const leased = await leaseLeadAiArtifactJobById(target.id, 3);
+
+    expect(leased?.id).toBe(target.id);
+    expect(leased?.attempt_count).toBe(1);
+    const globalFirst = await getNextLeadAiArtifactJob();
+    expect(globalFirst?.input_hash).toBe("hash-first");
   });
 });

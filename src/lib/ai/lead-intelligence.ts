@@ -16,6 +16,7 @@ import {
   OPENAI_RESPONSES_ENDPOINT,
 } from "@/lib/ai/config";
 import type { AiVerificationSource } from "@/lib/ai/lead-verification";
+import { extractVerificationEvidence } from "@/lib/ai/lead-evidence";
 
 export const LEAD_INTELLIGENCE_PROMPT_VERSION = "lead-intelligence-v1";
 
@@ -30,6 +31,25 @@ const contentSectionSchema = z.object({
   goal: z.string().min(1).max(240),
   bullets: z.array(z.string().min(1).max(180)).min(1).max(6),
 });
+
+const pitchAngleTypeSchema = z.enum([
+  "no_usable_site",
+  "directory_only",
+  "weak_site",
+  "uncertain",
+  "usable_site",
+  "general_opportunity",
+]);
+
+const operatorPitchFields = {
+  pitchAngleType: pitchAngleTypeSchema,
+  verificationCaveat: z.string().min(1).max(500),
+  callOpener: z.string().min(1).max(500),
+  smsOpener: z.string().min(1).max(320),
+  voicemailScript: z.string().min(1).max(600),
+  followUpMessage: z.string().min(1).max(800),
+  claimSupport: z.array(z.string().min(1).max(220)).min(1).max(8),
+};
 
 export const businessDetailSchema = z.object({
   artifact_type: z.literal("business_detail"),
@@ -47,6 +67,7 @@ export const businessDetailSchema = z.object({
   website_generation_prompt: z.string().min(200).max(4000),
   confidence: z.number().min(0).max(1),
   sources: z.array(sourceSchema).max(8),
+  ...operatorPitchFields,
 }).strict();
 
 export const competitiveReportSchema = z.object({
@@ -80,6 +101,7 @@ export const competitiveReportSchema = z.object({
   data_gaps: z.array(z.string().min(1).max(180)).max(10),
   confidence: z.number().min(0).max(1),
   sources: z.array(sourceSchema).max(8),
+  ...operatorPitchFields,
 }).strict();
 
 export type BusinessDetailContent = z.infer<typeof businessDetailSchema>;
@@ -171,8 +193,18 @@ export async function callOpenAILeadArtifact(
   const functionOutputs = buildRequiredFunctionOutputs(artifactType, context, extractFunctionCalls(functionPlanning.raw));
   const final = await callArtifactFinal(apiKey, artifactType, context, functionOutputs);
   const text = extractResponseText(final.raw);
-  const content = parseLeadArtifactResponse(artifactType, text);
-  const usage = mergeUsage(functionPlanning.raw.usage, final.raw.usage);
+  let content = parseLeadArtifactResponse(artifactType, text);
+  let reviewRaw: Record<string, unknown> | null = null;
+  let reviewError: string | null = null;
+  try {
+    const review = await callArtifactReview(apiKey, artifactType, context, content);
+    reviewRaw = review.raw;
+    content = parseLeadArtifactResponse(artifactType, extractResponseText(review.raw));
+  } catch (error) {
+    reviewError = error instanceof Error ? error.message : "Lead intelligence review failed.";
+  }
+  const usage = mergeUsage(functionPlanning.raw.usage, final.raw.usage, reviewRaw?.usage);
+  const costUsage = mergeUsage(functionPlanning.raw.usage, final.raw.usage);
 
   return {
     content,
@@ -180,11 +212,13 @@ export async function callOpenAILeadArtifact(
       functionPlanning: functionPlanning.raw,
       functionOutputs,
       final: final.raw,
+      review: reviewRaw,
+      reviewError,
     },
     inputHash,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
-    estimatedCost: usage.estimatedCost,
+    estimatedCost: costUsage.estimatedCost,
   };
 }
 
@@ -389,6 +423,11 @@ function buildPitchEvidence(lead: Lead, latestAiVerification: AiLeadVerification
   const confidence = latestAiVerification?.confidence ?? lead.ai_confidence;
   const websiteUrl = latestAiVerification?.found_website_url ?? lead.ai_found_website_url ?? lead.website_uri;
   const sources = latestAiVerification?.sources ?? [];
+  const rawEvidence = extractVerificationEvidence(latestAiVerification?.raw_json);
+  const evidenceGrade = typeof rawEvidence.evidenceGrade === "string" ? rawEvidence.evidenceGrade : inferEvidenceGrade(aiStatus, viability, confidence);
+  const candidateAssessment = rawEvidence.candidateAssessment && typeof rawEvidence.candidateAssessment === "object" && !Array.isArray(rawEvidence.candidateAssessment)
+    ? rawEvidence.candidateAssessment
+    : null;
 
   let finding = "Needs manual review";
   if (aiStatus === "no_site_found" || viability === "directory_only") finding = "No usable official website found";
@@ -411,7 +450,31 @@ function buildPitchEvidence(lead: Lead, latestAiVerification: AiLeadVerification
     websiteUrl,
     sources,
     dataGaps,
+    evidenceGrade,
+    candidateAssessment,
+    verificationCaveat: buildVerificationCaveat(aiStatus, viability, evidenceGrade),
   };
+}
+
+function inferEvidenceGrade(aiStatus: string | null | undefined, viability: string | null | undefined, confidence: number | null | undefined): string {
+  if ((aiStatus === "no_site_found" || viability === "directory_only") && Number(confidence ?? 0) >= 0.8) return "strong";
+  if ((aiStatus === "weak_site_found" || viability === "broken" || viability === "parked" || viability === "placeholder") && Number(confidence ?? 0) >= 0.65) return "moderate";
+  if (aiStatus === "uncertain" || aiStatus === "mismatch") return "conflicting";
+  if (aiStatus === "site_found" && viability === "usable") return "moderate";
+  return "weak";
+}
+
+function buildVerificationCaveat(aiStatus: string | null | undefined, viability: string | null | undefined, evidenceGrade: string): string {
+  if (evidenceGrade === "strong" && (aiStatus === "no_site_found" || viability === "directory_only")) {
+    return "Public evidence strongly supports a no-usable-official-site outreach angle.";
+  }
+  if (viability === "broken" || viability === "parked" || viability === "placeholder") {
+    return "Frame this as a weak or broken web-presence opportunity, not as a business with no website.";
+  }
+  if (aiStatus === "site_found" && viability === "usable") {
+    return "A usable official site may exist; avoid no-site claims and focus only on confirmed gaps.";
+  }
+  return "Use cautious wording because the website evidence needs human confirmation.";
 }
 
 async function callArtifactFunctionPlanning(apiKey: string, leadId: string, artifactType: LeadAiArtifactType) {
@@ -439,7 +502,26 @@ async function callArtifactFinal(
   context: LeadArtifactContext,
   functionOutputs: Array<{ name: string; output: unknown }>,
 ) {
-  const raw = await callResponsesApi(apiKey, {
+  const raw = await callResponsesApi(apiKey, buildArtifactFinalRequest(artifactType, context, functionOutputs));
+  return { raw };
+}
+
+async function callArtifactReview(
+  apiKey: string,
+  artifactType: LeadAiArtifactType,
+  context: LeadArtifactContext,
+  content: LeadAiArtifactContent,
+) {
+  const raw = await callResponsesApi(apiKey, buildArtifactReviewRequest(artifactType, context, content));
+  return { raw };
+}
+
+export function buildArtifactFinalRequest(
+  artifactType: LeadAiArtifactType,
+  context: LeadArtifactContext,
+  functionOutputs: Array<{ name: string; output: unknown }>,
+): Record<string, unknown> {
+  return {
     model: OPENAI_LEAD_VERIFICATION_MODEL,
     store: false,
     max_output_tokens: artifactType === "business_detail" ? 2600 : 2200,
@@ -471,8 +553,42 @@ async function callArtifactFinal(
         schema: artifactType === "business_detail" ? businessDetailJsonSchema : competitiveReportJsonSchema,
       },
     },
-  });
-  return { raw };
+  };
+}
+
+export function buildArtifactReviewRequest(
+  artifactType: LeadAiArtifactType,
+  context: LeadArtifactContext,
+  content: LeadAiArtifactContent,
+): Record<string, unknown> {
+  return {
+    model: OPENAI_LEAD_VERIFICATION_MODEL,
+    store: false,
+    max_output_tokens: artifactType === "business_detail" ? 1800 : 1600,
+    instructions: [
+      "You are a no-browse reviewer for internal lead intelligence artifacts.",
+      "Do not use web search, tools, browsing, or outside knowledge. Use only deterministic context and the draft artifact JSON.",
+      "Rewrite overclaims into cautious operator-safe language.",
+      "Do not claim the business has no website unless pitchEvidence.evidenceGrade is strong or moderate and the finding supports no usable official website.",
+      "Keep source-backed facts, exact revenue range, and competitor counts unchanged.",
+      "Return only strict JSON matching the same artifact schema.",
+    ].join(" "),
+    input: JSON.stringify({
+      artifactType,
+      promptVersion: LEAD_INTELLIGENCE_PROMPT_VERSION,
+      deterministicContext: context,
+      draftArtifact: content,
+    }),
+    text: {
+      verbosity: "low",
+      format: {
+        type: "json_schema",
+        name: `${artifactType}_review`,
+        strict: true,
+        schema: artifactType === "business_detail" ? businessDetailJsonSchema : competitiveReportJsonSchema,
+      },
+    },
+  };
 }
 
 async function callResponsesApi(apiKey: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -554,6 +670,8 @@ function buildFinalInstructions(artifactType: LeadAiArtifactType): string {
     "Do not invent hard counts, URLs, revenue numbers, phone numbers, or addresses. If evidence is missing, put it in data gaps or missing info.",
     "Use web search only for supplemental context and cite sources you actually used in the sources array.",
     "Keep claims conservative and pitch-useful. The brother will use this live on calls.",
+    "Include operator-ready call, SMS, voicemail, follow-up, caveat, pitch angle, and claim support fields.",
+    "If verification evidence is weak or uncertain, use cautious phrasing such as 'I could not confirm a usable official site' instead of hard no-site claims.",
   ];
   if (artifactType === "business_detail") {
     return [
@@ -702,6 +820,29 @@ const sourceJsonSchema = {
   },
 };
 
+const operatorPitchJsonSchemaProperties = {
+  pitchAngleType: {
+    type: "string",
+    enum: ["no_usable_site", "directory_only", "weak_site", "uncertain", "usable_site", "general_opportunity"],
+  },
+  verificationCaveat: { type: "string" },
+  callOpener: { type: "string" },
+  smsOpener: { type: "string" },
+  voicemailScript: { type: "string" },
+  followUpMessage: { type: "string" },
+  claimSupport: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 8 },
+};
+
+const operatorPitchRequiredFields = [
+  "pitchAngleType",
+  "verificationCaveat",
+  "callOpener",
+  "smsOpener",
+  "voicemailScript",
+  "followUpMessage",
+  "claimSupport",
+];
+
 const businessDetailJsonSchema = {
   type: "object",
   additionalProperties: false,
@@ -721,6 +862,7 @@ const businessDetailJsonSchema = {
     "website_generation_prompt",
     "confidence",
     "sources",
+    ...operatorPitchRequiredFields,
   ],
   properties: {
     artifact_type: { type: "string", enum: ["business_detail"] },
@@ -752,6 +894,7 @@ const businessDetailJsonSchema = {
     website_generation_prompt: { type: "string" },
     confidence: { type: "number", minimum: 0, maximum: 1 },
     sources: { type: "array", items: sourceJsonSchema, maxItems: 8 },
+    ...operatorPitchJsonSchemaProperties,
   },
 };
 
@@ -771,6 +914,7 @@ const competitiveReportJsonSchema = {
     "data_gaps",
     "confidence",
     "sources",
+    ...operatorPitchRequiredFields,
   ],
   properties: {
     artifact_type: { type: "string", enum: ["competitive_report"] },
@@ -822,5 +966,6 @@ const competitiveReportJsonSchema = {
     data_gaps: { type: "array", items: { type: "string" }, maxItems: 10 },
     confidence: { type: "number", minimum: 0, maximum: 1 },
     sources: { type: "array", items: sourceJsonSchema, maxItems: 8 },
+    ...operatorPitchJsonSchemaProperties,
   },
 };

@@ -31,6 +31,7 @@ import {
   bulkUpdateLeadStatus as dbBulkUpdateStatus,
   updateLeadVerification as dbUpdateVerification,
   getLatestAiVerification,
+  getAiUsageForActor,
   getAiVerificationById,
   getAiVerificationCandidates,
   getQualityActionCandidateIds,
@@ -44,6 +45,7 @@ import {
   setLeadQualityBucket,
   updateLeadPhoneVerificationStatus,
   updateLeadAiFeedback,
+  createAiFeedbackEvent,
   markLeadAiVerified,
   queueLeadsForEnrichment,
   createAuditLog,
@@ -67,7 +69,7 @@ import {
   queueMissingAiVerifications,
   repairLeadAiWebsiteViability,
 } from "@/lib/ai/verification-worker";
-import { queueLeadAiArtifact, queueLeadPitchPack } from "@/lib/ai/artifact-worker";
+import { processLeadArtifactJobById, queueLeadAiArtifact, queueLeadPitchPack } from "@/lib/ai/artifact-worker";
 import type { LeadAiArtifactType } from "@/lib/db/queries";
 
 const statusSchema = z.enum(["new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost"]);
@@ -124,6 +126,21 @@ const aiFeedbackSchema = z.object({
   correctedWebsiteUrl: z.string().trim().url().max(500).optional().or(z.literal("")),
   falsePositiveReason: z.string().trim().max(500).optional(),
   reviewerNotes: z.string().trim().max(1000).optional(),
+});
+const researcherAiFeedbackSchema = z.object({
+  feedbackKind: z.enum(["verification", "pitch"]),
+  verdict: z.enum(["correct", "incorrect", "uncertain", "useful", "not_useful"]),
+  correctedWebsiteUrl: z.string().trim().url().max(500).optional().or(z.literal("")),
+  reason: z.string().trim().max(1000).optional().or(z.literal("")),
+  verificationId: z.string().trim().max(120).optional().or(z.literal("")),
+  artifactId: z.string().trim().max(120).optional().or(z.literal("")),
+}).superRefine((value, ctx) => {
+  if (value.feedbackKind === "verification" && (value.verdict === "useful" || value.verdict === "not_useful")) {
+    ctx.addIssue({ code: "custom", path: ["verdict"], message: "Verification feedback must be correct, incorrect, or uncertain." });
+  }
+  if (value.feedbackKind === "pitch" && (value.verdict === "correct" || value.verdict === "incorrect" || value.verdict === "uncertain")) {
+    ctx.addIssue({ code: "custom", path: ["verdict"], message: "Pitch feedback must be useful or not useful." });
+  }
 });
 const manualWebsiteCorrectionSchema = z.object({
   websiteUrl: z.string().trim().max(500).optional().or(z.literal("")),
@@ -188,6 +205,60 @@ async function requireLeadOwnershipForMutation(
   if (!lead.assigned_to_user_id) return { ok: false, error: "Claim this lead before updating it." };
   if (lead.assigned_to_user_id !== session.userId) return { ok: false, error: `Taken by ${leadOwnerLabel(lead)}.` };
   return { ok: true };
+}
+
+const RESEARCHER_AI_CLAIM_REQUIRED_MESSAGE = "Claim this lead before running AI tools.";
+const RESEARCHER_AI_REQUEST_SOURCES = ["researcher_ai_check", "researcher_pitch_pack"];
+
+async function requireLeadOwnershipForResearcherAi(
+  id: string,
+  session: { userId: string; role: string },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const ownership = await requireLeadOwnershipForMutation(id, session);
+  if (ownership.ok) return ownership;
+  if (ownership.error === "Lead not found") return ownership;
+  return { ok: false, error: RESEARCHER_AI_CLAIM_REQUIRED_MESSAGE };
+}
+
+async function requireResearcherAiBudget(
+  session: { userId: string; role: string },
+  settings: Awaited<ReturnType<typeof getSettings>>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (session.role === "admin") return { ok: true };
+
+  const dailyUsage = await getAiUsageForActor(session.userId, startOfUtcDayIso(), RESEARCHER_AI_REQUEST_SOURCES);
+  const monthlyUsage = await getAiUsageForActor(session.userId, startOfUtcMonthIso(), RESEARCHER_AI_REQUEST_SOURCES);
+  if (dailyUsage.calls >= settings.researcher_ai_daily_run_cap) {
+    return {
+      ok: false,
+      error: `Researcher AI daily run cap reached (${dailyUsage.calls}/${settings.researcher_ai_daily_run_cap}). Ask an admin to raise the cap or try tomorrow.`,
+    };
+  }
+  if (dailyUsage.cost >= settings.researcher_ai_daily_budget_usd) {
+    return {
+      ok: false,
+      error: `Researcher AI daily budget reached (${formatUsd(dailyUsage.cost)}/${formatUsd(settings.researcher_ai_daily_budget_usd)}). Ask an admin to raise the cap or try tomorrow.`,
+    };
+  }
+  if (monthlyUsage.cost >= settings.researcher_ai_monthly_budget_usd) {
+    return {
+      ok: false,
+      error: `Researcher AI monthly budget reached (${formatUsd(monthlyUsage.cost)}/${formatUsd(settings.researcher_ai_monthly_budget_usd)}). Ask an admin to raise the cap.`,
+    };
+  }
+  return { ok: true };
+}
+
+function startOfUtcDayIso(date = new Date()): string {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())).toISOString();
+}
+
+function startOfUtcMonthIso(date = new Date()): string {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)).toISOString();
+}
+
+function formatUsd(value: number): string {
+  return `$${Math.max(0, value).toFixed(2)}`;
 }
 
 function normalizeOptionalText(value: string | undefined): string | null {
@@ -697,6 +768,40 @@ export async function runAiVerificationAction(leadId: string, options: { force?:
   return result;
 }
 
+export async function runResearcherAiCheckAction(leadId: string) {
+  const session = await requirePermission("ai:researcher_tools");
+  await ensureDbReady();
+  const lead = await queryLeadById(leadId);
+  if (!lead) return { error: "Lead not found" };
+
+  const ownership = await requireLeadOwnershipForResearcherAi(leadId, session);
+  if (!ownership.ok) return { error: ownership.error };
+
+  const settings = await getSettings();
+  if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
+  const budget = await requireResearcherAiBudget(session, settings);
+  if (!budget.ok) return { error: budget.error };
+
+  await createAuditLog("researcher_ai_check_requested", "lead", leadId, {
+    actorUserId: session.userId,
+    actorRole: session.role,
+  });
+  const result = await performAiVerification(lead, false, settings, {
+    applyToLead: false,
+    actorUserId: session.userId,
+    requestSource: "researcher_ai_check",
+  });
+  await createAuditLog("researcher_ai_check_completed", "lead", leadId, {
+    actorUserId: session.userId,
+    actorRole: session.role,
+    success: !("error" in result),
+    verificationId: "verification" in result ? result.verification?.id ?? null : null,
+    error: "error" in result ? result.error : null,
+  });
+  revalidatePath(`/leads/${leadId}`);
+  return result;
+}
+
 export async function queueMissingAiVerificationsAction() {
   await requirePermission("ai:verify");
   await ensureDbReady();
@@ -727,6 +832,93 @@ export async function queueLeadPitchPackAction(leadId: string, options: { force?
   revalidateLeadViews();
   revalidatePath(`/leads/${leadId}`);
   return result;
+}
+
+export async function generateResearcherPitchPackAction(leadId: string) {
+  const session = await requirePermission("ai:researcher_tools");
+  await ensureDbReady();
+  const lead = await queryLeadById(leadId);
+  if (!lead) return { error: "Lead not found" };
+
+  const ownership = await requireLeadOwnershipForResearcherAi(leadId, session);
+  if (!ownership.ok) return { error: ownership.error };
+
+  const settings = await getSettings();
+  if (!settings.ai_enabled) return { error: "AI is disabled in Settings." };
+  const budget = await requireResearcherAiBudget(session, settings);
+  if (!budget.ok) return { error: budget.error };
+
+  await createAuditLog("researcher_pitch_pack_requested", "lead", leadId, {
+    actorUserId: session.userId,
+    actorRole: session.role,
+  });
+  const queued = await queueLeadPitchPack(leadId, {
+    force: false,
+    settings,
+    actorUserId: session.userId,
+    requestSource: "researcher_pitch_pack",
+  });
+  const businessDetail = await processResearcherArtifactResult(queued.businessDetail, session);
+  const competitiveReport = await processResearcherArtifactResult(queued.competitiveReport, session);
+  const hasError = businessDetail.status === "error" || competitiveReport.status === "error";
+  await createAuditLog(hasError ? "researcher_pitch_pack_failed" : "researcher_pitch_pack_completed", "lead", leadId, {
+    actorUserId: session.userId,
+    actorRole: session.role,
+    businessDetail,
+    competitiveReport,
+  });
+  revalidateLeadViews();
+  revalidatePath(`/leads/${leadId}`);
+  return { businessDetail, competitiveReport };
+}
+
+export async function submitResearcherAiFeedbackAction(leadId: string, input: unknown) {
+  const session = await requirePermission("ai:researcher_tools");
+  await ensureDbReady();
+  const parsed = researcherAiFeedbackSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid AI feedback." };
+  }
+
+  const lead = await queryLeadById(leadId);
+  if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForResearcherAi(leadId, session);
+  if (!ownership.ok) return { error: ownership.error };
+
+  const feedback = await createAiFeedbackEvent({
+    lead_id: leadId,
+    verification_id: parsed.data.verificationId?.trim() || null,
+    artifact_id: parsed.data.artifactId?.trim() || null,
+    actor_user_id: session.userId,
+    feedback_kind: parsed.data.feedbackKind,
+    verdict: parsed.data.verdict,
+    corrected_website_url: parsed.data.correctedWebsiteUrl?.trim() || null,
+    reason: parsed.data.reason?.trim() || null,
+    metadata_json: {
+      actorRole: session.role,
+      source: "lead_detail",
+    },
+  });
+  await createAuditLog("researcher_ai_feedback_submitted", "lead", leadId, {
+    actorUserId: session.userId,
+    actorRole: session.role,
+    feedbackKind: parsed.data.feedbackKind,
+    verdict: parsed.data.verdict,
+    feedbackId: feedback.id,
+  });
+  revalidatePath(`/leads/${leadId}`);
+  return { success: true, feedback };
+}
+
+async function processResearcherArtifactResult(
+  result: Awaited<ReturnType<typeof queueLeadAiArtifact>>,
+  session: { userId: string },
+): Promise<Awaited<ReturnType<typeof queueLeadAiArtifact>>> {
+  if (result.status !== "queued") return result;
+  return processLeadArtifactJobById(result.artifactId, {
+    actorUserId: session.userId,
+    requestSource: "researcher_pitch_pack",
+  });
 }
 
 export async function manualWebsiteCorrectionAction(leadId: string, input: unknown) {

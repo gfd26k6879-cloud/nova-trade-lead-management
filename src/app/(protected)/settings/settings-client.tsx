@@ -30,6 +30,9 @@ interface Settings {
   ai_enabled: boolean;
   ai_model: string;
   ai_batch_limit: number;
+  researcher_ai_daily_run_cap: number;
+  researcher_ai_daily_budget_usd: number;
+  researcher_ai_monthly_budget_usd: number;
   ai_cache_ttl_days: number;
   ai_manual_apply_required: boolean;
   ai_auto_verify_enabled: boolean;
@@ -470,6 +473,9 @@ export function SettingsClient({
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <TextField label="Locked Model" value={settings.ai_model} />
           <NumberField label="AI Batch Limit" value={settings.ai_batch_limit} onChange={(v) => update("ai_batch_limit", v)} />
+          <NumberField label="Researcher AI Daily Runs" value={settings.researcher_ai_daily_run_cap} onChange={(v) => update("researcher_ai_daily_run_cap", v)} />
+          <NumberField label="Researcher AI Daily $" value={settings.researcher_ai_daily_budget_usd} onChange={(v) => update("researcher_ai_daily_budget_usd", v)} step={0.25} />
+          <NumberField label="Researcher AI Monthly $" value={settings.researcher_ai_monthly_budget_usd} onChange={(v) => update("researcher_ai_monthly_budget_usd", v)} step={1} />
           <NumberField label="AI Result Cache (days)" value={settings.ai_cache_ttl_days} onChange={(v) => update("ai_cache_ttl_days", v)} />
           <NumberField label="AI Concurrency" value={settings.ai_verification_concurrency} onChange={(v) => update("ai_verification_concurrency", v)} />
           <NumberField label="AI Max Attempts" value={settings.ai_max_attempts} onChange={(v) => update("ai_max_attempts", v)} />

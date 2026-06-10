@@ -26,6 +26,7 @@ import {
   createDemoForLeadAction,
   updateLeadVerificationAction,
   runAiVerificationAction,
+  runResearcherAiCheckAction,
   applyAiRecommendationAction,
   repairLeadAiWebsiteViabilityAction,
   addLeadNoteAction,
@@ -37,7 +38,9 @@ import {
   updateLeadPhoneVerificationStatusAction,
   queueLeadAiArtifactAction,
   queueLeadPitchPackAction,
+  generateResearcherPitchPackAction,
   updateLeadAiFeedbackAction,
+  submitResearcherAiFeedbackAction,
 } from "@/lib/leads/actions";
 import type { AppRole } from "@/lib/permissions";
 import type { AdminRequestType } from "@/lib/db/queries";
@@ -193,6 +196,7 @@ interface AiVerification {
   website_viability_status: string | null;
   website_health_json: Record<string, unknown> | null;
   website_viability_reason: string | null;
+  raw_json?: Record<string, unknown>;
   estimated_cost: number;
   error: string | null;
   created_at: string;
@@ -341,6 +345,7 @@ export function LeadDetailClient({
   density,
   scoreThresholds,
   currentUser,
+  initialTab = "work",
 }: {
   lead: Lead;
   initialEvents: OutreachEvent[];
@@ -353,11 +358,12 @@ export function LeadDetailClient({
   density?: DensityResult;
   scoreThresholds: ScoreBandThresholds;
   currentUser: { userId: string; email: string; role: AppRole };
+  initialTab?: LeadDetailTab;
 }) {
   const router = useRouter();
   const scoreBand = resolveScoreBand(lead.score, scoreThresholds);
   const scoreBandStyle = getScoreBandStyle(scoreBand.key);
-  const [activeTab, setActiveTab] = useState<LeadDetailTab>("work");
+  const [activeTab, setActiveTab] = useState<LeadDetailTab>(initialTab);
   const [showAiSources, setShowAiSources] = useState(false);
   const [status, setStatus] = useState(lead.status);
   const [notes, setNotes] = useState(lead.notes ?? "");
@@ -393,6 +399,7 @@ export function LeadDetailClient({
   const [aiFalsePositiveReason, setAiFalsePositiveReason] = useState(lead.ai_false_positive_reason ?? "");
   const [aiReviewerNotes, setAiReviewerNotes] = useState(lead.ai_reviewer_notes ?? "");
   const [aiFeedbackLoading, setAiFeedbackLoading] = useState(false);
+  const [researcherAiFeedbackLoading, setResearcherAiFeedbackLoading] = useState<string | null>(null);
   const [websiteCorrectionUrl, setWebsiteCorrectionUrl] = useState(lead.ai_corrected_website_url ?? lead.website_uri ?? "");
   const [websiteCorrectionResolution, setWebsiteCorrectionResolution] = useState<WebsiteCorrectionResolution>("official_website_found");
   const [websiteCorrectionNotes, setWebsiteCorrectionNotes] = useState("");
@@ -437,6 +444,8 @@ export function LeadDetailClient({
   const isClaimedByCurrentUser = assignedToUserId === currentUser.userId;
   const isClaimedByOther = Boolean(assignedToUserId && !isClaimedByCurrentUser);
   const canEditLead = isAdmin || isClaimedByCurrentUser;
+  const canUseResearcherAiTools = isAdmin || isClaimedByCurrentUser;
+  const aiToolsClaimMessage = "Claim this lead to run AI check or generate a pitch pack.";
 
   const flash = (msg: string) => {
     setSaveMsg(msg);
@@ -841,49 +850,80 @@ export function LeadDetailClient({
   };
 
   const handleRunAiVerification = async (force = false) => {
+    if (!canUseResearcherAiTools) {
+      flash(aiToolsClaimMessage);
+      return;
+    }
     setAiLoading(true);
     try {
-      const result = await runAiVerificationAction(lead.id, { force });
+      const result = isAdmin
+        ? await runAiVerificationAction(lead.id, { force })
+        : await runResearcherAiCheckAction(lead.id);
       if ("verification" in result && result.verification) {
         setAiVerification(result.verification as AiVerification);
-        flash(result.cached ? "AI verification loaded from cache" : "AI verification complete");
+        flash(result.cached ? "AI check loaded from cache" : isAdmin ? "AI verification complete" : "AI check complete");
         router.refresh();
       } else if ("error" in result) {
-        flash(result.error ?? "AI verification failed");
+        flash(result.error ?? "AI check failed");
       }
     } catch {
-      flash("AI verification failed");
+      flash("AI check failed");
     } finally {
       setAiLoading(false);
     }
   };
 
   const handleQueueArtifact = async (artifactType: "business_detail" | "competitive_report", force = false) => {
+    if (!canUseResearcherAiTools) {
+      flash(aiToolsClaimMessage);
+      return;
+    }
     setArtifactLoading(artifactType);
     try {
-      const result = await queueLeadAiArtifactAction(lead.id, artifactType, { force });
+      const result = isAdmin
+        ? await queueLeadAiArtifactAction(lead.id, artifactType, { force })
+        : await generateResearcherPitchPackAction(lead.id);
       if ("error" in result) {
         flash(result.error ?? "Unable to queue lead intelligence");
         return;
       }
-      flash(result.status === "queued" && result.skippedExisting ? "Lead intelligence already queued or ready" : "Lead intelligence queued");
-      await processArtifactQueue(artifactType);
+      if (isAdmin && "status" in result) {
+        flash(result.status === "queued" && result.skippedExisting ? "Lead intelligence already queued or ready" : "Lead intelligence queued");
+        await processArtifactQueue(artifactType);
+      } else {
+        flash("Pitch pack generated");
+        router.refresh();
+      }
     } finally {
       setArtifactLoading(null);
     }
   };
 
   const handleGeneratePitchPack = async (force = false) => {
+    if (!canUseResearcherAiTools) {
+      flash(aiToolsClaimMessage);
+      return;
+    }
     setArtifactLoading("pitch_pack");
     try {
-      const result = await queueLeadPitchPackAction(lead.id, { force });
+      const result = isAdmin
+        ? await queueLeadPitchPackAction(lead.id, { force })
+        : await generateResearcherPitchPackAction(lead.id);
+      if ("error" in result) {
+        flash(result.error ?? "Unable to generate pitch pack");
+        return;
+      }
       const hasError = "error" in result.businessDetail || "error" in result.competitiveReport;
       if (hasError) {
         flash("One or more pitch pack artifacts could not be queued");
         return;
       }
-      flash("Pitch pack queued");
-      await processArtifactQueue("pitch_pack");
+      flash(isAdmin ? "Pitch pack queued" : "Pitch pack generated");
+      if (isAdmin) {
+        await processArtifactQueue("pitch_pack");
+      } else {
+        router.refresh();
+      }
     } finally {
       setArtifactLoading(null);
     }
@@ -904,6 +944,39 @@ export function LeadDetailClient({
       router.refresh();
     }
     setAiFeedbackLoading(false);
+  };
+
+  const handleResearcherAiFeedback = async (
+    feedbackKind: "verification" | "pitch",
+    verdict: "incorrect" | "useful" | "not_useful",
+  ) => {
+    if (!canUseResearcherAiTools) {
+      flash(aiToolsClaimMessage);
+      return;
+    }
+    const key = `${feedbackKind}:${verdict}`;
+    setResearcherAiFeedbackLoading(key);
+    try {
+      const result = await submitResearcherAiFeedbackAction(lead.id, {
+        feedbackKind,
+        verdict,
+        verificationId: feedbackKind === "verification" ? aiVerification?.id ?? "" : "",
+        artifactId: feedbackKind === "pitch" ? competitiveReportArtifact?.id ?? businessDetailArtifact?.id ?? "" : "",
+        correctedWebsiteUrl: feedbackKind === "verification" ? foundAiWebsite ?? "" : "",
+        reason: verdict === "incorrect"
+          ? "Researcher marked the AI website finding as wrong from lead detail."
+          : verdict === "useful"
+            ? "Researcher marked the pitch pack as useful."
+            : "Researcher marked the pitch pack as not useful.",
+      });
+      if ("error" in result) {
+        flash(result.error ?? "Unable to save AI feedback");
+      } else {
+        flash("AI feedback saved");
+      }
+    } finally {
+      setResearcherAiFeedbackLoading(null);
+    }
   };
 
   const processArtifactQueue = async (artifactType: string) => {
@@ -1065,6 +1138,7 @@ export function LeadDetailClient({
   const businessDetailJob = latestArtifact(initialAiArtifacts, "business_detail");
   const competitiveReportArtifact = latestCompleteArtifact(initialAiArtifacts, "competitive_report");
   const competitiveReportJob = latestArtifact(initialAiArtifacts, "competitive_report");
+  const aiEvidence = getAiEvidence(aiVerification?.raw_json);
 
   const copyDemoPitch = () => {
     if (!demoHref) return;
@@ -1513,17 +1587,28 @@ export function LeadDetailClient({
               <div>
                 <h3 className="section-label">AI Verification</h3>
                 <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
-                  Uses the locked gpt-5.4-mini verifier with manual apply.
+                  {isAdmin
+                    ? "Uses the locked gpt-5.4-mini verifier with manual apply."
+                    : "Creates research evidence only. Admin review is still required before changing website status or excluding the lead."}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className="btn-primary text-xs" title="Run AI verification immediately for this lead and save the completed result." disabled={aiLoading} onClick={() => handleRunAiVerification(false)}>
-                  {aiLoading ? "Checking..." : "Run AI Verify"}
+                <button type="button" className="btn-primary text-xs" title={isAdmin ? "Run AI verification immediately for this lead and save the completed result." : "Run a researcher-safe AI check without changing canonical lead status."} disabled={aiLoading || !canUseResearcherAiTools} onClick={() => handleRunAiVerification(false)}>
+                  {aiLoading ? "Checking..." : isAdmin ? "Run AI Verify" : "Run AI check"}
                 </button>
-                <button type="button" className="btn-glass text-xs" title="Force a fresh AI verification instead of using a cached result." disabled={aiLoading} onClick={() => handleRunAiVerification(true)}>Refresh</button>
-                <button type="button" className="btn-glass text-xs" title="Re-check whether the AI-found website is usable, weak, broken, or directory-only." disabled={aiLoading || !foundAiWebsite} onClick={handleRepairAiViability}>Re-check Website Viability</button>
+                {isAdmin && (
+                  <>
+                    <button type="button" className="btn-glass text-xs" title="Force a fresh AI verification instead of using a cached result." disabled={aiLoading} onClick={() => handleRunAiVerification(true)}>Refresh</button>
+                    <button type="button" className="btn-glass text-xs" title="Re-check whether the AI-found website is usable, weak, broken, or directory-only." disabled={aiLoading || !foundAiWebsite} onClick={handleRepairAiViability}>Re-check Website Viability</button>
+                  </>
+                )}
               </div>
             </div>
+            {!canUseResearcherAiTools && !isAdmin && (
+              <p className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(245,158,11,0.12)", color: "var(--text-secondary)", border: "1px solid rgba(245,158,11,0.24)" }}>
+                {aiToolsClaimMessage}
+              </p>
+            )}
 
             <div className="mt-4 grid gap-4 lg:grid-cols-4">
               <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
@@ -1565,6 +1650,52 @@ export function LeadDetailClient({
               </p>
             )}
 
+            {aiVerification && (
+              <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h4 className="section-label">Evidence</h4>
+                    <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
+                      {aiEvidence.identitySummary || "AI evidence needs human review before canonical changes."}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-md px-2 py-1 text-xs font-semibold capitalize" style={{ background: "rgba(99,102,241,0.12)", color: "var(--text-primary)", border: "1px solid rgba(99,102,241,0.24)" }}>
+                      {aiEvidence.evidenceGrade}
+                    </span>
+                    {aiEvidence.candidateScore !== null && (
+                      <span className="rounded-md px-2 py-1 text-xs font-semibold" style={{ background: "rgba(34,197,94,0.1)", color: "var(--text-primary)", border: "1px solid rgba(34,197,94,0.2)" }}>
+                        {aiEvidence.candidateScore} candidate score
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                  <EvidenceList title="Official evidence" items={aiEvidence.officialSiteEvidence} />
+                  <EvidenceList title="Contradictions" items={aiEvidence.contradictingEvidence} />
+                  <EvidenceList title="Quality flags" items={aiEvidence.siteQualityFlags} />
+                </div>
+                {aiEvidence.manualReviewReason && (
+                  <p className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(245,158,11,0.1)", color: "var(--text-secondary)" }}>
+                    {aiEvidence.manualReviewReason}
+                  </p>
+                )}
+                {!isAdmin && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button type="button" className="btn-glass text-xs" disabled={researcherAiFeedbackLoading !== null || !canUseResearcherAiTools} onClick={() => handleResearcherAiFeedback("verification", "incorrect")}>
+                      {researcherAiFeedbackLoading === "verification:incorrect" ? "Saving..." : "AI was wrong"}
+                    </button>
+                    <button type="button" className="btn-glass text-xs" disabled={researcherAiFeedbackLoading !== null || !canUseResearcherAiTools} onClick={() => handleResearcherAiFeedback("pitch", "useful")}>
+                      {researcherAiFeedbackLoading === "pitch:useful" ? "Saving..." : "Pitch was useful"}
+                    </button>
+                    <button type="button" className="btn-glass text-xs" disabled={researcherAiFeedbackLoading !== null || !canUseResearcherAiTools} onClick={() => handleResearcherAiFeedback("pitch", "not_useful")}>
+                      {researcherAiFeedbackLoading === "pitch:not_useful" ? "Saving..." : "Pitch not useful"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {aiVerification && aiVerification.sources.length > 0 && (
               <div className="mt-4">
                 <button type="button" className="btn-glass text-xs" onClick={() => setShowAiSources((current) => !current)}>
@@ -1583,20 +1714,17 @@ export function LeadDetailClient({
               </div>
             )}
 
-            {aiVerification && (
+            {aiVerification && isAdmin && (
               <div className="mt-4 flex flex-wrap gap-2">
-                {isAdmin && (
-                  <>
-                    <button type="button" className="btn-glass text-xs" disabled={aiApplying !== null || !aiVerification.found_website_url || !hasUsableAiWebsite} onClick={() => handleApplyAi("update_website")}>{aiApplying === "update_website" ? "Applying..." : "Apply Usable Website"}</button>
-                    <button type="button" className="btn-glass text-xs" disabled={aiApplying !== null || !hasUsableAiWebsite} onClick={() => handleApplyAi("exclude_has_website")}>{aiApplying === "exclude_has_website" ? "Excluding..." : "Exclude as Has Website"}</button>
-                  </>
-                )}
+                <button type="button" className="btn-glass text-xs" disabled={aiApplying !== null || !aiVerification.found_website_url || !hasUsableAiWebsite} onClick={() => handleApplyAi("update_website")}>{aiApplying === "update_website" ? "Applying..." : "Apply Usable Website"}</button>
+                <button type="button" className="btn-glass text-xs" disabled={aiApplying !== null || !hasUsableAiWebsite} onClick={() => handleApplyAi("exclude_has_website")}>{aiApplying === "exclude_has_website" ? "Excluding..." : "Exclude as Has Website"}</button>
                 <button type="button" className="btn-glass text-xs" disabled={aiApplying !== null || !hasBrokenSiteOpportunity} onClick={() => handleApplyAi("mark_broken_site_opportunity")}>{aiApplying === "mark_broken_site_opportunity" ? "Marking..." : "Mark Broken Site Opportunity"}</button>
                 <button type="button" className="btn-glass text-xs" disabled={aiApplying !== null} onClick={() => handleApplyAi("mark_manual_review")}>{aiApplying === "mark_manual_review" ? "Marking..." : "Mark Manual Review"}</button>
               </div>
             )}
           </section>
 
+          {isAdmin && (
           <section className="glass rounded-2xl p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -1617,6 +1745,7 @@ export function LeadDetailClient({
               <button type="button" className="btn-glass text-xs" disabled={aiFeedbackLoading} onClick={handleSaveAiFeedback}>{aiFeedbackLoading ? "Saving..." : "Save AI Feedback"}</button>
             </div>
           </section>
+          )}
         </section>
       )}
 
@@ -1661,15 +1790,20 @@ export function LeadDetailClient({
                 <h3 className="section-label">Lead Intelligence</h3>
                 <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>Manual gpt-5.4-mini briefs for website generation and the sales pitch.</p>
               </div>
-              <button type="button" className="btn-primary text-xs" disabled={artifactLoading !== null} onClick={() => handleGeneratePitchPack(false)}>
+              <button type="button" className="btn-primary text-xs" disabled={artifactLoading !== null || !canUseResearcherAiTools} onClick={() => handleGeneratePitchPack(false)}>
                 {artifactLoading === "pitch_pack" ? "Generating..." : "Generate Pitch Pack"}
               </button>
             </div>
+            {!canUseResearcherAiTools && !isAdmin && (
+              <p className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(245,158,11,0.12)", color: "var(--text-secondary)", border: "1px solid rgba(245,158,11,0.24)" }}>
+                {aiToolsClaimMessage}
+              </p>
+            )}
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
-              <ArtifactPanel title="Business Detail" description="Website build brief and copy-ready prompt." artifact={businessDetailArtifact} latestJob={businessDetailJob} loading={artifactLoading === "business_detail" || artifactLoading === "pitch_pack"} generateLabel="Generate Brief" regenerateLabel="Regenerate Brief" onGenerate={() => handleQueueArtifact("business_detail", false)} onRegenerate={() => handleQueueArtifact("business_detail", true)} onCopy={() => copyToClipboard(String(businessDetailArtifact?.content_json.website_generation_prompt ?? ""))}>
+              <ArtifactPanel title="Business Detail" description="Website build brief and copy-ready prompt." artifact={businessDetailArtifact} latestJob={businessDetailJob} loading={artifactLoading === "business_detail" || artifactLoading === "pitch_pack"} disabled={!canUseResearcherAiTools} generateLabel="Generate Brief" regenerateLabel={isAdmin ? "Regenerate Brief" : "Generate Pitch Pack"} onGenerate={() => handleQueueArtifact("business_detail", false)} onRegenerate={() => handleQueueArtifact("business_detail", isAdmin)} onCopy={() => copyToClipboard(String(businessDetailArtifact?.content_json.website_generation_prompt ?? ""))}>
                 {businessDetailArtifact ? <BusinessDetailView artifact={businessDetailArtifact} /> : <EmptyArtifactState label={artifactStateLabel(businessDetailJob)} />}
               </ArtifactPanel>
-              <ArtifactPanel title="Competitive Report" description="Competitor snapshot, upside estimate, and pitch points." artifact={competitiveReportArtifact} latestJob={competitiveReportJob} loading={artifactLoading === "competitive_report" || artifactLoading === "pitch_pack"} generateLabel="Generate Report" regenerateLabel="Regenerate Report" onGenerate={() => handleQueueArtifact("competitive_report", false)} onRegenerate={() => handleQueueArtifact("competitive_report", true)} onCopy={() => copyToClipboard(buildPitchBriefText(competitiveReportArtifact))}>
+              <ArtifactPanel title="Competitive Report" description="Competitor snapshot, upside estimate, and pitch points." artifact={competitiveReportArtifact} latestJob={competitiveReportJob} loading={artifactLoading === "competitive_report" || artifactLoading === "pitch_pack"} disabled={!canUseResearcherAiTools} generateLabel="Generate Report" regenerateLabel={isAdmin ? "Regenerate Report" : "Generate Pitch Pack"} onGenerate={() => handleQueueArtifact("competitive_report", false)} onRegenerate={() => handleQueueArtifact("competitive_report", isAdmin)} onCopy={() => copyToClipboard(buildPitchBriefText(competitiveReportArtifact))}>
                 {competitiveReportArtifact ? <CompetitiveReportView artifact={competitiveReportArtifact} /> : <EmptyArtifactState label={artifactStateLabel(competitiveReportJob)} />}
               </ArtifactPanel>
             </div>
@@ -2079,6 +2213,7 @@ function ArtifactPanel({
   artifact,
   latestJob,
   loading,
+  disabled = false,
   generateLabel,
   regenerateLabel,
   onGenerate,
@@ -2091,6 +2226,7 @@ function ArtifactPanel({
   artifact: LeadAiArtifact | null;
   latestJob: LeadAiArtifact | null;
   loading: boolean;
+  disabled?: boolean;
   generateLabel: string;
   regenerateLabel: string;
   onGenerate: () => void;
@@ -2118,7 +2254,7 @@ function ArtifactPanel({
           )}
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" className="btn-glass text-xs" disabled={loading} onClick={isReady ? onRegenerate : onGenerate}>
+          <button type="button" className="btn-glass text-xs" disabled={loading || disabled} onClick={isReady ? onRegenerate : onGenerate}>
             {loading ? "Generating..." : isReady ? regenerateLabel : generateLabel}
           </button>
           <button type="button" className="btn-glass text-xs" disabled={!isReady || loading} onClick={onCopy}>
@@ -2139,6 +2275,7 @@ function BusinessDetailView({ artifact }: { artifact: LeadAiArtifact }) {
   return (
     <div className="space-y-4 text-sm" style={{ color: "var(--text-primary)" }}>
       <p className="leading-relaxed">{String(content.business_summary ?? "No summary generated.")}</p>
+      <OperatorPitchPanel content={content} />
       <ArtifactList title="Services" items={services} />
       <ArtifactList title="Trust Signals" items={trustSignals} />
       {sections.length > 0 && (
@@ -2175,10 +2312,45 @@ function CompetitiveReportView({ artifact }: { artifact: LeadAiArtifact }) {
         <QualityMetric label="Monthly Upside" value={`${formatCurrencyNumber(revenue.low)}-${formatCurrencyNumber(revenue.high)}`} />
       </div>
       <p className="leading-relaxed">{String(content.opportunity_angle ?? "No opportunity angle generated.")}</p>
+      <OperatorPitchPanel content={content} />
       <ArtifactList title="Pitch Bullets" items={stringArray(content.pitch_bullets)} />
       <ArtifactList title="Objection Handling" items={stringArray(content.objection_handling)} />
       <ArtifactList title="Assumptions" items={stringArray(content.assumptions)} />
       <ArtifactSources sources={artifact.sources_json} />
+    </div>
+  );
+}
+
+function OperatorPitchPanel({ content }: { content: Record<string, unknown> }) {
+  const claimSupport = stringArray(content.claimSupport);
+  const snippets = [
+    ["Call opener", content.callOpener],
+    ["SMS opener", content.smsOpener],
+    ["Voicemail", content.voicemailScript],
+    ["Follow-up", content.followUpMessage],
+  ].filter(([, value]) => typeof value === "string" && value.trim());
+  if (!content.pitchAngleType && !content.verificationCaveat && snippets.length === 0 && claimSupport.length === 0) return null;
+  return (
+    <div className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Pitch stance</span>
+          <p className="mt-1 text-xs font-semibold capitalize" style={{ color: "var(--text-primary)" }}>{formatLabel(String(content.pitchAngleType ?? "general_opportunity"))}</p>
+        </div>
+        <div>
+          <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Caveat</span>
+          <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--text-secondary)" }}>{String(content.verificationCaveat ?? "Use cautious wording.")}</p>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2">
+        {snippets.map(([label, value]) => (
+          <div key={String(label)} className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.28)" }}>
+            <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{String(label)}</span>
+            <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--text-secondary)" }}>{String(value)}</p>
+          </div>
+        ))}
+      </div>
+      <ArtifactList title="Claim support" items={claimSupport} />
     </div>
   );
 }
@@ -2189,6 +2361,39 @@ function EmptyArtifactState({ label }: { label: string }) {
       {label}
     </div>
   );
+}
+
+function EvidenceList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.28)" }}>
+      <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{title}</span>
+      {items.length > 0 ? (
+        <ul className="mt-1 space-y-1">
+          {items.slice(0, 4).map((item) => (
+            <li key={item} className="text-xs leading-relaxed" style={{ color: "var(--text-secondary)" }}>{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>None recorded</p>
+      )}
+    </div>
+  );
+}
+
+function getAiEvidence(rawJson: Record<string, unknown> | null | undefined) {
+  const evidence = toRecord(rawJson?.evidence);
+  const candidateAssessment = toRecord(evidence.candidateAssessment);
+  const identityMatch = toRecord(evidence.identityMatch);
+  const candidateScore = typeof candidateAssessment.score === "number" ? candidateAssessment.score : null;
+  return {
+    evidenceGrade: capitalizeWord(String(evidence.evidenceGrade ?? "weak")),
+    candidateScore,
+    identitySummary: typeof identityMatch.summary === "string" ? identityMatch.summary : "",
+    officialSiteEvidence: stringArray(evidence.officialSiteEvidence),
+    contradictingEvidence: stringArray(evidence.contradictingEvidence),
+    siteQualityFlags: stringArray(evidence.siteQualityFlags).map(formatLabel),
+    manualReviewReason: typeof evidence.manualReviewReason === "string" ? evidence.manualReviewReason : "",
+  };
 }
 
 function ArtifactList({ title, items }: { title: string; items: string[] }) {
@@ -2243,6 +2448,11 @@ function formatLabel(value: string | null | undefined): string {
   return value ? value.replace(/_/g, " ") : "N/A";
 }
 
+function capitalizeWord(value: string): string {
+  if (!value) return value;
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
 function latestArtifact(artifacts: LeadAiArtifact[], artifactType: LeadAiArtifact["artifact_type"]): LeadAiArtifact | null {
   return artifacts.find((artifact) => artifact.artifact_type === artifactType) ?? null;
 }
@@ -2273,11 +2483,14 @@ function buildPitchBriefText(artifact: LeadAiArtifact | null): string {
   return [
     `Opportunity: ${String(content.opportunity_angle ?? "")}`,
     `Conservative monthly upside: ${formatCurrencyNumber(revenue.low)}-${formatCurrencyNumber(revenue.high)}`,
+    content.verificationCaveat ? `Caveat: ${String(content.verificationCaveat)}` : null,
+    content.callOpener ? `Call opener: ${String(content.callOpener)}` : null,
+    content.smsOpener ? `SMS: ${String(content.smsOpener)}` : null,
     "Pitch bullets:",
     ...stringArray(content.pitch_bullets).map((item) => `- ${item}`),
     "Objection handling:",
     ...stringArray(content.objection_handling).map((item) => `- ${item}`),
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function formatArtifactType(value: string | null | undefined): string {

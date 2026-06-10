@@ -7,6 +7,8 @@ import {
   getOpenAIApiKey,
   OPENAI_RESPONSES_ENDPOINT,
 } from "./config";
+import { buildLeadIdentityEvidencePacket, type EvidenceGrade, type IdentityMatchValue, type WebsiteCandidateAssessment } from "./lead-evidence";
+import type { WebsiteViabilityResult } from "./website-viability";
 
 export const AI_VERIFICATION_STATUSES = [
   "site_found",
@@ -33,6 +35,22 @@ export interface AiVerificationSource {
   evidence: string;
 }
 
+export interface AiCandidateWebsiteEvidence {
+  url: string;
+  title: string | null;
+  sourceUrl: string | null;
+  evidence: string;
+  isOfficialCandidate: boolean;
+}
+
+export interface AiIdentityMatchEvidence {
+  name: IdentityMatchValue;
+  location: IdentityMatchValue;
+  phone: IdentityMatchValue;
+  category: IdentityMatchValue;
+  summary: string;
+}
+
 export interface AiVerificationResult {
   status: Exclude<AiVerificationStatus, "not_checked" | "error">;
   confidence: number;
@@ -44,6 +62,13 @@ export interface AiVerificationResult {
   recommendation: AiRecommendation;
   reason: string;
   summary: string;
+  candidateWebsites: AiCandidateWebsiteEvidence[];
+  identityMatch: AiIdentityMatchEvidence;
+  officialSiteEvidence: string[];
+  contradictingEvidence: string[];
+  siteQualityFlags: string[];
+  manualReviewReason: string | null;
+  evidenceGrade: EvidenceGrade;
 }
 
 export interface OpenAILeadVerificationResponse {
@@ -61,6 +86,28 @@ const sourceSchema = z.object({
   evidence: z.string().min(1).max(500),
 });
 
+const candidateWebsiteSchema = z.object({
+  url: z.string().url(),
+  title: z.string().nullable(),
+  sourceUrl: z.string().url().nullable(),
+  evidence: z.string().min(1).max(500),
+  isOfficialCandidate: z.boolean(),
+});
+
+const identityMatchSchema = z.object({
+  name: z.enum(["exact", "near", "weak", "mismatch", "unknown"]).default("unknown"),
+  location: z.enum(["exact", "near", "weak", "mismatch", "unknown"]).default("unknown"),
+  phone: z.enum(["exact", "near", "weak", "mismatch", "unknown"]).default("unknown"),
+  category: z.enum(["exact", "near", "weak", "mismatch", "unknown"]).default("unknown"),
+  summary: z.string().min(1).max(500).default("Identity evidence was not summarized."),
+}).default({
+  name: "unknown",
+  location: "unknown",
+  phone: "unknown",
+  category: "unknown",
+  summary: "Identity evidence was not summarized.",
+});
+
 export const aiVerificationResultSchema = z.object({
   status: z.enum(AI_VERIFICATION_STATUSES),
   confidence: z.number().min(0).max(1),
@@ -72,6 +119,13 @@ export const aiVerificationResultSchema = z.object({
   recommendation: z.enum(AI_RECOMMENDATIONS),
   reason: z.string().min(1).max(800),
   summary: z.string().min(1).max(1200),
+  candidateWebsites: z.array(candidateWebsiteSchema).max(5).default([]),
+  identityMatch: identityMatchSchema,
+  officialSiteEvidence: z.array(z.string().min(1).max(240)).max(8).default([]),
+  contradictingEvidence: z.array(z.string().min(1).max(240)).max(8).default([]),
+  siteQualityFlags: z.array(z.string().min(1).max(80)).max(12).default([]),
+  manualReviewReason: z.string().min(1).max(500).nullable().default(null),
+  evidenceGrade: z.enum(["strong", "moderate", "weak", "conflicting"]).default("weak"),
 }).superRefine((value, ctx) => {
   const claimsWebsite = value.status === "site_found" || value.status === "weak_site_found" || value.recommendation === "update_website" || value.recommendation === "exclude";
   if (claimsWebsite && !value.foundWebsiteUrl) {
@@ -108,6 +162,8 @@ export function buildLeadVerificationRequest(lead: Lead): Record<string, unknown
       "An official domain is the business's own domain. Directory listings, social profiles, Google Maps, Yelp, BBB, chamber pages, booking marketplaces, and aggregators are not official websites.",
       "If you find only directory or social evidence, return no official website, include the source URLs, and use prioritize or manual_review.",
       "If you find a possible official domain but identity is ambiguous, return the candidate URL with sources and use uncertain or mismatch, not site_found.",
+      "Return candidateWebsites for every plausible website URL you considered, including rejected directory/social candidates.",
+      "Return identityMatch, officialSiteEvidence, contradictingEvidence, siteQualityFlags, manualReviewReason, and evidenceGrade so a human can audit the finding.",
       "Do not treat domain existence as proof of a usable website; app code will verify website viability after you return a URL.",
       "Use web search sparingly. Prefer official business pages, domain contact pages, chamber/listing pages, and strong source agreement.",
       "Do not recommend exclusion unless you found a real official website that matches the business identity with high confidence and source evidence.",
@@ -121,6 +177,49 @@ export function buildLeadVerificationRequest(lead: Lead): Record<string, unknown
       format: {
         type: "json_schema",
         name: "lead_ai_verification",
+        strict: true,
+        schema: leadVerificationJsonSchema,
+      },
+    },
+  };
+}
+
+export function buildLeadVerificationAdjudicationRequest(
+  lead: Lead,
+  result: AiVerificationResult,
+  websiteViability: WebsiteViabilityResult | null,
+  candidateAssessment: WebsiteCandidateAssessment,
+): Record<string, unknown> {
+  const model = getConfiguredOpenAIModel();
+  return {
+    model,
+    store: false,
+    max_output_tokens: 1200,
+    instructions: [
+      "You are a no-browse adjudicator for local business website verification.",
+      "Do not use web search, tools, browsing, or outside knowledge. You may only use the JSON context provided.",
+      "You may revise status, confidence, recommendation, reason, summary, and evidence fields when deterministic checks contradict the original result.",
+      "You cannot introduce new URLs, new sources, new phone numbers, or new email addresses.",
+      "If deterministic candidateAssessment is reject, do not return site_found.",
+      "If candidateAssessment is manual_review, prefer uncertain unless the original evidence is clearly strong.",
+      "Return only strict JSON matching the schema.",
+    ].join(" "),
+    input: JSON.stringify({
+      leadIdentityEvidence: buildLeadIdentityEvidencePacket(lead),
+      originalResult: result,
+      websiteViability,
+      candidateAssessment,
+      allowedWebsiteUrls: Array.from(new Set([
+        result.foundWebsiteUrl,
+        ...result.candidateWebsites.map((candidate) => candidate.url),
+      ].filter(Boolean))),
+      allowedSourceUrls: result.sources.map((source) => source.url),
+    }),
+    text: {
+      verbosity: "low",
+      format: {
+        type: "json_schema",
+        name: "lead_ai_verification_adjudication",
         strict: true,
         schema: leadVerificationJsonSchema,
       },
@@ -172,6 +271,57 @@ export async function callOpenAILeadVerifier(lead: Lead, apiKeyOverride?: string
   }
 }
 
+export async function callOpenAILeadVerificationAdjudicator(
+  lead: Lead,
+  result: AiVerificationResult,
+  websiteViability: WebsiteViabilityResult | null,
+  candidateAssessment: WebsiteCandidateAssessment,
+  apiKeyOverride?: string,
+): Promise<OpenAILeadVerificationResponse> {
+  const apiKey = (apiKeyOverride || getOpenAIApiKey()).trim();
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is not configured.");
+  }
+
+  const body = buildLeadVerificationAdjudicationRequest(lead, result, websiteViability, candidateAssessment);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45_000);
+
+  try {
+    const response = await fetch(OPENAI_RESPONSES_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    const raw = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (!response.ok) {
+      const message = extractOpenAIError(raw) ?? `OpenAI request failed with status ${response.status}`;
+      throw new Error(message);
+    }
+
+    const text = extractResponseText(raw);
+    const parsed = parseAiVerificationResponse(text);
+    const resultWithBounds = enforceAdjudicationBounds(parsed, result, candidateAssessment);
+    const usage = estimateOpenAIUsageCost(raw.usage as { input_tokens?: number; output_tokens?: number; total_tokens?: number } | undefined);
+
+    return {
+      result: resultWithBounds,
+      raw,
+      inputHash: createLeadVerificationInputHash(lead),
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedCost: usage.estimatedCost,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function parseAiVerificationResponse(text: string): AiVerificationResult {
   let parsed: unknown;
   try {
@@ -205,7 +355,42 @@ function buildLeadVerificationInput(lead: Lead): string {
     categories: lead.categories,
     rating: lead.rating,
     reviewCount: lead.review_count,
+    identityEvidence: buildLeadIdentityEvidencePacket(lead),
   });
+}
+
+function enforceAdjudicationBounds(
+  adjudicated: AiVerificationResult,
+  original: AiVerificationResult,
+  candidateAssessment: WebsiteCandidateAssessment,
+): AiVerificationResult {
+  const allowedUrls = new Set([
+    original.foundWebsiteUrl,
+    ...original.candidateWebsites.map((candidate) => candidate.url),
+  ].filter(Boolean));
+  const foundWebsiteUrl = adjudicated.foundWebsiteUrl && allowedUrls.has(adjudicated.foundWebsiteUrl)
+    ? adjudicated.foundWebsiteUrl
+    : original.foundWebsiteUrl;
+  const allowedSourceUrls = new Set(original.sources.map((source) => source.url));
+  const sources = adjudicated.sources.filter((source) => allowedSourceUrls.has(source.url));
+  const bounded = {
+    ...adjudicated,
+    foundWebsiteUrl,
+    sources: sources.length > 0 ? sources : original.sources,
+    candidateWebsites: adjudicated.candidateWebsites.length > 0 ? adjudicated.candidateWebsites : original.candidateWebsites,
+    siteQualityFlags: Array.from(new Set([...adjudicated.siteQualityFlags, ...candidateAssessment.flags])),
+  };
+  if (candidateAssessment.recommendation === "reject" && bounded.status === "site_found") {
+    return {
+      ...bounded,
+      status: "uncertain",
+      recommendation: "manual_review",
+      confidence: Math.min(bounded.confidence, 0.68),
+      manualReviewReason: bounded.manualReviewReason ?? "Deterministic candidate checks rejected the official-site finding.",
+      evidenceGrade: "weak",
+    };
+  }
+  return bounded;
 }
 
 function extractResponseText(raw: Record<string, unknown>): string {
@@ -247,6 +432,13 @@ const leadVerificationJsonSchema = {
     "recommendation",
     "reason",
     "summary",
+    "candidateWebsites",
+    "identityMatch",
+    "officialSiteEvidence",
+    "contradictingEvidence",
+    "siteQualityFlags",
+    "manualReviewReason",
+    "evidenceGrade",
   ],
   properties: {
     status: { type: "string", enum: AI_VERIFICATION_STATUSES },
@@ -276,5 +468,38 @@ const leadVerificationJsonSchema = {
     recommendation: { type: "string", enum: AI_RECOMMENDATIONS },
     reason: { type: "string" },
     summary: { type: "string" },
+    candidateWebsites: {
+      type: "array",
+      maxItems: 5,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["url", "title", "sourceUrl", "evidence", "isOfficialCandidate"],
+        properties: {
+          url: { type: "string" },
+          title: { type: ["string", "null"] },
+          sourceUrl: { type: ["string", "null"] },
+          evidence: { type: "string" },
+          isOfficialCandidate: { type: "boolean" },
+        },
+      },
+    },
+    identityMatch: {
+      type: "object",
+      additionalProperties: false,
+      required: ["name", "location", "phone", "category", "summary"],
+      properties: {
+        name: { type: "string", enum: ["exact", "near", "weak", "mismatch", "unknown"] },
+        location: { type: "string", enum: ["exact", "near", "weak", "mismatch", "unknown"] },
+        phone: { type: "string", enum: ["exact", "near", "weak", "mismatch", "unknown"] },
+        category: { type: "string", enum: ["exact", "near", "weak", "mismatch", "unknown"] },
+        summary: { type: "string" },
+      },
+    },
+    officialSiteEvidence: { type: "array", items: { type: "string" }, maxItems: 8 },
+    contradictingEvidence: { type: "array", items: { type: "string" }, maxItems: 8 },
+    siteQualityFlags: { type: "array", items: { type: "string" }, maxItems: 12 },
+    manualReviewReason: { type: ["string", "null"] },
+    evidenceGrade: { type: "string", enum: ["strong", "moderate", "weak", "conflicting"] },
   },
 };

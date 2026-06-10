@@ -10,13 +10,15 @@ describe("role permission matrix", () => {
     expect(hasPermission("admin", "users:manage")).toBe(true);
     expect(hasPermission("admin", "lead:close")).toBe(true);
     expect(hasPermission("admin", "admin_request:manage")).toBe(true);
+    expect(hasPermission("admin", "ai:researcher_tools")).toBe(true);
   });
 
-  it("lets researchers work claimed leads without admin, AI, demo, or billing-sensitive controls", () => {
+  it("lets researchers work claimed leads and use safe AI tools without admin AI, demo, or billing-sensitive controls", () => {
     expect(hasPermission("researcher", "view:workspace")).toBe(true);
     expect(hasPermission("researcher", "lead:update")).toBe(true);
     expect(hasPermission("researcher", "outreach:create")).toBe(true);
     expect(hasPermission("researcher", "admin_request:create")).toBe(true);
+    expect(hasPermission("researcher", "ai:researcher_tools")).toBe(true);
     expect(hasPermission("researcher", "admin_request:manage")).toBe(false);
     expect(hasPermission("researcher", "demo:create")).toBe(false);
     expect(hasPermission("researcher", "ai:verify")).toBe(false);
