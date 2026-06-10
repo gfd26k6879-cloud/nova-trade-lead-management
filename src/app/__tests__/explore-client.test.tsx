@@ -196,6 +196,12 @@ describe("ExploreClient search surface", () => {
     expect(html).toContain("No official business website is recorded for this lead.");
     expect(html).toContain("Why this is shown: no official website found, strong reviews, and marked ready for outreach.");
     expect(html).toContain("Website review");
+    expect(html).toContain('data-role="lead-card-footer"');
+    expect(html).toContain('data-role="lead-card-actions"');
+    expect(html).toContain('aria-label="Claim lead"');
+    expect(html).toContain('data-action-tone="website"');
+    expect(html).toContain('data-action-tone="work"');
+    expect(html).toContain('data-action-tone="danger"');
     expect(html).not.toContain(">none</span>");
     expect(html).not.toContain("Why this result:");
   });

@@ -994,15 +994,15 @@ function MapPointCard({
         ))}
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "var(--glass-border-light)" }}>
-        <OwnerPill label={owner} mine={point.assigned_to_user_id === currentUserId} />
-        <Link href={`/leads/${point.id}`} prefetch={false} className="btn-glass ml-auto text-sm">Details</Link>
-        {!point.assigned_to_user_id && (
-          <button type="button" className="btn-primary text-sm" disabled={busy} onClick={() => onClaim(point.id)}>
-            {busy ? "Claiming..." : "Claim"}
-          </button>
-        )}
-      </div>
+      <LeadCardFooter
+        leadId={point.id}
+        owner={owner}
+        mine={point.assigned_to_user_id === currentUserId}
+        assigned={Boolean(point.assigned_to_user_id)}
+        busy={busy}
+        compact
+        onClaim={onClaim}
+      />
     </article>
   );
 }
@@ -1066,18 +1066,14 @@ function LeadCard({
         ))}
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3" style={{ borderColor: "var(--glass-border-light)" }}>
-        <OwnerPill label={owner} mine={lead.assigned_to_user_id === currentUserId} />
-        <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass ml-auto text-sm">Details</Link>
-        <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass text-sm">Website review</Link>
-        <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass text-sm">Work update</Link>
-        <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass text-sm">Archive</Link>
-        {!lead.assigned_to_user_id && (
-          <button type="button" className="btn-primary text-sm" disabled={busy} onClick={() => onClaim(lead.id)}>
-            {busy ? "Claiming..." : "Claim"}
-          </button>
-        )}
-      </div>
+      <LeadCardFooter
+        leadId={lead.id}
+        owner={owner}
+        mine={lead.assigned_to_user_id === currentUserId}
+        assigned={Boolean(lead.assigned_to_user_id)}
+        busy={busy}
+        onClaim={onClaim}
+      />
     </article>
   );
 }
@@ -1190,6 +1186,112 @@ function SegmentButton({ active, onClick, children }: { active: boolean; onClick
   );
 }
 
+function LeadCardFooter({
+  leadId,
+  owner,
+  mine,
+  assigned,
+  busy,
+  compact = false,
+  onClaim,
+}: {
+  leadId: string;
+  owner: string;
+  mine: boolean;
+  assigned: boolean;
+  busy: boolean;
+  compact?: boolean;
+  onClaim: (leadId: string) => void;
+}) {
+  return (
+    <div className="mt-4 border-t pt-3" style={{ borderColor: "var(--glass-border-light)" }} data-role="lead-card-footer">
+      <div className="flex items-center justify-between gap-2">
+        <OwnerPill label={owner} mine={mine} />
+        {!assigned && (
+          <button
+            type="button"
+            className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg px-4 text-sm font-semibold leading-none transition disabled:cursor-not-allowed disabled:opacity-50"
+            style={{
+              background: "var(--accent)",
+              color: "var(--text-on-accent)",
+              boxShadow: "0 5px 16px var(--accent-glow)",
+            }}
+            disabled={busy}
+            onClick={() => onClaim(leadId)}
+            aria-label="Claim lead"
+          >
+            {busy ? "Claiming..." : "Claim"}
+          </button>
+        )}
+      </div>
+
+      <div className={`mt-2 grid gap-1.5 ${compact ? "grid-cols-1" : "grid-cols-2"}`} aria-label="Lead actions" data-role="lead-card-actions">
+        <LeadCardAction href={`/leads/${leadId}`} label={compact ? "Open details" : "Details"} tone="neutral" title="Open the full lead record." />
+        {!compact && (
+          <>
+            <LeadCardAction href={`/leads/${leadId}`} label="Website review" tone="website" title="Review website evidence and AI verification before outreach." />
+            <LeadCardAction href={`/leads/${leadId}`} label="Work update" tone="work" title="Open the lead workbench to log notes, calls, and follow-ups." />
+            <LeadCardAction href={`/leads/${leadId}`} label="Archive" tone="danger" title="Open the lead record before archiving or disqualifying it." />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type LeadCardActionTone = "neutral" | "website" | "work" | "danger";
+
+function LeadCardAction({
+  href,
+  label,
+  tone,
+  title,
+}: {
+  href: string;
+  label: string;
+  tone: LeadCardActionTone;
+  title: string;
+}) {
+  return (
+    <Link
+      href={href}
+      prefetch={false}
+      className="inline-flex min-h-8 items-center justify-center rounded-lg border px-2.5 py-1.5 text-center text-xs font-semibold leading-tight transition hover:-translate-y-px"
+      style={leadCardActionStyle(tone)}
+      title={title}
+      data-action-tone={tone}
+    >
+      {label}
+    </Link>
+  );
+}
+
+function leadCardActionStyle(tone: LeadCardActionTone): React.CSSProperties {
+  const styles: Record<LeadCardActionTone, React.CSSProperties> = {
+    neutral: {
+      background: "var(--surface-muted)",
+      borderColor: "var(--surface-card-border)",
+      color: "var(--text-secondary)",
+    },
+    website: {
+      background: "var(--badge-taken-bg)",
+      borderColor: "var(--chip-border)",
+      color: "var(--badge-taken-text)",
+    },
+    work: {
+      background: "var(--badge-mine-bg)",
+      borderColor: "var(--chip-border)",
+      color: "var(--badge-mine-text)",
+    },
+    danger: {
+      background: "var(--danger-bg)",
+      borderColor: "var(--chip-border)",
+      color: "var(--danger-text)",
+    },
+  };
+  return styles[tone];
+}
+
 function Badge({ label, title, tone = "neutral" }: BadgeMetadata) {
   return (
     <span
@@ -1207,8 +1309,9 @@ function Badge({ label, title, tone = "neutral" }: BadgeMetadata) {
 function OwnerPill({ label, mine }: { label: string; mine: boolean }) {
   return (
     <span
-      className="rounded-md px-2 py-1 text-xs font-medium"
-      style={mine ? { background: "var(--badge-mine-bg)", color: "var(--badge-mine-text)" } : { background: "var(--chip-muted-bg)", border: "1px solid var(--chip-border)", color: "var(--text-secondary)" }}
+      className="inline-flex h-8 items-center rounded-full border px-2.5 text-xs font-semibold leading-none"
+      style={mine ? { background: "var(--badge-mine-bg)", borderColor: "var(--chip-border)", color: "var(--badge-mine-text)" } : { background: "var(--chip-muted-bg)", borderColor: "var(--chip-border)", color: "var(--text-secondary)" }}
+      title={mine ? "Assigned to you." : "Open lead that nobody owns yet."}
     >
       {label}
     </span>
