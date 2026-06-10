@@ -45,6 +45,7 @@ function insertLead(input: {
   qualityBucket?: string;
   aiVerificationStatus?: string;
   aiWebsiteViabilityStatus?: string | null;
+  aiQueueStatus?: string;
 }) {
   testDb.prepare(
     `INSERT INTO leads (
@@ -55,7 +56,7 @@ function insertLead(input: {
     ) VALUES (
       ?, ?, ?, '123 Main St, Denver, CO 80202', '303-555-0100', '["plumber"]', ?, 20, 'new',
       'plumbing', 'qualified', ?, ?,
-      ?, 'verified', ?, ?,
+      ?, ?, ?, ?,
       ?, ?, 'market-colorado', 'US', 'cell-us-co-80202', '80202', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z'
     )`
   ).run(
@@ -66,6 +67,7 @@ function insertLead(input: {
     input.qualityBucket ?? "ready_to_call",
     input.aiVerificationStatus ?? "no_site_found",
     input.aiWebsiteViabilityStatus ?? "directory_only",
+    input.aiQueueStatus ?? "verified",
     input.salesPriority ?? 70,
     input.leadQuality ?? 80,
     input.assignedTo ?? null,
@@ -109,6 +111,23 @@ describe("researcher workbench queries", () => {
     expect(workbench.unclaimedLeads.map((lead) => lead.id).slice(0, 3)).toEqual(["no-site", "broken", "weak-high"]);
     expect(workbench.summary.myClaimed).toBe(1);
     expect(workbench.summary.dueToday).toBe(1);
+  });
+
+  it("shows active owned leads even while they still need AI verification", async () => {
+    insertLead({
+      id: "queued-ai-owned",
+      assignedTo: "user-1",
+      qualityBucket: "needs_ai_verify",
+      aiQueueStatus: "queued",
+      aiVerificationStatus: "not_checked",
+      aiWebsiteViabilityStatus: null,
+    });
+
+    const workbench = await getResearcherWorkbench("user-1");
+
+    expect(workbench.summary.myClaimed).toBe(1);
+    expect(workbench.myLeads.map((lead) => lead.id)).toContain("queued-ai-owned");
+    expect(workbench.nextAction?.id).toBe("queued-ai-owned");
   });
 
   it("persists structured outreach and maps outcomes to lead state", async () => {

@@ -8528,11 +8528,12 @@ export async function updateLeadTimestamp(id: string, field: string, value: stri
 
 export async function getNowQueue(
   limit = 25,
-  options: { assignedToUserId?: string; unassignedOnly?: boolean; visibleToUserId?: string } = {},
+  options: { assignedToUserId?: string; unassignedOnly?: boolean; visibleToUserId?: string; includeAllAssignedActive?: boolean } = {},
 ): Promise<QueueLead[]>{
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const candidateLimit = Math.max(limit * 20, 200);
+  const includeAllAssignedActive = Boolean(options.assignedToUserId && options.includeAllAssignedActive);
   const assignmentConditions: string[] = [];
   const assignmentParams: unknown[] = [];
   if (options.assignedToUserId) {
@@ -8547,12 +8548,11 @@ export async function getNowQueue(
     assignmentParams.push(options.visibleToUserId);
   }
   const assignmentWhere = assignmentConditions.length > 0 ? `AND ${assignmentConditions.join(" AND ")}` : "";
-
-  const rows = await db.prepare(`
-    WITH candidates AS (
-      SELECT id
-      FROM leads
-      WHERE website_status IN ('none', 'social', 'basic')
+  const candidateWhere = includeAllAssignedActive
+    ? `status NOT IN ('closed_won','closed_lost')
+        AND ${SCORE_ELIGIBLE_CONDITION}
+        ${assignmentWhere}`
+    : `website_status IN ('none', 'social', 'basic')
         AND ${noUsableAiWebsiteCondition()}
         AND qualification_status IN ('qualified', 'needs_verification')
         AND status IN ('new', 'verified', 'contacted')
@@ -8564,8 +8564,13 @@ export async function getNowQueue(
         )
         AND score > 0
         AND ${SCORE_ELIGIBLE_CONDITION}
-        AND archived_at IS NULL
-        ${assignmentWhere}
+        ${assignmentWhere}`;
+
+  const rows = await db.prepare(`
+    WITH candidates AS (
+      SELECT id
+      FROM leads
+      WHERE ${candidateWhere}
       ORDER BY ${leadWebsiteNeedRankExpression("leads")} DESC, sales_priority_score DESC, lead_quality_score DESC, score DESC
       LIMIT ?
     ),
@@ -8739,7 +8744,7 @@ export async function getResearcherWorkbench(userId: string, options: { viewerRo
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const visibleToUserId = options.viewerRole === "admin" ? undefined : userId;
   const [myLeads, unclaimedLeads] = await Promise.all([
-    getNowQueue(25, { assignedToUserId: userId, visibleToUserId }),
+    getNowQueue(25, { assignedToUserId: userId, visibleToUserId, includeAllAssignedActive: true }),
     getNowQueue(25, { unassignedOnly: true, visibleToUserId }),
   ]);
   const marketCondition = visibleToUserId
