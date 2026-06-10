@@ -37,34 +37,34 @@ export const SCORE_BAND_DEFINITIONS: readonly ScoreBandDefinition[] = [
 
 export const SCORE_BAND_STYLE_MAP: Record<ScoreBandKey, ScoreBandStyle> = {
   low: {
-    background: "rgba(100,116,139,0.12)",
-    border: "rgba(100,116,139,0.25)",
-    color: "#475569",
+    background: "var(--score-low-bg)",
+    border: "var(--score-low-border)",
+    color: "var(--score-low-text)",
   },
   fair: {
-    background: "rgba(245,158,11,0.12)",
-    border: "rgba(245,158,11,0.25)",
-    color: "#b45309",
+    background: "var(--score-fair-bg)",
+    border: "var(--score-fair-border)",
+    color: "var(--score-fair-text)",
   },
   good: {
-    background: "rgba(14,165,233,0.12)",
-    border: "rgba(14,165,233,0.25)",
-    color: "#0369a1",
+    background: "var(--score-good-bg)",
+    border: "var(--score-good-border)",
+    color: "var(--score-good-text)",
   },
   high: {
-    background: "rgba(34,197,94,0.12)",
-    border: "rgba(34,197,94,0.25)",
-    color: "#166534",
+    background: "var(--score-high-bg)",
+    border: "var(--score-high-border)",
+    color: "var(--score-high-text)",
   },
   hot: {
-    background: "rgba(147,51,234,0.12)",
-    border: "rgba(147,51,234,0.25)",
-    color: "#7e22ce",
+    background: "var(--score-hot-bg)",
+    border: "var(--score-hot-border)",
+    color: "var(--score-hot-text)",
   },
   probably_win: {
-    background: "rgba(234,179,8,0.16)",
-    border: "rgba(234,179,8,0.35)",
-    color: "#713f12",
+    background: "var(--score-win-bg)",
+    border: "var(--score-win-border)",
+    color: "var(--score-win-text)",
   },
 };
 

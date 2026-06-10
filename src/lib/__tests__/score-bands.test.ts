@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeScoreBandThresholds,
   formatScoreBandRange,
+  getScoreBandStyle,
   resolveScoreBand,
 } from "@/lib/score-bands";
 
@@ -46,5 +47,14 @@ describe("score band domain logic", () => {
     expect(formatScoreBandRange("high", thresholds)).toBe("15.3 - 18.1");
     expect(formatScoreBandRange("hot", thresholds)).toBe("18.1 - 19.4");
     expect(formatScoreBandRange("probably_win", thresholds)).toBe("> 19.4");
+  });
+
+  it("uses theme variables for score band colors so dark mode stays readable", async () => {
+    for (const key of ["low", "fair", "good", "high", "hot", "probably_win"] as const) {
+      const style = getScoreBandStyle(key);
+      expect(style.background).toContain("var(--score-");
+      expect(style.border).toContain("var(--score-");
+      expect(style.color).toContain("var(--score-");
+    }
   });
 });

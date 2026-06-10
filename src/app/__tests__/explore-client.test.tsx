@@ -211,4 +211,13 @@ describe("ExploreClient search surface", () => {
     expect(exploreClient).toContain("--search-surface");
     expect(exploreClient).toContain("--chip-bg");
   });
+
+  it("closes the Lead Finder menu when clicking outside the search surface", () => {
+    const tokenSearch = readFileSync(join(process.cwd(), "src/app/(protected)/explore/explore-token-search.tsx"), "utf8");
+
+    expect(tokenSearch).toContain('window.addEventListener("pointerdown", handlePointerDown)');
+    expect(tokenSearch).toContain("rootRef.current?.contains(target)");
+    expect(tokenSearch).toContain("setOpen(false)");
+    expect(tokenSearch).toContain("setBuilderOpen(false)");
+  });
 });

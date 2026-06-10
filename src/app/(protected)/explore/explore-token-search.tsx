@@ -66,6 +66,7 @@ export function ExploreTokenSearch({
   onApply,
   onRemoveChip,
 }: Props) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);
@@ -100,6 +101,19 @@ export function ExploreTokenSearch({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  useEffect(() => {
+    if (!open && !builderOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (rootRef.current?.contains(target)) return;
+      setOpen(false);
+      setBuilderOpen(false);
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [builderOpen, open]);
+
   const acceptSuggestion = (suggestion: ExploreSearchSuggestion) => {
     setErrors([]);
     setDraft("");
@@ -119,7 +133,7 @@ export function ExploreTokenSearch({
   };
 
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="section-label">Lead Finder</h2>

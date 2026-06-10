@@ -14,8 +14,8 @@ type PageShellProps = {
 export function PageShell({ title, description, stats = [], children }: PageShellProps) {
   return (
     <section className="space-y-5">
-      <header className="glass-heavy rounded-2xl p-4 sm:p-5">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+      <header className="glass-heavy rounded-2xl p-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
             <h2 className="text-xl font-semibold leading-tight" style={{ color: "var(--text-primary)" }}>
               {title}
@@ -26,28 +26,29 @@ export function PageShell({ title, description, stats = [], children }: PageShel
           </div>
 
           {stats.length > 0 && (
-            <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3 xl:flex xl:flex-wrap xl:justify-end">
-            {stats.map((stat) => (
-              <article
-                key={stat.label}
-                className="min-w-0 rounded-lg px-3 py-2 xl:min-w-32"
-                style={{
-                  background: "var(--surface-card)",
-                  border: "1px solid var(--surface-card-border)",
-                }}
-              >
-                <p className="section-label break-words">{stat.label}</p>
-                <p className="mt-1 break-words text-lg font-semibold leading-tight" style={{ color: "var(--text-primary)" }}>
-                  {stat.value}
-                </p>
-                {stat.hint && (
-                  <p className="mt-1 break-words text-xs" style={{ color: "var(--text-tertiary)" }}>
-                    {stat.hint}
-                  </p>
-                )}
-              </article>
-            ))}
-          </div>
+            <dl
+              className="flex min-w-0 flex-wrap gap-x-4 gap-y-2 rounded-xl px-3 py-2 xl:max-w-[58rem] xl:justify-end"
+              style={{
+                background: "var(--surface-card)",
+                border: "1px solid var(--surface-card-border)",
+              }}
+            >
+              {stats.map((stat) => (
+                <div key={stat.label} className="inline-flex min-w-0 items-baseline gap-2">
+                  <dt className="section-label shrink-0">{stat.label}</dt>
+                  <dd className="flex min-w-0 items-baseline gap-1.5">
+                    <span className="text-lg font-semibold leading-none" style={{ color: "var(--text-primary)" }}>
+                      {stat.value}
+                    </span>
+                    {stat.hint && (
+                      <span className="truncate text-xs" style={{ color: "var(--text-tertiary)" }}>
+                        {stat.hint}
+                      </span>
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
           )}
         </div>
       </header>
