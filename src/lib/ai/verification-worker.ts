@@ -25,6 +25,8 @@ import {
   callOpenAILeadVerifier,
   createLeadVerificationInputHash,
   isAiVerificationFresh,
+  OpenAIResponseParseError,
+  serializeOpenAIResponseParseError,
   type AiVerificationResult,
 } from "@/lib/ai/lead-verification";
 import { applyWebsiteCandidateAssessment, extractVerificationEvidence, scoreWebsiteCandidate } from "@/lib/ai/lead-evidence";
@@ -248,6 +250,9 @@ export async function performAiVerification(
       adjudicationOutputTokens = adjudicated.outputTokens;
     } catch (error) {
       adjudicationError = error instanceof Error ? error.message : "AI adjudication failed.";
+      if (error instanceof OpenAIResponseParseError) {
+        adjudicationRaw = { parseError: serializeOpenAIResponseParseError(error) };
+      }
     }
     if (!normalizedResult.foundWebsiteUrl && normalizedViability?.status === "usable") {
       normalizedViability = null;
@@ -329,6 +334,9 @@ export async function performAiVerification(
     return { success: true, cached: false, verification };
   } catch (error) {
     const message = error instanceof Error ? error.message : "AI verification failed.";
+    const parseError = error instanceof OpenAIResponseParseError
+      ? serializeOpenAIResponseParseError(error)
+      : null;
     const verification = await createAiLeadVerification({
       lead_id: lead.id,
       model,
@@ -338,6 +346,7 @@ export async function performAiVerification(
       summary: message,
       input_hash: inputHash,
       error: message,
+      raw_json: parseError ? { parseError } : undefined,
       requested_by_user_id: actorUserId,
       request_source: requestSource,
     });
@@ -349,7 +358,7 @@ export async function performAiVerification(
       estimated_cost: 0,
       actor_user_id: actorUserId,
       request_source: requestSource,
-      metadata: { error: message, inputHash },
+      metadata: { error: message, inputHash, parseErrorStage: parseError?.stage ?? null },
     });
     if (applyToLead) {
       await markLeadAiError(lead.id, message);

@@ -80,6 +80,18 @@ export interface OpenAILeadVerificationResponse {
   estimatedCost: number;
 }
 
+export class OpenAIResponseParseError extends Error {
+  constructor(
+    message: string,
+    readonly stage: "lead_verifier" | "lead_adjudicator",
+    readonly responseText: string,
+    readonly raw: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "OpenAIResponseParseError";
+  }
+}
+
 const sourceSchema = z.object({
   url: z.string().url(),
   title: z.string().nullable(),
@@ -141,7 +153,7 @@ export function buildLeadVerificationRequest(lead: Lead): Record<string, unknown
   return {
     model,
     store: false,
-    max_output_tokens: 900,
+    max_output_tokens: 2400,
     max_tool_calls: 2,
     include: ["web_search_call.action.sources"],
     tools: [
@@ -194,7 +206,7 @@ export function buildLeadVerificationAdjudicationRequest(
   return {
     model,
     store: false,
-    max_output_tokens: 1200,
+    max_output_tokens: 2400,
     instructions: [
       "You are a no-browse adjudicator for local business website verification.",
       "Do not use web search, tools, browsing, or outside knowledge. You may only use the JSON context provided.",
@@ -255,7 +267,7 @@ export async function callOpenAILeadVerifier(lead: Lead, apiKeyOverride?: string
     }
 
     const text = extractResponseText(raw);
-    const result = parseAiVerificationResponse(text);
+    const result = parseOpenAILeadVerificationText(text, raw, "lead_verifier");
     const usage = estimateOpenAIUsageCost(raw.usage as { input_tokens?: number; output_tokens?: number; total_tokens?: number } | undefined);
 
     return {
@@ -305,7 +317,7 @@ export async function callOpenAILeadVerificationAdjudicator(
     }
 
     const text = extractResponseText(raw);
-    const parsed = parseAiVerificationResponse(text);
+    const parsed = parseOpenAILeadVerificationText(text, raw, "lead_adjudicator");
     const resultWithBounds = enforceAdjudicationBounds(parsed, result, candidateAssessment);
     const usage = estimateOpenAIUsageCost(raw.usage as { input_tokens?: number; output_tokens?: number; total_tokens?: number } | undefined);
 
@@ -330,6 +342,15 @@ export function parseAiVerificationResponse(text: string): AiVerificationResult 
     throw new Error("AI verification returned invalid JSON.");
   }
   return aiVerificationResultSchema.parse(parsed);
+}
+
+export function serializeOpenAIResponseParseError(error: OpenAIResponseParseError): Record<string, unknown> {
+  return {
+    message: error.message,
+    stage: error.stage,
+    responseText: truncateForDiagnostics(error.responseText, 12_000),
+    response: summarizeOpenAIResponse(error.raw),
+  };
 }
 
 export function isAiVerificationFresh(createdAt: string | null | undefined, ttlDays: number): boolean {
@@ -408,6 +429,48 @@ function extractResponseText(raw: Record<string, unknown>): string {
   const text = chunks.join("\n").trim();
   if (!text) throw new Error("AI verification returned no text output.");
   return text;
+}
+
+function parseOpenAILeadVerificationText(
+  text: string,
+  raw: Record<string, unknown>,
+  stage: OpenAIResponseParseError["stage"],
+): AiVerificationResult {
+  try {
+    return parseAiVerificationResponse(text);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "AI verification response could not be parsed.";
+    throw new OpenAIResponseParseError(message, stage, text, raw);
+  }
+}
+
+function summarizeOpenAIResponse(raw: Record<string, unknown>): Record<string, unknown> {
+  const output = Array.isArray(raw.output) ? raw.output : [];
+  return {
+    id: typeof raw.id === "string" ? raw.id : null,
+    status: typeof raw.status === "string" ? raw.status : null,
+    model: typeof raw.model === "string" ? raw.model : null,
+    incompleteDetails: raw.incomplete_details ?? null,
+    error: raw.error ?? null,
+    usage: raw.usage ?? null,
+    output: output.map((item) => {
+      const record = typeof item === "object" && item !== null ? item as Record<string, unknown> : {};
+      const content = Array.isArray(record.content) ? record.content as Array<Record<string, unknown>> : [];
+      return {
+        type: record.type ?? null,
+        status: record.status ?? null,
+        content: content.map((contentItem) => ({
+          type: contentItem.type ?? null,
+          textLength: typeof contentItem.text === "string" ? contentItem.text.length : 0,
+          textPreview: typeof contentItem.text === "string" ? truncateForDiagnostics(contentItem.text, 1000) : null,
+        })),
+      };
+    }),
+  };
+}
+
+function truncateForDiagnostics(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...[truncated ${value.length - maxLength} chars]` : value;
 }
 
 function extractOpenAIError(raw: Record<string, unknown>): string | null {

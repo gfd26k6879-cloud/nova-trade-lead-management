@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildLeadVerificationAdjudicationRequest,
   buildLeadVerificationRequest,
+  callOpenAILeadVerifier,
   createLeadVerificationInputHash,
+  OpenAIResponseParseError,
   parseAiVerificationResponse,
+  serializeOpenAIResponseParseError,
 } from "@/lib/ai/lead-verification";
 import {
   buildLeadIdentityEvidencePacket,
@@ -166,11 +169,40 @@ describe("AI lead verification request", () => {
     const request = buildLeadVerificationRequest(makeLead());
 
     expect(request.max_tool_calls).toBe(2);
+    expect(request.max_output_tokens).toBeGreaterThanOrEqual(2400);
     expect(request.include).toEqual(["web_search_call.action.sources"]);
     expect(request.tools).toEqual([
       expect.objectContaining({ type: "web_search" }),
     ]);
     expect(JSON.stringify(request.input)).toContain("identityEvidence");
+  });
+
+  it("keeps the no-tool adjudicator on a larger LLM-only output budget", () => {
+    const lead = makeLead();
+    const base = parseAiVerificationResponse(JSON.stringify({
+      status: "no_site_found",
+      confidence: 0.8,
+      foundWebsiteUrl: null,
+      foundEmail: null,
+      foundPhone: null,
+      socialProfiles: [],
+      sources: [{ url: "https://example-directory.test/business", title: "Directory", evidence: "No website listed." }],
+      recommendation: "prioritize",
+      reason: "Only directory and social sources were found.",
+      summary: "No official website was found in the checked sources.",
+    }));
+    const request = buildLeadVerificationAdjudicationRequest(lead, base, null, {
+      url: null,
+      score: 0,
+      recommendation: "manual_review",
+      flags: [],
+      reasons: [],
+      hostType: "unknown",
+    });
+
+    expect(request.max_output_tokens).toBeGreaterThanOrEqual(2400);
+    expect(request).not.toHaveProperty("tools");
+    expect(request).not.toHaveProperty("max_tool_calls");
   });
 
   it("builds normalized evidence packets before web search", () => {
@@ -260,5 +292,38 @@ describe("AI lead verification request", () => {
     expect(request).not.toHaveProperty("include");
     expect(request).not.toHaveProperty("max_tool_calls");
     expect(JSON.stringify(request)).toContain("candidateAssessment");
+  });
+
+  it("throws parse diagnostics when OpenAI returns incomplete JSON", async () => {
+    const raw = {
+      id: "resp_parse_failure",
+      status: "completed",
+      incomplete_details: { reason: "max_output_tokens" },
+      output: [
+        {
+          type: "message",
+          status: "completed",
+          content: [
+            { type: "output_text", text: "{\"status\":\"no_site_found\"" },
+          ],
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 2400, total_tokens: 2500 },
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(raw), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(callOpenAILeadVerifier(makeLead(), "sk-test")).rejects.toBeInstanceOf(OpenAIResponseParseError);
+    try {
+      await callOpenAILeadVerifier(makeLead(), "sk-test");
+    } catch (error) {
+      expect(error).toBeInstanceOf(OpenAIResponseParseError);
+      const diagnostic = serializeOpenAIResponseParseError(error as OpenAIResponseParseError);
+      expect(diagnostic.stage).toBe("lead_verifier");
+      expect(JSON.stringify(diagnostic)).toContain("max_output_tokens");
+      expect(JSON.stringify(diagnostic)).toContain("resp_parse_failure");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
