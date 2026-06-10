@@ -195,15 +195,31 @@ describe("ExploreClient search surface", () => {
     expect(html).toContain("$4,025 est.");
     expect(html).toContain("No official business website is recorded for this lead.");
     expect(html).toContain("Why this is shown: no official website found, strong reviews, and marked ready for outreach.");
-    expect(html).toContain("Website review");
     expect(html).toContain('data-role="lead-card-footer"');
-    expect(html).toContain('data-role="lead-card-actions"');
     expect(html).toContain('aria-label="Claim lead"');
-    expect(html).toContain('data-action-tone="website"');
-    expect(html).toContain('data-action-tone="work"');
-    expect(html).toContain('data-action-tone="danger"');
+    expect(html).not.toContain("Website review");
+    expect(html).not.toContain("Work update");
+    expect(html).not.toContain("Archive");
+    expect(html).not.toContain('data-role="lead-card-actions"');
     expect(html).not.toContain(">none</span>");
     expect(html).not.toContain("Why this result:");
+  });
+
+  it("does not expose Workbench actions for claimed leads if stale Explore data includes one", () => {
+    currentParams = new URLSearchParams();
+    const html = renderExplore("researcher", [
+      makeLead({
+        assigned_to_user_id: "user-1",
+        assigned_user_email: "user@example.com",
+        assigned_user_display_name: "Researcher",
+      }),
+    ]);
+
+    expect(html).toContain("Mine");
+    expect(html).not.toContain('aria-label="Claim lead"');
+    expect(html).not.toContain("Website review");
+    expect(html).not.toContain("Work update");
+    expect(html).not.toContain("Archive");
   });
 
   it("uses theme variables for the touched search and Explore panel surfaces", () => {

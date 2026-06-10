@@ -320,7 +320,7 @@ export function ExploreClient({
   return (
     <PageShell
       title="Lead Explorer"
-      description="Browse the full lead inventory, narrow by location and quality, then claim the business you want to work."
+      description="Browse unclaimed lead inventory, narrow by location and quality, then claim the business you want to work."
       stats={stats}
     >
       {message && (
@@ -995,13 +995,11 @@ function MapPointCard({
       </div>
 
       <LeadCardFooter
-        leadId={point.id}
         owner={owner}
         mine={point.assigned_to_user_id === currentUserId}
         assigned={Boolean(point.assigned_to_user_id)}
         busy={busy}
-        compact
-        onClaim={onClaim}
+        onClaim={() => onClaim(point.id)}
       />
     </article>
   );
@@ -1067,12 +1065,11 @@ function LeadCard({
       </div>
 
       <LeadCardFooter
-        leadId={lead.id}
         owner={owner}
         mine={lead.assigned_to_user_id === currentUserId}
         assigned={Boolean(lead.assigned_to_user_id)}
         busy={busy}
-        onClaim={onClaim}
+        onClaim={() => onClaim(lead.id)}
       />
     </article>
   );
@@ -1171,7 +1168,7 @@ function LeadTableRow({
             {busy ? "Claiming..." : "Claim"}
           </button>
         ) : (
-          <Link href={`/leads/${lead.id}`} prefetch={false} className="btn-glass px-3 py-1.5 text-xs">Details</Link>
+          <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Claimed</span>
         )}
       </td>
     </tr>
@@ -1187,21 +1184,17 @@ function SegmentButton({ active, onClick, children }: { active: boolean; onClick
 }
 
 function LeadCardFooter({
-  leadId,
   owner,
   mine,
   assigned,
   busy,
-  compact = false,
   onClaim,
 }: {
-  leadId: string;
   owner: string;
   mine: boolean;
   assigned: boolean;
   busy: boolean;
-  compact?: boolean;
-  onClaim: (leadId: string) => void;
+  onClaim: () => void;
 }) {
   return (
     <div className="mt-4 border-t pt-3" style={{ borderColor: "var(--glass-border-light)" }} data-role="lead-card-footer">
@@ -1217,79 +1210,15 @@ function LeadCardFooter({
               boxShadow: "0 5px 16px var(--accent-glow)",
             }}
             disabled={busy}
-            onClick={() => onClaim(leadId)}
+            onClick={onClaim}
             aria-label="Claim lead"
           >
             {busy ? "Claiming..." : "Claim"}
           </button>
         )}
       </div>
-
-      <div className={`mt-2 grid gap-1.5 ${compact ? "grid-cols-1" : "grid-cols-2"}`} aria-label="Lead actions" data-role="lead-card-actions">
-        <LeadCardAction href={`/leads/${leadId}`} label={compact ? "Open details" : "Details"} tone="neutral" title="Open the full lead record." />
-        {!compact && (
-          <>
-            <LeadCardAction href={`/leads/${leadId}`} label="Website review" tone="website" title="Review website evidence and AI verification before outreach." />
-            <LeadCardAction href={`/leads/${leadId}`} label="Work update" tone="work" title="Open the lead workbench to log notes, calls, and follow-ups." />
-            <LeadCardAction href={`/leads/${leadId}`} label="Archive" tone="danger" title="Open the lead record before archiving or disqualifying it." />
-          </>
-        )}
-      </div>
     </div>
   );
-}
-
-type LeadCardActionTone = "neutral" | "website" | "work" | "danger";
-
-function LeadCardAction({
-  href,
-  label,
-  tone,
-  title,
-}: {
-  href: string;
-  label: string;
-  tone: LeadCardActionTone;
-  title: string;
-}) {
-  return (
-    <Link
-      href={href}
-      prefetch={false}
-      className="inline-flex min-h-8 items-center justify-center rounded-lg border px-2.5 py-1.5 text-center text-xs font-semibold leading-tight transition hover:-translate-y-px"
-      style={leadCardActionStyle(tone)}
-      title={title}
-      data-action-tone={tone}
-    >
-      {label}
-    </Link>
-  );
-}
-
-function leadCardActionStyle(tone: LeadCardActionTone): React.CSSProperties {
-  const styles: Record<LeadCardActionTone, React.CSSProperties> = {
-    neutral: {
-      background: "var(--surface-muted)",
-      borderColor: "var(--surface-card-border)",
-      color: "var(--text-secondary)",
-    },
-    website: {
-      background: "var(--badge-taken-bg)",
-      borderColor: "var(--chip-border)",
-      color: "var(--badge-taken-text)",
-    },
-    work: {
-      background: "var(--badge-mine-bg)",
-      borderColor: "var(--chip-border)",
-      color: "var(--badge-mine-text)",
-    },
-    danger: {
-      background: "var(--danger-bg)",
-      borderColor: "var(--chip-border)",
-      color: "var(--danger-text)",
-    },
-  };
-  return styles[tone];
 }
 
 function Badge({ label, title, tone = "neutral" }: BadgeMetadata) {

@@ -58,7 +58,7 @@ describe("lead access boundaries", () => {
     expect(filters.assignedToUserId).toBeUndefined();
   });
 
-  it("keeps researcher Explore owner:me scoped to the current user", () => {
+  it("keeps researcher Explore scoped to unclaimed inventory even for owner:me URLs", () => {
     const filters = constrainExploreFiltersForSession(researcher, {
       assigned: "me",
       assignedToUserId: "other-user",
@@ -66,10 +66,24 @@ describe("lead access boundaries", () => {
     });
 
     expect(filters).toMatchObject({
-      assigned: "me",
-      assignedToUserId: "researcher-1",
+      assigned: "unassigned",
       visibleToUserId: "researcher-1",
     });
+    expect(filters.assignedToUserId).toBeUndefined();
+  });
+
+  it("keeps researcher Explore owner:any scoped to unclaimed inventory", () => {
+    const filters = constrainExploreFiltersForSession(researcher, {
+      assigned: "any",
+      search: "pilot",
+    });
+
+    expect(filters).toMatchObject({
+      assigned: "unassigned",
+      search: "pilot",
+      visibleToUserId: "researcher-1",
+    });
+    expect(filters.assignedToUserId).toBeUndefined();
   });
 
   it("redirects researchers away from all-leads, kanban, and arbitrary owner URLs", () => {

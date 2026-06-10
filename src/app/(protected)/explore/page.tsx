@@ -18,7 +18,7 @@ export default async function ExplorePage({ searchParams }: Props) {
 const logRouteTiming = startRouteTiming("/explore");
   const session = await requirePermission("view:workspace");
   const params = await searchParams;
-  const queryState = buildExploreQueryState(params, session.userId);
+  const queryState = buildExploreQueryState(params);
   const filters = constrainExploreFiltersForSession(session, queryState.filters);
   const { view, mode } = queryState;
   let loaded: {

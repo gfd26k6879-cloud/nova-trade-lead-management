@@ -3,7 +3,7 @@ import type { LeadFilters } from "@/lib/db/queries";
 export const EXPLORER_PAGE_SIZE = 60;
 export const DEFAULT_MAP_POINT_LIMIT = 200;
 export const MAX_MAP_POINT_LIMIT = 600;
-export type ExploreMode = "work_ready" | "directory" | "my_leads" | "unclaimed" | "needs_review";
+export type ExploreMode = "work_ready" | "directory" | "unclaimed" | "needs_review";
 
 export interface ExploreCommandResult {
   filters: Record<string, string | null>;
@@ -59,11 +59,10 @@ export const GEO_PRESETS: Record<string, Pick<LeadFilters, "minLat" | "maxLat" |
 };
 
 export const EXPLORE_MODE_OPTIONS: Array<{ value: ExploreMode; label: string; description: string }> = [
-  { value: "work_ready", label: "Work-ready", description: "Active sales opportunities." },
-  { value: "directory", label: "Directory", description: "All records, including disqualified or archived inventory." },
-  { value: "my_leads", label: "My leads", description: "Leads assigned to you." },
+  { value: "work_ready", label: "Work-ready", description: "Unclaimed sales opportunities ready to review." },
+  { value: "directory", label: "Directory", description: "Unclaimed inventory, including admin-visible archived or excluded records." },
   { value: "unclaimed", label: "Unclaimed", description: "Open leads nobody owns yet." },
-  { value: "needs_review", label: "Needs review", description: "Manual or AI review candidates." },
+  { value: "needs_review", label: "Needs review", description: "Unclaimed manual or AI review candidates." },
 ];
 
 export const EXPLORE_QUICK_FILTERS: Array<{
@@ -76,8 +75,8 @@ export const EXPLORE_QUICK_FILTERS: Array<{
   {
     label: "Best no-site",
     description: "No website, active opportunities, sorted by website need.",
-    command: "website:none sort:website_need",
-    updates: { mode: "work_ready", websiteStatus: "none", assigned: "any", sortBy: "website_need", page: null },
+    command: "website:none owner:unclaimed sort:website_need",
+    updates: { mode: "work_ready", websiteStatus: "none", assigned: "unassigned", sortBy: "website_need", page: null },
     aliases: ["no website", "best website gap", "work ready no site"],
   },
   {
@@ -90,23 +89,16 @@ export const EXPLORE_QUICK_FILTERS: Array<{
   {
     label: "Needs AI",
     description: "Leads still waiting on AI verification.",
-    command: "quality:needs_ai owner:any",
-    updates: { mode: "needs_review", qualityBucket: "needs_ai_verify", aiVerificationStatus: "not_checked", assigned: "any", sortBy: "opportunity", page: null },
+    command: "quality:needs_ai owner:unclaimed",
+    updates: { mode: "needs_review", qualityBucket: "needs_ai_verify", aiVerificationStatus: "not_checked", assigned: "unassigned", sortBy: "opportunity", page: null },
     aliases: ["ai review", "needs verification"],
   },
   {
     label: "Broken/basic site",
     description: "AI/manual quality marked as broken-site opportunity.",
-    command: "website:broken",
-    updates: { mode: "work_ready", qualityBucket: "broken_site_opportunity", assigned: "any", sortBy: "website_need", page: null },
+    command: "website:broken owner:unclaimed",
+    updates: { mode: "work_ready", qualityBucket: "broken_site_opportunity", assigned: "unassigned", sortBy: "website_need", page: null },
     aliases: ["broken site", "basic site", "website opportunity"],
-  },
-  {
-    label: "My follow-ups",
-    description: "Your contacted leads, sorted by newest.",
-    command: "owner:me status:contacted sort:newest",
-    updates: { mode: "my_leads", assigned: "me", status: "contacted", sortBy: "created_at", page: null },
-    aliases: ["follow ups", "mine contacted"],
   },
 ];
 
@@ -150,7 +142,7 @@ export interface ExploreParams {
   includeExcluded?: string | boolean;
 }
 
-export function buildExploreQueryState(params: ExploreParams, userId: string): {
+export function buildExploreQueryState(params: ExploreParams): {
   filters: LeadFilters;
   view: "cards" | "table";
   mapOpen: boolean;
@@ -158,10 +150,7 @@ export function buildExploreQueryState(params: ExploreParams, userId: string): {
 } {
   const geoBounds = params.geo ? GEO_PRESETS[params.geo] : undefined;
   const mode = normalizeExploreMode(params.mode);
-  const assignedFilter: "me" | "unassigned" | "any" | undefined =
-    params.assigned === "me" || params.assigned === "unassigned" || params.assigned === "any" ? params.assigned : undefined;
-  const modeAssigned = mode === "my_leads" ? "me" : mode === "unclaimed" ? "unassigned" : undefined;
-  const effectiveAssigned = assignedFilter ?? modeAssigned;
+  const effectiveAssigned = "unassigned" as const;
   const includeExcluded = params.includeExcluded === "true" || params.includeExcluded === true || mode === "directory";
   const archived = normalizeArchivedFilter(params.archived, mode);
 
@@ -189,8 +178,8 @@ export function buildExploreQueryState(params: ExploreParams, userId: string): {
       countryCode: cleanParam(params.countryCode),
       marketId: cleanParam(params.marketId),
       locationCellId: cleanParam(params.locationCellId),
-      assigned: effectiveAssigned === "any" ? undefined : effectiveAssigned,
-      assignedToUserId: effectiveAssigned === "me" ? userId : undefined,
+      assigned: effectiveAssigned,
+      assignedToUserId: undefined,
       qualityBucket: mode === "needs_review" ? (cleanParam(params.qualityBucket) ?? "needs_manual_review") : cleanParam(params.qualityBucket),
       aiVerificationStatus: cleanParam(params.aiVerificationStatus),
       sortBy: cleanParam(params.sortBy) ?? "opportunity",
@@ -330,7 +319,6 @@ export function buildExploreSearchSuggestions(context: ExploreSuggestionContext)
         suggestion("filter:country:us", "filter", "Country: United States", "U.S. leads and discovery inventory.", "country:US", { countryCode: "US", page: null }, ["usa", "america", "colorado"]),
         suggestion("filter:country:gb", "filter", "Country: United Kingdom", "U.K. leads and discovery inventory.", "country:GB", { countryCode: "GB", page: null }, ["uk", "britain", "england"]),
         suggestion("filter:owner:unclaimed", "filter", "Owner: Unclaimed", "Open leads nobody owns yet.", "owner:unclaimed", { assigned: "unassigned", page: null }, ["unassigned"]),
-        suggestion("filter:owner:me", "filter", "Owner: Mine", "Only leads assigned to you.", "owner:me", { assigned: "me", page: null }, ["my leads", "mine"]),
         suggestion("filter:quality:needs_ai", "filter", "Quality: Needs AI", "Leads waiting for AI verification.", "quality:needs_ai", { qualityBucket: "needs_ai_verify", aiVerificationStatus: "not_checked", page: null }, ["ai", "needs review"]),
         suggestion("filter:website:broken", "filter", "Website: Broken/basic", "Broken-site opportunities.", "website:broken", { qualityBucket: "broken_site_opportunity", page: null }, ["basic site", "broken site"]),
         suggestion("filter:reviews", "filter", "Reviews >= 50", "Businesses with enough review volume to prioritize.", "reviews>=50", { minReviews: "50", page: null }, ["review count"]),
@@ -343,7 +331,6 @@ export function buildExploreSearchSuggestions(context: ExploreSuggestionContext)
       suggestions: [
         suggestion("example:toronto", "example", "Toronto no-site and unclaimed", "Apply city, website, and owner filters together.", "city:toronto website:none owner:unclaimed", { city: "toronto", websiteStatus: "none", assigned: "unassigned", page: null }, ["canada", "toronto"]),
         suggestion("example:high_reviews", "example", "High-review, high-rating leads", "Prioritize businesses with stronger public demand.", "reviews>=50 rating>=4.2", { minReviews: "50", minRating: "4.2", page: null }, ["reviews", "rating"]),
-        suggestion("example:followups", "example", "My contacted follow-ups", "Find your contacted leads sorted by newest.", "owner:me status:contacted sort:newest", { assigned: "me", status: "contacted", sortBy: "created_at", page: null }, ["mine", "follow ups"]),
       ],
     },
   ];
@@ -434,7 +421,7 @@ function matchesSuggestion(item: ExploreSearchSuggestion, query: string): boolea
 }
 
 function normalizeExploreMode(value: string | undefined): ExploreMode {
-  if (value === "directory" || value === "my_leads" || value === "unclaimed" || value === "needs_review") return value;
+  if (value === "directory" || value === "unclaimed" || value === "needs_review") return value;
   return "work_ready";
 }
 

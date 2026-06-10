@@ -27,12 +27,10 @@ export function constrainLeadFiltersForSession(session: LeadAccessSession, filte
 export function constrainExploreFiltersForSession(session: LeadAccessSession, filters: LeadFilters): LeadFilters {
   if (session.role === "admin") return filters;
 
-  const assigned = filters.assigned === "me" || filters.assigned === "unassigned" ? filters.assigned : undefined;
-
   return {
     ...filters,
-    assigned,
-    assignedToUserId: assigned === "me" ? session.userId : undefined,
+    assigned: "unassigned",
+    assignedToUserId: undefined,
     includeExcluded: false,
     visibleToUserId: session.userId,
   };

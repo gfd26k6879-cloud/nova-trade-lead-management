@@ -221,6 +221,17 @@ describe("lead exclusion query behavior", () => {
     expect((await getLeads({ pageSize: 10 })).leads.map((lead) => lead.id)).toContain(archivedId);
   });
 
+  it("keeps claimed leads out of unclaimed Explore inventory", async () => {
+    const unclaimedId = insertLead(testDb, 405, { score: 14, status: "new", websiteStatus: "none" });
+    const claimedId = insertLead(testDb, 406, { score: 15, status: "new", websiteStatus: "none" });
+    testDb.prepare("UPDATE leads SET assigned_to_user_id = ? WHERE id = ?").run("researcher-1", claimedId);
+
+    const unclaimed = await getLeads({ assigned: "unassigned", pageSize: 10 });
+
+    expect(unclaimed.leads.map((lead) => lead.id)).toContain(unclaimedId);
+    expect(unclaimed.leads.map((lead) => lead.id)).not.toContain(claimedId);
+  });
+
   it("matches Explore free-text search against internal lead notes", async () => {
     const pilotId = insertLead(testDb, 410, { score: 12, status: "new", websiteStatus: "none" });
     const otherId = insertLead(testDb, 411, { score: 13, status: "new", websiteStatus: "none" });

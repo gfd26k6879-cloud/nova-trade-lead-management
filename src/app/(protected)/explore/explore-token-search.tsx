@@ -326,7 +326,6 @@ function ExploreBuilder({
         <BuilderSelect label="AI verification" value={filters.aiVerificationStatus ?? ""} onChange={(value) => onApply({ aiVerificationStatus: value, page: null })} options={BUILDER_FILTERS.ai.map((value) => [value, value ? getAiVerificationDisplay({ status: value }).label : "All AI states"])} />
         <BuilderSelect label="Lead status" value={filters.status ?? ""} onChange={(value) => onApply({ status: value, page: null })} options={BUILDER_FILTERS.status.map((value) => [value, value ? formatLabel(value) : "All statuses"])} />
         <BuilderSelect label="Category" value={filters.category ?? ""} onChange={(value) => onApply({ category: value, page: null })} options={BUILDER_FILTERS.category.map((value) => [value, value ? formatLabel(value) : "All categories"])} />
-        <BuilderSelect label="Assignment" value={filters.assigned ?? "any"} onChange={(value) => onApply({ assigned: value, page: null })} options={[["any", "Any owner"], ["unassigned", "Unclaimed"], ["me", "Mine"]]} />
         {currentRole === "admin" && <BuilderSelect label="Inventory" value={filters.archived ?? "active"} onChange={(value) => onApply({ archived: value, page: null })} options={[["active", "Active only"], ["archived", "Archived only"], ["all", "Active + archived"]]} />}
         {currentRole === "admin" && (
           <label className="flex items-center gap-2 self-end rounded-xl px-3 py-3 text-sm" style={{ background: "var(--search-surface)", border: "1px solid var(--search-border)", color: "var(--text-secondary)" }}>

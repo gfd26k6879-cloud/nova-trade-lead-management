@@ -60,16 +60,19 @@ describe("explore command filters", () => {
   });
 
   it("builds mode-aware query state", () => {
-    const workReady = buildExploreQueryState({}, "user-1");
-    const directory = buildExploreQueryState({ mode: "directory" }, "user-1");
-    const mine = buildExploreQueryState({ mode: "my_leads" }, "user-1");
+    const workReady = buildExploreQueryState({});
+    const directory = buildExploreQueryState({ mode: "directory" });
+    const needsReview = buildExploreQueryState({ mode: "needs_review" });
 
     expect(workReady.mode).toBe("work_ready");
+    expect(workReady.filters.assigned).toBe("unassigned");
     expect(workReady.filters.archived).toBe("active");
     expect(workReady.filters.includeExcluded).toBe(false);
+    expect(directory.filters.assigned).toBe("unassigned");
     expect(directory.filters.archived).toBe("all");
     expect(directory.filters.includeExcluded).toBe(true);
-    expect(mine.filters.assignedToUserId).toBe("user-1");
+    expect(needsReview.filters.assigned).toBe("unassigned");
+    expect(needsReview.filters.assignedToUserId).toBeUndefined();
   });
 
   it("builds removable chips from URL state", () => {
@@ -99,7 +102,7 @@ describe("explore command filters", () => {
     const country = groups.flatMap((group) => group.suggestions).find((item) => item.label === "Country: Canada");
     const type = groups.flatMap((group) => group.suggestions).find((item) => item.label === "Type: Dental");
 
-    expect(quick?.updates).toMatchObject({ mode: "work_ready", websiteStatus: "none", assigned: "any", sortBy: "website_need" });
+    expect(quick?.updates).toMatchObject({ mode: "work_ready", websiteStatus: "none", assigned: "unassigned", sortBy: "website_need" });
     expect(area?.updates).toMatchObject({ geo: "denver", minLat: null, maxLat: null, minLng: null, maxLng: null });
     expect(country?.updates).toMatchObject({ countryCode: "CA" });
     expect(type?.updates).toMatchObject({ businessType: "dental" });
@@ -110,7 +113,7 @@ describe("explore command filters", () => {
     const followUps = buildExploreSearchSuggestions({ mode: "work_ready", query: "follow ups" }).flatMap((group) => group.suggestions);
 
     expect(website.some((item) => item.command === "website:none")).toBe(true);
-    expect(followUps.some((item) => item.label === "My follow-ups")).toBe(true);
+    expect(followUps.some((item) => item.label === "My follow-ups")).toBe(false);
   });
 
   it("keeps presentation controls out of lead search tokens", () => {

@@ -24,7 +24,7 @@ export async function GET(request: Request) {
   try {
     const session = await requirePermission("view:workspace");
     await ensureDbReady();
-    const { filters: rawFilters } = buildExploreQueryState(params, session.userId);
+    const { filters: rawFilters } = buildExploreQueryState(params);
     const filters = constrainExploreFiltersForSession(session, rawFilters);
 
     const [mapResult, zipCoverage, googleMapsApiKey] = await withDbStatementTimeout(8_000, async () => {
