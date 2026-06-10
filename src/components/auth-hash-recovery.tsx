@@ -16,7 +16,7 @@ export function AuthHashRecovery() {
     const accessToken = params.get("access_token");
     const refreshToken = params.get("refresh_token");
 
-    if (type !== "recovery" || !accessToken || !refreshToken) return;
+    if ((type !== "recovery" && type !== "invite") || !accessToken || !refreshToken) return;
 
     const supabase = createSupabaseBrowserClient();
     void supabase.auth

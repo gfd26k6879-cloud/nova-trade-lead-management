@@ -4,6 +4,7 @@ import { ensureDbReady, getSettings } from "@/lib/db/queries";
 import { applyNoStoreHeaders } from "@/lib/http-cache";
 import { getConfiguredWorkerCronSecrets } from "@/lib/internal-worker-auth";
 import { startRouteTiming } from "@/lib/route-timing";
+import { CANONICAL_APP_URL } from "@/lib/app-url";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +41,7 @@ export async function GET() {
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   });
 
-  checks.appUrl = checkRequiredEnv({ NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL });
+  checks.appUrl = checkAppUrlEnv(process.env.NEXT_PUBLIC_APP_URL);
   checks.databaseUrl = checkRequiredEnv({ DATABASE_URL: process.env.DATABASE_URL });
   checks.supabaseAdmin = checkRequiredEnv({ SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY });
   checks.workerCronSecret = await checkWorkerCronSecret();
@@ -55,7 +56,7 @@ export async function GET() {
     if (!settings.google_places_api_key_configured) throw new Error("Google Places key is not configured in env or settings.");
   }, "degraded", true);
 
-  const criticalKeys = ["database", "settings", "supabaseAuth", "appUrl", "databaseUrl", "supabaseAdmin", "workerCronSecret"];
+  const criticalKeys = ["database", "settings", "supabaseAuth", "databaseUrl", "supabaseAdmin", "workerCronSecret"];
   const ready = criticalKeys.every((key) => checks[key]?.status === "ok");
   const degraded = ready && Object.values(checks).some((check) => check.status !== "ok");
   const status: HealthStatus = ready ? (degraded ? "degraded" : "ok") : "error";
@@ -102,6 +103,17 @@ function checkRequiredEnv(env: Record<string, string | undefined>): HealthCheck 
   return missing.length === 0
     ? { status: "ok" }
     : { status: "error", message: `Missing required env: ${missing.join(", ")}` };
+}
+
+function checkAppUrlEnv(value: string | undefined): HealthCheck {
+  const configured = value?.trim().replace(/\/+$/, "");
+  if (!configured) {
+    return { status: "degraded", message: `NEXT_PUBLIC_APP_URL is missing; auth emails fall back to ${CANONICAL_APP_URL}.` };
+  }
+  if (configured !== CANONICAL_APP_URL) {
+    return { status: "degraded", message: `NEXT_PUBLIC_APP_URL is ${configured}; expected ${CANONICAL_APP_URL}.` };
+  }
+  return { status: "ok" };
 }
 
 async function checkWorkerCronSecret(): Promise<HealthCheck> {

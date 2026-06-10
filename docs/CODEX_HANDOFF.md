@@ -17,7 +17,7 @@ GitHub and Vercel deploy from the active repo. Do not continue work from the arc
 ## Current Production State
 
 - GitHub repo: `https://github.com/Masihhedayati/lead-generation`
-- Production app: `https://lead-generation-orcin.vercel.app`
+- Production app: `https://www.nosite.xyz`
 - Latest deployed commit at handoff: `700ffcda021f1ca1c9b919eda4fe1d85c53d83aa`
 - Latest deployment ID at handoff: `dpl_HusAKCbXQqVSumyTAJtXUbT59onV`
 - Vercel project: `lead-generation`
@@ -40,8 +40,8 @@ GitHub and Vercel deploy from the active repo. Do not continue work from the arc
   - lead AI artifact jobs
   - crawl units
 - Added artifact retry metadata and retry behavior.
-- Fixed password reset links to use canonical `NEXT_PUBLIC_APP_URL`.
-- Replaced temporary password display with setup/reset email flow.
+- Fixed welcome invite and password reset links to use canonical `NEXT_PUBLIC_APP_URL`.
+- Replaced temporary password display with welcome invite/reset email flow.
 - Added CSV formula-injection protection.
 - Added route aliases for `/discover`, `/run-monitor`, `/monitor`, and `/stats`.
 - Archived the stale local repo and documented the active source of truth.

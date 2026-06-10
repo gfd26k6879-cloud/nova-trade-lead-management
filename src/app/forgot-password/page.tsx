@@ -27,7 +27,7 @@ export default async function ForgotPasswordPage({ searchParams }: ForgotPasswor
             Reset password
           </h1>
           <p className="mt-1 text-sm" style={{ color: "var(--text-tertiary)" }}>
-            Send a recovery link to your workspace email.
+            Send a password reset link to your workspace email.
           </p>
         </div>
 
@@ -47,7 +47,7 @@ function getErrorMessage(error?: string): string | null {
   if (!error) return null;
   if (error === "missing_config") return "Supabase Auth is not configured.";
   if (error === "invalid_email") return "Enter a valid email address.";
-  if (error === "missing_origin") return "Password reset is missing the production app URL. Ask an admin to set NEXT_PUBLIC_APP_URL in Vercel.";
-  if (error === "expired_link") return "That recovery link is expired or was already used. Request a fresh reset link and open only the newest email.";
+  if (error === "missing_origin") return "Password reset links must use https://www.nosite.xyz. Ask an admin to check NEXT_PUBLIC_APP_URL in Vercel.";
+  if (error === "expired_link") return "That account link is expired or was already used. Request a fresh reset link and open only the newest email.";
   return decodeURIComponent(error);
 }

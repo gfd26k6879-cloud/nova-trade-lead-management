@@ -42,10 +42,10 @@ export default async function ResetPasswordPage({ searchParams }: ResetPasswordP
                 color: "#b45309",
               }}
             >
-              Your recovery session is missing or expired. Request a fresh reset link.
+              Your account setup or recovery session is missing or expired. Request a fresh invite or password reset link.
             </div>
             <Link href="/forgot-password" className="btn-primary w-full">
-              Send new reset link
+              Send password reset link
             </Link>
           </div>
         ) : (

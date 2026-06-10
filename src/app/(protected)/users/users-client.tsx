@@ -50,11 +50,11 @@ export function UsersClient({
         return;
       }
       refreshUser(result.user);
-      setEmailNotice(`Password setup email sent to ${result.user.email}.`);
+      setEmailNotice(`Welcome email sent to ${result.user.email}.`);
       setEmail("");
       setDisplayName("");
       setRole("researcher");
-      toast.success("User created and setup email sent");
+      toast.success("User created and welcome email sent");
     });
   };
 
@@ -194,7 +194,7 @@ export function UsersClient({
             </select>
           </Field>
           <button type="button" className="btn-primary w-full" disabled={pending || !email} onClick={handleCreate}>
-            Create User
+            Create User and Send Welcome Email
           </button>
         </div>
 

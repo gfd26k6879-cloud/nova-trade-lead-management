@@ -7,9 +7,9 @@ import { z } from "zod";
 import { startRouteTiming } from "@/lib/route-timing";
 import { createSupabaseServerClient, isSupabaseAuthConfigured } from "@/lib/supabase/server";
 
-const confirmRecoverySchema = z.object({
+const confirmAuthLinkSchema = z.object({
   tokenHash: z.string().trim().min(16),
-  type: z.literal("recovery"),
+  type: z.enum(["invite", "recovery"]),
   next: z.string().trim().optional(),
 });
 
@@ -21,14 +21,14 @@ export async function confirmRecoveryTokenAction(formData: FormData) {
     redirect("/login?error=missing_config");
   }
 
-  const parsed = confirmRecoverySchema.safeParse({
+  const parsed = confirmAuthLinkSchema.safeParse({
     tokenHash: formData.get("tokenHash"),
     type: formData.get("type"),
     next: formData.get("next"),
   });
 
   if (!parsed.success) {
-    logRouteTiming(400, { reason: "invalid_recovery_token" });
+    logRouteTiming(400, { reason: "invalid_auth_link_token" });
     redirect("/forgot-password?error=invalid_recovery_link");
   }
 
@@ -44,7 +44,7 @@ export async function confirmRecoveryTokenAction(formData: FormData) {
   }
 
   const next = normalizeNextPath(parsed.data.next ?? null);
-  logRouteTiming(307, { result: "recovery_verified", next });
+  logRouteTiming(307, { result: "auth_link_verified", type: parsed.data.type, next });
   redirect(next);
 }
 

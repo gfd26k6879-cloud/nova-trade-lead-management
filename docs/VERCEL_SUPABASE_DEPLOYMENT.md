@@ -100,7 +100,7 @@ Manual steps:
 ```bash
 DATABASE_URL=
 POSTGRES_MAX_CONNECTIONS=1
-NEXT_PUBLIC_APP_URL=https://lead-generation-orcin.vercel.app
+NEXT_PUBLIC_APP_URL=https://www.nosite.xyz
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
@@ -118,11 +118,10 @@ OPENAI_AI_COST_RESERVATION_USD=0.05
 
 Redeploy after any environment variable change.
 
-`NEXT_PUBLIC_APP_URL` is required in Production because password setup and reset
+`NEXT_PUBLIC_APP_URL` should be set in Production because welcome invite and reset
 links are generated server-side. Set it to the canonical production origin:
-`https://lead-generation-orcin.vercel.app`. In Supabase Auth, set the Site URL
-to the same origin and allow `https://lead-generation-orcin.vercel.app/auth/callback`
-as a redirect URL.
+`https://www.nosite.xyz`. In Supabase Auth, set the Site URL to the same origin
+and allow `https://www.nosite.xyz/auth/callback` as a redirect URL.
 
 `NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` is optional and only enables the Explorer's
 manual Google map switch. It must be a browser-restricted Maps JavaScript API key

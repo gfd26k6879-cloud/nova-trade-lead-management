@@ -1,11 +1,10 @@
 "use server";
 
-import { randomBytes } from "crypto";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-import { buildPasswordRecoveryUrl, resolveCanonicalAppUrl } from "@/lib/app-url";
+import { buildPasswordRecoveryUrl, buildWelcomeInviteUrl, resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
   createAppUserForAuthUser,
   listAppUsers,
@@ -68,24 +67,24 @@ export async function createUserAction(input: { email: string; displayName?: str
     return { error: parsed.error.issues[0]?.message ?? "Invalid user input." };
   }
 
-  const temporaryPassword = generateTemporaryPassword();
+  const headerStore = await headers();
+  const appUrl = resolveCanonicalAppUrl(headerStore.get("origin"));
   const supabase = createSupabaseAdminClient();
-  const { data, error } = await supabase.auth.admin.createUser({
-    email: parsed.data.email,
-    password: temporaryPassword,
-    email_confirm: true,
-    user_metadata: {
+  const { data, error } = await supabase.auth.admin.inviteUserByEmail(parsed.data.email, {
+    redirectTo: buildWelcomeInviteUrl("/reset-password", appUrl),
+    data: {
       display_name: parsed.data.displayName ?? "",
     },
   });
 
-  if (error || !data.user?.id || !data.user.email) {
-    return { error: error?.message ?? "Unable to create Supabase Auth user." };
+  if (error || !data.user?.id) {
+    return { error: error?.message ?? "Unable to create Supabase Auth invite." };
   }
 
+  const authEmail = data.user.email ?? parsed.data.email;
   const appUser = await createAppUserForAuthUser({
     userId: data.user.id,
-    email: data.user.email,
+    email: authEmail,
     displayName: parsed.data.displayName ?? null,
     role: parsed.data.role,
     status: "active",
@@ -93,21 +92,17 @@ export async function createUserAction(input: { email: string; displayName?: str
   });
 
   await createAuditLog("app_user_created", "app_user", appUser.user_id, {
-    email: appUser.email,
-    role: appUser.role,
+    email: parsed.data.email,
+    role: parsed.data.role,
   });
 
-  const resetResult = await sendPasswordSetupEmail(data.user.email);
-  if (resetResult.error) {
-    await createAuditLog("app_user_password_setup_email_failed", "app_user", appUser.user_id, {
-      email: appUser.email,
-      error: resetResult.error,
-    });
-    return { error: `User was created, but the setup email failed: ${resetResult.error}` };
-  }
+  await createAuditLog("app_user_welcome_email_sent", "app_user", appUser.user_id, {
+    email: authEmail,
+    redirectTo: buildWelcomeInviteUrl("/reset-password", appUrl),
+  });
 
   revalidatePath("/users");
-  return { success: true, user: appUser, setupEmailSent: true };
+  return { success: true, user: appUser, welcomeEmailSent: true };
 }
 
 export async function updateUserRoleAction(userId: string, role: AppRole) {
@@ -175,7 +170,7 @@ export async function resetUserPasswordAction(userId: string) {
     return { error: error?.message ?? "Unable to load Supabase Auth user email." };
   }
 
-  const resetResult = await sendPasswordSetupEmail(data.user.email);
+  const resetResult = await sendPasswordResetEmail(data.user.email);
   if (resetResult.error) {
     return { error: resetResult.error };
   }
@@ -184,14 +179,9 @@ export async function resetUserPasswordAction(userId: string) {
   return { success: true, resetEmailSent: true };
 }
 
-function generateTemporaryPassword(): string {
-  return `NoSite-${randomBytes(12).toString("base64url")}-1a!`;
-}
-
-async function sendPasswordSetupEmail(email: string): Promise<{ error: string | null }> {
+async function sendPasswordResetEmail(email: string): Promise<{ error: string | null }> {
   const headerStore = await headers();
   const appUrl = resolveCanonicalAppUrl(headerStore.get("origin"));
-  if (!appUrl) return { error: "NEXT_PUBLIC_APP_URL is required to send password setup links in production." };
 
   const supabase = createSupabaseAdminClient();
   const { error } = await supabase.auth.resetPasswordForEmail(email, {

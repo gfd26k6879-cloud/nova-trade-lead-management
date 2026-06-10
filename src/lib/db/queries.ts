@@ -20,6 +20,7 @@ import {
 } from "@/lib/lead-quality";
 import { decryptSecret, encryptSecret } from "@/lib/secret-crypto";
 import { getAuditActor } from "@/lib/audit-context";
+import { resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
   SCHEDULER_WORKER_METADATA,
   getSchedulerWorkerMetadata,
@@ -2178,21 +2179,24 @@ export function buildSchedulerHealthFallback(error: string): SchedulerHealth {
 }
 
 function buildAuthRecoveryDiagnostics(): AuthRecoveryDiagnostics {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/+$/, "") ?? "";
+  const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/+$/, "") ?? "";
+  const appUrl = resolveCanonicalAppUrl(null);
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ?? "";
   const warnings: string[] = [];
 
-  if (!appUrl) {
-    warnings.push("NEXT_PUBLIC_APP_URL is missing. Password reset links cannot be generated safely in production.");
+  if (!configuredAppUrl) {
+    warnings.push("NEXT_PUBLIC_APP_URL is missing. Auth emails will fall back to https://www.nosite.xyz.");
+  } else if (configuredAppUrl !== appUrl) {
+    warnings.push(`NEXT_PUBLIC_APP_URL is ${configuredAppUrl}; auth email fallback is ${appUrl}.`);
   }
   if (!supabaseUrl) {
     warnings.push("NEXT_PUBLIC_SUPABASE_URL is missing. Supabase Auth cannot validate sessions.");
   }
 
   return {
-    appUrlConfigured: Boolean(appUrl),
+    appUrlConfigured: Boolean(configuredAppUrl),
     supabaseUrlConfigured: Boolean(supabaseUrl),
-    callbackUrl: appUrl ? `${appUrl}/auth/callback` : null,
+    callbackUrl: `${appUrl}/auth/callback`,
     warnings,
   };
 }

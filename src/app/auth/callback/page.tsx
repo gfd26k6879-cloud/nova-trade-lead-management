@@ -15,7 +15,7 @@ type AuthCallbackPageProps = {
 export default async function AuthCallbackPage({ searchParams }: AuthCallbackPageProps) {
   const params = await searchParams;
 
-  if (params.token_hash || params.type === "recovery") {
+  if (params.token_hash || params.type === "recovery" || params.type === "invite") {
     return <TokenHashRecovery tokenHash={params.token_hash ?? ""} type={params.type ?? ""} next={params.next ?? "/reset-password"} />;
   }
 
@@ -23,27 +23,31 @@ export default async function AuthCallbackPage({ searchParams }: AuthCallbackPag
 }
 
 function TokenHashRecovery({ tokenHash, type, next }: { tokenHash: string; type: string; next: string }) {
-  const isValidShape = Boolean(tokenHash) && type === "recovery";
+  const isValidType = type === "recovery" || type === "invite";
+  const isValidShape = Boolean(tokenHash) && isValidType;
   const safeNext = normalizeNextPath(next);
+  const isInvite = type === "invite";
   return (
     <RecoveryShell>
       {!isValidShape ? (
         <>
-          <StatusMessage tone="error">The recovery link is missing required reset information. Request a fresh password reset link.</StatusMessage>
+          <StatusMessage tone="error">The account link is missing required information. Request a fresh invite or password reset link.</StatusMessage>
           <Link href="/forgot-password" className="btn-primary mt-5 w-full">
-            Send new reset link
+            Send password reset link
           </Link>
         </>
       ) : (
         <form action={confirmRecoveryTokenAction} className="space-y-5">
           <StatusMessage tone="info">
-            This extra step protects your reset link from email security scanners. Continue only if you requested this reset.
+            {isInvite
+              ? "This extra step protects your welcome link from email security scanners. Continue only if an admin invited you."
+              : "This extra step protects your reset link from email security scanners. Continue only if you requested this reset."}
           </StatusMessage>
           <input type="hidden" name="tokenHash" value={tokenHash} />
-          <input type="hidden" name="type" value="recovery" />
+          <input type="hidden" name="type" value={type} />
           <input type="hidden" name="next" value={safeNext} />
           <button type="submit" className="btn-primary w-full">
-            Continue password reset
+            {isInvite ? "Continue account setup" : "Continue password reset"}
           </button>
         </form>
       )}

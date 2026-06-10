@@ -32,11 +32,6 @@ export async function requestPasswordResetAction(formData: FormData) {
   const headerStore = await headers();
   const origin = resolveCanonicalAppUrl(headerStore.get("origin"));
 
-  if (!origin) {
-    logRouteTiming(500, { reason: "missing_origin" });
-    redirect("/forgot-password?error=missing_origin");
-  }
-
   const redirectTo = buildPasswordRecoveryUrl("/reset-password", origin);
   const supabase = await createSupabaseServerClient();
   const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {

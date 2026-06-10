@@ -9,7 +9,7 @@ type CallbackState = "loading" | "success" | "error";
 
 export function AuthCallbackClient() {
   const [state, setState] = useState<CallbackState>("loading");
-  const [message, setMessage] = useState("Preparing your password reset session...");
+  const [message, setMessage] = useState("Preparing your account session...");
 
   useEffect(() => {
     let active = true;
@@ -21,7 +21,7 @@ export function AuthCallbackClient() {
 
       if (error) {
         setState("error");
-        setMessage("That sign-in link is invalid or expired. Request a fresh password reset link.");
+        setMessage("That account link is invalid or expired. Request a fresh invite or password reset link.");
         return;
       }
 
@@ -41,13 +41,13 @@ export function AuthCallbackClient() {
         if (!active) return;
         if (sessionError) {
           setState("error");
-          setMessage("That recovery link could not create a reset session. Request a fresh password reset link.");
+          setMessage("That account link could not create a password session. Request a fresh invite or password reset link.");
           return;
         }
 
         window.history.replaceState(null, "", `${url.pathname}${url.search}`);
         setState("success");
-        setMessage("Recovery session ready. Opening the password form...");
+        setMessage("Account session ready. Opening the password form...");
         window.location.replace(next);
         return;
       }
@@ -58,19 +58,19 @@ export function AuthCallbackClient() {
         if (!active) return;
         if (exchangeError) {
           setState("error");
-          setMessage("That recovery link is expired, already used, or was opened in a different browser than the reset request.");
+          setMessage("That account link is expired, already used, or was opened in a different browser than the original request.");
           return;
         }
 
         window.history.replaceState(null, "", `${url.pathname}?next=${encodeURIComponent(next)}`);
         setState("success");
-        setMessage("Recovery session ready. Opening the password form...");
+        setMessage("Account session ready. Opening the password form...");
         window.location.replace(next);
         return;
       }
 
       setState("error");
-      setMessage("The recovery link is missing required reset information. Request a fresh password reset link.");
+      setMessage("The account link is missing required information. Request a fresh invite or password reset link.");
     }
 
     void completeCallback();
@@ -86,7 +86,7 @@ export function AuthCallbackClient() {
 
       {state === "error" && (
         <Link href="/forgot-password" className="btn-primary mt-5 w-full">
-          Send new reset link
+          Send password reset link
         </Link>
       )}
     </RecoveryShell>
@@ -99,10 +99,10 @@ export function RecoveryShell({ children }: { children: React.ReactNode }) {
       <main className="glass-lg w-full max-w-sm rounded-3xl p-10">
         <div className="mb-8">
           <h1 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
-            Password recovery
+            Account access
           </h1>
           <p className="mt-1 text-sm" style={{ color: "var(--text-tertiary)" }}>
-            Verifying your reset link before opening the password form.
+            Verifying your secure account link before opening the password form.
           </p>
         </div>
         {children}

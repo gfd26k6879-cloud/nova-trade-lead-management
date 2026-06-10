@@ -114,7 +114,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 color: "#dc2626",
               }}
             >
-              The recovery link is missing required information. Request a fresh password reset and open only the newest email.
+              The account link is missing required information. Request a fresh invite or password reset and open only the newest email.
             </div>
           )}
 
@@ -127,7 +127,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 color: "#dc2626",
               }}
             >
-              That recovery link is expired or was already used. Request a fresh password reset link.
+              That account link is expired or was already used. Request a fresh invite or password reset link.
             </div>
           )}
 

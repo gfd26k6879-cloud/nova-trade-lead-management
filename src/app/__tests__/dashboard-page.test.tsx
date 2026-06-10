@@ -24,7 +24,7 @@ const queryMocks = vi.hoisted(() => ({
     auth: {
       appUrlConfigured: true,
       supabaseUrlConfigured: true,
-      callbackUrl: "https://lead-generation-orcin.vercel.app/auth/callback",
+      callbackUrl: "https://www.nosite.xyz/auth/callback",
       warnings: [],
     },
   })),
