@@ -5,6 +5,7 @@ import { applyNoStoreHeaders } from "@/lib/http-cache";
 import { getConfiguredWorkerCronSecrets } from "@/lib/internal-worker-auth";
 import { startRouteTiming } from "@/lib/route-timing";
 import { CANONICAL_APP_URL } from "@/lib/app-url";
+import { getRuntimeLogContext } from "@/lib/runtime-log-context";
 
 export const dynamic = "force-dynamic";
 
@@ -67,6 +68,7 @@ export async function GET() {
       status,
       checkedAt: new Date().toISOString(),
       durationMs: Date.now() - startedAt,
+      runtime: getRuntimeLogContext(),
       checks,
     },
     { status: ready ? 200 : 503 },

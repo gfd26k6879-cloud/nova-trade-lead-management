@@ -140,6 +140,7 @@ export function emptyTeamBoardSummary(): TeamBoardSummary {
     members: [],
     unassignedReady: 0,
     overdueFollowUps: 0,
+    todayActivity: [],
     latestActivity: [],
   };
 }

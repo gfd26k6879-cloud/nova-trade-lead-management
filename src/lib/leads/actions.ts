@@ -317,6 +317,10 @@ export async function updateLeadNotesAction(id: string, notes: string) {
   const ownership = await requireLeadOwnershipForMutation(id, session);
   if (!ownership.ok) return { error: ownership.error };
   await dbUpdateNotes(id, notes);
+  await createAuditLog("lead_notes_updated", "lead", id, {
+    length: notes.length,
+    hasNotes: notes.trim().length > 0,
+  });
   revalidatePath(`/leads/${id}`);
   return { success: true };
 }
@@ -395,6 +399,7 @@ export async function updateLeadReminderAction(id: string, date: string | null) 
   const ownership = await requireLeadOwnershipForMutation(id, session);
   if (!ownership.ok) return { error: ownership.error };
   await dbUpdateReminder(id, date);
+  await createAuditLog("lead_reminder_updated", "lead", id, { reminderDate: date });
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
   return { success: true };
@@ -548,7 +553,20 @@ export async function logOutreachEventAction(
     followUpAt: normalizeOptionalText(parsed.data.followUpAt),
     nextStep: normalizeOptionalText(parsed.data.nextStep),
   });
-  await createAuditLog("outreach_logged", "lead", leadId, { channel: parsed.data.channel, outcome: parsed.data.outcome });
+  await createAuditLog("outreach_logged", "lead", leadId, {
+    eventId: event.id,
+    channel: parsed.data.channel,
+    outcome: parsed.data.outcome,
+    contactPersonName: normalizeOptionalText(parsed.data.contactPersonName),
+    contactPersonRole: normalizeOptionalText(parsed.data.contactPersonRole),
+    decisionMakerReached: parsed.data.decisionMakerReached,
+    objectionReason: normalizeOptionalText(parsed.data.objectionReason),
+    quotedAmount: parsed.data.quotedAmount,
+    closeValue: parsed.data.closeValue,
+    followUpAt: normalizeOptionalText(parsed.data.followUpAt),
+    nextStep: normalizeOptionalText(parsed.data.nextStep),
+    hasNote: Boolean(normalizeOptionalText(parsed.data.note)),
+  });
   revalidateLeadViews();
   revalidatePath(`/leads/${leadId}`);
   return { success: true, event };
@@ -571,6 +589,7 @@ export async function markLeadRepliedAction(id: string) {
   if (!ownership.ok) return { error: ownership.error };
   if (lead.first_reply_at) return { error: "Already marked as replied" };
   await updateLeadTimestamp(id, "first_reply_at", null);
+  await createAuditLog("lead_reply_marked", "lead", id);
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
   return { success: true };
@@ -588,6 +607,7 @@ export async function markMeetingBookedAction(id: string) {
   if (lead.status !== "meeting_set" && lead.status !== "closed_won") {
     await dbUpdateStatus(id, "meeting_set");
   }
+  await createAuditLog("lead_meeting_booked", "lead", id);
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
   return { success: true };

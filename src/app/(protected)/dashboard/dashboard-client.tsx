@@ -1188,14 +1188,14 @@ export function DashboardClient({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="section-label">Latest activity</h3>
-                <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>Recent outreach logged by the team.</p>
+                <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>Recent outreach and operational updates logged by the team.</p>
               </div>
               <Link href="/team" className="btn-glass text-sm">Open Team Board</Link>
             </div>
             <div className="mt-4 space-y-3">
               {currentTeamSummary.latestActivity.length === 0 ? (
                 <p className="rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
-                  No outreach activity has been logged yet.
+                  No activity has been logged yet.
                 </p>
               ) : currentTeamSummary.latestActivity.slice(0, 5).map((activity) => (
                 <ActivityRow key={activity.id} activity={activity} />
@@ -1518,6 +1518,8 @@ function TeamMemberCard({ member }: { member: TeamBoardSummary["members"][number
       <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
         <TeamMetric label="Claimed" value={member.claimed_active} />
         <TeamMetric label="Due today" value={member.due_today} />
+        <TeamMetric label="Activity today" value={member.activity_today} />
+        <TeamMetric label="Contacts today" value={member.contacts_today} />
         <TeamMetric label="Steve queue" value={member.fulfillment_open} />
         <TeamMetric label="Web / Quote" value={`${member.website_requests_open} / ${member.quote_requests_open}`} />
         <TeamMetric label="Stale" value={member.stale_claimed} />
@@ -1545,18 +1547,27 @@ function ActivityRow({ activity }: { activity: TeamBoardSummary["latestActivity"
       style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Link className="link-accent break-words font-medium" href={`/leads/${activity.lead_id}`} prefetch={false}>
-          {activity.lead_name ?? "Unknown lead"}
-        </Link>
+        {activity.lead_id ? (
+          <Link className="link-accent break-words font-medium" href={`/leads/${activity.lead_id}`} prefetch={false}>
+            {activity.lead_name ?? "Unknown lead"}
+          </Link>
+        ) : (
+          <p className="break-words font-medium" style={{ color: "var(--text-primary)" }}>
+            {activity.lead_name ?? activityTitle(activity)}
+          </p>
+        )}
         <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
           {formatDateTime(activity.created_at)}
         </span>
       </div>
       <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-        {activity.actor_email ?? "Someone"} logged {channelLabel(activity.channel)} as {formatOutcome(activity.outcome)}.
+        {activity.actor_email ?? "Someone"} {activityVerb(activity)}.
       </p>
       {activity.note && (
         <p className="mt-2 text-sm" style={{ color: "var(--text-primary)" }}>{activity.note}</p>
+      )}
+      {!activity.note && activity.summary && (
+        <p className="mt-2 text-sm" style={{ color: "var(--text-primary)" }}>{activity.summary}</p>
       )}
     </article>
   );
@@ -1643,6 +1654,23 @@ function formatDateTime(value: string): string {
 
 function formatOutcome(outcome: string): string {
   return outcome.replace(/_/g, " ");
+}
+
+function activityTitle(activity: TeamBoardSummary["latestActivity"][number]): string {
+  if (activity.activity_type === "admin_request") return "Admin request";
+  if (activity.activity_type === "note") return "Lead note";
+  return formatOutcome(activity.action || activity.outcome || "Activity");
+}
+
+function activityVerb(activity: TeamBoardSummary["latestActivity"][number]): string {
+  if (activity.activity_type === "outreach") {
+    return `logged ${channelLabel(activity.channel)} as ${formatOutcome(activity.outcome)}`;
+  }
+  if (activity.activity_type === "note") return "added a note";
+  if (activity.activity_type === "admin_request") {
+    return `created a ${formatOutcome(activity.channel)} (${formatOutcome(activity.outcome)})`;
+  }
+  return `recorded ${formatOutcome(activity.action || activity.outcome || "activity")}`;
 }
 
 function channelLabel(channel: string): string {

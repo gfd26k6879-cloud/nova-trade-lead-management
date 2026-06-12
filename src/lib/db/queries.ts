@@ -36,6 +36,7 @@ import {
   type CountryCode,
   type LocationCellType,
 } from "@/lib/geography";
+import type { AppRole } from "@/lib/permissions";
 
 // ─── Types ───
 
@@ -1187,6 +1188,11 @@ export interface TeamBoardMember {
   claimed_active: number;
   due_today: number;
   stale_claimed: number;
+  activity_today: number;
+  contacts_today: number;
+  calls_today: number;
+  decision_makers_today: number;
+  followups_set_today: number;
   contacts_7d: number;
   meetings: number;
   closed_won: number;
@@ -1198,12 +1204,26 @@ export interface TeamBoardMember {
 
 export interface TeamBoardActivity {
   id: string;
-  lead_id: string;
+  activity_type: "outreach" | "note" | "admin_request" | "audit";
+  action: string;
+  lead_id: string | null;
   lead_name: string | null;
+  actor_user_id: string | null;
   actor_email: string | null;
+  actor_display_name: string | null;
   channel: string;
-  outcome: OutreachOutcome;
+  outcome: string;
+  summary: string | null;
+  contact_person_name: string | null;
+  contact_person_role: string | null;
+  decision_maker_reached: boolean;
+  objection_reason: string | null;
+  quoted_amount: number;
+  close_value: number;
+  follow_up_at: string | null;
+  next_step: string | null;
   note: string | null;
+  metadata: Record<string, unknown>;
   created_at: string;
 }
 
@@ -1211,6 +1231,7 @@ export interface TeamBoardSummary {
   members: TeamBoardMember[];
   unassignedReady: number;
   overdueFollowUps: number;
+  todayActivity: TeamBoardActivity[];
   latestActivity: TeamBoardActivity[];
 }
 
@@ -7467,9 +7488,16 @@ export async function getRunLastError(runId: string): Promise<string | null>{
 
 // ─── Audit Logs ───
 
-export async function createAuditLog(action: string, entityType?: string, entityId?: string, metadata?: Record<string, unknown>): Promise<void>{
+export async function createAuditLog(
+  action: string,
+  entityType?: string,
+  entityId?: string,
+  metadata?: Record<string, unknown>,
+  options: { actor?: { userId?: string | null; email?: string | null; role?: AppRole | null } | null } = {},
+): Promise<void>{
   const db = await getDb();
-  const actor = getAuditActor();
+  const contextActor = getAuditActor();
+  const actor = options.actor === undefined ? contextActor : options.actor;
   await db.prepare(
     `INSERT INTO audit_logs (
       id, action, entity_type, entity_id, actor_user_id, actor_email, actor_role, metadata, created_at
@@ -8808,6 +8836,48 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
          SELECT COUNT(*)
          FROM outreach_events oe
          WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+       ), 0)
+       + COALESCE((
+         SELECT COUNT(*)
+         FROM lead_notes n
+         WHERE n.author_user_id = au.user_id AND n.created_at >= ? AND n.deleted_at IS NULL
+       ), 0)
+       + COALESCE((
+         SELECT COUNT(*)
+         FROM admin_requests ar
+         WHERE ar.created_by_user_id = au.user_id AND ar.created_at >= ?
+       ), 0)
+       + COALESCE((
+         SELECT COUNT(*)
+         FROM audit_logs al
+         WHERE al.actor_user_id = au.user_id
+           AND al.created_at >= ?
+           AND al.action NOT IN ('outreach_logged','lead_note_created','admin_request_created','admin_request_duplicate_open')
+       ), 0) as activity_today,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+       ), 0) as contacts_today,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.channel = 'call'
+       ), 0) as calls_today,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND COALESCE(oe.decision_maker_reached, 0) = 1
+       ), 0) as decision_makers_today,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.follow_up_at IS NOT NULL
+       ), 0) as followups_set_today,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0) as contacts_7d,
        COALESCE(SUM(CASE WHEN l.status = 'meeting_set' THEN 1 ELSE 0 END), 0) as meetings,
        COALESCE(SUM(CASE WHEN l.status = 'closed_won' THEN 1 ELSE 0 END), 0) as closed_won,
@@ -8834,7 +8904,7 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
      WHERE au.status = 'active'
      GROUP BY au.user_id, au.email, au.display_name, au.role, au.is_team_lead, au.team_lead_user_id, au.team_label, tl.email, tl.display_name
      ORDER BY au.role ASC, au.is_team_lead DESC, au.email ASC`
-  ).all<Record<string, unknown>>(today, staleBefore, weekAgo);
+  ).all<Record<string, unknown>>(today, staleBefore, today, today, today, today, today, today, today, today, weekAgo);
 
   const unassignedRow = await db.prepare(
     `SELECT COUNT(*) as count
@@ -8854,15 +8924,8 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
        AND reminder_date <= ?
        AND status NOT IN ('closed_won','closed_lost')`
   ).get(today) as { count: number } | undefined;
-  const activityRows = await db.prepare(
-    `SELECT oe.id, oe.lead_id, l.name as lead_name, COALESCE(oe.actor_email, au.email) as actor_email,
-       oe.channel, oe.outcome, oe.note, oe.created_at
-     FROM outreach_events oe
-     LEFT JOIN leads l ON l.id = oe.lead_id
-     LEFT JOIN app_users au ON au.user_id = oe.actor_user_id
-     ORDER BY oe.created_at DESC
-     LIMIT 25`
-  ).all<Record<string, unknown>>();
+  const todayActivityRows = await getTeamBoardActivityRows({ since: today, limit: 100 });
+  const activityRows = await getTeamBoardActivityRows({ limit: 25 });
 
   return {
     members: members.map((row) => ({
@@ -8878,6 +8941,11 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
       claimed_active: Number(row.claimed_active ?? 0),
       due_today: Number(row.due_today ?? 0),
       stale_claimed: Number(row.stale_claimed ?? 0),
+      activity_today: Number(row.activity_today ?? 0),
+      contacts_today: Number(row.contacts_today ?? 0),
+      calls_today: Number(row.calls_today ?? 0),
+      decision_makers_today: Number(row.decision_makers_today ?? 0),
+      followups_set_today: Number(row.followups_set_today ?? 0),
       contacts_7d: Number(row.contacts_7d ?? 0),
       meetings: Number(row.meetings ?? 0),
       closed_won: Number(row.closed_won ?? 0),
@@ -8888,16 +8956,8 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
     })),
     unassignedReady: Number(unassignedRow?.count ?? 0),
     overdueFollowUps: Number(overdueRow?.count ?? 0),
-    latestActivity: activityRows.map((row) => ({
-      id: String(row.id),
-      lead_id: String(row.lead_id),
-      lead_name: (row.lead_name as string | null) ?? null,
-      actor_email: (row.actor_email as string | null) ?? null,
-      channel: String(row.channel),
-      outcome: normalizeOutreachOutcome(row.outcome),
-      note: (row.note as string | null) ?? null,
-      created_at: String(row.created_at),
-    })),
+    todayActivity: todayActivityRows.map(parseTeamBoardActivityRow),
+    latestActivity: activityRows.map(parseTeamBoardActivityRow),
   };
 }
 
@@ -8925,6 +8985,48 @@ export async function getResearcherTeamBoardSummary(userId: string): Promise<Tea
          SELECT COUNT(*)
          FROM outreach_events oe
          WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+       ), 0)
+       + COALESCE((
+         SELECT COUNT(*)
+         FROM lead_notes n
+         WHERE n.author_user_id = au.user_id AND n.created_at >= ? AND n.deleted_at IS NULL
+       ), 0)
+       + COALESCE((
+         SELECT COUNT(*)
+         FROM admin_requests ar
+         WHERE ar.created_by_user_id = au.user_id AND ar.created_at >= ?
+       ), 0)
+       + COALESCE((
+         SELECT COUNT(*)
+         FROM audit_logs al
+         WHERE al.actor_user_id = au.user_id
+           AND al.created_at >= ?
+           AND al.action NOT IN ('outreach_logged','lead_note_created','admin_request_created','admin_request_duplicate_open')
+       ), 0) as activity_today,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+       ), 0) as contacts_today,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.channel = 'call'
+       ), 0) as calls_today,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND COALESCE(oe.decision_maker_reached, 0) = 1
+       ), 0) as decision_makers_today,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.follow_up_at IS NOT NULL
+       ), 0) as followups_set_today,
+       COALESCE((
+         SELECT COUNT(*)
+         FROM outreach_events oe
+         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0) as contacts_7d,
        COALESCE(SUM(CASE WHEN l.status = 'meeting_set' THEN 1 ELSE 0 END), 0) as meetings,
        COALESCE(SUM(CASE WHEN l.status = 'closed_won' THEN 1 ELSE 0 END), 0) as closed_won,
@@ -8948,18 +9050,10 @@ export async function getResearcherTeamBoardSummary(userId: string): Promise<Tea
      LEFT JOIN leads l ON l.assigned_to_user_id = au.user_id AND COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL
      WHERE au.status = 'active' AND au.user_id = ?
      GROUP BY au.user_id, au.email, au.display_name, au.role, au.is_team_lead, au.team_lead_user_id, au.team_label, tl.email, tl.display_name`
-  ).get<Record<string, unknown>>(today, staleBefore, weekAgo, userId);
+  ).get<Record<string, unknown>>(today, staleBefore, today, today, today, today, today, today, today, today, weekAgo, userId);
 
-  const activityRows = await db.prepare(
-    `SELECT oe.id, oe.lead_id, l.name as lead_name, COALESCE(oe.actor_email, au.email) as actor_email,
-       oe.channel, oe.outcome, oe.note, oe.created_at
-     FROM outreach_events oe
-     LEFT JOIN leads l ON l.id = oe.lead_id
-     LEFT JOIN app_users au ON au.user_id = oe.actor_user_id
-     WHERE oe.actor_user_id = ?
-     ORDER BY oe.created_at DESC
-     LIMIT 25`
-  ).all<Record<string, unknown>>(userId);
+  const todayActivityRows = await getTeamBoardActivityRows({ since: today, actorUserId: userId, limit: 100 });
+  const activityRows = await getTeamBoardActivityRows({ actorUserId: userId, limit: 25 });
 
   const member: TeamBoardMember | null = memberRow ? {
     user_id: String(memberRow.user_id),
@@ -8974,6 +9068,11 @@ export async function getResearcherTeamBoardSummary(userId: string): Promise<Tea
     claimed_active: Number(memberRow.claimed_active ?? 0),
     due_today: Number(memberRow.due_today ?? 0),
     stale_claimed: Number(memberRow.stale_claimed ?? 0),
+    activity_today: Number(memberRow.activity_today ?? 0),
+    contacts_today: Number(memberRow.contacts_today ?? 0),
+    calls_today: Number(memberRow.calls_today ?? 0),
+    decision_makers_today: Number(memberRow.decision_makers_today ?? 0),
+    followups_set_today: Number(memberRow.followups_set_today ?? 0),
     contacts_7d: Number(memberRow.contacts_7d ?? 0),
     meetings: Number(memberRow.meetings ?? 0),
     closed_won: Number(memberRow.closed_won ?? 0),
@@ -8987,17 +9086,208 @@ export async function getResearcherTeamBoardSummary(userId: string): Promise<Tea
     members: member ? [member] : [],
     unassignedReady: 0,
     overdueFollowUps: member?.due_today ?? 0,
-    latestActivity: activityRows.map((row) => ({
-      id: String(row.id),
-      lead_id: String(row.lead_id),
-      lead_name: (row.lead_name as string | null) ?? null,
-      actor_email: (row.actor_email as string | null) ?? null,
-      channel: String(row.channel),
-      outcome: normalizeOutreachOutcome(row.outcome),
-      note: (row.note as string | null) ?? null,
-      created_at: String(row.created_at),
-    })),
+    todayActivity: todayActivityRows.map(parseTeamBoardActivityRow),
+    latestActivity: activityRows.map(parseTeamBoardActivityRow),
   };
+}
+
+async function getTeamBoardActivityRows({
+  since,
+  actorUserId,
+  limit,
+}: {
+  since?: string;
+  actorUserId?: string;
+  limit: number;
+}): Promise<Array<Record<string, unknown>>> {
+  const db = await getDb();
+  const safeLimit = Math.max(1, Math.min(250, Math.floor(limit)));
+  const params: unknown[] = [];
+
+  const outreachWhere = buildActivityWhere("oe", "actor_user_id", since, actorUserId, params);
+  const noteWhere = buildActivityWhere("n", "author_user_id", since, actorUserId, params, ["n.deleted_at IS NULL"]);
+  const adminRequestWhere = buildActivityWhere("ar", "created_by_user_id", since, actorUserId, params);
+  const auditWhere = buildActivityWhere("al", "actor_user_id", since, actorUserId, params, [
+    "al.action NOT IN ('outreach_logged','lead_note_created','admin_request_created','admin_request_duplicate_open')",
+  ]);
+  params.push(safeLimit);
+
+  return db.prepare(
+    `SELECT *
+     FROM (
+       SELECT
+         'outreach:' || oe.id as id,
+         'outreach' as activity_type,
+         'outreach_logged' as action,
+         oe.lead_id,
+         l.name as lead_name,
+         oe.actor_user_id,
+         COALESCE(oe.actor_email, au.email) as actor_email,
+         au.display_name as actor_display_name,
+         oe.channel,
+         oe.outcome,
+         NULL as summary,
+         oe.contact_person_name,
+         oe.contact_person_role,
+         oe.decision_maker_reached,
+         oe.objection_reason,
+         oe.quoted_amount,
+         oe.close_value,
+         oe.follow_up_at,
+         oe.next_step,
+         oe.note,
+         '{}' as metadata_json,
+         oe.created_at
+       FROM outreach_events oe
+       LEFT JOIN leads l ON l.id = oe.lead_id
+       LEFT JOIN app_users au ON au.user_id = oe.actor_user_id
+       ${outreachWhere}
+
+       UNION ALL
+
+       SELECT
+         'note:' || n.id as id,
+         'note' as activity_type,
+         'lead_note_created' as action,
+         n.lead_id,
+         l.name as lead_name,
+         n.author_user_id as actor_user_id,
+         au.email as actor_email,
+         au.display_name as actor_display_name,
+         'note' as channel,
+         'note_created' as outcome,
+         NULL as summary,
+         NULL as contact_person_name,
+         NULL as contact_person_role,
+         0 as decision_maker_reached,
+         NULL as objection_reason,
+         0 as quoted_amount,
+         0 as close_value,
+         NULL as follow_up_at,
+         NULL as next_step,
+         n.body as note,
+         '{}' as metadata_json,
+         n.created_at
+       FROM lead_notes n
+       LEFT JOIN leads l ON l.id = n.lead_id
+       LEFT JOIN app_users au ON au.user_id = n.author_user_id
+       ${noteWhere}
+
+       UNION ALL
+
+       SELECT
+         'admin_request:' || ar.id as id,
+         'admin_request' as activity_type,
+         'admin_request_created' as action,
+         ar.lead_id,
+         l.name as lead_name,
+         ar.created_by_user_id as actor_user_id,
+         COALESCE(ar.created_by_email, au.email) as actor_email,
+         au.display_name as actor_display_name,
+         ar.request_type as channel,
+         ar.status as outcome,
+         ar.summary,
+         ar.contact_person_name,
+         NULL as contact_person_role,
+         0 as decision_maker_reached,
+         NULL as objection_reason,
+         0 as quoted_amount,
+         0 as close_value,
+         ar.due_at as follow_up_at,
+         ar.next_step,
+         ar.summary as note,
+         '{}' as metadata_json,
+         ar.created_at
+       FROM admin_requests ar
+       LEFT JOIN leads l ON l.id = ar.lead_id
+       LEFT JOIN app_users au ON au.user_id = ar.created_by_user_id
+       ${adminRequestWhere}
+
+       UNION ALL
+
+       SELECT
+         'audit:' || al.id as id,
+         'audit' as activity_type,
+         al.action,
+         CASE WHEN al.entity_type = 'lead' THEN al.entity_id ELSE NULL END as lead_id,
+         l.name as lead_name,
+         al.actor_user_id,
+         COALESCE(al.actor_email, au.email) as actor_email,
+         au.display_name as actor_display_name,
+         'audit' as channel,
+         al.action as outcome,
+         NULL as summary,
+         NULL as contact_person_name,
+         NULL as contact_person_role,
+         0 as decision_maker_reached,
+         NULL as objection_reason,
+         0 as quoted_amount,
+         0 as close_value,
+         NULL as follow_up_at,
+         NULL as next_step,
+         NULL as note,
+         CAST(al.metadata AS TEXT) as metadata_json,
+         al.created_at
+       FROM audit_logs al
+       LEFT JOIN leads l ON al.entity_type = 'lead' AND l.id = al.entity_id
+       LEFT JOIN app_users au ON au.user_id = al.actor_user_id
+       ${auditWhere}
+     ) activity
+     ORDER BY created_at DESC
+     LIMIT ?`
+  ).all<Record<string, unknown>>(...params);
+}
+
+function buildActivityWhere(
+  alias: string,
+  actorColumn: string,
+  since: string | undefined,
+  actorUserId: string | undefined,
+  params: unknown[],
+  extraConditions: string[] = [],
+): string {
+  const conditions = [...extraConditions];
+  if (since) {
+    conditions.push(`${alias}.created_at >= ?`);
+    params.push(since);
+  }
+  if (actorUserId) {
+    conditions.push(`${alias}.${actorColumn} = ?`);
+    params.push(actorUserId);
+  }
+  return conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+}
+
+function parseTeamBoardActivityRow(row: Record<string, unknown>): TeamBoardActivity {
+  return {
+    id: String(row.id),
+    activity_type: normalizeTeamBoardActivityType(row.activity_type),
+    action: String(row.action ?? ""),
+    lead_id: row.lead_id ? String(row.lead_id) : null,
+    lead_name: (row.lead_name as string | null) ?? null,
+    actor_user_id: (row.actor_user_id as string | null) ?? null,
+    actor_email: (row.actor_email as string | null) ?? null,
+    actor_display_name: (row.actor_display_name as string | null) ?? null,
+    channel: String(row.channel ?? "activity"),
+    outcome: String(row.outcome ?? row.action ?? "activity"),
+    summary: (row.summary as string | null) ?? null,
+    contact_person_name: (row.contact_person_name as string | null) ?? null,
+    contact_person_role: (row.contact_person_role as string | null) ?? null,
+    decision_maker_reached: toBoolean(row.decision_maker_reached),
+    objection_reason: (row.objection_reason as string | null) ?? null,
+    quoted_amount: Number(row.quoted_amount ?? 0),
+    close_value: Number(row.close_value ?? 0),
+    follow_up_at: normalizeNullableDateText(row.follow_up_at),
+    next_step: (row.next_step as string | null) ?? null,
+    note: (row.note as string | null) ?? null,
+    metadata: safeParseJson<Record<string, unknown>>(row.metadata_json, {}),
+    created_at: normalizeDateText(row.created_at),
+  };
+}
+
+function normalizeTeamBoardActivityType(value: unknown): TeamBoardActivity["activity_type"] {
+  if (value === "note" || value === "admin_request" || value === "audit") return value;
+  return "outreach";
 }
 
 // ─── Dashboard Extended Stats ───
