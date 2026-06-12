@@ -1,6 +1,23 @@
 import { NextRequest } from "next/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const supabaseMocks = vi.hoisted(() => ({
+  getUser: vi.fn(),
+}));
+
+vi.mock("@supabase/ssr", () => ({
+  createServerClient: vi.fn(() => ({
+    auth: {
+      getUser: supabaseMocks.getUser,
+    },
+  })),
+}));
+
 import { proxy } from "@/proxy";
+
+beforeEach(() => {
+  supabaseMocks.getUser.mockReset();
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -32,6 +49,27 @@ describe("proxy security headers", () => {
     expect(response.headers.get("Cache-Control")).toBe("private, no-store, max-age=0, must-revalidate");
     expect(response.headers.get("Content-Security-Policy")).toContain("script-src");
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  it("clears stale Supabase auth cookies without leaking auth errors from protected redirects", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://project.supabase.co");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "sb_publishable_test");
+    supabaseMocks.getUser.mockRejectedValue(Object.assign(new Error("Invalid Refresh Token: Refresh Token Not Found"), {
+      code: "refresh_token_not_found",
+    }));
+
+    const response = await proxy(new NextRequest("https://example.test/queue", {
+      headers: {
+        cookie: "sb-project-auth-token=stale; unrelated=value",
+      },
+    }));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("https://example.test/login");
+    expect(response.headers.get("set-cookie")).toContain("sb-project-auth-token=");
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(response.headers.get("set-cookie")).not.toContain("unrelated=");
   });
 
   it("allows Google Maps assets without opening Places or geocoding APIs broadly", async () => {

@@ -53,7 +53,17 @@ export async function getSession(options: { allowInactive?: boolean } = {}): Pro
   if (!isSupabaseAuthConfigured()) return null;
 
   const supabase = await createSupabaseServerClient();
-  const { data, error } = await supabase.auth.getUser();
+  let result: Awaited<ReturnType<typeof supabase.auth.getUser>>;
+  try {
+    result = await supabase.auth.getUser();
+  } catch (error) {
+    if (isStaleSupabaseAuthError(error)) {
+      await clearStaleSupabaseAuthCookies();
+    }
+    return null;
+  }
+
+  const { data, error } = result;
   const user = data.user;
 
   if (error) {

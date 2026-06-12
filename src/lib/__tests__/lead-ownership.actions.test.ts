@@ -57,7 +57,15 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requirePermission: authMocks.requirePermission }));
 vi.mock("@/lib/db/queries", () => queryMocks);
 
-import { archiveLeadAction, createManualLeadAction, logOutreachEventAction, restoreArchivedLeadAction, updateLeadStatusAction } from "@/lib/leads/actions";
+import {
+  archiveLeadAction,
+  claimLeadAction,
+  createManualLeadAction,
+  logOutreachEventAction,
+  restoreArchivedLeadAction,
+  unclaimLeadAction,
+  updateLeadStatusAction,
+} from "@/lib/leads/actions";
 
 const baseLead = {
   id: "lead-1",
@@ -74,6 +82,42 @@ beforeEach(() => {
 });
 
 describe("lead ownership server actions", () => {
+  it("records the claiming user on claim audit events", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    queryMocks.getLeadById.mockResolvedValue(baseLead);
+    queryMocks.claimLeadForUser.mockResolvedValue(1);
+
+    const result = await claimLeadAction("lead-1");
+
+    expect(result).toEqual({ success: true });
+    expect(queryMocks.claimLeadForUser).toHaveBeenCalledWith("lead-1", "user-1");
+    expect(queryMocks.createAuditLog).toHaveBeenCalledWith(
+      "lead_claimed",
+      "lead",
+      "lead-1",
+      undefined,
+      { actor: { userId: "user-1", email: "one@example.com", role: "researcher" } },
+    );
+  });
+
+  it("records the releasing user on unclaim audit events", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    queryMocks.getLeadById.mockResolvedValue({ ...baseLead, assigned_to_user_id: "user-1" });
+    queryMocks.assignLeadToUser.mockResolvedValue(undefined);
+
+    const result = await unclaimLeadAction("lead-1");
+
+    expect(result).toEqual({ success: true });
+    expect(queryMocks.assignLeadToUser).toHaveBeenCalledWith("lead-1", null);
+    expect(queryMocks.createAuditLog).toHaveBeenCalledWith(
+      "lead_unclaimed",
+      "lead",
+      "lead-1",
+      undefined,
+      { actor: { userId: "user-1", email: "one@example.com", role: "researcher" } },
+    );
+  });
+
   it("requires researchers to claim a lead before status changes", async () => {
     authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
     queryMocks.getLeadById.mockResolvedValue(baseLead);

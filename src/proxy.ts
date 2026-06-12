@@ -59,17 +59,27 @@ export async function proxy(request: NextRequest) {
     },
   });
 
-  const { data, error } = await supabase.auth.getUser();
+  let user: unknown = null;
+  let authError: unknown = null;
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    user = data.user;
+    authError = error;
+  } catch (error) {
+    authError = error;
+  }
 
-  if (error || !data.user) {
+  if (authError || !user) {
     if (isProtectedApi) {
-      return withProxySecurityHeaders(applyNoStoreHeaders(NextResponse.json({ error: "Authentication required" }, { status: 401 })), security);
+      const apiResponse = withProxySecurityHeaders(applyNoStoreHeaders(NextResponse.json({ error: "Authentication required" }, { status: 401 })), security);
+      return isStaleSupabaseAuthError(authError) ? expireSupabaseAuthCookies(request, apiResponse) : apiResponse;
     }
 
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";
     loginUrl.search = "";
-    return withProxySecurityHeaders(applyNoStoreHeaders(NextResponse.redirect(loginUrl)), security);
+    const redirectResponse = withProxySecurityHeaders(applyNoStoreHeaders(NextResponse.redirect(loginUrl)), security);
+    return isStaleSupabaseAuthError(authError) ? expireSupabaseAuthCookies(request, redirectResponse) : redirectResponse;
   }
 
   return response;
@@ -158,6 +168,26 @@ function withProxySecurityHeaders<T extends { headers: Headers }>(response: T, s
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(self)");
+  return response;
+}
+
+function isStaleSupabaseAuthError(error: unknown): boolean {
+  const maybe = error as { code?: unknown; message?: unknown };
+  const code = String(maybe?.code ?? "").toLowerCase();
+  const message = error instanceof Error ? error.message : String(maybe?.message ?? error ?? "");
+  return code === "refresh_token_not_found" || /invalid refresh token|refresh token not found|auth session missing/i.test(message);
+}
+
+function expireSupabaseAuthCookies<T extends NextResponse>(request: NextRequest, response: T): T {
+  const options = getSupabaseServerCookieOptions();
+  for (const cookie of request.cookies.getAll()) {
+    if (!cookie.name.startsWith("sb-") || !cookie.name.includes("auth-token")) continue;
+    response.cookies.set(cookie.name, "", {
+      ...options,
+      expires: new Date(0),
+      maxAge: 0,
+    });
+  }
   return response;
 }
 

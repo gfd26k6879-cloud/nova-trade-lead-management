@@ -55,7 +55,7 @@ import {
   type LeadFilters,
   type QualityFilters,
 } from "@/lib/db/queries";
-import { requirePermission } from "@/lib/auth";
+import { requirePermission, type AppSession } from "@/lib/auth";
 import { canReadLeadForSession, constrainLeadFiltersForSession } from "@/lib/lead-access";
 import type { PhoneVerificationStatus, QualityBucket } from "@/lib/lead-quality";
 import { generateOutreachPackage } from "@/lib/outreach-package";
@@ -192,6 +192,16 @@ function revalidateLeadViews(): void {
 
 function leadOwnerLabel(lead: { assigned_user_display_name?: string | null; assigned_user_email?: string | null; assigned_to_user_id?: string | null }): string {
   return lead.assigned_user_display_name || lead.assigned_user_email || lead.assigned_to_user_id || "another researcher";
+}
+
+function auditActorOptions(session: AppSession) {
+  return {
+    actor: {
+      userId: session.userId,
+      email: session.email,
+      role: session.role,
+    },
+  };
 }
 
 async function requireLeadOwnershipForMutation(
@@ -359,7 +369,7 @@ export async function claimLeadAction(id: string) {
     const current = await queryLeadById(id);
     return { error: current ? `Taken by ${leadOwnerLabel(current)}.` : "Lead not found" };
   }
-  await createAuditLog("lead_claimed", "lead", id);
+  await createAuditLog("lead_claimed", "lead", id, undefined, auditActorOptions(session));
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
   return { success: true };
@@ -375,7 +385,7 @@ export async function unclaimLeadAction(id: string) {
     return { error: "Only the assigned researcher or an admin can unclaim this lead." };
   }
   await dbAssignLeadToUser(id, null);
-  await createAuditLog("lead_unclaimed", "lead", id);
+  await createAuditLog("lead_unclaimed", "lead", id, undefined, auditActorOptions(session));
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
   return { success: true };
