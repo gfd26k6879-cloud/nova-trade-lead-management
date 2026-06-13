@@ -383,7 +383,7 @@ export interface ConversionMetrics {
 export interface CrawlRun {
   id: string;
   mode: string;
-  status: string;
+  status: "queued" | "running" | "paused" | "blocked" | "done" | "error" | "canceled" | string;
   categories: string[];
   market_id: string | null;
   selection_json: Record<string, unknown> | null;
@@ -397,6 +397,9 @@ export interface CrawlRun {
   error_count: number;
   api_calls_used: number;
   last_error: string | null;
+  blocked_reason: string | null;
+  blocked_at: string | null;
+  blocked_error_code: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -416,12 +419,16 @@ export interface DiscoveryItemSummary {
   errorCount: number;
   apiCallsUsed: number;
   lastError: string | null;
+  blockedReason: string | null;
+  blockedAt: string | null;
+  blockedErrorCode: string | null;
   createdAt: string;
   startedAt: string | null;
   endedAt: string | null;
   totalUnits: number;
   doneUnits: number;
   failedUnits: number;
+  retryWaitUnits: number;
   openUnits: number;
   runningUnits: number;
   canceledUnits: number;
@@ -484,6 +491,9 @@ export interface CrawlUnit {
   duplicate_places_seen: number;
   budget_blocked_at: string | null;
   attempt_count: number;
+  next_retry_at: string | null;
+  max_attempts: number;
+  last_error_code: string | null;
   discovered_count: number;
   started_at: string | null;
   finished_at: string | null;
@@ -499,6 +509,7 @@ export interface CrawlProgress {
   total: number;
   done: number;
   failed: number;
+  retryWait: number;
   running: number;
   pending: number;
   canceled: number;
@@ -527,6 +538,9 @@ export interface CrawlUnitPreview {
   new_places_seen: number;
   duplicate_places_seen: number;
   budget_blocked_at: string | null;
+  next_retry_at: string | null;
+  max_attempts: number;
+  last_error_code: string | null;
   created_at: string;
 }
 
@@ -1114,6 +1128,7 @@ export interface AiFeedbackEvaluationSummary {
 export type ManualWebsiteCorrectionResolution =
   | "official_website_found"
   | "weak_or_basic_site"
+  | "candidate_website_needs_review"
   | "social_or_directory_only"
   | "remove_website";
 
@@ -1530,6 +1545,12 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
     "ALTER TABLE settings ADD COLUMN IF NOT EXISTS researcher_ai_daily_run_cap integer NOT NULL DEFAULT 10",
     "ALTER TABLE settings ADD COLUMN IF NOT EXISTS researcher_ai_daily_budget_usd double precision NOT NULL DEFAULT 2.0",
     "ALTER TABLE settings ADD COLUMN IF NOT EXISTS researcher_ai_monthly_budget_usd double precision NOT NULL DEFAULT 25.0",
+    "ALTER TABLE crawl_runs ADD COLUMN IF NOT EXISTS blocked_reason text",
+    "ALTER TABLE crawl_runs ADD COLUMN IF NOT EXISTS blocked_at timestamptz",
+    "ALTER TABLE crawl_runs ADD COLUMN IF NOT EXISTS blocked_error_code text",
+    "ALTER TABLE crawl_units ADD COLUMN IF NOT EXISTS next_retry_at timestamptz",
+    "ALTER TABLE crawl_units ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 3",
+    "ALTER TABLE crawl_units ADD COLUMN IF NOT EXISTS last_error_code text",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS assigned_to_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL",
     "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS actor_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL",
     "ALTER TABLE outreach_events ADD COLUMN IF NOT EXISTS actor_email text",
@@ -3425,6 +3446,9 @@ function parseCrawlRunRow(row: Record<string, unknown>): CrawlRun {
     created_by_user_id: (row.created_by_user_id as string | null) ?? null,
     started_at: normalizeNullableDateText(row.started_at),
     ended_at: normalizeNullableDateText(row.ended_at),
+    blocked_reason: (row.blocked_reason as string | null) ?? null,
+    blocked_at: normalizeNullableDateText(row.blocked_at),
+    blocked_error_code: (row.blocked_error_code as string | null) ?? null,
     created_at: normalizeDateText(row.created_at),
     updated_at: normalizeDateText(row.updated_at),
   } as unknown as CrawlRun;
@@ -3490,6 +3514,7 @@ export async function listDiscoveryItems(limit = 12): Promise<DiscoveryItemSumma
          COUNT(*) as total_units,
          SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done_units,
          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_units,
+         SUM(CASE WHEN status = 'retry_wait' THEN 1 ELSE 0 END) as retry_wait_units,
          SUM(CASE WHEN status IN ('pending','retry_wait') THEN 1 ELSE 0 END) as open_units,
          SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running_units,
          SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END) as canceled_units,
@@ -3514,6 +3539,9 @@ export async function listDiscoveryItems(limit = 12): Promise<DiscoveryItemSumma
        cr.error_count,
        cr.api_calls_used,
        cr.last_error,
+       cr.blocked_reason,
+       cr.blocked_at,
+       cr.blocked_error_code,
        cr.created_at,
        cr.started_at,
        cr.ended_at,
@@ -3522,6 +3550,7 @@ export async function listDiscoveryItems(limit = 12): Promise<DiscoveryItemSumma
        COALESCE(uc.total_units, 0) as total_units,
        COALESCE(uc.done_units, 0) as done_units,
        COALESCE(uc.failed_units, 0) as failed_units,
+       COALESCE(uc.retry_wait_units, 0) as retry_wait_units,
        COALESCE(uc.open_units, 0) as open_units,
        COALESCE(uc.running_units, 0) as running_units,
        COALESCE(uc.canceled_units, 0) as canceled_units,
@@ -3557,12 +3586,16 @@ export async function listDiscoveryItems(limit = 12): Promise<DiscoveryItemSumma
       errorCount: Number(row.error_count) || 0,
       apiCallsUsed: Number(row.api_calls_used) || 0,
       lastError: (row.last_error as string | null) ?? null,
+      blockedReason: (row.blocked_reason as string | null) ?? null,
+      blockedAt: normalizeNullableDateText(row.blocked_at),
+      blockedErrorCode: (row.blocked_error_code as string | null) ?? null,
       createdAt,
       startedAt: normalizeNullableDateText(row.started_at),
       endedAt: normalizeNullableDateText(row.ended_at),
       totalUnits: Number(row.total_units) || 0,
       doneUnits: Number(row.done_units) || 0,
       failedUnits: Number(row.failed_units) || 0,
+      retryWaitUnits: Number(row.retry_wait_units) || 0,
       openUnits: Number(row.open_units) || 0,
       runningUnits: Number(row.running_units) || 0,
       canceledUnits: Number(row.canceled_units) || 0,
@@ -3590,10 +3623,42 @@ function buildDiscoveryScopeLabel(marketName: string | null, countryCode: Countr
 
 export async function updateCrawlRunStatus(id: string, status: string): Promise<void>{
   const db = await getDb();
-  const updates: Record<string, unknown> = { status };
-  if (status === "done" || status === "error" || status === "canceled") updates.ended_at = nowISO();
-  await db.prepare("UPDATE crawl_runs SET status = ?, ended_at = COALESCE(?, ended_at), updated_at = ? WHERE id = ?")
-    .run(status, updates.ended_at ?? null, nowISO(), id);
+  const now = nowISO();
+  if (status === "running" || status === "queued") {
+    await db.prepare(
+      `UPDATE crawl_runs
+       SET status = ?,
+           ended_at = NULL,
+           blocked_reason = NULL,
+           blocked_at = NULL,
+           blocked_error_code = NULL,
+           last_error = NULL,
+           updated_at = ?
+       WHERE id = ?`
+    ).run(status, now, id);
+    return;
+  }
+
+  const endedAt = status === "done" || status === "error" || status === "canceled" ? now : null;
+  await db.prepare(
+    "UPDATE crawl_runs SET status = ?, ended_at = COALESCE(?, ended_at), updated_at = ? WHERE id = ?"
+  ).run(status, endedAt, now, id);
+}
+
+export async function blockCrawlRun(id: string, reason: string, errorCode: string | null = null): Promise<void> {
+  const db = await getDb();
+  const now = nowISO();
+  await db.prepare(
+    `UPDATE crawl_runs
+     SET status = 'blocked',
+         blocked_reason = ?,
+         blocked_at = ?,
+         blocked_error_code = ?,
+         last_error = ?,
+         ended_at = ?,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(reason, now, errorCode, reason, now, now, id);
 }
 
 export async function cancelCrawlRun(runId: string, reason = "Stopped by user"): Promise<{ canceledUnits: number }> {
@@ -3787,12 +3852,20 @@ export async function createCrawlUnitsForCells(runId: string, categories: string
 
 export async function getNextPendingUnit(runId: string): Promise<CrawlUnit | null>{
   const db = await getDb();
+  const now = nowISO();
 
   await db.prepare(
     `UPDATE crawl_units SET status = 'pending', started_at = NULL
      WHERE crawl_run_id = ? AND status = 'running'
      AND started_at < datetime('now', '-5 minutes')`
   ).run(runId);
+  await db.prepare(
+    `UPDATE crawl_units
+     SET status = 'pending', started_at = NULL
+     WHERE crawl_run_id = ?
+       AND status = 'retry_wait'
+       AND (next_retry_at IS NULL OR next_retry_at <= ?)`
+  ).run(runId, now);
 
   const row = await db.prepare(
     `SELECT cu.*,
@@ -3822,11 +3895,19 @@ export async function getNextPendingUnit(runId: string): Promise<CrawlUnit | nul
 
 export async function leaseNextCrawlUnit(runId: string): Promise<CrawlUnit | null> {
   const db = await getDb();
+  const now = nowISO();
   await db.prepare(
     `UPDATE crawl_units SET status = 'pending', started_at = NULL
      WHERE crawl_run_id = ? AND status = 'running'
        AND started_at < datetime('now', '-5 minutes')`
   ).run(runId);
+  await db.prepare(
+    `UPDATE crawl_units
+     SET status = 'pending', started_at = NULL
+     WHERE crawl_run_id = ?
+       AND status = 'retry_wait'
+       AND (next_retry_at IS NULL OR next_retry_at <= ?)`
+  ).run(runId, now);
 
   const leased = await db.prepare(
     `UPDATE crawl_units
@@ -3853,7 +3934,7 @@ export async function leaseNextCrawlUnit(runId: string): Promise<CrawlUnit | nul
      )
        AND status = 'pending'
      RETURNING id`
-  ).get<{ id: string }>(nowISO(), runId);
+  ).get<{ id: string }>(now, runId);
 
   if (!leased) return null;
 
@@ -3882,15 +3963,46 @@ export async function markUnitRunning(unitId: string): Promise<void>{
 export async function markUnitDone(unitId: string, discoveredCount: number): Promise<void>{
   const db = await getDb();
   await db.prepare(
-    "UPDATE crawl_units SET status = 'done', finished_at = ?, discovered_count = ? WHERE id = ? AND status <> 'canceled'"
+    `UPDATE crawl_units
+     SET status = 'done',
+         finished_at = ?,
+         discovered_count = ?,
+         next_retry_at = NULL,
+         last_error_code = NULL
+     WHERE id = ? AND status <> 'canceled'`
   ).run(nowISO(), discoveredCount, unitId);
 }
 
-export async function markUnitFailed(unitId: string, error: string): Promise<void>{
+export async function markUnitFailed(unitId: string, error: string, errorCode: string | null = null): Promise<void>{
   const db = await getDb();
   await db.prepare(
-    "UPDATE crawl_units SET status = 'failed', finished_at = ?, last_error = ? WHERE id = ? AND status <> 'canceled'"
-  ).run(nowISO(), error, unitId);
+    `UPDATE crawl_units
+     SET status = 'failed',
+         finished_at = ?,
+         last_error = ?,
+         last_error_code = ?,
+         next_retry_at = NULL
+     WHERE id = ? AND status <> 'canceled'`
+  ).run(nowISO(), error, errorCode, unitId);
+}
+
+export async function markUnitRetryWait(
+  unitId: string,
+  error: string,
+  nextRetryAt: string,
+  errorCode: string | null = null,
+): Promise<void>{
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE crawl_units
+     SET status = 'retry_wait',
+         started_at = NULL,
+         finished_at = ?,
+         last_error = ?,
+         last_error_code = ?,
+         next_retry_at = ?
+     WHERE id = ? AND status <> 'canceled'`
+  ).run(nowISO(), error, errorCode, nextRetryAt, unitId);
 }
 
 export async function updateUnitPageToken(unitId: string, token: string | null): Promise<void>{
@@ -3926,7 +4038,15 @@ export async function recordUnitPageFetch(
 export async function retryFailedUnits(runId: string): Promise<number>{
   const db = await getDb();
   const result = await db.prepare(
-    "UPDATE crawl_units SET status = 'pending', started_at = NULL, last_error = NULL WHERE crawl_run_id = ? AND status = 'failed'"
+    `UPDATE crawl_units
+     SET status = 'pending',
+         started_at = NULL,
+         finished_at = NULL,
+         next_retry_at = NULL,
+         last_error = NULL,
+         last_error_code = NULL
+     WHERE crawl_run_id = ?
+       AND status IN ('failed','retry_wait')`
   ).run(runId);
   return result.changes;
 }
@@ -3962,15 +4082,19 @@ export async function getCrawlProgress(runId: string): Promise<CrawlProgress> {
     `SELECT status, COUNT(*) as count FROM crawl_units WHERE crawl_run_id = ? GROUP BY status`
   ).all(runId) as { status: string; count: number }[];
 
-  const counts = { total: 0, done: 0, failed: 0, running: 0, pending: 0, canceled: 0 };
+  const counts = { total: 0, done: 0, failed: 0, retryWait: 0, running: 0, pending: 0, canceled: 0 };
   for (const row of rows) {
     const count = Number(row.count) || 0;
     counts.total += count;
     if (row.status === "done") counts.done = count;
     else if (row.status === "failed") counts.failed = count;
+    else if (row.status === "retry_wait") {
+      counts.retryWait = count;
+      counts.pending += count;
+    }
     else if (row.status === "running") counts.running = count;
     else if (row.status === "canceled") counts.canceled = count;
-    else if (row.status === "pending" || row.status === "retry_wait") counts.pending += count;
+    else if (row.status === "pending") counts.pending += count;
   }
   return counts;
 }
@@ -4002,6 +4126,9 @@ export async function getCrawlUnitPreview(runId: string, limit = 80): Promise<Cr
        cu.new_places_seen,
        cu.duplicate_places_seen,
        cu.budget_blocked_at,
+       cu.next_retry_at,
+       cu.max_attempts,
+       cu.last_error_code,
        cu.created_at
      FROM crawl_units cu
      LEFT JOIN location_cells c ON c.id = cu.location_cell_id
@@ -4026,6 +4153,8 @@ export async function getCrawlUnitPreview(runId: string, limit = 80): Promise<Cr
   return rows.map((row) => ({
     ...row,
     attempt_count: Number(row.attempt_count) || 0,
+    max_attempts: Number(row.max_attempts) || 3,
+    next_retry_at: normalizeNullableDateText(row.next_retry_at),
     discovered_count: Number(row.discovered_count) || 0,
   }));
 }
@@ -6135,6 +6264,27 @@ export async function applyManualWebsiteCorrection(
         updated_at = ?
        WHERE id = ?`
     ).run(websiteUrl, now, websiteUrl, correctionReason, notes, now, now, leadId);
+  } else if (input.resolution === "candidate_website_needs_review") {
+    await db.prepare(
+      `UPDATE leads SET
+        website_uri = ?,
+        website_status = ?,
+        website_verified_at = ?,
+        ai_website_feedback_status = 'uncertain',
+        ai_corrected_website_url = ?,
+        ai_false_positive_reason = ?,
+        ai_reviewer_notes = ?,
+        ai_feedback_at = ?,
+        is_excluded = 0,
+        exclusion_reason = NULL,
+        excluded_at = NULL,
+        qualification_status = CASE WHEN qualification_status = 'disqualified' THEN 'needs_verification' ELSE qualification_status END,
+        disqualification_reason = NULL,
+        quality_bucket = 'needs_manual_review',
+        ai_recommendation = 'manual_review',
+        updated_at = ?
+       WHERE id = ?`
+    ).run(...baseValues, now, leadId);
   } else if (input.resolution === "social_or_directory_only") {
     await db.prepare(
       `UPDATE leads SET

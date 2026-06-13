@@ -14,6 +14,7 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/lib/users/actions", () => ({
   createUserAction: vi.fn(),
+  removeUserAction: vi.fn(),
   resetUserPasswordAction: vi.fn(),
   updateUserMarketAccessAction: vi.fn(),
   updateUserRoleAction: vi.fn(),
@@ -42,16 +43,16 @@ function user(input: Partial<AppUser> & Pick<AppUser, "user_id" | "email" | "rol
 }
 
 describe("UsersClient", () => {
-  it("renders selected, available, and no-access territory states as readable cards", () => {
+  it("renders the management workspace with directory, selected user details, and removal controls", () => {
     const markets = [
       { id: "market-colorado", name: "Colorado", country_code: "US", admin_area1: "CO" },
       { id: "market-toronto", name: "Toronto", country_code: "CA", admin_area1: "ON" },
       { id: "market-london", name: "London", country_code: "GB", admin_area1: "England" },
     ] as LocationMarket[];
     const users = [
-      user({ user_id: "admin-1", email: "admin@example.com", role: "admin", display_name: "Admin" }),
-      user({ user_id: "researcher-1", email: "one@example.com", role: "researcher", display_name: "One" }),
       user({ user_id: "researcher-2", email: "two@example.com", role: "researcher", display_name: "Two" }),
+      user({ user_id: "researcher-1", email: "one@example.com", role: "researcher", display_name: "One" }),
+      user({ user_id: "admin-1", email: "admin@example.com", role: "admin", display_name: "Admin" }),
     ];
     const access: Record<string, UserMarketAccess[]> = {
       "researcher-1": [{
@@ -68,13 +69,21 @@ describe("UsersClient", () => {
       <UsersClient initialUsers={users} markets={markets} initialMarketAccess={access} />,
     );
 
-    expect(text).toContain("Users and Territories");
-    expect(text).toContain("Country access");
+    expect(text).toContain("User Management");
+    expect(text).toContain("Team access, roles, and lifecycle");
+    expect(text).toContain("Create user");
+    expect(text).toContain("Send invite");
+    expect(text).toContain("Directory");
+    expect(text).toContain("Search name, email, team, or territory");
+    expect(text).toContain("Selected User");
+    expect(text).toContain("Territory Access");
+    expect(text).toContain("Remove user");
     expect(text).toContain("United States");
     expect(text).toContain("Colorado · US");
     expect(text).toContain("Toronto");
-    expect(text).toContain("Available");
-    expect(text).toContain("No country access");
-    expect(text).toContain("Admins can access all markets.");
+    expect(text).toContain("1 available");
+    expect(text).toContain("No access");
+    expect(text).toContain("No territory access");
+    expect(text).toContain("All markets");
   });
 });

@@ -23,11 +23,21 @@ function makeLead(): Lead {
     primary_type: "dentist",
     lat: null,
     lng: null,
+    market_id: null,
+    location_cell_id: null,
+    country_code: "US",
+    admin_area1: "CO",
+    admin_area2: "Denver",
+    locality: "Denver",
+    postal_code: "80202",
     score: 18,
     status: "new",
     is_excluded: false,
     exclusion_reason: null,
     excluded_at: null,
+    archived_at: null,
+    archived_by_user_id: null,
+    archive_reason: null,
     selling_niche: "dental",
     business_type: "dental",
     win_probability_score: 0,
@@ -97,7 +107,8 @@ function makeLead(): Lead {
 }
 
 function makeAiResult(overrides: Partial<AiVerificationResult> = {}): AiVerificationResult {
-  return {
+  const identityMatch = { name: "near", location: "unknown", phone: "unknown", category: "unknown", summary: "Near business name match." } satisfies AiVerificationResult["identityMatch"];
+  const base: AiVerificationResult = {
     status: "site_found",
     confidence: 0.88,
     foundWebsiteUrl: "https://gatewayparkdental.example",
@@ -108,7 +119,24 @@ function makeAiResult(overrides: Partial<AiVerificationResult> = {}): AiVerifica
     recommendation: "keep",
     reason: "Candidate domain found.",
     summary: "AI found a candidate domain.",
+    candidateWebsites: [],
+    identityMatch,
+    officialSiteEvidence: [],
+    contradictingEvidence: [],
+    siteQualityFlags: [],
+    manualReviewReason: null,
+    evidenceGrade: "weak",
+  };
+  return {
+    ...base,
     ...overrides,
+    candidateWebsites: overrides.candidateWebsites ?? base.candidateWebsites,
+    identityMatch: overrides.identityMatch ?? base.identityMatch,
+    officialSiteEvidence: overrides.officialSiteEvidence ?? base.officialSiteEvidence,
+    contradictingEvidence: overrides.contradictingEvidence ?? base.contradictingEvidence,
+    siteQualityFlags: overrides.siteQualityFlags ?? base.siteQualityFlags,
+    manualReviewReason: overrides.manualReviewReason ?? null,
+    evidenceGrade: overrides.evidenceGrade ?? base.evidenceGrade,
   };
 }
 

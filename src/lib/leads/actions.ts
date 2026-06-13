@@ -144,7 +144,7 @@ const researcherAiFeedbackSchema = z.object({
 });
 const manualWebsiteCorrectionSchema = z.object({
   websiteUrl: z.string().trim().max(500).optional().or(z.literal("")),
-  resolution: z.enum(["official_website_found", "weak_or_basic_site", "social_or_directory_only", "remove_website"]),
+  resolution: z.enum(["official_website_found", "weak_or_basic_site", "candidate_website_needs_review", "social_or_directory_only", "remove_website"]),
   notes: z.string().trim().max(2000).optional().or(z.literal("")),
 });
 const updateLeadFactsSchema = z.object({

@@ -132,33 +132,55 @@ export function computeLeadQuality(input: LeadQualityInput): LeadQualityResult {
   const isDisqualified = input.qualificationStatus === "disqualified" || input.qualificationStatus === "unqualified";
   const isCustomWebsite = input.websiteStatus === "custom";
 
-  if (feedbackStatus === "incorrect" || feedbackStatus === "uncertain") {
-    return {
-      leadQualityScore: feedbackStatus === "incorrect" ? 35 : 45,
-      qualityBucket: "needs_manual_review",
-      easyBuildScore: 0,
-      cashSpeedScore: 0,
-      needScore: 0,
-      qualityReason: feedbackStatus === "incorrect"
-        ? "Human review marked the AI website finding incorrect."
-        : "Human review marked the AI website finding uncertain.",
-      recommendedOffer: "not_recommended",
-      nextBestAction: "Review corrected website evidence before outreach.",
-    };
-  }
-
-  if (input.isExcluded || isClosed || isDisqualified || isCustomWebsite || hasUsableAiWebsite || input.status === "closed_lost") {
+  if (input.isExcluded || isClosed || isDisqualified || input.status === "closed_lost") {
     return {
       leadQualityScore: 0,
       qualityBucket: "not_a_fit",
       easyBuildScore: 0,
       cashSpeedScore: 0,
       needScore: 0,
-      qualityReason: hasUsableAiWebsite || isCustomWebsite
-        ? "Usable website already found."
-        : isClosed
-          ? "Business is not currently operational."
-          : "Lead is excluded or disqualified.",
+      qualityReason: isClosed
+        ? "Business is not currently operational."
+        : "Lead is excluded or disqualified.",
+      recommendedOffer: "not_recommended",
+      nextBestAction: "Do not work this lead unless an admin restores it.",
+    };
+  }
+
+  if (feedbackStatus === "uncertain") {
+    return {
+      leadQualityScore: 45,
+      qualityBucket: "needs_manual_review",
+      easyBuildScore: 0,
+      cashSpeedScore: 0,
+      needScore: 0,
+      qualityReason: "Human review marked the website finding uncertain.",
+      recommendedOffer: "not_recommended",
+      nextBestAction: "Review corrected website evidence before outreach.",
+    };
+  }
+
+  if (feedbackStatus === "incorrect" && input.websiteStatus !== "basic") {
+    return {
+      leadQualityScore: 35,
+      qualityBucket: "needs_manual_review",
+      easyBuildScore: 0,
+      cashSpeedScore: 0,
+      needScore: 0,
+      qualityReason: "Human review marked the AI website finding incorrect.",
+      recommendedOffer: "not_recommended",
+      nextBestAction: "Review corrected website evidence before outreach.",
+    };
+  }
+
+  if (isCustomWebsite || hasUsableAiWebsite) {
+    return {
+      leadQualityScore: 0,
+      qualityBucket: "not_a_fit",
+      easyBuildScore: 0,
+      cashSpeedScore: 0,
+      needScore: 0,
+      qualityReason: "Usable website already found.",
       recommendedOffer: "not_recommended",
       nextBestAction: "Do not work this lead unless an admin restores it.",
     };
@@ -184,14 +206,18 @@ export function computeLeadQuality(input: LeadQualityInput): LeadQualityResult {
     badPhonePenalty,
   );
 
-  const bucket = resolveQualityBucket({
-    aiStatus: String(aiStatus),
-    viability: viability ? String(viability) : null,
-    hasPhone,
-    phoneStatus,
-    final,
-    hasWeakSite,
-  });
+  const bucket = feedbackStatus === "incorrect" && input.websiteStatus === "basic"
+    ? "broken_site_opportunity"
+    : feedbackStatus === "correct" && input.websiteStatus === "social"
+      ? "needs_manual_review"
+      : resolveQualityBucket({
+          aiStatus: String(aiStatus),
+          viability: viability ? String(viability) : null,
+          hasPhone,
+          phoneStatus,
+          final,
+          hasWeakSite,
+        });
   const recommendedOffer = recommendOffer(String(businessType), bucket, viability ? String(viability) : null, final, hasPhone);
 
   return {

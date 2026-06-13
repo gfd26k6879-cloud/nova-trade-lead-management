@@ -7,7 +7,9 @@ import { z } from "zod";
 import { buildPasswordRecoveryUrl, buildWelcomeInviteUrl, resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
   createAppUserForAuthUser,
+  getAppUserByUserId,
   listAppUsers,
+  removeAppUser,
   updateAppUserRole,
   updateAppUserStatus,
   updateAppUserTeam,
@@ -123,6 +125,40 @@ export async function updateUserStatusAction(userId: string, status: AppUserStat
   await createAuditLog("app_user_status_updated", "app_user", userId, { status });
   revalidatePath("/users");
   return { success: true };
+}
+
+export async function removeUserAction(userId: string) {
+  const session = await requirePermission("users:manage");
+  await ensureDbReady();
+  const target = await getAppUserByUserId(userId);
+  if (!target) return { error: "User not found." };
+  if (target.user_id === session.userId) return { error: "You cannot remove your own account." };
+
+  const users = await listAppUsers();
+  const remainingActiveAdmins = users.filter((user) => (
+    user.user_id !== target.user_id && user.role === "admin" && user.status === "active"
+  )).length;
+  if (target.role === "admin" && remainingActiveAdmins === 0) {
+    return { error: "Cannot remove the last active admin." };
+  }
+
+  const supabase = createSupabaseAdminClient();
+  const { error } = await supabase.auth.admin.deleteUser(userId);
+  if (error && !/not found/i.test(error.message)) {
+    return { error: error.message };
+  }
+
+  await removeAppUser(userId);
+  await createAuditLog("app_user_removed", "app_user", userId, {
+    email: target.email,
+    role: target.role,
+  });
+  revalidatePath("/users");
+  revalidatePath("/team");
+  revalidatePath("/leads");
+  revalidatePath("/explore");
+  revalidatePath("/queue");
+  return { success: true, user: target };
 }
 
 export async function updateUserTeamAction(userId: string, input: { isTeamLead?: boolean; teamLeadUserId?: string | null; teamLabel?: string | null }) {

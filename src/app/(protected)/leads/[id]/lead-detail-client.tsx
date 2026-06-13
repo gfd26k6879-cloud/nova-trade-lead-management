@@ -236,7 +236,7 @@ const STATUS_OPTIONS = ["new", "verified", "contacted", "preview_sent", "meeting
 const CHANNEL_OPTIONS = ["call", "text", "email", "walkin", "other"];
 const OUTCOME_OPTIONS = ["not_reached", "left_voicemail", "contacted", "decision_maker_reached", "demo_sent", "meeting_set", "follow_up_needed", "not_interested", "quoted", "closed_won", "closed_lost"];
 type AiApplyAction = "update_website" | "exclude_has_website" | "mark_broken_site_opportunity" | "mark_manual_review";
-type WebsiteCorrectionResolution = "official_website_found" | "weak_or_basic_site" | "social_or_directory_only" | "remove_website";
+type WebsiteCorrectionResolution = "official_website_found" | "weak_or_basic_site" | "candidate_website_needs_review" | "social_or_directory_only" | "remove_website";
 type WorkUpdateAction = "research_note" | "called" | "left_voicemail" | "follow_up" | "not_interested" | "done";
 type LeadDetailTab = "work" | "overview" | "verification" | "intelligence" | "admin";
 type ActivityTimelineItem = {
@@ -297,6 +297,7 @@ const CALL_OUTCOME_PRESETS: CallOutcomePreset[] = [
 const WEBSITE_CORRECTION_OPTIONS: Array<{ value: WebsiteCorrectionResolution; label: string; help: string }> = [
   { value: "official_website_found", label: "Official website found", help: "Remove from no-site sales queues but keep the directory record." },
   { value: "weak_or_basic_site", label: "Weak/basic site", help: "Keep as a website-improvement opportunity." },
+  { value: "candidate_website_needs_review", label: "Candidate website - review", help: "Save the candidate URL and keep the lead in manual review until confirmed." },
   { value: "social_or_directory_only", label: "Social/directory only", help: "Keep as a no-site style opportunity with evidence attached." },
   { value: "remove_website", label: "Remove website", help: "Clear an incorrect website URL from the record." },
 ];
@@ -1589,7 +1590,7 @@ export function LeadDetailClient({
                 <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
                   {isAdmin
                     ? "Uses the locked gpt-5.4-mini verifier with manual apply."
-                    : "Creates research evidence only. Admin review is still required before changing website status or excluding the lead."}
+                    : "AI checks create advisory evidence. Use website correction above to save candidate sites or send uncertain matches to review."}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">

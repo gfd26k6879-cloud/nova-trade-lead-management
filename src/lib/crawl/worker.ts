@@ -14,12 +14,15 @@ import {
   leaseNextCrawlUnit,
   markUnitDone,
   markUnitFailed,
+  markUnitRetryWait,
   incrementCrawlRunCounters,
   updateCrawlRunStatus,
+  blockCrawlRun,
   getCrawlProgress,
   upsertLead,
   leadExists,
   getSettings,
+  updateUnitPageToken,
   recordUnitPageFetch,
   API_ENDPOINT_TEXT_SEARCH,
   logApiUsageEvent,
@@ -32,7 +35,7 @@ import { enqueueAiVerificationForLead } from "@/lib/ai/verification-worker";
 
 const SKIP_BUSINESS_STATUSES = new Set(["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"]);
 export interface ProcessResult {
-  status: "processed" | "idle" | "paused" | "done" | "error";
+  status: "processed" | "idle" | "paused" | "done" | "error" | "blocked" | "retry_wait";
   unitId?: string;
   zip?: string;
   category?: string;
@@ -44,11 +47,21 @@ export interface ProcessResult {
     total: number;
     done: number;
     failed: number;
+    retryWait: number;
     pending: number;
     running: number;
     canceled: number;
   };
 }
+
+type UnitFailurePolicy =
+  | { type: "block_run"; code: string; reason: string }
+  | { type: "retry"; code: string; nextRetryAt: string }
+  | { type: "fail"; code: string; clearPageToken?: boolean };
+
+const DEFAULT_UNIT_MAX_ATTEMPTS = 3;
+const TRANSIENT_RETRY_BASE_DELAY_SECONDS = 60;
+const TRANSIENT_RETRY_MAX_DELAY_SECONDS = 15 * 60;
 
 export async function processNextUnit(): Promise<ProcessResult> {
   const run = await getProcessingCrawlRun();
@@ -301,6 +314,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
     const googleError = err instanceof PlacesApiError ? err : null;
     const rawErrorMessage = err instanceof Error ? err.message : String(err);
     const errorMessage = googleError ? formatPlacesApiErrorForOperator(googleError) : rawErrorMessage;
+    const failurePolicy = classifyUnitFailure(err, unit.attempt_count, unit.max_attempts);
     if (googleError || isLikelyBillableGoogleAttemptError(rawErrorMessage)) {
       try {
         await logApiUsageEvent({
@@ -331,8 +345,48 @@ export async function processNextUnit(): Promise<ProcessResult> {
       }
       apiCalls++;
     }
-    await markUnitFailed(unit.id, errorMessage);
     await incrementCrawlRunCounters(run.id, 0, 1, apiCalls);
+
+    if (failurePolicy.type === "block_run") {
+      await markUnitFailed(unit.id, errorMessage, failurePolicy.code);
+      await blockCrawlRun(run.id, failurePolicy.reason, failurePolicy.code);
+      await createAuditLog("crawl_run_blocked", "crawl_run", run.id, {
+        unitId: unit.id,
+        category: unit.category,
+        zip: unit.zip,
+        errorCode: failurePolicy.code,
+        reason: failurePolicy.reason,
+      });
+      return {
+        status: "blocked",
+        unitId: unit.id,
+        zip: unit.zip,
+        category: unit.category,
+        error: failurePolicy.reason,
+        leadsFound,
+        apiCalls,
+        progress: await getCrawlProgress(run.id),
+      };
+    }
+
+    if (failurePolicy.type === "retry") {
+      await markUnitRetryWait(unit.id, errorMessage, failurePolicy.nextRetryAt, failurePolicy.code);
+      return {
+        status: "retry_wait",
+        unitId: unit.id,
+        zip: unit.zip,
+        category: unit.category,
+        error: errorMessage,
+        leadsFound,
+        apiCalls,
+        progress: await getCrawlProgress(run.id),
+      };
+    }
+
+    if (failurePolicy.clearPageToken) {
+      await updateUnitPageToken(unit.id, null);
+    }
+    await markUnitFailed(unit.id, errorMessage, failurePolicy.code);
 
     return {
       status: "error",
@@ -345,6 +399,63 @@ export async function processNextUnit(): Promise<ProcessResult> {
       progress: await getCrawlProgress(run.id),
     };
   }
+}
+
+function classifyUnitFailure(error: unknown, attemptCount: number, maxAttempts: number | null | undefined): UnitFailurePolicy {
+  const attemptsUsed = Math.max(1, Math.floor(Number(attemptCount) || 1));
+  const maxAllowedAttempts = Math.max(1, Math.floor(Number(maxAttempts) || DEFAULT_UNIT_MAX_ATTEMPTS));
+  if (error instanceof PlacesApiError) {
+    const googleStatus = extractGoogleStatus(error);
+    if (error.status === 403 && googleStatus === "PERMISSION_DENIED") {
+      return {
+        type: "block_run",
+        code: "google_permission_denied",
+        reason: "Google Places permission denied. Check the production Google Places API key, billing, API restrictions, and Places API entitlement before retrying.",
+      };
+    }
+    if (error.status === 429 || error.status >= 500) {
+      return attemptsUsed >= maxAllowedAttempts
+        ? { type: "fail", code: error.status === 429 ? "google_rate_limited_exhausted" : "google_transient_exhausted" }
+        : { type: "retry", code: error.status === 429 ? "google_rate_limited" : "google_transient_error", nextRetryAt: nextRetryAtForAttempt(attemptsUsed) };
+    }
+    if (error.status === 400 && googleStatus === "INVALID_ARGUMENT" && /page|paging|pageToken/i.test(error.body)) {
+      return { type: "fail", code: "google_invalid_page_token", clearPageToken: true };
+    }
+    return { type: "fail", code: `google_${error.status}` };
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (isTransientNetworkError(message)) {
+    return attemptsUsed >= maxAllowedAttempts
+      ? { type: "fail", code: "network_transient_exhausted" }
+      : { type: "retry", code: "network_transient", nextRetryAt: nextRetryAtForAttempt(attemptsUsed) };
+  }
+
+  return attemptsUsed >= maxAllowedAttempts
+    ? { type: "fail", code: "generic_error_exhausted" }
+    : { type: "retry", code: "generic_error", nextRetryAt: nextRetryAtForAttempt(attemptsUsed) };
+}
+
+function extractGoogleStatus(error: PlacesApiError): string | null {
+  try {
+    const parsed = JSON.parse(error.body) as { error?: { status?: unknown } };
+    return typeof parsed.error?.status === "string" ? parsed.error.status : null;
+  } catch {
+    return null;
+  }
+}
+
+function nextRetryAtForAttempt(attemptCount: number): string {
+  const exponent = Math.max(0, Math.floor(attemptCount) - 1);
+  const delaySeconds = Math.min(
+    TRANSIENT_RETRY_MAX_DELAY_SECONDS,
+    TRANSIENT_RETRY_BASE_DELAY_SECONDS * Math.pow(2, exponent),
+  );
+  return new Date(Date.now() + delaySeconds * 1000).toISOString();
+}
+
+function isTransientNetworkError(message: string): boolean {
+  return /fetch failed|network|timeout|timed out|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(message);
 }
 
 function extractPlaceId(raw: string): string | null {

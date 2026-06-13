@@ -224,7 +224,7 @@ describe("crawl worker integration", () => {
     expect(result.zip).toBe("80202");
   });
 
-  it("handles textSearch errors gracefully", async () => {
+  it("moves generic textSearch errors into retry wait before the attempt cap", async () => {
     const runId = seedTestRun(testDb);
     seedTestUnit(testDb, { runId });
 
@@ -232,17 +232,89 @@ describe("crawl worker integration", () => {
 
     const result = await processNextUnit();
 
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("retry_wait");
     expect(result.error).toContain("API quota exceeded");
 
-    const unit = testDb.prepare("SELECT status, last_error FROM crawl_units WHERE id = 'unit-1'").get() as Record<string, unknown>;
-    expect(unit.status).toBe("failed");
+    const unit = testDb.prepare("SELECT status, last_error, last_error_code, next_retry_at FROM crawl_units WHERE id = 'unit-1'").get() as Record<string, unknown>;
+    expect(unit.status).toBe("retry_wait");
     expect(unit.last_error).toContain("API quota exceeded");
+    expect(unit.last_error_code).toBe("generic_error");
+    expect(unit.next_retry_at).toBeTruthy();
+  });
+
+  it("moves Google 429 responses into retry wait with backoff", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestUnit(testDb, { runId });
+    const rawErrorBody = JSON.stringify({
+      error: {
+        code: 429,
+        message: "Quota exceeded.",
+        status: "RESOURCE_EXHAUSTED",
+      },
+    });
+    mockTextSearch.mockRejectedValueOnce(new PlacesApiError(429, rawErrorBody));
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("retry_wait");
+    const unit = testDb.prepare("SELECT status, last_error_code, next_retry_at FROM crawl_units WHERE id = 'unit-1'").get() as Record<string, unknown>;
+    expect(unit.status).toBe("retry_wait");
+    expect(unit.last_error_code).toBe("google_rate_limited");
+    expect(unit.next_retry_at).toBeTruthy();
+  });
+
+  it("leases retry-wait units once their retry time has passed", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestZip(testDb, "80203", "Denver", 39.73, -104.98, "Denver");
+    seedTestUnit(testDb, { id: "retry-unit", runId, zip: "80202", category: "dentist" });
+    seedTestUnit(testDb, { id: "pending-unit", runId, zip: "80203", category: "dentist" });
+    testDb.prepare(
+      "UPDATE crawl_units SET status = 'retry_wait', next_retry_at = datetime('now', '-1 minute') WHERE id = 'retry-unit'",
+    ).run();
+    const place = makePlaceResult({ id: "places/retry-ready" });
+    mockTextSearch.mockResolvedValueOnce(mockTextSearchResponse([place]));
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("processed");
+    expect(result.unitId).toBe("retry-unit");
+    const unit = testDb.prepare("SELECT status, next_retry_at FROM crawl_units WHERE id = 'retry-unit'").get() as Record<string, unknown>;
+    expect(unit.status).toBe("done");
+    expect(unit.next_retry_at).toBeNull();
+  });
+
+  it("blocks the run on Google permission errors without retrying remaining units", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestZip(testDb, "80203", "Denver", 39.73, -104.98, "Denver");
+    seedTestUnit(testDb, { id: "blocked-unit", runId, zip: "80202", category: "dentist" });
+    seedTestUnit(testDb, { id: "untouched-unit", runId, zip: "80203", category: "dentist" });
+    const rawErrorBody = JSON.stringify({
+      error: {
+        code: 403,
+        message: "Places API has not been used in project or it is disabled.",
+        status: "PERMISSION_DENIED",
+      },
+    });
+    mockTextSearch.mockRejectedValueOnce(new PlacesApiError(403, rawErrorBody));
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("blocked");
+    expect(result.error).toContain("Google Places permission denied");
+    const run = testDb.prepare("SELECT status, blocked_reason, blocked_error_code FROM crawl_runs WHERE id = ?").get(runId) as Record<string, unknown>;
+    expect(run.status).toBe("blocked");
+    expect(run.blocked_error_code).toBe("google_permission_denied");
+    expect(String(run.blocked_reason)).toContain("Google Places permission denied");
+    expect(testDb.prepare("SELECT status, last_error_code FROM crawl_units WHERE id = 'blocked-unit'").get()).toMatchObject({
+      status: "failed",
+      last_error_code: "google_permission_denied",
+    });
+    expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'untouched-unit'").get()).toMatchObject({ status: "pending" });
   });
 
   it("does not follow nextPageToken by default", async () => {
     const runId = seedTestRun(testDb);
-    seedTestUnit(testDb, { runId });
+    seedTestUnit(testDb, { runId, nextPageToken: "bad-page-token" });
 
     const page1Place = makePlaceResult({ id: "places/page1-biz" });
     const page2Place = makePlaceResult({ id: "places/page2-biz" });
@@ -352,9 +424,11 @@ describe("crawl worker integration", () => {
     expect(result.status).toBe("error");
     expect(result.error).toBe("Google Places request failed with status 400.");
 
-    const unit = testDb.prepare("SELECT status, last_error FROM crawl_units WHERE id = 'unit-1'").get() as Record<string, unknown>;
+    const unit = testDb.prepare("SELECT status, last_error, last_error_code, next_page_token FROM crawl_units WHERE id = 'unit-1'").get() as Record<string, unknown>;
     expect(unit.status).toBe("failed");
     expect(unit.last_error).toBe("Google Places request failed with status 400.");
+    expect(unit.last_error_code).toBe("google_invalid_page_token");
+    expect(unit.next_page_token).toBeNull();
 
     const usage = testDb.prepare("SELECT success, billable_units, metadata FROM api_usage_events WHERE crawl_unit_id = 'unit-1'").get() as Record<string, unknown>;
     expect(usage.success).toBe(0);

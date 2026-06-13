@@ -66,6 +66,50 @@ describe("lead quality scoring", () => {
     expect(quality.recommendedOffer).toBe("not_recommended");
   });
 
+  it("keeps excluded official-website corrections out of the review queue", () => {
+    const quality = computeLeadQuality({
+      ...baseLead,
+      isExcluded: true,
+      aiWebsiteFeedbackStatus: "incorrect",
+    });
+
+    expect(quality.qualityBucket).toBe("not_a_fit");
+    expect(quality.leadQualityScore).toBe(0);
+  });
+
+  it("keeps candidate website corrections in manual review", () => {
+    const quality = computeLeadQuality({
+      ...baseLead,
+      websiteStatus: "custom",
+      aiWebsiteFeedbackStatus: "uncertain",
+    });
+
+    expect(quality.qualityBucket).toBe("needs_manual_review");
+    expect(quality.nextBestAction).toContain("Review corrected website evidence");
+  });
+
+  it("keeps weak manually found sites as broken-site opportunities", () => {
+    const quality = computeLeadQuality({
+      ...baseLead,
+      websiteStatus: "basic",
+      aiWebsiteFeedbackStatus: "incorrect",
+    });
+
+    expect(quality.qualityBucket).toBe("broken_site_opportunity");
+    expect(quality.recommendedOffer).toBe("broken_site_rescue");
+  });
+
+  it("keeps social or directory-only website corrections in manual review", () => {
+    const quality = computeLeadQuality({
+      ...baseLead,
+      websiteStatus: "social",
+      aiVerificationStatus: "no_site_found",
+      aiWebsiteFeedbackStatus: "correct",
+    });
+
+    expect(quality.qualityBucket).toBe("needs_manual_review");
+  });
+
   it("penalizes missing phones without throwing away high-value leads", () => {
     const quality = computeLeadQuality({
       ...baseLead,

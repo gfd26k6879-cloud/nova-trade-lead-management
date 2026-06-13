@@ -38,6 +38,9 @@ export default async function UsersPage() {
 
   const active = users.filter((user) => user.status === "active").length;
   const researchers = users.filter((user) => user.role === "researcher").length;
+  const researchersWithoutAccess = users.filter((user) => (
+    user.status === "active" && user.role === "researcher" && (accessByUser[user.user_id]?.length ?? 0) === 0
+  )).length;
 
   return (
     <PageShell
@@ -49,6 +52,7 @@ export default async function UsersPage() {
         { label: "Active Users", value: String(active) },
         { label: "Admins", value: String(users.filter((user) => user.role === "admin").length) },
         { label: "Researchers", value: String(researchers) },
+        { label: "No Access", value: String(researchersWithoutAccess) },
         { label: "Disabled", value: String(users.length - active) },
       ]}
     >

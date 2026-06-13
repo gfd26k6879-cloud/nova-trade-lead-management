@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Lead } from "@/lib/db/queries";
+import { getDefaultScoreBandThresholds } from "@/lib/score-bands";
 
 let currentParams = new URLSearchParams();
 
@@ -28,7 +29,7 @@ function renderExplore(role: "admin" | "researcher" = "admin", leads: Lead[] = [
       mapPointLimit={200}
       zipCoverage={[]}
       filters={{ mode: "work_ready", sortBy: "opportunity", view: "cards", archived: "active", includeExcluded: false }}
-      scoreThresholds={{ high: 20, medium: 10 }}
+      scoreThresholds={getDefaultScoreBandThresholds()}
       businessTypeCounts={[{ id: "dental", label: "Dental", total: 3, active: 2 }]}
       currentUser={{ userId: "user-1", email: "user@example.com", role }}
       googleMapsApiKey={null}

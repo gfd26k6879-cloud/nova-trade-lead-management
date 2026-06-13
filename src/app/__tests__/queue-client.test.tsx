@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import type { QueueLead, ResearcherWorkbench } from "@/lib/db/queries";
+import { getDefaultScoreBandThresholds } from "@/lib/score-bands";
 
 let currentParams = new URLSearchParams();
 
@@ -23,7 +24,7 @@ vi.mock("@/lib/leads/actions", () => ({
 
 import { QueueClient } from "@/app/(protected)/queue/queue-client";
 
-const scoreThresholds = { high: 80, medium: 50 };
+const scoreThresholds = getDefaultScoreBandThresholds();
 const currentUser = { userId: "user-1", email: "researcher@example.com", role: "researcher" as const };
 
 function renderQueue(workbench: ResearcherWorkbench) {

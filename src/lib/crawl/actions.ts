@@ -9,6 +9,7 @@ import {
   createCrawlUnitsForSelection,
   createCrawlUnitsForCells,
   updateCrawlRunStatus,
+  blockCrawlRun,
   cancelCrawlRun,
   retryFailedUnits as retryFailed,
   getDashboardStats,
@@ -45,6 +46,8 @@ import {
   listDiscoveryItems,
   type DiscoveryItemSummary,
   getSettings,
+  API_ENDPOINT_TEXT_SEARCH,
+  logApiUsageEvent,
   getAdminFulfillmentSummary,
   getStatisticsSummary,
   getTeamBoardSummary,
@@ -68,11 +71,14 @@ import {
 } from "@/lib/dashboard-fallbacks";
 import {
   estimateDiscoveryRunSize,
+  getTextSearchFieldMaskForDiscoveryMode,
+  getTextSearchSkuForDiscoveryMode,
   normalizeDiscoveryMode,
   normalizePaginationPolicy,
   type DiscoverySizeInput,
   type DiscoverySizeEstimate,
 } from "@/lib/discovery-sizing";
+import { PlacesApiError, textSearch } from "@/lib/google-places";
 import { startRouteTiming } from "@/lib/route-timing";
 
 const startPlannerSchema = z.object({
@@ -113,6 +119,108 @@ async function estimateDiscoveryRunSizeWithUsage(
 
 function discoveryBlockMessage(estimate: DiscoverySizeEstimate, fallback = "Discovery run is blocked by the current Google safety cap."): string {
   return estimate.blockingReasons[0] ?? fallback;
+}
+
+type GoogleDiagnosticResult =
+  | { ok: true; mode: "coverage_probe" | "lead_harvest"; keySource: "ui" | "env" | "none"; fieldMask: string; sku: string }
+  | { ok: false; mode: "coverage_probe" | "lead_harvest"; keySource: "ui" | "env" | "none"; fieldMask: string; sku: string; error: string; errorCode: string };
+
+function diagnosticCapBlockMessage(estimate: DiscoverySizeEstimate): string | null {
+  if (estimate.remainingMonthlyCallCap === null) return null;
+  const callsIncludingDiagnostic = estimate.estimatedSearchCalls + 1;
+  if (callsIncludingDiagnostic <= estimate.remainingMonthlyCallCap) return null;
+  return `This action needs ${callsIncludingDiagnostic.toLocaleString()} Google Text Search calls including the diagnostic preflight, but only ${estimate.remainingMonthlyCallCap.toLocaleString()} remain under the ${estimate.capSource.replace(/_/g, " ")} cap.`;
+}
+
+function googleDiagnosticFailureMessage(result: GoogleDiagnosticResult): string | null {
+  if (result.ok) return null;
+  return `Google diagnostic failed before Discovery could run: ${result.error}`;
+}
+
+async function runGoogleDiscoveryDiagnostic(
+  mode: "coverage_probe" | "lead_harvest",
+  options: { crawlRunId?: string | null; category?: string | null; locationLabel?: string | null } = {},
+): Promise<GoogleDiagnosticResult> {
+  const settings = await getSettings();
+  const fieldMask = getTextSearchFieldMaskForDiscoveryMode(mode);
+  const sku = getTextSearchSkuForDiscoveryMode(mode);
+  const keySource = settings.google_places_api_key_source;
+  const category = options.category?.trim() || "dentist";
+  const locationLabel = options.locationLabel?.trim() || "Denver, CO 80202, United States";
+  const query = `${category.replace(/_/g, " ")} near ${locationLabel}`;
+
+  if (!settings.google_places_api_key_configured) {
+    return {
+      ok: false,
+      mode,
+      keySource,
+      fieldMask,
+      sku,
+      error: "Google Places API key is not configured in Settings or Vercel environment variables.",
+      errorCode: "google_key_missing",
+    };
+  }
+
+  try {
+    await textSearch(query, undefined, settings.rate_limit_ms, undefined, { fieldMask });
+    await logApiUsageEvent({
+      crawl_run_id: options.crawlRunId ?? null,
+      endpoint: API_ENDPOINT_TEXT_SEARCH,
+      sku,
+      field_mask: fieldMask,
+      success: true,
+      was_cached: false,
+      billable_units: 1,
+      metadata: {
+        diagnostic: true,
+        discoveryMode: mode,
+        query,
+        keySource,
+      },
+    });
+    return { ok: true, mode, keySource, fieldMask, sku };
+  } catch (error) {
+    const errorMessage = formatGoogleDiagnosticError(error);
+    if (error instanceof PlacesApiError) {
+      await logApiUsageEvent({
+        crawl_run_id: options.crawlRunId ?? null,
+        endpoint: API_ENDPOINT_TEXT_SEARCH,
+        sku,
+        field_mask: fieldMask,
+        success: false,
+        was_cached: false,
+        billable_units: 1,
+        metadata: {
+          diagnostic: true,
+          discoveryMode: mode,
+          query,
+          keySource,
+          error: error.message.slice(0, 500),
+          googleStatus: error.status,
+          googleErrorBody: error.body.slice(0, 1000),
+        },
+      });
+    }
+    return {
+      ok: false,
+      mode,
+      keySource,
+      fieldMask,
+      sku,
+      error: errorMessage,
+      errorCode: error instanceof PlacesApiError ? `google_${error.status}` : "google_diagnostic_failed",
+    };
+  }
+}
+
+function formatGoogleDiagnosticError(error: unknown): string {
+  if (error instanceof PlacesApiError) {
+    if (error.status === 403 && /PERMISSION_DENIED/i.test(error.body)) {
+      return "Google Places returned 403 PERMISSION_DENIED. Check the production key restrictions, billing, and Places API entitlement.";
+    }
+    return `Google Places returned ${error.status}.`;
+  }
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function estimateRemainingDiscoveryRun(
@@ -162,7 +270,7 @@ type CoverageLoadError = "db_statement_timeout" | "transient_db_error" | "covera
 
 type CoverageRunSummary = Pick<
   CrawlRun,
-  "id" | "name" | "scope_label" | "status" | "started_at" | "created_at" | "ended_at" | "categories" | "discovered_count" | "api_calls_used" | "last_error" | "market_id"
+  "id" | "name" | "scope_label" | "status" | "started_at" | "created_at" | "ended_at" | "categories" | "discovered_count" | "api_calls_used" | "last_error" | "blocked_reason" | "blocked_at" | "blocked_error_code" | "market_id"
 > & { discoveryMode: "coverage_probe" | "lead_harvest" | null };
 
 function classifyCoverageFailure(error: unknown): CoverageLoadError {
@@ -189,6 +297,9 @@ function summarizeCoverageRun(run: CrawlRun | null | undefined): CoverageRunSumm
     discovered_count: run.discovered_count,
     api_calls_used: run.api_calls_used,
     last_error: run.last_error,
+    blocked_reason: run.blocked_reason,
+    blocked_at: run.blocked_at,
+    blocked_error_code: run.blocked_error_code,
     market_id: run.market_id,
     discoveryMode: normalizeDiscoveryModeFromSelection(run.selection_json),
   } : null;
@@ -319,6 +430,18 @@ export async function startCrawlRunAction(payload: StartCrawlPayload) {
       error: discoveryBlockMessage(sizeEstimate, "Discovery selection is blocked by the current Google safety cap."),
       estimate: sizeEstimate,
     };
+  }
+  const diagnosticCapError = diagnosticCapBlockMessage(sizeEstimate);
+  if (diagnosticCapError) {
+    return { error: diagnosticCapError, estimate: sizeEstimate };
+  }
+  const diagnostic = await runGoogleDiscoveryDiagnostic(discoveryMode, {
+    category: categories[0],
+    locationLabel: marketSelection?.cellIds[0] ?? plannerSelection?.zipCodes[0] ?? null,
+  });
+  const diagnosticError = googleDiagnosticFailureMessage(diagnostic);
+  if (diagnosticError) {
+    return { error: diagnosticError, estimate: sizeEstimate, diagnostic };
   }
 
   const run = await createCrawlRun(categories, marketSelection ? {
@@ -522,8 +645,8 @@ export async function stopCrawlRunAction(runId?: string) {
   await ensureDbReady();
   const run = await getSelectedOrDefaultVisibleCrawlRun(runId);
   if (!run) return { error: "No active discovery run to stop." };
-  if (run.status !== "running" && run.status !== "queued" && run.status !== "paused") {
-    return { error: "Only a running, queued, or paused discovery item can have remaining units canceled." };
+  if (run.status !== "running" && run.status !== "queued" && run.status !== "paused" && run.status !== "blocked") {
+    return { error: "Only a running, queued, paused, or blocked discovery item can have remaining units canceled." };
   }
   const result = await cancelCrawlRun(run.id);
   await createAuditLog("crawl_run_canceled", "crawl_run", run.id, {
@@ -538,10 +661,23 @@ export async function resumeCrawlRunAction(runId?: string) {
   const processing = await getProcessingCrawlRun();
   if (processing) return { error: "Another discovery item is already processing. Pause or complete it before resuming this item." };
   const latest = runId ? await getSelectedOrDefaultVisibleCrawlRun(runId) : await getLatestPausedCrawlRun();
-  if (!latest || latest.status !== "paused") return { error: "No paused run to resume." };
+  if (!latest || (latest.status !== "paused" && latest.status !== "blocked")) return { error: "No paused or blocked run to resume." };
   const estimate = await estimateRemainingDiscoveryRun(latest, "open");
   if (!estimate.canStart) {
     return { error: discoveryBlockMessage(estimate, "This paused discovery item exceeds the current Google safety cap."), estimate };
+  }
+  const diagnosticCapError = diagnosticCapBlockMessage(estimate);
+  if (diagnosticCapError) {
+    return { error: diagnosticCapError, estimate };
+  }
+  const diagnostic = await runGoogleDiscoveryDiagnostic(
+    normalizeDiscoveryMode(latest.selection_json?.discoveryMode, estimate.mode),
+    { crawlRunId: latest.id, category: latest.categories[0] ?? null },
+  );
+  const diagnosticError = googleDiagnosticFailureMessage(diagnostic);
+  if (!diagnostic.ok && diagnosticError) {
+    await blockCrawlRun(latest.id, diagnosticError, diagnostic.errorCode);
+    return { error: diagnosticError, estimate, diagnostic };
   }
   await updateCrawlRunStatus(latest.id, "running");
   await createAuditLog("crawl_run_resumed", "crawl_run", latest.id);
@@ -554,15 +690,46 @@ export async function retryFailedUnitsAction(runId?: string) {
   const run = await getSelectedOrDefaultVisibleCrawlRun(runId);
   if (!run) return { error: "No run found." };
   if (run.status === "canceled") return { error: "This run was stopped. Start a new discovery instead of retrying it." };
-  const estimate = await estimateRemainingDiscoveryRun(run, "failed");
+  const estimate = await estimateRemainingDiscoveryRun(run, "open_or_failed");
   if (!estimate.canStart) {
     return { error: discoveryBlockMessage(estimate, "Retrying failed units exceeds the current Google safety cap."), estimate };
   }
+  const diagnosticCapError = diagnosticCapBlockMessage(estimate);
+  if (diagnosticCapError) {
+    return { error: diagnosticCapError, estimate };
+  }
+  const diagnostic = await runGoogleDiscoveryDiagnostic(
+    normalizeDiscoveryMode(run.selection_json?.discoveryMode, estimate.mode),
+    { crawlRunId: run.id, category: run.categories[0] ?? null },
+  );
+  const diagnosticError = googleDiagnosticFailureMessage(diagnostic);
+  if (!diagnostic.ok && diagnosticError) {
+    await blockCrawlRun(run.id, diagnosticError, diagnostic.errorCode);
+    return { error: diagnosticError, estimate, diagnostic };
+  }
   const count = await retryFailed(run.id);
-  if (run.status === "done" || run.status === "error") {
+  if (run.status === "done" || run.status === "error" || run.status === "blocked") {
     await updateCrawlRunStatus(run.id, "running");
   }
   return { retriedCount: count, estimate };
+}
+
+export async function runGoogleDiscoveryDiagnosticAction(runId?: string) {
+  await requirePermission("crawl:manage");
+  await ensureDbReady();
+  const run = runId ? await getSelectedOrDefaultVisibleCrawlRun(runId) : await getProcessingCrawlRun();
+  const settings = await getSettings();
+  const mode = run
+    ? normalizeDiscoveryMode(run.selection_json?.discoveryMode, settings.google_default_discovery_mode)
+    : settings.google_default_discovery_mode;
+  const diagnostic = await runGoogleDiscoveryDiagnostic(mode, {
+    crawlRunId: run?.id ?? null,
+    category: run?.categories?.[0] ?? null,
+  });
+  if (!diagnostic.ok && run?.id) {
+    await blockCrawlRun(run.id, `Google diagnostic failed before Discovery could run: ${diagnostic.error}`, diagnostic.errorCode);
+  }
+  return { diagnostic };
 }
 
 export async function updateSchedulerWorkerEnabledAction(workerName: SchedulerWorkerName, enabled: boolean) {
@@ -822,25 +989,37 @@ export async function getCoverageDiscoveryItemsAction(selectedRunId?: string | n
 
 export async function getCoverageSelectedRunAction(selectedRunId?: string | null): Promise<{
   run: CoverageRunSummary | null;
+  crawlWorker: { enabled: boolean; googlePlacesKeyConfigured: boolean; googlePlacesKeySource: "ui" | "env" | "none" } | null;
   loadError?: CoverageLoadError;
 }> {
   await requirePermission("crawl:manage");
   const logActionTiming = startRouteTiming("action:getCoverageSelectedRun");
   try {
-    const run = await withReadOnlyActionDeadline(
+    const result = await withReadOnlyActionDeadline(
       "getCoverageSelectedRunAction",
       10_000,
       withDbStatementTimeout(8_000, async () => {
         await ensureDbReady();
-        return timedCoverageStep("getCoverageSelectedRun", "selected_run", () => getSelectedOrDefaultVisibleCrawlRun(selectedRunId ?? undefined));
+        const [run, settings] = await Promise.all([
+          timedCoverageStep("getCoverageSelectedRun", "selected_run", () => getSelectedOrDefaultVisibleCrawlRun(selectedRunId ?? undefined)),
+          getSettings(),
+        ]);
+        return {
+          run,
+          crawlWorker: {
+            enabled: settings.scheduler_crawl_enabled,
+            googlePlacesKeyConfigured: settings.google_places_api_key_configured,
+            googlePlacesKeySource: settings.google_places_api_key_source,
+          },
+        };
       }),
     );
     logActionTiming(200);
-    return { run: summarizeCoverageRun(run) };
+    return { run: summarizeCoverageRun(result.run), crawlWorker: result.crawlWorker };
   } catch (error) {
     const loadError = classifyCoverageFailure(error);
     logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
-    return { run: null, loadError };
+    return { run: null, crawlWorker: null, loadError };
   }
 }
 

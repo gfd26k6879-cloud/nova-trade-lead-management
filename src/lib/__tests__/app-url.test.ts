@@ -40,5 +40,7 @@ describe("app URL helpers", () => {
       .toBe("https://example.com/auth/callback?next=%2Freset-password");
     expect(buildWelcomeInviteUrl("reset-password", CANONICAL_APP_URL))
       .toBe(`${CANONICAL_APP_URL}/auth/callback?next=%2Freset-password`);
+    expect(buildAuthCallbackUrl("/queue", CANONICAL_APP_URL))
+      .toBe(`${CANONICAL_APP_URL}/auth/callback?next=%2Fqueue`);
   });
 });

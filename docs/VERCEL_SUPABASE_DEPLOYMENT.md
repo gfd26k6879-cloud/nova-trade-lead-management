@@ -121,7 +121,51 @@ Redeploy after any environment variable change.
 `NEXT_PUBLIC_APP_URL` should be set in Production because welcome invite and reset
 links are generated server-side. Set it to the canonical production origin:
 `https://www.nosite.xyz`. In Supabase Auth, set the Site URL to the same origin
-and allow `https://www.nosite.xyz/auth/callback` as a redirect URL.
+and allow both callback entries as redirect URLs:
+
+```text
+https://www.nosite.xyz/auth/callback
+https://www.nosite.xyz/auth/callback**
+```
+
+The `**` entry covers invite/reset links that include the app's `next` query
+parameter. Without a matching callback redirect URL, Supabase can ignore the
+app-provided `redirectTo` and fall back to the Site URL.
+
+Invite and recovery emails must use the app-provided redirect URL, not
+`{{ .SiteURL }}`, for their primary action links. The app sends Supabase this
+exact redirect URL:
+
+```text
+https://www.nosite.xyz/auth/callback?next=%2Freset-password
+```
+
+The custom Supabase email templates should link to that redirect and append the
+one-time token hash:
+
+```html
+<!-- Invite user template action link -->
+<a href="{{ .RedirectTo }}&amp;token_hash={{ .TokenHash }}&amp;type=invite">Set up account</a>
+
+<!-- Reset password template action link -->
+<a href="{{ .RedirectTo }}&amp;token_hash={{ .TokenHash }}&amp;type=recovery">Reset password</a>
+```
+
+Do not build invite/recovery action links from `{{ .SiteURL }}`. If the
+Supabase Site URL ever drifts back to a Vercel domain, `{{ .SiteURL }}` links
+will send users to the wrong host. `{{ .RedirectTo }}` uses the URL passed by
+the app for that specific invite/reset request.
+
+With a Supabase Management API personal access token, check or reapply the
+production Auth URL/template settings from this repo:
+
+```bash
+SUPABASE_ACCESS_TOKEN=... npm run auth:supabase:check
+SUPABASE_ACCESS_TOKEN=... npm run auth:supabase:apply
+```
+
+The apply command also removes the known legacy
+`lead-generation-orcin.vercel.app` redirect entry from the Auth allowlist.
 
 `NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` is optional and only enables the Explorer's
 manual Google map switch. It must be a browser-restricted Maps JavaScript API key
