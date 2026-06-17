@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:launch": "playwright test e2e/launch-auth-screenshots.spec.ts",
     "auth:supabase:check": "node scripts/supabase-auth-config.mjs",
     "auth:supabase:apply": "APPLY_SUPABASE_AUTH_CONFIG=1 node scripts/supabase-auth-config.mjs",
     "db:export:sqlite": "node scripts/export-sqlite-data.mjs",

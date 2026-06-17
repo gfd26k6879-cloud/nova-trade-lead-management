@@ -128,7 +128,7 @@ Production smoke checks after deploy:
    Then run the read-only launch screenshot audit:
 
    ```bash
-   E2E_BASE_URL=https://www.nosite.xyz npx playwright test e2e/launch-auth-screenshots.spec.ts
+   E2E_BASE_URL=https://www.nosite.xyz npm run test:e2e:launch
    ```
 
 3. Open `/scheduler` in production after login and verify:

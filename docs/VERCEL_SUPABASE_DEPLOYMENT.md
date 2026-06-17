@@ -19,7 +19,7 @@ spec after setting either `E2E_STORAGE_STATE` or both Supabase E2E credentials:
 ```bash
 E2E_BASE_URL=https://www.nosite.xyz \
 E2E_STORAGE_STATE=.auth/admin.json \
-npx playwright test e2e/launch-auth-screenshots.spec.ts
+npm run test:e2e:launch
 ```
 
 If no storage state is available, use:
@@ -28,7 +28,7 @@ If no storage state is available, use:
 E2E_BASE_URL=https://www.nosite.xyz \
 E2E_SUPABASE_EMAIL=<admin email> \
 E2E_SUPABASE_PASSWORD=<password> \
-npx playwright test e2e/launch-auth-screenshots.spec.ts
+npm run test:e2e:launch
 ```
 
 Do not assume `NOSITE_ADMIN_PASSWORD` is a valid E2E login password. Production
