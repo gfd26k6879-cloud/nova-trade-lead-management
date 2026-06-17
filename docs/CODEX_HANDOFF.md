@@ -75,6 +75,13 @@ E2E status:
 Authenticated rendered QA is still blocked until E2E_STORAGE_STATE or E2E_SUPABASE_EMAIL/E2E_SUPABASE_PASSWORD are configured.
 ```
 
+June 16 continuation evidence:
+
+- No local `.auth` storage-state file or E2E credential env vars were present.
+- 1Password Environments MCP authenticated successfully, but no visible Environment was named for NoSite or this repo.
+- Vercel production env names include Supabase/runtime/admin variables, but no `E2E_STORAGE_STATE`, `E2E_SUPABASE_EMAIL`, or `E2E_SUPABASE_PASSWORD` variables. Do not treat `NOSITE_ADMIN_PASSWORD` as proof of a Supabase E2E login; the app login path uses Supabase `signInWithPassword`.
+- Wrangler is logged in with zone read and Workers-related scopes, but not zone settings/admin write. The Cloudflare API connector also returned an invalid-token error for a read call, so the Managed robots block still needs dashboard/owner-token access.
+
 Local production-mode smoke:
 
 - `next start` passed on `http://127.0.0.1:3001`.

@@ -31,6 +31,10 @@ E2E_SUPABASE_PASSWORD=<password> \
 npx playwright test e2e/launch-auth-screenshots.spec.ts
 ```
 
+Do not assume `NOSITE_ADMIN_PASSWORD` is a valid E2E login password. Production
+login uses Supabase `signInWithPassword`, so the screenshot audit needs a real
+Supabase auth password or a captured `E2E_STORAGE_STATE` file.
+
 Confirm these stay untracked:
 
 - `.env.local`
