@@ -13,6 +13,24 @@ npm run build
 npm run test:e2e
 ```
 
+For the launch screenshot QA pass, run the dedicated authenticated screenshot
+spec after setting either `E2E_STORAGE_STATE` or both Supabase E2E credentials:
+
+```bash
+E2E_BASE_URL=https://www.nosite.xyz \
+E2E_STORAGE_STATE=.auth/admin.json \
+npx playwright test e2e/launch-auth-screenshots.spec.ts
+```
+
+If no storage state is available, use:
+
+```bash
+E2E_BASE_URL=https://www.nosite.xyz \
+E2E_SUPABASE_EMAIL=<admin email> \
+E2E_SUPABASE_PASSWORD=<password> \
+npx playwright test e2e/launch-auth-screenshots.spec.ts
+```
+
 Confirm these stay untracked:
 
 - `.env.local`

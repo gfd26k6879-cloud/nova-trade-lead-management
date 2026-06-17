@@ -70,7 +70,7 @@ Remediation validation:
 - Live rendered browser smoke passed for `/privacy`, `/terms`, `/support`, `/data-sources`, and `/login` at desktop and mobile widths with no detected horizontal overflow.
 - A live-only Cloudflare Email Obfuscation/CSP hydration issue was found and fixed by rendering the support contact as `support [at] nosite.xyz`; final live smoke confirmed no email-decode script injection and no literal email string.
 - Supabase migration `202606160001` was applied directly through the linked CLI and repaired as applied; the new enrichment status constraint and new indexes were verified, but historical migration drift remains and should be reconciled before future blanket `supabase db push` use.
-- Authenticated rendered browser QA remains blocked until `E2E_STORAGE_STATE` or `E2E_SUPABASE_EMAIL`/`E2E_SUPABASE_PASSWORD` are configured.
+- Authenticated rendered browser QA remains blocked until `E2E_STORAGE_STATE` or `E2E_SUPABASE_EMAIL`/`E2E_SUPABASE_PASSWORD` are configured. A dedicated read-only launch screenshot spec exists at `e2e/launch-auth-screenshots.spec.ts` and covers `/dashboard`, `/coverage`, `/explore`, `/leads`, `/quality`, `/team`, `/statistics`, `/users`, `/scheduler`, and one lead detail page at desktop and mobile widths.
 - Cloudflare Managed robots content still prepends a broad `User-agent: *` / `Allow: /` block before the app's stricter invite-only robots rules; fixing that requires owner-level Cloudflare configuration outside this repo.
 
 ## Initial Verification Matrix (Pre-Remediation)

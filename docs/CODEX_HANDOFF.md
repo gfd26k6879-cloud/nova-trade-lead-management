@@ -118,6 +118,12 @@ Production smoke checks after deploy:
    E2E_SUPABASE_PASSWORD=<password>
    ```
 
+   Then run the read-only launch screenshot audit:
+
+   ```bash
+   E2E_BASE_URL=https://www.nosite.xyz npx playwright test e2e/launch-auth-screenshots.spec.ts
+   ```
+
 3. Open `/scheduler` in production after login and verify:
    - worker toggles display correctly,
    - AI verification queue is draining,
