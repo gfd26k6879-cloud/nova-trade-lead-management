@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-export const SUPPORT_EMAIL = "support@nosite.xyz";
+export const SUPPORT_CONTACT = "support [at] nosite.xyz";
 
 export const PUBLIC_TRUST_ROBOTS: Metadata["robots"] = {
   index: true,
@@ -163,9 +163,9 @@ export function PublicTrustPage({
           style={{ borderColor: "var(--glass-border-light)", color: "var(--text-tertiary)" }}
         >
           <span>NoSite Leads is public only for trust, support, and data-source information.</span>
-          <a className="font-medium" style={{ color: "var(--accent)" }} href={`mailto:${SUPPORT_EMAIL}`}>
-            {SUPPORT_EMAIL}
-          </a>
+          <span className="font-medium" style={{ color: "var(--accent)" }} aria-label="support at nosite dot xyz">
+            {SUPPORT_CONTACT}
+          </span>
         </footer>
       </div>
     </main>

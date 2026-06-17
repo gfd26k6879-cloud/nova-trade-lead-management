@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { PublicTrustPage, PUBLIC_TRUST_ROBOTS, SUPPORT_EMAIL } from "@/app/_components/public-trust-page";
+import { PublicTrustPage, PUBLIC_TRUST_ROBOTS, SUPPORT_CONTACT } from "@/app/_components/public-trust-page";
 
 export const metadata: Metadata = {
   title: "Support | NoSite Leads",
@@ -15,14 +15,14 @@ export default function SupportPage() {
       title="Support for accounts, corrections, removals, and demos"
       description="Support is handled manually during the invite-only launch. Use the contact path below for account issues, business-data corrections, data export questions, and demo ownership or removal requests."
       facts={[
-        { label: "Contact", value: SUPPORT_EMAIL },
+        { label: "Contact", value: SUPPORT_CONTACT },
         { label: "Best for", value: "Account help, corrections, removal requests, export questions, and demo concerns." },
         { label: "Launch mode", value: "Manual support for an invite-only workspace." },
       ]}
       sections={[
         {
           title: "Support contact",
-          body: `Email ${SUPPORT_EMAIL} for account support, correction requests, removal requests, retention and export questions, or demo page concerns.`,
+          body: `Email ${SUPPORT_CONTACT} for account support, correction requests, removal requests, retention and export questions, or demo page concerns.`,
         },
         {
           title: "Correction or removal path",

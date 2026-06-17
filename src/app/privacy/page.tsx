@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { PublicTrustPage, PUBLIC_TRUST_ROBOTS, SUPPORT_EMAIL } from "@/app/_components/public-trust-page";
+import { PublicTrustPage, PUBLIC_TRUST_ROBOTS, SUPPORT_CONTACT } from "@/app/_components/public-trust-page";
 
 export const metadata: Metadata = {
   title: "Privacy | NoSite Leads",
@@ -48,7 +48,7 @@ export default function PrivacyPage() {
         },
         {
           title: "Corrections and removal",
-          body: `Businesses can request correction or removal by emailing ${SUPPORT_EMAIL} with the business name, location, URL if available, and the requested change. Inaccurate lead details and unwanted demo references are reviewed and corrected or removed where appropriate.`,
+          body: `Businesses can request correction or removal by emailing ${SUPPORT_CONTACT} with the business name, location, URL if available, and the requested change. Inaccurate lead details and unwanted demo references are reviewed and corrected or removed where appropriate.`,
         },
       ]}
     />

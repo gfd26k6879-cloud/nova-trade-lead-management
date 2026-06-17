@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { PublicTrustPage, PUBLIC_TRUST_ROBOTS, SUPPORT_EMAIL } from "@/app/_components/public-trust-page";
+import { PublicTrustPage, PUBLIC_TRUST_ROBOTS, SUPPORT_CONTACT } from "@/app/_components/public-trust-page";
 
 export const metadata: Metadata = {
   title: "Terms | NoSite Leads",
@@ -46,7 +46,7 @@ export default function TermsPage() {
         },
         {
           title: "Support and disputes",
-          body: `Questions, correction requests, removal requests, and demo ownership concerns can be sent to ${SUPPORT_EMAIL}.`,
+          body: `Questions, correction requests, removal requests, and demo ownership concerns can be sent to ${SUPPORT_CONTACT}.`,
         },
       ]}
     />

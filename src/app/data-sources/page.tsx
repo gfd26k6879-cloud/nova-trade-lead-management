@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { PublicTrustPage, PUBLIC_TRUST_ROBOTS, SUPPORT_EMAIL } from "@/app/_components/public-trust-page";
+import { PublicTrustPage, PUBLIC_TRUST_ROBOTS, SUPPORT_CONTACT } from "@/app/_components/public-trust-page";
 
 export const metadata: Metadata = {
   title: "Data Sources | NoSite Leads",
@@ -39,7 +39,7 @@ export default function DataSourcesPage() {
         },
         {
           title: "Corrections and removals",
-          body: `Business owners and operators can request corrections, removals, export help, or demo review by emailing ${SUPPORT_EMAIL}.`,
+          body: `Business owners and operators can request corrections, removals, export help, or demo review by emailing ${SUPPORT_CONTACT}.`,
         },
         {
           title: "Demo ownership",

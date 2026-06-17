@@ -19,7 +19,7 @@ describe("public trust pages", () => {
     expect(privacy).toContain("official Google Places API only");
     expect(privacy).toContain("No Google review text");
     expect(privacy).toContain("Retention and export");
-    expect(privacy).toContain("support@nosite.xyz");
+    expect(privacy).toContain("support [at] nosite.xyz");
 
     expect(terms).toContain("Invite-only access");
     expect(terms).toContain("No automated outbound sending");
