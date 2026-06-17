@@ -65,7 +65,13 @@ Remediation validation:
 - Full local validation under Node 24 passed: `npx tsc --noEmit`, `npm run lint`, `npm test`, and `npm run build`.
 - Local production-mode smoke on `http://127.0.0.1:3001` passed for public trust/login rendering at desktop and mobile widths, protected-route unauthenticated redirects, deleted legacy batch route `404`, public trust page `200`s, robots posture, and worker/explore unauthenticated API behavior.
 - Local `/api/health` returned only coarse JSON, but its local status was `503` because the dependency check was unhealthy in this machine state; live health still needs post-deploy verification.
-- Authenticated rendered browser QA remains blocked until `E2E_STORAGE_STATE` or `E2E_SUPABASE_EMAIL`/`E2E_SUPABASE_PASSWORD` are configured and Playwright Chromium is available.
+- Production deploy `dpl_CDrrrd8C32nKzcT1WHd3U2jkY8jP` is ready and aliased to `https://www.nosite.xyz`.
+- Production unauthenticated smoke passed for coarse `/api/health` `200`, public trust page `200`s, protected-route redirects to `/login`, deleted legacy batch route `404`, and worker/explore unauthenticated API `401`.
+- Live rendered browser smoke passed for `/privacy`, `/terms`, `/support`, `/data-sources`, and `/login` at desktop and mobile widths with no detected horizontal overflow.
+- A live-only Cloudflare Email Obfuscation/CSP hydration issue was found and fixed by rendering the support contact as `support [at] nosite.xyz`; final live smoke confirmed no email-decode script injection and no literal email string.
+- Supabase migration `202606160001` was applied directly through the linked CLI and repaired as applied; the new enrichment status constraint and new indexes were verified, but historical migration drift remains and should be reconciled before future blanket `supabase db push` use.
+- Authenticated rendered browser QA remains blocked until `E2E_STORAGE_STATE` or `E2E_SUPABASE_EMAIL`/`E2E_SUPABASE_PASSWORD` are configured.
+- Cloudflare Managed robots content still prepends a broad `User-agent: *` / `Allow: /` block before the app's stricter invite-only robots rules; fixing that requires owner-level Cloudflare configuration outside this repo.
 
 ## Initial Verification Matrix (Pre-Remediation)
 

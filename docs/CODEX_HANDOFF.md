@@ -18,8 +18,8 @@ GitHub and Vercel deploy from the active repo. Do not continue work from the arc
 
 - GitHub repo: `https://github.com/Masihhedayati/lead-generation`
 - Production app: `https://www.nosite.xyz`
-- Latest deployed commit before this remediation batch: `59f8bf0bf75a`
-- Latest deployment ID at handoff: not re-verified in this local pass
+- Latest deployed commit at handoff: `9a05b43`
+- Latest deployment ID at handoff: `dpl_CDrrrd8C32nKzcT1WHd3U2jkY8jP`
 - Vercel project: `lead-generation`
 - Runtime: Next.js 16.2.6, React 19.2.6, Node 24.x on Vercel
 - Database: Supabase Postgres in production, SQLite locally when `DATABASE_URL` is not set
@@ -85,23 +85,29 @@ Local production-mode smoke:
 
 Production smoke checks after deploy:
 
-- Not yet re-run for this local remediation batch.
-- Required after deploy: `/api/health`, trust pages, protected redirects, deleted legacy worker route 404, admin/researcher authenticated smoke, Supabase migration/RLS/Vault/cron state, and robots posture.
+- `https://www.nosite.xyz/api/health` returned `{"status":"ok","checkedAt":"..."}` with no dependency details.
+- `/privacy`, `/terms`, `/support`, `/data-sources`, and `/login` rendered live at desktop and mobile widths with no detected horizontal overflow.
+- The live trust pages no longer trigger Cloudflare Email Obfuscation injection or React hydration errors; support contact is rendered as `support [at] nosite.xyz`.
+- `/dashboard`, `/coverage`, `/explore`, `/leads`, `/quality`, `/team`, `/statistics`, `/users`, and `/scheduler` all landed on `/login` when unauthenticated.
+- The deleted legacy batch worker route returned `404`.
+- Unauthenticated worker and explore API probes returned `401`.
+- Production deployment is ready and aliased to `https://www.nosite.xyz`, `https://nosite.xyz`, and existing Vercel aliases.
+- Still not performed: authenticated admin/researcher browser smoke, because `E2E_STORAGE_STATE` and `E2E_SUPABASE_EMAIL`/`E2E_SUPABASE_PASSWORD` were unavailable.
+- Still owner-level follow-up: Cloudflare Managed robots content still prepends a broad `User-agent: *` / `Allow: /` block before the app's stricter invite-only robots rules.
 
 ## Important Caveats
 
 - `npm audit --omit=dev` still reports a moderate advisory from Next's bundled PostCSS under `next@16.2.6`. npm suggests a breaking downgrade to `next@9.3.3`, so it was intentionally not applied.
-- Direct `supabase db push` was not run in the June 16 pass. Apply `supabase/migrations/202606160001_launch_readiness_reliability.sql` before live smoke.
-- Supabase migrations should still be applied through the normal linked Supabase workflow when available.
+- `supabase/migrations/202606160001_launch_readiness_reliability.sql` was applied directly through `supabase db query --linked --file ...`, and `supabase migration repair --linked --status applied 202606160001` succeeded.
+- Supabase migration history is still broadly drifted from prior remote repairs, so do not run a blanket `supabase db push` without first reconciling local and remote migration history.
 
 ## Next Best Tasks
 
-1. Link this repo to the production Supabase project locally, then run migration status/push:
+1. Reconcile Supabase migration history before the next schema migration:
 
    ```bash
-   supabase link --project-ref <production-project-ref>
-   supabase db push --dry-run
-   supabase db push
+   supabase migration list --linked
+   supabase db pull
    ```
 
 2. Add local E2E credentials or storage state so authenticated browser QA can actually run:
