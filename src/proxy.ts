@@ -110,6 +110,7 @@ function createSecurityContext(): SecurityContext {
   const isDev = process.env.NODE_ENV === "development";
   const googleMapsHosts = ["https://maps.googleapis.com", "https://maps.gstatic.com"];
   const scriptSrc = [`'self'`, `'nonce-${nonce}'`, "'strict-dynamic'", ...googleMapsHosts];
+  const scriptSrcElem = [`'self'`, `'nonce-${nonce}'`, ...googleMapsHosts];
 
   if (isDev) {
     scriptSrc.push("'unsafe-eval'");
@@ -118,6 +119,7 @@ function createSecurityContext(): SecurityContext {
   const directives = [
     "default-src 'self'",
     `script-src ${scriptSrc.join(" ")}`,
+    `script-src-elem ${scriptSrcElem.join(" ")}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",

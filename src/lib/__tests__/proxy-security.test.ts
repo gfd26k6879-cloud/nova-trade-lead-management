@@ -31,6 +31,7 @@ describe("proxy security headers", () => {
     const csp = response.headers.get("Content-Security-Policy") ?? "";
 
     expect(csp).toMatch(/script-src[^;]*'nonce-[^']+'[^;]*'strict-dynamic'/);
+    expect(csp).toMatch(/script-src-elem[^;]*'self'[^;]*'nonce-[^']+'/);
     expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
     expect(csp).not.toMatch(/script-src[^;]*'unsafe-eval'/);
     expect(csp).toContain("frame-ancestors 'none'");
@@ -80,6 +81,7 @@ describe("proxy security headers", () => {
     const csp = response.headers.get("Content-Security-Policy") ?? "";
 
     expect(csp).toMatch(/script-src[^;]*https:\/\/maps\.googleapis\.com[^;]*https:\/\/maps\.gstatic\.com/);
+    expect(csp).toMatch(/script-src-elem[^;]*https:\/\/maps\.googleapis\.com[^;]*https:\/\/maps\.gstatic\.com/);
     expect(csp).toMatch(/connect-src[^;]*https:\/\/maps\.googleapis\.com[^;]*https:\/\/maps\.gstatic\.com/);
     expect(csp).toContain("img-src 'self' data: blob: https:");
     expect(csp).not.toContain("places.googleapis.com");
