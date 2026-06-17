@@ -425,18 +425,18 @@ export function UsersClient({
           </table>
         </div>
 
-        <div className="mt-5 grid gap-3 lg:hidden">
+        <div className="mt-5 grid min-w-0 gap-3 lg:hidden">
           {filteredUsers.map((user) => (
             <article
               key={user.user_id}
-              className="rounded-xl border p-4"
+              className="min-w-0 overflow-hidden rounded-xl border p-4"
               style={{
                 background: selectedUser?.user_id === user.user_id ? "var(--selection-bg)" : "var(--surface-card)",
                 borderColor: "var(--surface-card-border)",
               }}
             >
-              <div className="flex items-start justify-between gap-3">
-                <button type="button" className="flex min-w-0 items-center gap-3 text-left" onClick={() => setSelectedUserId(user.user_id)}>
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => setSelectedUserId(user.user_id)}>
                   <UserAvatar user={user} />
                   <span className="min-w-0">
                     <span className="block truncate font-semibold" style={{ color: "var(--text-primary)" }}>{displayNameFor(user)}</span>
@@ -445,19 +445,19 @@ export function UsersClient({
                 </button>
                 <StatusBadge status={user.status} />
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2">
                 <RoleControl user={user} pending={pending} onRole={handleRole} />
                 <TeamSummary user={user} />
-                <div className="sm:col-span-2">
+                <div className="min-w-0 sm:col-span-2">
                   <TerritorySummary user={user} access={marketAccess[user.user_id] ?? []} />
                 </div>
               </div>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button type="button" className="btn-glass flex-1 text-xs" disabled={pending} onClick={() => handlePasswordReset(user)}>Reset</button>
-                <button type="button" className="btn-glass flex-1 text-xs" disabled={pending} onClick={() => handleStatus(user)}>
+              <div className="mt-4 flex min-w-0 flex-wrap gap-2">
+                <button type="button" className="btn-glass min-w-0 flex-1 text-xs" disabled={pending} onClick={() => handlePasswordReset(user)}>Reset</button>
+                <button type="button" className="btn-glass min-w-0 flex-1 text-xs" disabled={pending} onClick={() => handleStatus(user)}>
                   {user.status === "active" ? "Disable" : "Enable"}
                 </button>
-                <button type="button" className="btn-glass flex-1 text-xs" style={{ color: "var(--danger-text)" }} disabled={pending} onClick={() => setRemoveCandidate(user)}>
+                <button type="button" className="btn-glass min-w-0 flex-1 text-xs" style={{ color: "var(--danger-text)" }} disabled={pending} onClick={() => setRemoveCandidate(user)}>
                   Remove
                 </button>
               </div>
@@ -666,7 +666,7 @@ function RoleControl({ user, pending, onRole }: { user: AppUser; pending: boolea
       value={user.role}
       aria-label={`Role for ${user.email}`}
       onChange={(event) => onRole(user.user_id, event.target.value as AppRole)}
-      className="glass-select w-full min-w-[8rem] text-xs"
+      className="glass-select w-full min-w-0 max-w-full text-xs"
       disabled={pending}
     >
       <option value="researcher">Researcher</option>
@@ -678,8 +678,8 @@ function RoleControl({ user, pending, onRole }: { user: AppUser; pending: boolea
 function TeamSummary({ user }: { user: AppUser }) {
   const leadName = user.team_lead_display_name || user.team_lead_email;
   return (
-    <div className="space-y-1 text-xs" style={{ color: "var(--text-secondary)" }}>
-      <div className="font-medium" style={{ color: "var(--text-primary)" }}>
+    <div className="min-w-0 space-y-1 text-xs" style={{ color: "var(--text-secondary)" }}>
+      <div className="truncate font-medium" style={{ color: "var(--text-primary)" }}>
         {user.is_team_lead ? "Team lead" : leadName ? `Reports to ${leadName}` : "No team lead"}
       </div>
       <div className="truncate" title={user.team_label ?? undefined} style={{ color: "var(--text-tertiary)" }}>

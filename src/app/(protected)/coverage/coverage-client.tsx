@@ -636,19 +636,19 @@ export function CoverageClient({
           />
         ) : run ? (
           <>
-            <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_2fr]">
-              <label className="flex flex-col gap-1">
+            <div className="mt-5 grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+              <label className="flex min-w-0 flex-col gap-1">
                 <span className="section-label">Selected discovery item</span>
-                <select className="glass-select" value={run.id} onChange={(event) => handleRunSelect(event.target.value)}>
+                <select className="glass-select w-full min-w-0 max-w-full" value={run.id} onChange={(event) => handleRunSelect(event.target.value)}>
                   {!selectedDiscoveryItem && <option value={run.id}>{run.name ?? `Discovery item ${run.id.slice(0, 8)}`} - {formatLabel(run.status)}</option>}
                   {discoveryItems.map((item) => (
                     <option key={item.id} value={item.id}>{formatDiscoveryItemLabel(item)}</option>
                   ))}
                 </select>
               </label>
-              <div className="rounded-xl p-3 text-sm" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>
-                <p className="font-semibold" style={{ color: "var(--text-primary)" }}>{selectedDiscoveryItem?.name ?? run.name ?? "Selected discovery item"}</p>
-                <p className="mt-1 text-xs">{selectedDiscoveryItem?.scopeLabel ?? run.scope_label ?? "Selected discovery item"} · Counts below are scoped to this discovery item.</p>
+              <div className="min-w-0 overflow-hidden rounded-xl p-3 text-sm" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>
+                <p className="break-words font-semibold" style={{ color: "var(--text-primary)" }}>{selectedDiscoveryItem?.name ?? run.name ?? "Selected discovery item"}</p>
+                <p className="mt-1 break-words text-xs">{selectedDiscoveryItem?.scopeLabel ?? run.scope_label ?? "Selected discovery item"} · Counts below are scoped to this discovery item.</p>
               </div>
             </div>
             {(discoveryItemsStatus === "error" || discoveryItemsStatus === "timeout") && (
@@ -958,7 +958,7 @@ function formatDiscoveryItemLabel(item: DiscoveryItem): string {
 }
 
 function Select({ label, value, onChange, options, labels = {} }: { label: string; value: string; onChange: (value: string) => void; options: string[]; labels?: Record<string, string> }) {
-  return <label className="flex flex-col gap-1"><span className="section-label">{label}</span><select className="glass-select" value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{labels[option] ?? formatLabel(option)}</option>)}</select></label>;
+  return <label className="flex min-w-0 flex-col gap-1"><span className="section-label">{label}</span><select className="glass-select w-full min-w-0 max-w-full" value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{labels[option] ?? formatLabel(option)}</option>)}</select></label>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

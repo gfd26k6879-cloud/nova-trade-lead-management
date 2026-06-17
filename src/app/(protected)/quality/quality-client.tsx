@@ -317,11 +317,11 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
           </div>
         )}
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-4 grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <select
             aria-label="Country filter"
             title="Limit quality leads to one country. Changing this clears the market and cell."
-            className="glass-select"
+            className="glass-select w-full min-w-0 max-w-full"
             value={filters.countryCode ?? ""}
             onChange={(event) => updateFilters({ countryCode: event.target.value || null, marketId: null, locationCellId: null, denverOnly: null })}
           >
@@ -330,7 +330,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
           <select
             aria-label="Market filter"
             title="Limit quality leads to a saved market, such as London, Ontario."
-            className="glass-select"
+            className="glass-select w-full min-w-0 max-w-full"
             value={filters.marketId ?? ""}
             onChange={(event) => {
               const market = locationMarkets.find((item) => item.id === event.target.value);
@@ -343,7 +343,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
           <select
             aria-label="Location cell filter"
             title="Limit quality leads to a specific postal, postcode, or area cell inside the selected market."
-            className="glass-select"
+            className="glass-select w-full min-w-0 max-w-full"
             value={filters.locationCellId ?? ""}
             disabled={!filters.marketId}
             onChange={(event) => updateFilters({ locationCellId: event.target.value || null, denverOnly: null })}
@@ -352,7 +352,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
             {activeCells.map((cell) => <option key={cell.id} value={cell.id}>{cell.cell_label}</option>)}
           </select>
           <form
-            className="flex gap-2"
+            className="flex w-full min-w-0 gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               updateFilters({ city: city.trim() || null, zip: zip.trim() || null, denverOnly: null });
@@ -364,34 +364,34 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
           </form>
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-3">
+        <div className="mt-4 flex min-w-0 flex-wrap items-center gap-3">
           <form
-            className="flex gap-2"
+            className="flex min-w-0 flex-1 basis-full gap-2 sm:basis-auto"
             onSubmit={(event) => {
               event.preventDefault();
               updateFilter("search", search);
             }}
           >
-            <input className="glass-input min-w-60" placeholder="Search name, phone, area..." title="Search within the current quality scope." value={search} onChange={(event) => setSearch(event.target.value)} />
+            <input className="glass-input min-w-0 flex-1" placeholder="Search name, phone, area..." title="Search within the current quality scope." value={search} onChange={(event) => setSearch(event.target.value)} />
             <button type="submit" className="btn-glass text-xs" title="Apply text search to the quality list.">Search</button>
           </form>
-          <select aria-label="Quality bucket filter" title="Filter by the lead's current sales-readiness bucket." className="glass-select" value={filters.qualityBucket ?? ""} onChange={(event) => updateFilter("qualityBucket", event.target.value)}>
+          <select aria-label="Quality bucket filter" title="Filter by the lead's current sales-readiness bucket." className="glass-select min-w-0 max-w-full" value={filters.qualityBucket ?? ""} onChange={(event) => updateFilter("qualityBucket", event.target.value)}>
             {BUCKET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <select aria-label="Business type filter" title="Filter by business category, such as plumbing or dental." className="glass-select" value={filters.businessType ?? ""} onChange={(event) => updateFilter("businessType", event.target.value)}>
+          <select aria-label="Business type filter" title="Filter by business category, such as plumbing or dental." className="glass-select min-w-0 max-w-full" value={filters.businessType ?? ""} onChange={(event) => updateFilter("businessType", event.target.value)}>
             <option value="">All business types</option>
             {businessTypeCounts.map((type) => <option key={type.id} value={type.id}>{type.label} ({type.active})</option>)}
           </select>
-          <select aria-label="Recommended offer filter" title="Filter by the offer the system recommends pitching." className="glass-select" value={filters.recommendedOffer ?? ""} onChange={(event) => updateFilter("recommendedOffer", event.target.value)}>
+          <select aria-label="Recommended offer filter" title="Filter by the offer the system recommends pitching." className="glass-select min-w-0 max-w-full" value={filters.recommendedOffer ?? ""} onChange={(event) => updateFilter("recommendedOffer", event.target.value)}>
             {OFFER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <select aria-label="Phone verification filter" title="Filter by whether the phone number has been checked." className="glass-select" value={filters.phoneVerificationStatus ?? ""} onChange={(event) => updateFilter("phoneVerificationStatus", event.target.value)}>
+          <select aria-label="Phone verification filter" title="Filter by whether the phone number has been checked." className="glass-select min-w-0 max-w-full" value={filters.phoneVerificationStatus ?? ""} onChange={(event) => updateFilter("phoneVerificationStatus", event.target.value)}>
             {PHONE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <select aria-label="AI verification filter" title="Filter by completed AI outcome. Leads waiting in the AI queue still have no result yet." className="glass-select" value={filters.aiVerificationStatus ?? ""} onChange={(event) => updateFilter("aiVerificationStatus", event.target.value)}>
+          <select aria-label="AI verification filter" title="Filter by completed AI outcome. Leads waiting in the AI queue still have no result yet." className="glass-select min-w-0 max-w-full" value={filters.aiVerificationStatus ?? ""} onChange={(event) => updateFilter("aiVerificationStatus", event.target.value)}>
             {AI_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <select aria-label="Enrichment filter" title="Filter by whether Google Place Details enrichment has completed." className="glass-select" value={filters.enrichmentStatus ?? ""} onChange={(event) => updateFilter("enrichmentStatus", event.target.value)}>
+          <select aria-label="Enrichment filter" title="Filter by whether Google Place Details enrichment has completed." className="glass-select min-w-0 max-w-full" value={filters.enrichmentStatus ?? ""} onChange={(event) => updateFilter("enrichmentStatus", event.target.value)}>
             {ENRICHMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </div>

@@ -549,6 +549,19 @@ body {
   transform: translateY(0);
 }
 
+@media (max-width: 640px) {
+  .help-tip__bubble--right {
+    left: auto;
+    right: 0;
+    transform: translateY(0.2rem);
+  }
+
+  .help-tip:hover .help-tip__bubble--right,
+  .help-tip:focus .help-tip__bubble--right {
+    transform: translateY(0);
+  }
+}
+
 /* ---- Accent link ---- */
 .link-accent {
   color: var(--accent);
