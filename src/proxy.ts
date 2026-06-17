@@ -164,11 +164,22 @@ function getRequestHeadersWithSecurityHeaders(request: NextRequest, security: Se
 
 function withProxySecurityHeaders<T extends { headers: Headers }>(response: T, security: SecurityContext): T {
   response.headers.set("Content-Security-Policy", security.contentSecurityPolicy);
+  appendNoTransformDirective(response.headers);
   response.headers.set("X-Frame-Options", "DENY");
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(self)");
   return response;
+}
+
+function appendNoTransformDirective(headers: Headers): void {
+  const cacheControl = headers.get("Cache-Control");
+  if (!cacheControl) {
+    headers.set("Cache-Control", "no-transform");
+    return;
+  }
+  if (cacheControl.toLowerCase().split(",").some((directive) => directive.trim() === "no-transform")) return;
+  headers.set("Cache-Control", `${cacheControl}, no-transform`);
 }
 
 function isStaleSupabaseAuthError(error: unknown): boolean {
