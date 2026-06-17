@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: May 15, 2026
+Last updated: June 16, 2026
 
 ## Active Workspace
 
@@ -18,11 +18,12 @@ GitHub and Vercel deploy from the active repo. Do not continue work from the arc
 
 - GitHub repo: `https://github.com/Masihhedayati/lead-generation`
 - Production app: `https://www.nosite.xyz`
-- Latest deployed commit at handoff: `700ffcda021f1ca1c9b919eda4fe1d85c53d83aa`
-- Latest deployment ID at handoff: `dpl_HusAKCbXQqVSumyTAJtXUbT59onV`
+- Latest deployed commit before this remediation batch: `59f8bf0bf75a`
+- Latest deployment ID at handoff: not re-verified in this local pass
 - Vercel project: `lead-generation`
 - Runtime: Next.js 16.2.6, React 19.2.6, Node 24.x on Vercel
 - Database: Supabase Postgres in production, SQLite locally when `DATABASE_URL` is not set
+- Launch posture: invite-only public. The app stays private/admin-invited; `/privacy`, `/terms`, `/support`, `/data-sources`, and published demo links are public.
 
 ## Major Work Completed
 
@@ -45,10 +46,14 @@ GitHub and Vercel deploy from the active repo. Do not continue work from the arc
 - Added CSV formula-injection protection.
 - Added route aliases for `/discover`, `/run-monitor`, `/monitor`, and `/stats`.
 - Archived the stale local repo and documented the active source of truth.
+- Removed the legacy batch worker route so individual scheduler endpoints are the only worker execution API.
+- Added enrichment lease/retry/error terminal state, atomic lead upsert metadata, and failed-run terminal status.
+- Added admin launch readiness checklist, fulfillment pressure badge, public trust pages, demo draft/publish/unpublish/revoke/view lifecycle, and Statistics value-proof reporting.
+- Added shared dialog focus management and keyboard-safe Kanban move controls.
 
 ## Verification From Last Remediation Batch
 
-These passed locally before deploy:
+These passed locally under Node 24 in the June 16 launch-readiness remediation:
 
 ```bash
 npm run lint
@@ -56,32 +61,37 @@ npm run test
 npm run build
 ```
 
-Test count at handoff:
+Also passed:
 
 ```text
-30 test files passed
-149 tests passed
+npx tsc --noEmit --pretty false
+85 test files passed
+405 tests passed
 ```
 
 E2E status:
 
 ```text
-npm run test:e2e
-19 skipped because local E2E auth credentials were not configured.
+Authenticated rendered QA is still blocked until E2E_STORAGE_STATE or E2E_SUPABASE_EMAIL/E2E_SUPABASE_PASSWORD are configured.
 ```
+
+Local production-mode smoke:
+
+- `next start` passed on `http://127.0.0.1:3001`.
+- `/privacy`, `/terms`, `/support`, `/data-sources`, and `/login` rendered at desktop and mobile widths with no detected horizontal overflow.
+- `/dashboard`, `/coverage`, `/explore`, `/leads`, `/quality`, `/team`, `/statistics`, `/users`, and `/scheduler` all landed on `/login` when unauthenticated.
+- The deleted legacy batch worker route returned `404`.
+- `/api/health` returned only coarse JSON, but local status was `503` because the local dependency check was unhealthy.
 
 Production smoke checks after deploy:
 
-- `/api/health` returned `200`.
-- `/discover` redirected to `/dashboard`.
-- `/run-monitor` redirected to `/coverage`.
-- `/scheduler` redirected to login when unauthenticated.
-- `/forgot-password` loaded.
+- Not yet re-run for this local remediation batch.
+- Required after deploy: `/api/health`, trust pages, protected redirects, deleted legacy worker route 404, admin/researcher authenticated smoke, Supabase migration/RLS/Vault/cron state, and robots posture.
 
 ## Important Caveats
 
 - `npm audit --omit=dev` still reports a moderate advisory from Next's bundled PostCSS under `next@16.2.6`. npm suggests a breaking downgrade to `next@9.3.3`, so it was intentionally not applied.
-- Direct `supabase db push` was not possible from the local shell because the active workspace was not Supabase-linked and the pulled Vercel `DATABASE_URL` was empty. The migration is committed, and the app also has a runtime additive guard for the new artifact retry columns/indexes.
+- Direct `supabase db push` was not run in the June 16 pass. Apply `supabase/migrations/202606160001_launch_readiness_reliability.sql` before live smoke.
 - Supabase migrations should still be applied through the normal linked Supabase workflow when available.
 
 ## Next Best Tasks
@@ -94,9 +104,10 @@ Production smoke checks after deploy:
    supabase db push
    ```
 
-2. Add local E2E credentials so Playwright tests can actually run:
+2. Add local E2E credentials or storage state so authenticated browser QA can actually run:
 
    ```bash
+   E2E_STORAGE_STATE=.auth/admin.json
    E2E_SUPABASE_EMAIL=<admin email>
    E2E_SUPABASE_PASSWORD=<password>
    ```
@@ -105,7 +116,8 @@ Production smoke checks after deploy:
    - worker toggles display correctly,
    - AI verification queue is draining,
    - worker auth failures, if any, show clear messages,
-   - score recompute repairs AI-found usable websites out of no-site queues.
+   - score recompute repairs AI-found usable websites out of no-site queues,
+   - the legacy batch worker route returns 404 in production.
 
 4. Continue improving lead quality:
    - review several AI-verified leads manually,

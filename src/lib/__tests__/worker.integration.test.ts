@@ -16,6 +16,7 @@ vi.mock("@/lib/db/index", () => {
     getDb: () => testDb,
     generateId: () => crypto.randomUUID(),
     nowISO: () => new Date().toISOString(),
+    withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
   };
 });
 
@@ -138,6 +139,23 @@ describe("crawl worker integration", () => {
     expect(result.leadsFound).toBe(0);
 
     const count = testDb.prepare("SELECT COUNT(*) as c FROM leads WHERE place_id = 'dup-place'").get() as { c: number };
+    expect(count.c).toBe(1);
+  });
+
+  it("counts same-response duplicate place ids from atomic upsert results", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestUnit(testDb, { runId });
+
+    const first = makePlaceResult({ id: "places/same-place", displayName: { text: "Original Name" } });
+    const second = makePlaceResult({ id: "places/same-place", displayName: { text: "Updated Name" } });
+    mockTextSearch.mockResolvedValueOnce(mockTextSearchResponse([first, second]));
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("processed");
+    expect(result.leadsFound).toBe(1);
+    expect(result.leadsSkipped).toBe(1);
+    const count = testDb.prepare("SELECT COUNT(*) as c FROM leads WHERE place_id = 'same-place'").get() as { c: number };
     expect(count.c).toBe(1);
   });
 
@@ -434,6 +452,30 @@ describe("crawl worker integration", () => {
     expect(usage.success).toBe(0);
     expect(usage.billable_units).toBe(1);
     expect(String(usage.metadata)).toContain("INVALID_ARGUMENT");
+  });
+
+  it("marks a run with only failed units as error instead of done", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestUnit(testDb, { runId });
+    testDb.prepare("UPDATE crawl_units SET status = 'failed' WHERE id = 'unit-1'").run();
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("error");
+    const run = testDb.prepare("SELECT status FROM crawl_runs WHERE id = ?").get(runId) as { status: string };
+    expect(run.status).toBe("error");
+  });
+
+  it("keeps clean all-done runs terminalizing as done", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestUnit(testDb, { runId });
+    testDb.prepare("UPDATE crawl_units SET status = 'done' WHERE id = 'unit-1'").run();
+
+    const result = await processNextUnit();
+
+    expect(result.status).toBe("done");
+    const run = testDb.prepare("SELECT status FROM crawl_runs WHERE id = ?").get(runId) as { status: string };
+    expect(run.status).toBe("done");
   });
 
   it("keeps worker flow unchanged with planner-selected units", async () => {

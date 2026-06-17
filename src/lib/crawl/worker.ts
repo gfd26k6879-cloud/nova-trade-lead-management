@@ -20,7 +20,6 @@ import {
   blockCrawlRun,
   getCrawlProgress,
   upsertLead,
-  leadExists,
   getSettings,
   updateUnitPageToken,
   recordUnitPageFetch,
@@ -75,8 +74,9 @@ export async function processNextUnit(): Promise<ProcessResult> {
   if (!unit) {
     const progress = await getCrawlProgress(run.id);
     if (progress.pending === 0 && progress.running === 0) {
-      await updateCrawlRunStatus(run.id, "done");
-      return { status: "done", progress };
+      const terminalStatus = progress.failed > 0 ? "error" : "done";
+      await updateCrawlRunStatus(run.id, terminalStatus);
+      return { status: terminalStatus, progress };
     }
     return { status: "idle", progress };
   }
@@ -201,14 +201,6 @@ export async function processNextUnit(): Promise<ProcessResult> {
           continue;
         }
 
-        const existed = await leadExists(placeId);
-        if (existed) {
-          leadsSkipped++;
-          pageDuplicatePlaces++;
-        } else {
-          pageNewPlaces++;
-        }
-
         const websiteStatus = classifyWebsite(
           place.websiteUri,
           settings.social_hosts.length > 0 ? settings.social_hosts : undefined,
@@ -238,7 +230,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
           Object.keys(settings.niche_weights).length > 0 ? settings.niche_weights : undefined,
         );
 
-        const leadId = await upsertLead({
+        const { id: leadId, created } = await upsertLead({
           place_id: placeId,
           name: place.displayName?.text ?? null,
           address: place.formattedAddress ?? null,
@@ -265,6 +257,13 @@ export async function processNextUnit(): Promise<ProcessResult> {
           locality: unit.city,
           postal_code: unit.zip,
         });
+        if (created) {
+          leadsFound++;
+          pageNewPlaces++;
+        } else {
+          leadsSkipped++;
+          pageDuplicatePlaces++;
+        }
         if (settings.ai_enabled && settings.ai_auto_verify_enabled && settings.ai_verify_after_discovery) {
           try {
             await enqueueAiVerificationForLead(leadId, "places_discovery", { settings });
@@ -275,7 +274,6 @@ export async function processNextUnit(): Promise<ProcessResult> {
             });
           }
         }
-        if (!existed) leadsFound++;
       }
 
       pagesFetched++;

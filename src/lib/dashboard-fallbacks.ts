@@ -3,6 +3,7 @@ import {
   buildSchedulerHealthFallback,
   type AdminFulfillmentSummary,
   type DiscoveryItemSummary,
+  type LaunchReadinessSummary,
   type StatisticsSummary,
   type TeamBoardSummary,
 } from "@/lib/db/queries";
@@ -62,6 +63,7 @@ export interface DashboardStatsResult {
     total: number;
   };
   schedulerHealth: ReturnType<typeof buildSchedulerHealthFallback>;
+  launchReadiness: LaunchReadinessSummary;
   googleDiscoveryDefaults: {
     discoveryMode: DiscoveryMode;
     paginationPolicy: PaginationPolicy;
@@ -128,10 +130,20 @@ export function emptyDashboardStats(reason = "Dashboard stats are temporarily un
       total: 0,
     },
     schedulerHealth: buildSchedulerHealthFallback(reason),
+    launchReadiness: emptyLaunchReadinessSummary(),
     googleDiscoveryDefaults: {
       discoveryMode: "coverage_probe",
       paginationPolicy: "auto_yield_based",
     },
+  };
+}
+
+function emptyLaunchReadinessSummary(): LaunchReadinessSummary {
+  return {
+    readyCount: 0,
+    totalCount: 0,
+    blockers: 0,
+    items: [],
   };
 }
 
@@ -186,6 +198,21 @@ export function emptyStatisticsSummary(): StatisticsSummary {
       costPerQualifiedLead: null,
       costPerContactedLead: null,
       costPerMeeting: null,
+    },
+    valueProof: {
+      qualifiedNoSiteLeads: 0,
+      contactableLeads: 0,
+      costPerQualifiedLead: null,
+      demosPublished: 0,
+      demoViews: 0,
+      demoToMeetingRate: 0,
+      meetings: 0,
+      wins: 0,
+      losses: 0,
+      blockedOrFailureRate: 0,
+      blockedRuns: 0,
+      failedUnits: 0,
+      totalUnits: 0,
     },
     ai: {
       cost: 0,

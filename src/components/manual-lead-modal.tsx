@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createManualLeadAction } from "@/lib/leads/actions";
 import { BUSINESS_TYPE_OPTIONS } from "@/lib/business-types";
+import { useDialogFocus } from "@/components/use-dialog-focus";
 
 interface Props {
   open: boolean;
@@ -19,6 +20,10 @@ const WEBSITE_STATUS_OPTIONS = [
 
 export function ManualLeadModal({ open, onClose }: Props) {
   const router = useRouter();
+  const dialogRef = useRef<HTMLFormElement>(null);
+  const initialFocusRef = useRef<HTMLInputElement>(null);
+  const titleId = useId();
+  const descriptionId = useId();
   const [name, setName] = useState("");
   const [businessType, setBusinessType] = useState<string>(BUSINESS_TYPE_OPTIONS[0]?.id ?? "local_services");
   const [phone, setPhone] = useState("");
@@ -30,6 +35,13 @@ export function ManualLeadModal({ open, onClose }: Props) {
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useDialogFocus({
+    open,
+    dialogRef,
+    initialFocusRef,
+    onClose,
+  });
 
   if (!open) return null;
 
@@ -79,17 +91,20 @@ export function ManualLeadModal({ open, onClose }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4 py-8">
       <form
+        ref={dialogRef}
         onSubmit={createLead}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="manual-lead-title"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        tabIndex={-1}
         className="glass-heavy max-h-[calc(100vh-4rem)] w-full max-w-3xl overflow-y-auto rounded-2xl p-6 shadow-2xl"
         style={{ border: "1px solid rgba(255,255,255,0.55)" }}
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 id="manual-lead-title" className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>Add Lead</h2>
-            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+            <h2 id={titleId} className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>Add Lead</h2>
+            <p id={descriptionId} className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
               Create a manual candidate, then review, claim, archive, verify, or log outreach from the detail page.
             </p>
           </div>
@@ -107,7 +122,7 @@ export function ManualLeadModal({ open, onClose }: Props) {
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           <label htmlFor="manual-lead-name" className="flex flex-col gap-1 sm:col-span-2">
             <span className="section-label">Business name</span>
-            <input id="manual-lead-name" name="manualLeadName" className="glass-input" value={name} onChange={(event) => setName(event.target.value)} required maxLength={200} autoFocus />
+            <input ref={initialFocusRef} id="manual-lead-name" name="manualLeadName" className="glass-input" value={name} onChange={(event) => setName(event.target.value)} required maxLength={200} />
           </label>
           <label htmlFor="manual-lead-business-type" className="flex flex-col gap-1">
             <span className="section-label">Business type</span>

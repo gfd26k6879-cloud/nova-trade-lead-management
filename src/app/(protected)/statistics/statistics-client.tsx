@@ -90,6 +90,28 @@ export function StatisticsClient({ summary }: { summary: StatisticsSummary }) {
         <MetricCard label="Meetings" value={summary.kpis.meetings} />
       </section>
 
+      <section className="glass rounded-2xl p-6">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="section-label">Value Proof</h3>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              Launch-facing quality, demo, conversion, and failure signals.
+            </p>
+          </div>
+          <Link href="/leads" className="btn-glass text-sm">Open Leads</Link>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <MetricCard label="Qualified No-Site Leads" value={summary.valueProof.qualifiedNoSiteLeads} />
+          <MetricCard label="Contactable Leads" value={summary.valueProof.contactableLeads} />
+          <MetricCard label="Cost / Qualified" value={formatCurrencyNullable(summary.valueProof.costPerQualifiedLead)} />
+          <MetricCard label="Demos Published" value={summary.valueProof.demosPublished} sub={`${summary.valueProof.demoViews} views`} />
+          <MetricCard label="Demo to Meeting" value={formatPercent(summary.valueProof.demoToMeetingRate)} />
+          <MetricCard label="Meetings" value={summary.valueProof.meetings} />
+          <MetricCard label="Wins / Losses" value={`${summary.valueProof.wins} / ${summary.valueProof.losses}`} />
+          <MetricCard label="Blocked / Failed" value={formatPercent(summary.valueProof.blockedOrFailureRate)} sub={`${summary.valueProof.failedUnits} failed units`} />
+        </div>
+      </section>
+
       <section className="grid gap-4 lg:grid-cols-5">
         <MetricCard label="AI Calls" value={summary.ai.calls} sub="model calls in range" />
         <MetricCard label="AI Verifications" value={summary.ai.verifications} sub={`${summary.ai.cachedResults} cache hits`} />
@@ -297,6 +319,10 @@ function QualityValuePanel({ title, rows, valueLabel }: { title: string; rows: A
 
 function formatCurrency(value: number): string {
   return `$${Math.round(value).toLocaleString()}`;
+}
+
+function formatCurrencyNullable(value: number | null): string {
+  return value === null ? "n/a" : `$${value.toLocaleString()}`;
 }
 
 function formatPercent(value: number): string {

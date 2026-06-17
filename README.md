@@ -4,20 +4,20 @@ For the fastest complete system map, use `docs/ULTRA_SYSTEM_ATLAS.md`. For produ
 
 **Source of truth:** GitHub and Vercel deploy from `/Users/stevmq/lead-generation`. Do not use similarly named local folders for application changes unless they have first been reconciled into this Git repo.
 
-Private single-user lead discovery and outreach CRM (Customer Relationship Management) for website-sales side hustle operations. Discovers local businesses with weak or missing websites via Google Places API (Application Programming Interface), scores and prioritizes them, and provides outreach tools to convert leads.
+Private invite-only lead discovery and outreach CRM (Customer Relationship Management) for website-sales operations. Discovers local businesses with weak or missing websites via the official Google Places API (Application Programming Interface), scores and prioritizes them, and provides manual outreach, quality review, fulfillment, demo, and team-accountability tools.
 
 ## Architecture
 
 ```
 Next.js App Router (TypeScript)
-??? Supabase Postgres in production, SQLite locally without DATABASE_URL
-├── Google Places API (New) — lead discovery & enrichment
-├── Server Actions — mutations (crawl, leads, settings)
-├── API Routes — crawl polling, CSV export, health check
-└── Liquid Glass UI — Tailwind CSS custom theme
++-- Supabase Postgres in production, SQLite locally without DATABASE_URL
++-- Google Places API (New) - lead discovery & enrichment
++-- Server Actions - mutations (crawl, leads, settings)
++-- API Routes - worker endpoints, CSV export, health check
+`-- Liquid Glass UI - Tailwind CSS custom theme
 ```
 
-**Data flow:** Dashboard starts a crawl run -> sequential worker processes zip+category units -> Places API text search -> classify website -> compute score -> upsert lead -> UI displays results.
+**Data flow:** Dashboard or scheduler starts a crawl run -> worker leases one unit -> Places API text search -> classify website -> compute score -> atomic lead upsert -> enrichment worker leases qualifying leads -> UI displays quality, outreach, and fulfillment state.
 
 ## Tech Stack
 
@@ -37,14 +37,27 @@ src/
 │   ├── (protected)/          # Auth-gated routes
 │   │   ├── dashboard/        # Crawl controls, stats, metrics
 │   │   ├── coverage/         # Zip-by-zip crawl progress
+│   │   ├── explore/          # Map/list exploration
 │   │   ├── leads/            # Leads table + detail pages
+│   │   ├── quality/          # Lead quality review
 │   │   ├── queue/            # Now Queue — top actionable leads
+│   │   ├── scheduler/        # Worker health and controls
+│   │   ├── statistics/       # Conversion and value proof reporting
+│   │   ├── team/             # Team accountability
+│   │   ├── users/            # Admin-created users and market access
 │   │   └── settings/         # Niche weights, hosts, budget
 │   ├── api/
+│   │   ├── ai/                  # AI verification and artifact workers
 │   │   ├── crawl/process-next/  # Crawl worker polling endpoint
+│   │   ├── crawl/enrich-next/   # Enrichment worker endpoint
 │   │   ├── export/csv/          # CSV export endpoint
 │   │   └── health/              # Health check
+│   ├── demo/[slug]/          # Public published demo page
 │   ├── login/                # Authentication
+│   ├── privacy/              # Public trust page
+│   ├── terms/                # Public terms page
+│   ├── support/              # Public support page
+│   ├── data-sources/         # Public data-source disclosure
 │   ├── error.tsx             # Error boundary
 │   ├── not-found.tsx         # Custom 404
 │   └── layout.tsx            # Root layout + Toaster
@@ -54,7 +67,7 @@ src/
 │   └── confirm-dialog.tsx    # Reusable confirmation modal
 ├── lib/
 │   ├── db/
-?   ?   ??? index.ts          # SQLite/Postgres connection adapter
+│   │   ├── index.ts          # SQLite/Postgres connection adapter
 │   │   ├── schema.ts         # All CREATE TABLE statements
 │   │   ├── queries.ts        # Typed data access layer
 │   │   └── seed-zips.ts      # Colorado zip code seeder
@@ -157,7 +170,7 @@ src/
 
 ## Database
 
-Local development uses SQLite at `nosite-leads.db` when `DATABASE_URL` is not set. Production uses Supabase Postgres through the `DATABASE_URL` transaction pooler connection string. The current Postgres schema is in `supabase/migrations/202605110001_full_schema.sql`.
+Local development uses SQLite at `nosite-leads.db` when `DATABASE_URL` is not set. Production uses Supabase Postgres through the `DATABASE_URL` transaction pooler connection string. Apply every file in `supabase/migrations/` in timestamp order; later migrations add auth, scheduler, enrichment lease, and demo lifecycle fields.
 
 Core tables:
 
@@ -169,14 +182,14 @@ Core tables:
 - `settings` — Configuration (niche weights, hosts, budget)
 - `audit_logs` — Key action history
 - `place_cache` — Raw API response cache
+- `demos` — Draft/published/revoked demo lifecycle and view metadata
 
 ## Known Limitations
 
-- Single-user only (environment-configured credentials)
-- Crawl processing requires browser tab to be open (client-side polling)
+- Invite-only access only; no self-serve signup or billing
 - No automated outreach sending (copy-to-clipboard only)
 - Colorado zip codes only by default (expandable via data file)
-- Single-admin auth remains the v1 production model
+- Authenticated rendered browser QA requires `E2E_STORAGE_STATE` or `E2E_SUPABASE_EMAIL`/`E2E_SUPABASE_PASSWORD`
 
 ## API Compliance
 

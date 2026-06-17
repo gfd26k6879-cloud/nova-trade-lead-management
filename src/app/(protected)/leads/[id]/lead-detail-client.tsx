@@ -41,6 +41,9 @@ import {
   generateResearcherPitchPackAction,
   updateLeadAiFeedbackAction,
   submitResearcherAiFeedbackAction,
+  publishDemoForLeadAction,
+  revokeDemoForLeadAction,
+  unpublishDemoForLeadAction,
 } from "@/lib/leads/actions";
 import type { AppRole } from "@/lib/permissions";
 import type { AdminRequestType } from "@/lib/db/queries";
@@ -177,6 +180,10 @@ interface Demo {
   id: string;
   slug: string;
   is_published: boolean;
+  published_at?: string | null;
+  revoked_at?: string | null;
+  view_count?: number;
+  last_viewed_at?: string | null;
 }
 
 interface AiVerification {
@@ -850,6 +857,57 @@ export function LeadDetailClient({
     setDemoLoading(false);
   };
 
+  const handlePublishDemo = async () => {
+    if (!canEditLead) {
+      flash("Claim this lead before publishing a demo");
+      return;
+    }
+    setDemoLoading(true);
+    const result = await publishDemoForLeadAction(lead.id);
+    if ("demo" in result && result.demo) {
+      setDemo(result.demo as Demo);
+      flash("Demo published");
+      router.refresh();
+    } else if ("error" in result) {
+      flash(result.error ?? "Unable to publish demo");
+    }
+    setDemoLoading(false);
+  };
+
+  const handleUnpublishDemo = async () => {
+    if (!canEditLead) {
+      flash("Claim this lead before unpublishing a demo");
+      return;
+    }
+    setDemoLoading(true);
+    const result = await unpublishDemoForLeadAction(lead.id);
+    if ("demo" in result && result.demo) {
+      setDemo(result.demo as Demo);
+      flash("Demo unpublished");
+      router.refresh();
+    } else if ("error" in result) {
+      flash(result.error ?? "Unable to unpublish demo");
+    }
+    setDemoLoading(false);
+  };
+
+  const handleRevokeDemo = async () => {
+    if (!canEditLead) {
+      flash("Claim this lead before revoking a demo");
+      return;
+    }
+    setDemoLoading(true);
+    const result = await revokeDemoForLeadAction(lead.id, "Revoked from lead detail");
+    if ("demo" in result && result.demo) {
+      setDemo(result.demo as Demo);
+      flash("Demo revoked");
+      router.refresh();
+    } else if ("error" in result) {
+      flash(result.error ?? "Unable to revoke demo");
+    }
+    setDemoLoading(false);
+  };
+
   const handleRunAiVerification = async (force = false) => {
     if (!canUseResearcherAiTools) {
       flash(aiToolsClaimMessage);
@@ -1135,6 +1193,15 @@ export function LeadDetailClient({
       : "Unassigned";
   const websiteFinding = websiteFindingLabel(aiVerification?.status ?? lead.ai_verification_status, currentViability);
   const demoHref = demo ? `/demo/${demo.slug}` : null;
+  const demoIsPublic = Boolean(demo?.is_published && !demo.revoked_at);
+  const demoStatusLabel = demo
+    ? demo.revoked_at
+      ? "Revoked"
+      : demo.is_published
+        ? "Published"
+        : "Draft"
+    : "Not created";
+  const demoPreviewHref = demoIsPublic ? demoHref : null;
   const businessDetailArtifact = latestCompleteArtifact(initialAiArtifacts, "business_detail");
   const businessDetailJob = latestArtifact(initialAiArtifacts, "business_detail");
   const competitiveReportArtifact = latestCompleteArtifact(initialAiArtifacts, "competitive_report");
@@ -1142,7 +1209,7 @@ export function LeadDetailClient({
   const aiEvidence = getAiEvidence(aiVerification?.raw_json);
 
   const copyDemoPitch = () => {
-    if (!demoHref) return;
+    if (!demoHref || !demoIsPublic) return;
     const demoUrl = `${window.location.origin}${demoHref}`;
     copyToClipboard([
       `${lead.name ?? "This business"} looks like a verified website opportunity.`,
@@ -1759,15 +1826,33 @@ export function LeadDetailClient({
                 <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>Generate sales copy, outreach, and demo assets from the verified lead context.</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                {demoHref && <button type="button" className="btn-glass text-xs" onClick={copyDemoPitch}>Copy Demo Link + Pitch</button>}
+                {demoIsPublic && <button type="button" className="btn-glass text-xs" onClick={copyDemoPitch}>Copy Demo Link + Pitch</button>}
                 <button type="button" className="btn-primary text-xs" onClick={handleGeneratePackage} disabled={pkgLoading}>{pkgLoading ? "Generating..." : "Generate Outreach"}</button>
-                <button type="button" className="btn-glass text-xs" onClick={handleCreateDemo} disabled={demoLoading || !canEditLead}>{demoLoading ? "Creating..." : demo ? "Refresh Demo Link" : "Create Demo"}</button>
+                <button type="button" className="btn-glass text-xs" onClick={handleCreateDemo} disabled={demoLoading || !canEditLead || Boolean(demo?.revoked_at)}>
+                  {demoLoading ? "Saving..." : demo ? "Refresh Draft" : "Create Draft"}
+                </button>
               </div>
             </div>
             {demo && (
-              <div className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(99,102,241,0.08)", color: "var(--text-secondary)" }}>
-                <span className="block font-medium" style={{ color: "var(--text-primary)" }}>Demo URL</span>
-                <a className="link-accent break-all" href={`/demo/${demo.slug}`} target="_blank" rel="noopener noreferrer">/demo/{demo.slug}</a>
+              <div className="mt-3 rounded-xl px-3 py-3 text-xs" style={{ background: "rgba(99,102,241,0.08)", color: "var(--text-secondary)" }}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <span className="block font-medium" style={{ color: "var(--text-primary)" }}>Demo lifecycle</span>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="rounded-full px-2 py-0.5 font-medium" style={{ background: demoIsPublic ? "rgba(34,197,94,0.14)" : "rgba(15,23,42,0.08)", color: "var(--text-primary)" }}>{demoStatusLabel}</span>
+                      <span>{Number(demo.view_count ?? 0)} views</span>
+                      {demo.last_viewed_at && <span>Last viewed {new Date(demo.last_viewed_at).toLocaleDateString()}</span>}
+                    </div>
+                    {demoPreviewHref && <a className="link-accent mt-2 block break-all" href={demoPreviewHref} target="_blank" rel="noopener noreferrer">/demo/{demo.slug}</a>}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {demoPreviewHref && <a className="btn-glass text-xs" href={demoPreviewHref} target="_blank" rel="noopener noreferrer">Preview</a>}
+                    {demoIsPublic && demoHref && <button type="button" className="btn-glass text-xs" onClick={() => copyToClipboard(`${window.location.origin}${demoHref}`)}>Copy Link</button>}
+                    {!demo.revoked_at && !demo.is_published && <button type="button" className="btn-primary text-xs" onClick={handlePublishDemo} disabled={demoLoading || !canEditLead}>Publish</button>}
+                    {!demo.revoked_at && demo.is_published && <button type="button" className="btn-glass text-xs" onClick={handleUnpublishDemo} disabled={demoLoading || !canEditLead}>Unpublish</button>}
+                    {!demo.revoked_at && <button type="button" className="btn-glass text-xs" onClick={handleRevokeDemo} disabled={demoLoading || !canEditLead}>Revoke</button>}
+                  </div>
+                </div>
               </div>
             )}
           </section>

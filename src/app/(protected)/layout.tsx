@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { logoutAction } from "@/app/login/actions";
 import { getSession } from "@/lib/auth";
 import { NavHeader } from "@/components/nav-header";
+import { getAdminFulfillmentSummary } from "@/lib/db/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -42,9 +43,18 @@ export default async function ProtectedLayout({
     );
   }
 
+  let fulfillmentCount = 0;
+  if (session.role === "admin") {
+    try {
+      fulfillmentCount = (await getAdminFulfillmentSummary()).openTotal;
+    } catch {
+      fulfillmentCount = 0;
+    }
+  }
+
   return (
     <div className="min-h-screen">
-      <NavHeader email={session.email} role={session.role} fulfillmentCount={0} logoutAction={logoutAction} />
+      <NavHeader email={session.email} role={session.role} fulfillmentCount={fulfillmentCount} logoutAction={logoutAction} />
       <main className="mx-auto w-full max-w-7xl px-6 py-7">{children}</main>
     </div>
   );

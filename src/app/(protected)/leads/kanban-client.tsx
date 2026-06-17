@@ -92,11 +92,19 @@ interface Props {
 }
 
 const COLUMN_SCROLL_HEIGHT = 460;
-const CARD_ROW_HEIGHT = 122;
+const CARD_ROW_HEIGHT = 156;
 const VIRTUALIZE_THRESHOLD = 35;
 const VIRTUAL_OVERSCAN = 4;
 const STATUS_COLUMN_KEYS = new Set(STATUS_COLUMNS.map((col) => col.key));
 const KANBAN_EXCLUSION_REASON = "Excluded from Kanban board";
+
+function statusLabel(status: string): string {
+  return STATUS_COLUMNS.find((col) => col.key === status)?.label ?? status.replace(/_/g, " ");
+}
+
+function isRestrictedCloseStatus(status: string): boolean {
+  return status === "closed_won" || status === "closed_lost" || status === "excluded";
+}
 
 function resolveKanbanExclusionReason(input: string): string {
   const trimmed = input.trim();
@@ -178,26 +186,19 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
     setActiveId(String(event.active.id));
   };
 
-  const handleDragEnd = async (event: DragEndEvent) => {
-    setActiveId(null);
-    const { active, over } = event;
-    if (!over) return;
+  const moveLeadToStatus = useCallback(async (leadId: string, newStatus: string) => {
+    if (!STATUS_COLUMN_KEYS.has(newStatus)) return;
+    const lead = leadById.get(leadId);
+    if (!lead) return;
+    const currentStatus = lead.is_excluded ? "excluded" : lead.status;
+    if (currentStatus === newStatus) return;
 
-    const leadId = String(active.id);
-    const overId = String(over.id);
-    if (!STATUS_COLUMN_KEYS.has(overId)) return;
-    const newStatus = overId;
-    if (!canClose && (newStatus === "closed_won" || newStatus === "closed_lost" || newStatus === "excluded")) {
+    if (!canClose && isRestrictedCloseStatus(newStatus)) {
       toast.error("Only admins can close or exclude leads");
       return;
     }
 
-    const lead = leadById.get(leadId);
-    if (!lead) return;
-
     if (newStatus === "excluded") {
-      if (lead.is_excluded) return;
-
       const inputReason = window.prompt(
         `Optional reason for excluding "${lead.name ?? "this lead"}".\nLeave blank to use default reason, or press Cancel to keep it in the current lane.`,
         "",
@@ -238,11 +239,9 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
         }
       }
 
-      toast.success(`Moved to ${newStatus.replace(/_/g, " ")}`);
+      toast.success(`Moved to ${statusLabel(newStatus)}`);
       return;
     }
-
-    if (lead.status === newStatus) return;
 
     moveLeadLocally(lead, newStatus, false);
 
@@ -251,8 +250,18 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
       toast.error(result.error ?? "Failed to update status");
       router.refresh();
     } else {
-      toast.success(`Moved to ${newStatus.replace(/_/g, " ")}`);
+      toast.success(`Moved to ${statusLabel(newStatus)}`);
     }
+  }, [canClose, leadById, moveLeadLocally, router]);
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    setActiveId(null);
+    const { active, over } = event;
+    if (!over) return;
+
+    const leadId = String(active.id);
+    const overId = String(over.id);
+    await moveLeadToStatus(leadId, overId);
   };
 
   const isCapped = total > leads.length;
@@ -328,6 +337,8 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
               color={STATUS_COLORS[col.key]}
               leads={columns[col.key] ?? []}
               scoreThresholds={scoreThresholds}
+              canClose={canClose}
+              onMoveLead={moveLeadToStatus}
               droppable
             />
           ))}
@@ -347,6 +358,8 @@ function KanbanColumn({
   color,
   leads,
   scoreThresholds,
+  canClose,
+  onMoveLead,
   droppable = true,
 }: {
   id: string;
@@ -354,6 +367,8 @@ function KanbanColumn({
   color: string;
   leads: Lead[];
   scoreThresholds: ScoreBandThresholds;
+  canClose: boolean;
+  onMoveLead?: (leadId: string, status: string) => void | Promise<void>;
   droppable?: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id, disabled: !droppable });
@@ -413,9 +428,9 @@ function KanbanColumn({
                 }}
               >
                 {droppable ? (
-                  <DraggableCard lead={lead} scoreThresholds={scoreThresholds} />
+                  <DraggableCard lead={lead} scoreThresholds={scoreThresholds} canClose={canClose} onMoveLead={onMoveLead} />
                 ) : (
-                  <LeadCard lead={lead} scoreThresholds={scoreThresholds} />
+                  <LeadCard lead={lead} scoreThresholds={scoreThresholds} canClose={canClose} onMoveLead={onMoveLead} />
                 )}
               </div>
             ))}
@@ -424,9 +439,9 @@ function KanbanColumn({
           <div className="flex flex-col gap-2">
             {leads.map((lead) => (
               droppable ? (
-                <DraggableCard key={lead.id} lead={lead} scoreThresholds={scoreThresholds} />
+                <DraggableCard key={lead.id} lead={lead} scoreThresholds={scoreThresholds} canClose={canClose} onMoveLead={onMoveLead} />
               ) : (
-                <LeadCard key={lead.id} lead={lead} scoreThresholds={scoreThresholds} />
+                <LeadCard key={lead.id} lead={lead} scoreThresholds={scoreThresholds} canClose={canClose} onMoveLead={onMoveLead} />
               )
             ))}
           </div>
@@ -441,7 +456,17 @@ function KanbanColumn({
   );
 }
 
-function DraggableCard({ lead, scoreThresholds }: { lead: Lead; scoreThresholds: ScoreBandThresholds }) {
+function DraggableCard({
+  lead,
+  scoreThresholds,
+  canClose,
+  onMoveLead,
+}: {
+  lead: Lead;
+  scoreThresholds: ScoreBandThresholds;
+  canClose: boolean;
+  onMoveLead?: (leadId: string, status: string) => void | Promise<void>;
+}) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: lead.id });
 
   return (
@@ -455,13 +480,27 @@ function DraggableCard({ lead, scoreThresholds }: { lead: Lead; scoreThresholds:
         opacity: isDragging ? 0.4 : 1,
       }}
     >
-      <LeadCard lead={lead} scoreThresholds={scoreThresholds} />
+      <LeadCard lead={lead} scoreThresholds={scoreThresholds} canClose={canClose} onMoveLead={onMoveLead} />
     </div>
   );
 }
 
-function LeadCard({ lead, scoreThresholds, isDragging }: { lead: Lead; scoreThresholds: ScoreBandThresholds; isDragging?: boolean }) {
+function LeadCard({
+  lead,
+  scoreThresholds,
+  isDragging,
+  canClose = true,
+  onMoveLead,
+}: {
+  lead: Lead;
+  scoreThresholds: ScoreBandThresholds;
+  isDragging?: boolean;
+  canClose?: boolean;
+  onMoveLead?: (leadId: string, status: string) => void | Promise<void>;
+}) {
   const wb = WEBSITE_BADGE[lead.website_status] ?? WEBSITE_BADGE.custom;
+  const currentStatus = lead.is_excluded ? "excluded" : lead.status;
+  const leadName = lead.name ?? "lead";
 
   return (
     <div
@@ -529,6 +568,26 @@ function LeadCard({ lead, scoreThresholds, isDragging }: { lead: Lead; scoreThre
       <p className="mt-1 text-[0.62rem]" style={{ color: "var(--text-tertiary)" }}>
         {lead.assigned_to_user_id ? `Owner: ${lead.assigned_user_display_name || lead.assigned_user_email || "Assigned"}` : "Unclaimed"}
       </p>
+      {onMoveLead && (
+        <select
+          className="glass-select mt-2 w-full text-[0.65rem]"
+          value={currentStatus}
+          aria-label={`Move ${leadName} to another status`}
+          style={{ cursor: "default" }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          onChange={(event) => void onMoveLead(lead.id, event.target.value)}
+        >
+          {STATUS_COLUMNS.map((status) => {
+            const restricted = !canClose && isRestrictedCloseStatus(status.key) && status.key !== currentStatus;
+            return (
+              <option key={status.key} value={status.key} disabled={restricted}>
+                {status.label}
+              </option>
+            );
+          })}
+        </select>
+      )}
     </div>
   );
 }

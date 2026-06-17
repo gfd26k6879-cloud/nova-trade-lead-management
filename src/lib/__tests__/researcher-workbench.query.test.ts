@@ -9,6 +9,7 @@ vi.mock("@/lib/db/index", () => {
     getDb: () => testDb,
     generateId: () => crypto.randomUUID(),
     nowISO: () => "2026-05-15T12:00:00.000Z",
+    withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
   };
 });
 

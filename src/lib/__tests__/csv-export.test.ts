@@ -7,6 +7,9 @@ describe("CSV export escaping", () => {
     expect(csvEscape("+123")).toBe("'+123");
     expect(csvEscape("-123")).toBe("'-123");
     expect(csvEscape("@handle")).toBe("'@handle");
+    expect(csvEscape("\t=IMPORTXML(\"https://example.com\")")).toBe("\"'\t=IMPORTXML(\"\"https://example.com\"\")\"");
+    expect(csvEscape("\r+123")).toBe("\"'\r+123\"");
+    expect(csvEscape("   @handle")).toBe("'   @handle");
   });
 
   it("keeps normal CSV escaping behavior", () => {

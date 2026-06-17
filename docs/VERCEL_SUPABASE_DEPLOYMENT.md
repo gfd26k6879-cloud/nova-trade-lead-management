@@ -1,6 +1,6 @@
 # Vercel + Supabase Deployment Runbook
 
-This is the first production path for NoSite Leads. It keeps the app single-admin and uses Supabase only as the server-side Postgres database.
+This is the production path for NoSite Leads. It keeps the app invite-only with admin-created users and uses Supabase as the server-side Postgres database.
 
 ## 1. Codebase Checks
 
@@ -39,7 +39,21 @@ Apply schema:
 supabase db push
 ```
 
-If you do not use the Supabase CLI, paste `supabase/migrations/202605110001_full_schema.sql` into the Supabase SQL editor and run it once.
+If you do not use the Supabase CLI, run every file in `supabase/migrations/`
+through the Supabase SQL editor in timestamp order. Do not apply only
+`202605110001_full_schema.sql`; later migrations add auth-role revokes, RLS
+policy posture, scheduler tables/jobs, Vault-backed worker configuration, and
+location-access hardening that production depends on.
+
+After applying migrations, verify at minimum:
+
+- auth-role table access is revoked except where intentionally granted;
+- RLS/default-privilege hardening migrations have run;
+- `202606160001_launch_readiness_reliability.sql` has run, adding enrichment lease fields and demo lifecycle fields;
+- `worker_cron_secret` and `worker_base_url` exist in Supabase Vault before
+  applying scheduler cron migrations;
+- `cron.job` contains the expected NoSite worker jobs;
+- the Scheduler page reports the same worker set as `src/lib/scheduler/worker-metadata.ts`.
 
 ## 3. Migrate Local Data
 
@@ -258,13 +272,16 @@ After deploy:
 1. Log in.
 2. Confirm the bootstrap admin gets an admin role.
 3. Open `/users` and create the researcher account.
-4. Confirm lead count matches Supabase.
-5. Open `/leads`, `/queue`, `/dashboard`, `/statistics`, and `/settings`.
+4. Open `/dashboard`, `/coverage`, `/explore`, `/leads`, `/quality`, `/team`, `/statistics`, `/users`, and `/scheduler` on desktop and mobile widths.
+5. Confirm lead count matches Supabase.
 6. Confirm CSV export requires admin login.
-7. Save or verify Google/OpenAI keys in Settings.
-8. Run one low-cost Places test after fixing the Google API key.
-9. Run one AI verification and confirm the model remains locked to `gpt-5.4-mini`.
-10. Confirm the Supabase cron job drains `ai_queue_status = 'queued'` over several minutes.
+7. Confirm `/privacy`, `/terms`, `/support`, and `/data-sources` load publicly.
+8. Confirm the deleted legacy batch worker route returns `404`.
+9. Save or verify Google/OpenAI keys in Settings.
+10. Run one low-cost Places test after fixing the Google API key.
+11. Run one AI verification and confirm the model remains locked to `gpt-5.4-mini`.
+12. Confirm the Supabase cron jobs drain queued worker work over several minutes.
+13. Create a draft demo, publish it, open the public link, confirm view count increments best effort, then unpublish/revoke and confirm the public link stops serving.
 
 ## 8. First Hardening Pass
 
@@ -272,6 +289,6 @@ Do these after the first working deployment:
 
 - Add Supabase backups or upgrade to Pro before heavy production usage.
 - Add Vercel and Supabase log review to the weekly operating routine.
-- Keep crawl/enrichment manual and chunked.
+- Keep crawl/enrichment chunked through the scheduler endpoints.
 - Keep outbound messaging manual until compliance is designed.
 - Move to Supabase Auth only when multi-user accounts are needed.

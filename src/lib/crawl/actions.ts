@@ -36,6 +36,7 @@ import {
   getMarketCoverageSummary,
   getRunGeographyProgress,
   getSchedulerHealth,
+  getLaunchReadinessSummary,
   getSchedulerOperationsSummary,
   buildSchedulerOperationsFallback,
   getProcessingCrawlRun,
@@ -872,6 +873,7 @@ async function getDashboardAnalyticsActionInternal(): Promise<Partial<DashboardS
   const monthlyUsage = await timedDashboardAnalyticsStep("monthly_api_usage", getMonthlyApiUsageSummary);
   const qualifiedLeadCount = await timedDashboardAnalyticsStep("qualified_lead_count", () => getQualifiedLeadCount(5.0));
   const schedulerHealth = await timedDashboardAnalyticsStep("scheduler_health", getSchedulerHealth);
+  const launchReadiness = await timedDashboardAnalyticsStep("launch_readiness", getLaunchReadinessSummary);
   const monthlyApiCalls = monthlyUsage.totalCalls;
 
   if (visibleRun?.id) {
@@ -902,6 +904,7 @@ async function getDashboardAnalyticsActionInternal(): Promise<Partial<DashboardS
     qualifiedLeadCount,
     costPerQualifiedLead: null,
     schedulerHealth,
+    launchReadiness,
   };
 }
 

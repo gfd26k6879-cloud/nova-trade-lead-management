@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { ensureDbReady, getPublishedDemoBySlug } from "@/lib/db/queries";
+import { ensureDbReady, getPublishedDemoBySlug, recordDemoView } from "@/lib/db/queries";
 
 interface Props {
   params: Promise<{ slug: string }>;
@@ -22,6 +22,7 @@ export default async function DemoPage({ params }: Props) {
   if (!published) notFound();
 
   const { lead, demo } = published;
+  void recordDemoView(demo.id).catch(() => undefined);
   const config = demo.config_json as {
     headline?: string;
     subheadline?: string;

@@ -1,4 +1,4 @@
-import { getDb, generateId, nowISO, type DbClient } from "./index";
+import { getDb, generateId, nowISO, withDbTransaction, type DbClient } from "./index";
 import { seedZipCodes } from "./seed-zips";
 import { computeScoreBandThresholds, type ScoreBandThresholds } from "@/lib/score-bands";
 import { computeWinProbability } from "@/lib/scoring";
@@ -126,6 +126,13 @@ export interface Lead {
   notes: string | null;
   reminder_date: string | null;
   enrichment_status: string;
+  enrichment_attempt_count: number;
+  enrichment_started_at: string | null;
+  enrichment_finished_at: string | null;
+  enrichment_next_retry_at: string | null;
+  enrichment_last_error: string | null;
+  enrichment_last_error_code: string | null;
+  enrichment_max_attempts: number;
   enriched_at: string | null;
   review_highlights: string[] | null;
   editorial_summary: string | null;
@@ -362,6 +369,15 @@ export interface Demo {
   template_id: string | null;
   config_json: Record<string, unknown>;
   is_published: boolean;
+  published_at: string | null;
+  published_by_user_id: string | null;
+  unpublished_at: string | null;
+  unpublished_by_user_id: string | null;
+  revoked_at: string | null;
+  revoked_by_user_id: string | null;
+  revoke_reason: string | null;
+  view_count: number;
+  last_viewed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -938,6 +954,21 @@ export interface SchedulerHealth {
   auth: AuthRecoveryDiagnostics;
 }
 
+export interface LaunchReadinessItem {
+  key: string;
+  label: string;
+  ready: boolean;
+  detail: string;
+  href: string;
+}
+
+export interface LaunchReadinessSummary {
+  readyCount: number;
+  totalCount: number;
+  blockers: number;
+  items: LaunchReadinessItem[];
+}
+
 export interface AuthRecoveryDiagnostics {
   appUrlConfigured: boolean;
   supabaseUrlConfigured: boolean;
@@ -1440,6 +1471,21 @@ export interface StatisticsSummary {
     costPerQualifiedLead: number | null;
     costPerContactedLead: number | null;
     costPerMeeting: number | null;
+  };
+  valueProof: {
+    qualifiedNoSiteLeads: number;
+    contactableLeads: number;
+    costPerQualifiedLead: number | null;
+    demosPublished: number;
+    demoViews: number;
+    demoToMeetingRate: number;
+    meetings: number;
+    wins: number;
+    losses: number;
+    blockedOrFailureRate: number;
+    blockedRuns: number;
+    failedUnits: number;
+    totalUnits: number;
   };
   ai: {
     cost: number;
@@ -3067,15 +3113,30 @@ export async function getCellCoverageStatus(cellId: string, categories?: readonl
 export async function replaceUserMarketAccess(userId: string, marketIds: string[], actorUserId?: string | null): Promise<UserMarketAccess[]> {
   const db = await getDb();
   const uniqueMarketIds = Array.from(new Set(marketIds.map((id) => id.trim()).filter(Boolean)));
-  await db.prepare("DELETE FROM user_market_access WHERE user_id = ?").run(userId);
-  const insert = db.prepare(
-    "INSERT INTO user_market_access (user_id, market_id, created_by_user_id, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, market_id) DO NOTHING"
-  );
-  const now = nowISO();
-  for (const marketId of uniqueMarketIds) {
-    await insert.run(userId, marketId, actorUserId ?? null, now);
+
+  if (uniqueMarketIds.length > 0) {
+    const placeholders = uniqueMarketIds.map(() => "?").join(", ");
+    const rows = await db.prepare(`SELECT id FROM location_markets WHERE id IN (${placeholders})`)
+      .all<{ id: string }>(...uniqueMarketIds);
+    const validIds = new Set(rows.map((row) => row.id));
+    const missingIds = uniqueMarketIds.filter((id) => !validIds.has(id));
+    if (missingIds.length > 0) {
+      throw new Error(`Unknown market id${missingIds.length === 1 ? "" : "s"}: ${missingIds.join(", ")}`);
+    }
   }
-  return listUserMarketAccess(userId);
+
+  return withDbTransaction(async () => {
+    const txDb = await getDb();
+    await txDb.prepare("DELETE FROM user_market_access WHERE user_id = ?").run(userId);
+    const insert = txDb.prepare(
+      "INSERT INTO user_market_access (user_id, market_id, created_by_user_id, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, market_id) DO NOTHING"
+    );
+    const now = nowISO();
+    for (const marketId of uniqueMarketIds) {
+      await insert.run(userId, marketId, actorUserId ?? null, now);
+    }
+    return listUserMarketAccess(userId);
+  });
 }
 
 export async function listUserMarketAccess(userId: string): Promise<UserMarketAccess[]> {
@@ -4449,6 +4510,11 @@ function normalizeStateCoverageProgress(row: StateCoverageProgress): StateCovera
 
 // ─── Leads ───
 
+export interface UpsertLeadResult {
+  id: string;
+  created: boolean;
+}
+
 export async function upsertLead(data: {
   place_id: string;
   name?: string | null;
@@ -4484,12 +4550,12 @@ export async function upsertLead(data: {
   estimated_deal_value?: number;
   is_excluded?: boolean;
   exclusion_reason?: string | null;
-}): Promise<string>{
-  const db = await getDb();
-  const existing = await db.prepare("SELECT id FROM leads WHERE place_id = ?").get(data.place_id) as { id: string } | undefined;
-  const categories = data.categories ?? [];
-  const websiteStatus = (data.website_status ?? "none") as WebsiteStatus;
-  const qualification = qualifyLead({
+}): Promise<UpsertLeadResult>{
+  return withDbTransaction(async () => {
+    const db = await getDb();
+    const categories = data.categories ?? [];
+    const websiteStatus = (data.website_status ?? "none") as WebsiteStatus;
+    const qualification = qualifyLead({
     categories,
     websiteStatus,
     businessStatus: data.business_status,
@@ -4498,78 +4564,20 @@ export async function upsertLead(data: {
     mapsUri: data.maps_uri,
     score: data.score,
   });
-  const businessType = data.business_type ?? classifyBusinessType({ primaryType: data.primary_type, categories });
-  const qualificationStatus = data.qualification_status ?? qualification.qualificationStatus;
-  const disqualificationReason = data.disqualification_reason ?? qualification.disqualificationReason;
-  const shouldExclude = data.is_excluded ?? qualificationStatus === "disqualified";
-  const exclusionReason = data.exclusion_reason ?? (shouldExclude ? disqualificationReason : null);
+    const businessType = data.business_type ?? classifyBusinessType({ primaryType: data.primary_type, categories });
+    const qualificationStatus = data.qualification_status ?? qualification.qualificationStatus;
+    const disqualificationReason = data.disqualification_reason ?? qualification.disqualificationReason;
+    const shouldExclude = data.is_excluded ?? qualificationStatus === "disqualified";
+    const exclusionReason = data.exclusion_reason ?? (shouldExclude ? disqualificationReason : null);
+    const id = generateId();
+    const now = nowISO();
+    const categoriesJson = JSON.stringify(categories);
+    const normalizedCountry = data.country_code ? normalizeCountryCode(data.country_code) : null;
+    const sellingNiche = data.selling_niche ?? qualification.sellingNiche;
+    const contactabilityScore = data.contactability_score ?? qualification.contactabilityScore;
+    const estimatedDealValue = data.estimated_deal_value ?? qualification.estimatedDealValue;
 
-  if (existing) {
-    await db.prepare(
-      `UPDATE leads SET
-        name = COALESCE(?, name), address = COALESCE(?, address), phone = COALESCE(?, phone),
-        categories = COALESCE(?, categories), rating = COALESCE(?, rating), review_count = COALESCE(?, review_count),
-        website_uri = COALESCE(?, website_uri), website_status = COALESCE(?, website_status),
-        maps_uri = COALESCE(?, maps_uri), business_status = COALESCE(?, business_status),
-        price_level = COALESCE(?, price_level), photo_count = COALESCE(?, photo_count),
-        has_opening_hours = COALESCE(?, has_opening_hours), primary_type = COALESCE(?, primary_type),
-        lat = COALESCE(?, lat), lng = COALESCE(?, lng),
-        market_id = COALESCE(?, market_id),
-        location_cell_id = COALESCE(?, location_cell_id),
-        country_code = COALESCE(?, country_code),
-        admin_area1 = COALESCE(?, admin_area1),
-        admin_area2 = COALESCE(?, admin_area2),
-        locality = COALESCE(?, locality),
-        postal_code = COALESCE(?, postal_code),
-        score = COALESCE(?, score),
-        selling_niche = COALESCE(?, selling_niche),
-        business_type = COALESCE(?, business_type),
-        qualification_status = COALESCE(?, qualification_status),
-        disqualification_reason = COALESCE(?, disqualification_reason),
-        website_verified_at = COALESCE(?, website_verified_at),
-        contactability_score = COALESCE(?, contactability_score),
-        estimated_deal_value = COALESCE(?, estimated_deal_value),
-        is_excluded = CASE WHEN ? = 1 THEN 1 ELSE is_excluded END,
-        exclusion_reason = COALESCE(exclusion_reason, ?),
-        excluded_at = CASE WHEN ? = 1 AND excluded_at IS NULL THEN ? ELSE excluded_at END,
-        updated_at = ?
-      WHERE id = ?`
-    ).run(
-      data.name ?? null, data.address ?? null, data.phone ?? null,
-      data.categories ? JSON.stringify(data.categories) : null,
-      data.rating ?? null, data.review_count ?? null,
-      data.website_uri ?? null, data.website_status ?? null,
-      data.maps_uri ?? null, data.business_status ?? null,
-      data.price_level ?? null, data.photo_count ?? null,
-      data.has_opening_hours != null ? (data.has_opening_hours ? 1 : 0) : null,
-      data.primary_type ?? null, data.lat ?? null, data.lng ?? null,
-      data.market_id ?? null,
-      data.location_cell_id ?? null,
-      data.country_code ? normalizeCountryCode(data.country_code) : null,
-      data.admin_area1 ?? null,
-      data.admin_area2 ?? null,
-      data.locality ?? null,
-      data.postal_code ?? null,
-      data.score ?? null,
-      data.selling_niche ?? qualification.sellingNiche,
-      businessType,
-      qualificationStatus,
-      disqualificationReason,
-      data.website_verified_at ?? null,
-      data.contactability_score ?? qualification.contactabilityScore,
-      data.estimated_deal_value ?? qualification.estimatedDealValue,
-      shouldExclude ? 1 : 0,
-      exclusionReason,
-      shouldExclude ? 1 : 0,
-      nowISO(),
-      nowISO(), existing.id,
-    );
-    await updateLeadQualityScores(existing.id);
-    return existing.id;
-  }
-
-  const id = generateId();
-  await db.prepare(
+    const inserted = await db.prepare(
     `INSERT INTO leads (id, place_id, name, address, phone, categories, rating, review_count,
       website_uri, website_status, maps_uri, business_status, price_level,
       photo_count, has_opening_hours, primary_type, lat, lng,
@@ -4578,9 +4586,10 @@ export async function upsertLead(data: {
       contactability_score, estimated_deal_value, is_excluded, exclusion_reason, excluded_at,
       discovered_at, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
+      + " ON CONFLICT(place_id) DO NOTHING RETURNING id"
+  ).get<{ id: string }>(
     id, data.place_id, data.name ?? null, data.address ?? null, data.phone ?? null,
-    JSON.stringify(categories), data.rating ?? null, data.review_count ?? null,
+    categoriesJson, data.rating ?? null, data.review_count ?? null,
     data.website_uri ?? null, websiteStatus,
     data.maps_uri ?? null, data.business_status ?? null,
     data.price_level ?? null, data.photo_count ?? 0,
@@ -4588,26 +4597,95 @@ export async function upsertLead(data: {
     data.lat ?? null, data.lng ?? null,
     data.market_id ?? null,
     data.location_cell_id ?? null,
-    data.country_code ? normalizeCountryCode(data.country_code) : null,
+    normalizedCountry,
     data.admin_area1 ?? null,
     data.admin_area2 ?? null,
     data.locality ?? null,
     data.postal_code ?? null,
     data.score ?? 0,
-    data.selling_niche ?? qualification.sellingNiche,
+    sellingNiche,
     businessType,
     qualificationStatus,
     disqualificationReason,
     data.website_verified_at ?? null,
-    data.contactability_score ?? qualification.contactabilityScore,
-    data.estimated_deal_value ?? qualification.estimatedDealValue,
+    contactabilityScore,
+    estimatedDealValue,
     shouldExclude ? 1 : 0,
     exclusionReason,
-    shouldExclude ? nowISO() : null,
-    nowISO(), nowISO(), nowISO(),
+    shouldExclude ? now : null,
+    now, now, now,
   );
-  await updateLeadQualityScores(id);
-  return id;
+
+  if (inserted?.id) {
+    await updateLeadQualityScores(inserted.id);
+    return { id: inserted.id, created: true };
+  }
+
+  const updated = await db.prepare(
+    `UPDATE leads SET
+      name = COALESCE(?, name), address = COALESCE(?, address), phone = COALESCE(?, phone),
+      categories = COALESCE(?, categories), rating = COALESCE(?, rating), review_count = COALESCE(?, review_count),
+      website_uri = COALESCE(?, website_uri), website_status = COALESCE(?, website_status),
+      maps_uri = COALESCE(?, maps_uri), business_status = COALESCE(?, business_status),
+      price_level = COALESCE(?, price_level), photo_count = COALESCE(?, photo_count),
+      has_opening_hours = COALESCE(?, has_opening_hours), primary_type = COALESCE(?, primary_type),
+      lat = COALESCE(?, lat), lng = COALESCE(?, lng),
+      market_id = COALESCE(?, market_id),
+      location_cell_id = COALESCE(?, location_cell_id),
+      country_code = COALESCE(?, country_code),
+      admin_area1 = COALESCE(?, admin_area1),
+      admin_area2 = COALESCE(?, admin_area2),
+      locality = COALESCE(?, locality),
+      postal_code = COALESCE(?, postal_code),
+      score = COALESCE(?, score),
+      selling_niche = COALESCE(?, selling_niche),
+      business_type = COALESCE(?, business_type),
+      qualification_status = COALESCE(?, qualification_status),
+      disqualification_reason = COALESCE(?, disqualification_reason),
+      website_verified_at = COALESCE(?, website_verified_at),
+      contactability_score = COALESCE(?, contactability_score),
+      estimated_deal_value = COALESCE(?, estimated_deal_value),
+      is_excluded = CASE WHEN ? = 1 THEN 1 ELSE is_excluded END,
+      exclusion_reason = COALESCE(exclusion_reason, ?),
+      excluded_at = CASE WHEN ? = 1 AND excluded_at IS NULL THEN ? ELSE excluded_at END,
+      updated_at = ?
+     WHERE place_id = ?
+     RETURNING id`
+  ).get<{ id: string }>(
+    data.name ?? null, data.address ?? null, data.phone ?? null,
+    data.categories ? categoriesJson : null,
+    data.rating ?? null, data.review_count ?? null,
+    data.website_uri ?? null, data.website_status ?? null,
+    data.maps_uri ?? null, data.business_status ?? null,
+    data.price_level ?? null, data.photo_count ?? null,
+    data.has_opening_hours != null ? (data.has_opening_hours ? 1 : 0) : null,
+    data.primary_type ?? null, data.lat ?? null, data.lng ?? null,
+    data.market_id ?? null,
+    data.location_cell_id ?? null,
+    normalizedCountry,
+    data.admin_area1 ?? null,
+    data.admin_area2 ?? null,
+    data.locality ?? null,
+    data.postal_code ?? null,
+    data.score ?? null,
+    sellingNiche,
+    businessType,
+    qualificationStatus,
+    disqualificationReason,
+    data.website_verified_at ?? null,
+    contactabilityScore,
+    estimatedDealValue,
+    shouldExclude ? 1 : 0,
+    exclusionReason,
+    shouldExclude ? 1 : 0,
+    now,
+    now,
+    data.place_id,
+  );
+  if (!updated) throw new Error(`Failed to upsert lead for place_id ${data.place_id}.`);
+  await updateLeadQualityScores(updated.id);
+  return { id: updated.id, created: false };
+  });
 }
 
 export interface ManualLeadInput {
@@ -4625,7 +4703,7 @@ export interface ManualLeadInput {
 export async function createManualLead(input: ManualLeadInput): Promise<Lead> {
   const websiteStatus = normalizeWebsiteStatus(input.websiteStatus);
   const notes = composeManualLeadNotes(input);
-  const id = await upsertLead({
+  const { id } = await upsertLead({
     place_id: `manual:${generateId()}`,
     name: input.name,
     address: input.address ?? null,
@@ -7132,6 +7210,13 @@ function parseLeadRow(row: Record<string, unknown>): Lead {
     review_highlights: safeParseJson<string[] | null>(row.review_highlights, null),
     website_health: safeParseJson<Record<string, unknown> | null>(row.website_health, null),
     enrichment_status: (row.enrichment_status as string) ?? "pending",
+    enrichment_attempt_count: Number(row.enrichment_attempt_count ?? 0),
+    enrichment_started_at: (row.enrichment_started_at as string | null) ?? null,
+    enrichment_finished_at: (row.enrichment_finished_at as string | null) ?? null,
+    enrichment_next_retry_at: (row.enrichment_next_retry_at as string | null) ?? null,
+    enrichment_last_error: (row.enrichment_last_error as string | null) ?? null,
+    enrichment_last_error_code: (row.enrichment_last_error_code as string | null) ?? null,
+    enrichment_max_attempts: Number(row.enrichment_max_attempts ?? 3),
     verification: safeParseJson<Record<string, boolean>>(row.verification, {}),
   } as unknown as Lead;
 }
@@ -7411,6 +7496,126 @@ export async function getDashboardStats(): Promise<{
     countiesSelected: geographyProgress.countiesSelected,
     countiesCompleted: geographyProgress.countiesCompleted,
     aiQueueStats: await getAiQueueStats(),
+  };
+}
+
+export async function getLaunchReadinessSummary(): Promise<LaunchReadinessSummary> {
+  const db = await getDb();
+  const [settings, schedulerHealth] = await Promise.all([
+    getSettings(),
+    getSchedulerHealth(),
+  ]);
+  const counts = await db.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM app_users WHERE role = 'admin' AND status = 'active') as active_admins,
+       (SELECT COUNT(*) FROM app_users WHERE role = 'researcher' AND status = 'active') as active_researchers,
+       (SELECT COUNT(*) FROM location_markets WHERE status = 'active') as active_markets,
+       (SELECT COUNT(*) FROM location_cells WHERE COALESCE(is_active, 1) = 1) as active_cells,
+       (SELECT COUNT(*) FROM crawl_runs WHERE CAST(selection_json AS TEXT) LIKE '%coverage_probe%' AND status IN ('done','running','paused','error','blocked')) as coverage_runs,
+       (SELECT COUNT(*) FROM crawl_runs WHERE CAST(selection_json AS TEXT) LIKE '%lead_harvest%' AND status IN ('done','running','paused','error','blocked')) as harvest_runs,
+       (SELECT COUNT(*) FROM leads) as total_leads,
+       (SELECT COUNT(*) FROM leads WHERE quality_bucket <> 'needs_ai_verify' OR ai_verification_status <> 'not_checked') as reviewed_leads,
+       (SELECT COUNT(*) FROM demos) as demos_created,
+       (SELECT COUNT(*) FROM demos WHERE is_published = 1 AND revoked_at IS NULL) as demos_published`
+  ).get<Record<string, unknown>>() ?? {};
+
+  const activeAdmins = Number(counts.active_admins ?? 0);
+  const activeResearchers = Number(counts.active_researchers ?? 0);
+  const activeMarkets = Number(counts.active_markets ?? 0);
+  const activeCells = Number(counts.active_cells ?? 0);
+  const coverageRuns = Number(counts.coverage_runs ?? 0);
+  const harvestRuns = Number(counts.harvest_runs ?? 0);
+  const totalLeads = Number(counts.total_leads ?? 0);
+  const reviewedLeads = Number(counts.reviewed_leads ?? 0);
+  const demosCreated = Number(counts.demos_created ?? 0);
+  const demosPublished = Number(counts.demos_published ?? 0);
+  const enabledWorkers = schedulerHealth.workers.filter((worker) => worker.enabled);
+  const workerWarnings = schedulerHealth.workers.filter((worker) => worker.enabled && worker.warning);
+  const googleReady = settings.google_places_api_key_configured;
+  const openAiReady = !settings.ai_enabled || settings.openai_api_key_configured;
+
+  const items: LaunchReadinessItem[] = [
+    {
+      key: "auth_env",
+      label: "Admin access",
+      ready: activeAdmins > 0,
+      detail: activeAdmins > 0 ? `${activeAdmins} active admin account${activeAdmins === 1 ? "" : "s"}` : "No active admin account is visible.",
+      href: "/users",
+    },
+    {
+      key: "api_keys",
+      label: "API keys",
+      ready: googleReady && openAiReady,
+      detail: googleReady
+        ? openAiReady
+          ? "Google Places is configured; OpenAI state matches AI settings."
+          : "OpenAI is enabled but no OpenAI API key is configured."
+        : "Google Places API key is missing.",
+      href: "/settings",
+    },
+    {
+      key: "market_cells",
+      label: "Market and cells",
+      ready: activeMarkets > 0 && activeCells > 0,
+      detail: `${activeMarkets} active market${activeMarkets === 1 ? "" : "s"} and ${activeCells} active cell${activeCells === 1 ? "" : "s"}.`,
+      href: "/coverage",
+    },
+    {
+      key: "coverage_probe",
+      label: "Coverage probe",
+      ready: coverageRuns > 0,
+      detail: coverageRuns > 0 ? `${coverageRuns} coverage probe run${coverageRuns === 1 ? "" : "s"} recorded.` : "No coverage probe run recorded yet.",
+      href: "/coverage",
+    },
+    {
+      key: "lead_harvest",
+      label: "Lead harvest",
+      ready: harvestRuns > 0 || totalLeads > 0,
+      detail: harvestRuns > 0 ? `${harvestRuns} lead harvest run${harvestRuns === 1 ? "" : "s"} recorded.` : `${totalLeads} leads currently in inventory.`,
+      href: "/leads",
+    },
+    {
+      key: "quality_review",
+      label: "Quality review",
+      ready: reviewedLeads > 0,
+      detail: reviewedLeads > 0 ? `${reviewedLeads} lead${reviewedLeads === 1 ? "" : "s"} have quality or AI review signal.` : "No reviewed lead quality signal yet.",
+      href: "/quality",
+    },
+    {
+      key: "researcher_access",
+      label: "Researcher access",
+      ready: activeResearchers > 0,
+      detail: activeResearchers > 0 ? `${activeResearchers} active researcher account${activeResearchers === 1 ? "" : "s"}.` : "No active researcher account is visible.",
+      href: "/users",
+    },
+    {
+      key: "demo_created",
+      label: "Demo draft",
+      ready: demosCreated > 0,
+      detail: demosCreated > 0 ? `${demosCreated} demo draft${demosCreated === 1 ? "" : "s"} created.` : "No demo draft has been created.",
+      href: "/leads",
+    },
+    {
+      key: "demo_published",
+      label: "Demo published",
+      ready: demosPublished > 0,
+      detail: demosPublished > 0 ? `${demosPublished} published demo${demosPublished === 1 ? "" : "s"} available.` : "No non-revoked published demo is available.",
+      href: "/leads",
+    },
+    {
+      key: "worker_scheduler",
+      label: "Worker scheduler",
+      ready: enabledWorkers.length > 0 && workerWarnings.length === 0,
+      detail: `${enabledWorkers.length} worker${enabledWorkers.length === 1 ? "" : "s"} enabled; ${workerWarnings.length} active warning${workerWarnings.length === 1 ? "" : "s"}.`,
+      href: "/scheduler",
+    },
+  ];
+  const readyCount = items.filter((item) => item.ready).length;
+  return {
+    readyCount,
+    totalCount: items.length,
+    blockers: items.length - readyCount,
+    items,
   };
 }
 
@@ -7815,10 +8020,113 @@ export async function getUnenrichedLeads(limit: number): Promise<Lead[]>{
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT * FROM leads
-     WHERE enrichment_status = 'pending' AND score > 0 AND ${SCORE_ELIGIBLE_CONDITION}
+     WHERE enrichment_status = 'pending'
+       AND score > 0
+       AND enrichment_attempt_count < enrichment_max_attempts
+       AND ${SCORE_ELIGIBLE_CONDITION}
      ORDER BY score DESC LIMIT ?`
   ).all(limit) as Array<Record<string, unknown>>;
   return rows.map(parseLeadRow);
+}
+
+export async function leaseNextLeadForEnrichment(staleAfterMinutes = 10): Promise<Lead | null>{
+  const db = await getDb();
+  const now = nowISO();
+  const staleBefore = new Date(Date.now() - Math.max(1, staleAfterMinutes) * 60_000).toISOString();
+
+  await db.prepare(
+    `UPDATE leads
+     SET enrichment_status = 'pending',
+         enrichment_started_at = NULL,
+         enrichment_finished_at = ?,
+         updated_at = ?
+     WHERE enrichment_status = 'running'
+       AND (enrichment_started_at IS NULL OR enrichment_started_at <= ?)
+       AND enrichment_attempt_count < enrichment_max_attempts`
+  ).run(now, now, staleBefore);
+
+  await db.prepare(
+    `UPDATE leads
+     SET enrichment_status = 'error',
+         enrichment_finished_at = ?,
+         enrichment_next_retry_at = NULL,
+         enrichment_last_error = COALESCE(enrichment_last_error, 'Max enrichment attempts exhausted.'),
+         enrichment_last_error_code = COALESCE(enrichment_last_error_code, 'max_attempts_exhausted'),
+         updated_at = ?
+     WHERE enrichment_status IN ('pending','running','retry_wait')
+       AND enrichment_attempt_count >= enrichment_max_attempts`
+  ).run(now, now);
+
+  await db.prepare(
+    `UPDATE leads
+     SET enrichment_status = 'pending',
+         enrichment_next_retry_at = NULL,
+         updated_at = ?
+     WHERE enrichment_status = 'retry_wait'
+       AND enrichment_attempt_count < enrichment_max_attempts
+       AND (enrichment_next_retry_at IS NULL OR enrichment_next_retry_at <= ?)`
+  ).run(now, now);
+
+  const row = await db.prepare(
+    `UPDATE leads
+     SET enrichment_status = 'running',
+         enrichment_attempt_count = enrichment_attempt_count + 1,
+         enrichment_started_at = ?,
+         enrichment_finished_at = NULL,
+         enrichment_next_retry_at = NULL,
+         enrichment_last_error = NULL,
+         enrichment_last_error_code = NULL,
+         updated_at = ?
+     WHERE id = (
+       SELECT id
+       FROM leads
+       WHERE enrichment_status = 'pending'
+         AND enrichment_attempt_count < enrichment_max_attempts
+         AND score > 0
+         AND ${SCORE_ELIGIBLE_CONDITION}
+       ORDER BY score DESC, updated_at ASC
+       LIMIT 1
+     )
+       AND enrichment_status = 'pending'
+     RETURNING *`
+  ).get(now, now) as Record<string, unknown> | undefined;
+
+  return row ? parseLeadRow(row) : null;
+}
+
+export async function markLeadEnrichmentFailed(
+  id: string,
+  error: string,
+  errorCode: string,
+  options: { nextRetryAt?: string | null; terminal?: boolean } = {},
+): Promise<void>{
+  const db = await getDb();
+  const row = await db.prepare(
+    "SELECT enrichment_attempt_count, enrichment_max_attempts FROM leads WHERE id = ?"
+  ).get(id) as { enrichment_attempt_count: number; enrichment_max_attempts: number } | undefined;
+  const attempts = Number(row?.enrichment_attempt_count ?? 0);
+  const maxAttempts = Math.max(1, Number(row?.enrichment_max_attempts ?? 3) || 3);
+  const terminal = options.terminal || attempts >= maxAttempts;
+  const now = nowISO();
+  await db.prepare(
+    `UPDATE leads
+     SET enrichment_status = ?,
+         enrichment_started_at = NULL,
+         enrichment_finished_at = ?,
+         enrichment_next_retry_at = ?,
+         enrichment_last_error = ?,
+         enrichment_last_error_code = ?,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(
+    terminal ? "error" : "retry_wait",
+    now,
+    terminal ? null : options.nextRetryAt ?? now,
+    error.slice(0, 1000),
+    errorCode,
+    now,
+    id,
+  );
 }
 
 export async function updateLeadEnrichment(id: string, data: {
@@ -7863,7 +8171,13 @@ export async function updateLeadEnrichment(id: string, data: {
 
   await db.prepare(
     `UPDATE leads SET
-      enrichment_status = 'enriched', enriched_at = ?,
+      enrichment_status = 'enriched',
+      enriched_at = ?,
+      enrichment_finished_at = ?,
+      enrichment_started_at = NULL,
+      enrichment_next_retry_at = NULL,
+      enrichment_last_error = NULL,
+      enrichment_last_error_code = NULL,
       name = COALESCE(?, name),
       address = COALESCE(?, address),
       phone = COALESCE(?, phone),
@@ -7897,6 +8211,7 @@ export async function updateLeadEnrichment(id: string, data: {
       updated_at = ?
     WHERE id = ?`
   ).run(
+    nowISO(),
     nowISO(),
     data.name ?? null,
     data.address ?? null,
@@ -8328,43 +8643,15 @@ function demoHeadlineForLead(lead: Lead): string {
   return `A cleaner, faster website for ${lead.name ?? "your business"}`;
 }
 
-function parseDemoRow(row: Record<string, unknown>): Demo {
-  return {
-    id: row.id as string,
-    lead_id: row.lead_id as string,
-    slug: row.slug as string,
-    template_id: (row.template_id as string | null) ?? "default",
-    config_json: safeParseJson<Record<string, unknown>>((row.config_json as string | null) ?? "{}", {}),
-    is_published: ((row.is_published as number) ?? 0) === 1,
-    created_at: row.created_at as string,
-    updated_at: row.updated_at as string,
-  };
-}
-
-export async function getDemoByLeadId(leadId: string): Promise<Demo | null>{
-  const db = await getDb();
-  const row = await db.prepare("SELECT * FROM demos WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1").get(leadId) as Record<string, unknown> | undefined;
-  return row ? parseDemoRow(row) : null;
-}
-
-export async function createDemoForLead(leadId: string): Promise<Demo | null>{
-  const db = await getDb();
-  const existing = await getDemoByLeadId(leadId);
-  if (existing) return existing;
-
-  const lead = await getLeadById(leadId);
-  if (!lead) return null;
-
-  const slug = `${slugify(lead.name ?? "business")}-${generateId().slice(0, 8)}`;
-  const now = nowISO();
+async function buildDemoConfigForLead(lead: Lead): Promise<Record<string, unknown>> {
   const cta = ctaForNiche(lead.selling_niche, Boolean(lead.phone?.trim()));
-  const businessDetail = await getLatestLeadAiArtifact(leadId, "business_detail");
+  const businessDetail = await getLatestLeadAiArtifact(lead.id, "business_detail");
   const detail = businessDetail?.status === "complete" ? businessDetail.content_json : {};
   const detailServices = Array.isArray(detail.services) ? detail.services.map((item) => String(item)).filter(Boolean).slice(0, 6) : [];
   const trustSignals = Array.isArray(detail.trust_signals) ? detail.trust_signals.map((item) => String(item)).filter(Boolean).slice(0, 6) : [];
   const businessSummary = typeof detail.business_summary === "string" ? detail.business_summary : null;
   const ctaStrategy = typeof detail.cta_strategy === "string" ? detail.cta_strategy : null;
-  const config = {
+  return {
     headline: demoHeadlineForLead(lead),
     subheadline: businessSummary ?? "Built to help local customers call, book, and trust you faster.",
     services: detailServices.length > 0 ? detailServices : servicesForNiche(lead.selling_niche),
@@ -8376,13 +8663,135 @@ export async function createDemoForLead(leadId: string): Promise<Demo | null>{
     mapsUri: lead.maps_uri,
     websiteGap: lead.ai_summary ?? lead.quality_reason,
   };
+}
+
+function parseDemoRow(row: Record<string, unknown>): Demo {
+  return {
+    id: row.id as string,
+    lead_id: row.lead_id as string,
+    slug: row.slug as string,
+    template_id: (row.template_id as string | null) ?? "default",
+    config_json: safeParseJson<Record<string, unknown>>((row.config_json as string | null) ?? "{}", {}),
+    is_published: ((row.is_published as number) ?? 0) === 1,
+    published_at: (row.published_at as string | null) ?? null,
+    published_by_user_id: (row.published_by_user_id as string | null) ?? null,
+    unpublished_at: (row.unpublished_at as string | null) ?? null,
+    unpublished_by_user_id: (row.unpublished_by_user_id as string | null) ?? null,
+    revoked_at: (row.revoked_at as string | null) ?? null,
+    revoked_by_user_id: (row.revoked_by_user_id as string | null) ?? null,
+    revoke_reason: (row.revoke_reason as string | null) ?? null,
+    view_count: Number(row.view_count ?? 0),
+    last_viewed_at: (row.last_viewed_at as string | null) ?? null,
+    created_at: row.created_at as string,
+    updated_at: row.updated_at as string,
+  };
+}
+
+export async function getDemoByLeadId(leadId: string): Promise<Demo | null> {
+  const db = await getDb();
+  const row = (await db.prepare("SELECT * FROM demos WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1").get(leadId)) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? parseDemoRow(row) : null;
+}
+
+export async function createDemoForLead(leadId: string): Promise<Demo | null>{
+  const db = await getDb();
+  const existing = await getDemoByLeadId(leadId);
+
+  const lead = await getLeadById(leadId);
+  if (!lead) return null;
+  const config = await buildDemoConfigForLead(lead);
+  const now = nowISO();
+
+  if (existing && !existing.is_published && !existing.revoked_at) {
+    await db.prepare(
+      `UPDATE demos
+       SET config_json = ?,
+           updated_at = ?
+       WHERE id = ?`
+    ).run(JSON.stringify(config), now, existing.id);
+    await createAuditLog("demo_refreshed", "demo", existing.id, { leadId });
+    return getDemoByLeadId(leadId);
+  }
+
+  if (existing && existing.is_published && !existing.revoked_at) return existing;
+
+  const slug = `${slugify(lead.name ?? "business")}-${generateId().slice(0, 8)}`;
 
   await db.prepare(
     `INSERT INTO demos (id, lead_id, slug, template_id, config_json, is_published, created_at, updated_at)
-     VALUES (?, ?, ?, 'local-service-v1', ?, 1, ?, ?)`
+     VALUES (?, ?, ?, 'local-service-v1', ?, 0, ?, ?)`
   ).run(generateId(), leadId, slug, JSON.stringify(config), now, now);
+  const demo = await getDemoByLeadId(leadId);
+  if (demo) await createAuditLog("demo_created", "demo", demo.id, { leadId, slug: demo.slug, published: false });
+  return demo;
+}
 
+export async function publishDemoForLead(leadId: string, actorUserId: string | null = null): Promise<Demo | null>{
+  const demo = (await getDemoByLeadId(leadId)) ?? (await createDemoForLead(leadId));
+  if (!demo || demo.revoked_at) return null;
+  const db = await getDb();
+  const now = nowISO();
+  await db.prepare(
+    `UPDATE demos
+     SET is_published = 1,
+         published_at = COALESCE(published_at, ?),
+         published_by_user_id = COALESCE(published_by_user_id, ?),
+         unpublished_at = NULL,
+         unpublished_by_user_id = NULL,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(now, actorUserId, now, demo.id);
+  await db.prepare("UPDATE leads SET demo_sent_at = COALESCE(demo_sent_at, ?), updated_at = ? WHERE id = ?").run(now, now, leadId);
+  await createAuditLog("demo_published", "demo", demo.id, { leadId, actorUserId });
   return getDemoByLeadId(leadId);
+}
+
+export async function unpublishDemoForLead(leadId: string, actorUserId: string | null = null): Promise<Demo | null>{
+  const demo = await getDemoByLeadId(leadId);
+  if (!demo) return null;
+  const db = await getDb();
+  const now = nowISO();
+  await db.prepare(
+    `UPDATE demos
+     SET is_published = 0,
+         unpublished_at = ?,
+         unpublished_by_user_id = ?,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(now, actorUserId, now, demo.id);
+  await createAuditLog("demo_unpublished", "demo", demo.id, { leadId, actorUserId });
+  return getDemoByLeadId(leadId);
+}
+
+export async function revokeDemoForLead(leadId: string, actorUserId: string | null = null, reason: string | null = null): Promise<Demo | null>{
+  const demo = await getDemoByLeadId(leadId);
+  if (!demo) return null;
+  const db = await getDb();
+  const now = nowISO();
+  await db.prepare(
+    `UPDATE demos
+     SET is_published = 0,
+         revoked_at = COALESCE(revoked_at, ?),
+         revoked_by_user_id = COALESCE(revoked_by_user_id, ?),
+         revoke_reason = COALESCE(revoke_reason, ?),
+         updated_at = ?
+     WHERE id = ?`
+  ).run(now, actorUserId, reason, now, demo.id);
+  await createAuditLog("demo_revoked", "demo", demo.id, { leadId, actorUserId, reason });
+  return getDemoByLeadId(leadId);
+}
+
+export async function recordDemoView(demoId: string): Promise<void>{
+  const db = await getDb();
+  await db.prepare(
+    `UPDATE demos
+     SET view_count = view_count + 1,
+         last_viewed_at = ?,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(nowISO(), nowISO(), demoId);
 }
 
 export async function getPublishedDemoBySlug(slug: string): Promise<PublishedDemo | null>{
@@ -8395,12 +8804,21 @@ export async function getPublishedDemoBySlug(slug: string): Promise<PublishedDem
       d.template_id as demo_template_id,
       d.config_json as demo_config_json,
       d.is_published as demo_is_published,
+      d.published_at as demo_published_at,
+      d.published_by_user_id as demo_published_by_user_id,
+      d.unpublished_at as demo_unpublished_at,
+      d.unpublished_by_user_id as demo_unpublished_by_user_id,
+      d.revoked_at as demo_revoked_at,
+      d.revoked_by_user_id as demo_revoked_by_user_id,
+      d.revoke_reason as demo_revoke_reason,
+      d.view_count as demo_view_count,
+      d.last_viewed_at as demo_last_viewed_at,
       d.created_at as demo_created_at,
       d.updated_at as demo_updated_at,
       l.*
      FROM demos d
      INNER JOIN leads l ON l.id = d.lead_id
-     WHERE d.slug = ? AND d.is_published = 1
+     WHERE d.slug = ? AND d.is_published = 1 AND d.revoked_at IS NULL
      LIMIT 1`
   ).get(slug) as Record<string, unknown> | undefined;
 
@@ -8413,6 +8831,15 @@ export async function getPublishedDemoBySlug(slug: string): Promise<PublishedDem
     template_id: row.demo_template_id,
     config_json: row.demo_config_json,
     is_published: row.demo_is_published,
+    published_at: row.demo_published_at,
+    published_by_user_id: row.demo_published_by_user_id,
+    unpublished_at: row.demo_unpublished_at,
+    unpublished_by_user_id: row.demo_unpublished_by_user_id,
+    revoked_at: row.demo_revoked_at,
+    revoked_by_user_id: row.demo_revoked_by_user_id,
+    revoke_reason: row.demo_revoke_reason,
+    view_count: row.demo_view_count,
+    last_viewed_at: row.demo_last_viewed_at,
     created_at: row.demo_created_at,
     updated_at: row.demo_updated_at,
   });
@@ -9574,6 +10001,22 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
   );
   const excludedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 1 AND l.archived_at IS NULL");
   const demosCreated = await countRows(db, "demos d", demoWindow);
+  const qualifiedNoSiteLeads = await countRows(
+    db,
+    "leads l",
+    leadWindow,
+    `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status = 'qualified' AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")}`,
+  );
+  const contactableLeads = await countRows(
+    db,
+    "leads l",
+    leadWindow,
+    `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND (COALESCE(l.phone, '') != '' OR EXISTS (
+      SELECT 1 FROM ai_lead_verifications av
+      WHERE av.lead_id = l.id
+        AND (COALESCE(av.found_email, '') != '' OR COALESCE(av.found_phone, '') != '')
+    ))`,
+  );
   const contactedLeads = await countDistinctRows(db, "outreach_events oe", "oe.lead_id", outreachWindow);
   const replies = await countRows(db, "leads l", replyWindow, "l.first_reply_at IS NOT NULL AND l.archived_at IS NULL");
   const meetings = await countRows(db, "leads l", meetingWindow, "l.meeting_booked_at IS NOT NULL AND l.archived_at IS NULL");
@@ -9590,6 +10033,21 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     `SELECT COALESCE(COUNT(*), 0) as calls, COALESCE(SUM(a.estimated_cost), 0) as cost
      FROM api_usage_events a ${whereFromWindow(apiWindow, "a.success = 1 AND COALESCE(a.was_cached, 0) = 0")}`
   ).get(...apiWindow.params) as { calls: number; cost: number };
+
+  const demoProofRow = await db.prepare(
+    `SELECT COALESCE(COUNT(*), 0) as published,
+            COALESCE(SUM(d.view_count), 0) as views
+     FROM demos d ${whereFromWindow(demoWindow, "d.is_published = 1 AND d.revoked_at IS NULL")}`
+  ).get(...demoWindow.params) as { published: number; views: number };
+
+  const failureRow = await db.prepare(
+    `SELECT COALESCE(COUNT(cu.id), 0) as total_units,
+            COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) as failed_units,
+            COALESCE(COUNT(DISTINCT CASE WHEN cr.status IN ('blocked','error') THEN cr.id END), 0) as blocked_runs
+     FROM crawl_runs cr
+     LEFT JOIN crawl_units cu ON cu.crawl_run_id = cr.id
+     ${whereFromWindow(runWindow, "1 = 1")}`
+  ).get(...runWindow.params) as { total_units: number; failed_units: number; blocked_runs: number };
 
   const aiUsageRow = await db.prepare(
     `SELECT COALESCE(COUNT(*), 0) as calls,
@@ -9699,6 +10157,21 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
       costPerQualifiedLead: divideCurrency(apiRow.cost, qualifiedLeads),
       costPerContactedLead: divideCurrency(apiRow.cost, contactedLeads),
       costPerMeeting: divideCurrency(apiRow.cost, meetings),
+    },
+    valueProof: {
+      qualifiedNoSiteLeads,
+      contactableLeads,
+      costPerQualifiedLead: divideCurrency(apiRow.cost, qualifiedLeads),
+      demosPublished: Number(demoProofRow.published ?? 0),
+      demoViews: Number(demoProofRow.views ?? 0),
+      demoToMeetingRate: percentage(meetings, Number(demoProofRow.published ?? 0)),
+      meetings,
+      wins: closedWon,
+      losses: closedLost,
+      blockedOrFailureRate: percentage(Number(failureRow.failed_units ?? 0) + Number(failureRow.blocked_runs ?? 0), Number(failureRow.total_units ?? 0) + Number(failureRow.blocked_runs ?? 0)),
+      blockedRuns: Number(failureRow.blocked_runs ?? 0),
+      failedUnits: Number(failureRow.failed_units ?? 0),
+      totalUnits: Number(failureRow.total_units ?? 0),
     },
     ai: {
       cost: Math.round((aiUsageRow.cost ?? 0) * 100) / 100,

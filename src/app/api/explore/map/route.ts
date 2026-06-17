@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requirePermission } from "@/lib/auth";
+import { ForbiddenError, requirePermission, UnauthorizedError } from "@/lib/auth";
 import { withDbStatementTimeout } from "@/lib/db/index";
 import {
   ensureDbReady,
@@ -53,6 +53,25 @@ export async function GET(request: Request) {
       generatedAt,
     }));
   } catch (error) {
+    if (error instanceof UnauthorizedError || error instanceof ForbiddenError) {
+      console.warn("route_timing", {
+        route: "/api/explore/map",
+        durationMs: Date.now() - startedAt,
+        status: error.status,
+        reason: error.name,
+      });
+      return applyNoStoreHeaders(NextResponse.json({
+        points: [],
+        totalMapped: 0,
+        zipCoverage: [],
+        mapPointLimit: limit,
+        googleMapsConfigured: false,
+        googleMapsApiKey: null,
+        generatedAt,
+        error: error.message,
+      }, { status: error.status }));
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     const timedOut = /statement timeout|canceling statement|timeout|timed out/i.test(message);
     const status = timedOut ? 504 : 500;

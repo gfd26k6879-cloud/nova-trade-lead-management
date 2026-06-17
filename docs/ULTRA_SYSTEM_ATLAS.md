@@ -23,13 +23,21 @@ flowchart LR
 
 | Route | File | Purpose | Primary data path |
 |---|---|---|---|
-| `/login` | `src/app/login/page.tsx` | Single-user sign in | `loginAction()` -> cookie session |
-| `/dashboard` | `src/app/(protected)/dashboard/page.tsx` | Crawl controls + run stats + cost + conversion | `getDashboardStatsAction()` + polling |
+| `/login` | `src/app/login/page.tsx` | Invite-only sign in | `loginAction()` -> cookie session |
+| `/dashboard` | `src/app/(protected)/dashboard/page.tsx` | Crawl controls + launch checklist + run stats + cost + conversion | `getDashboardStatsAction()` + polling |
 | `/coverage` | `src/app/(protected)/coverage/page.tsx` | Zip progress and failures | coverage queries from `queries.ts` |
+| `/explore` | `src/app/(protected)/explore/page.tsx` | Map/list exploration of discovered leads | lead and map queries |
 | `/leads` | `src/app/(protected)/leads/page.tsx` | Table + Kanban (board) + filters + bulk status | `getLeads()` or `getKanbanLeads()` |
-| `/leads/[id]` | `src/app/(protected)/leads/[id]/page.tsx` | Full lead profile + outreach + verification | lead queries + lead actions |
+| `/leads/[id]` | `src/app/(protected)/leads/[id]/page.tsx` | Full lead profile + outreach + verification + demo lifecycle | lead queries + lead actions |
+| `/quality` | `src/app/(protected)/quality/page.tsx` | Quality review workspace | quality queries and actions |
 | `/queue` | `src/app/(protected)/queue/page.tsx` | Top actionable leads | `getNowQueue(25)` |
+| `/scheduler` | `src/app/(protected)/scheduler/page.tsx` | Worker health and controls | scheduler queries/actions |
+| `/statistics` | `src/app/(protected)/statistics/page.tsx` | Conversion, cost, and value proof reporting | `getStatisticsSummary()` |
+| `/team` | `src/app/(protected)/team/page.tsx` | Team assignment and accountability | team queries |
+| `/users` | `src/app/(protected)/users/page.tsx` | Admin-created users and market access | user actions and access queries |
 | `/settings` | `src/app/(protected)/settings/page.tsx` | Niche weights, host lists, limits | settings actions |
+| `/demo/[slug]` | `src/app/demo/[slug]/page.tsx` | Public published demo | `getPublishedDemoBySlug()` + best-effort view recording |
+| `/privacy`, `/terms`, `/support`, `/data-sources` | `src/app/*/page.tsx` | Public invite-only trust pages | static metadata and copy |
 
 ## 3) Endpoints (Route Handlers, Application Programming Interface)
 
@@ -37,8 +45,11 @@ flowchart LR
 |---|---|---|
 | `POST /api/crawl/process-next` | `src/app/api/crawl/process-next/route.ts` | Process one crawl unit |
 | `POST /api/crawl/enrich-next` | `src/app/api/crawl/enrich-next/route.ts` | Enrich one lead |
+| `POST /api/ai/verify-next` | `src/app/api/ai/verify-next/route.ts` | Process one AI verification job |
+| `POST /api/ai/artifacts/process-next` | `src/app/api/ai/artifacts/process-next/route.ts` | Process one AI artifact job |
+| `POST /api/scores/recompute-stale` | `src/app/api/scores/recompute-stale/route.ts` | Recompute stale lead scores |
 | `GET /api/export/csv` | `src/app/api/export/csv/route.ts` | Filter-aware Comma-Separated Values (CSV) export |
-| `GET /api/health` | `src/app/api/health/route.ts` | Health probe |
+| `GET /api/health` | `src/app/api/health/route.ts` | Coarse public health probe |
 
 ## 4) Core engine modules
 
@@ -88,13 +99,13 @@ sequenceDiagram
   W->>GP: Text Search
   loop for each place/page
     W->>DB: dedupe by place_id
-    W->>DB: upsert lead + page token checkpoint
+    W->>DB: atomic upsert lead + page token checkpoint
   end
   W->>DB: mark unit done or failed
   API-->>UI: progress payload
 ```
 
-Enrichment loop is the same pattern with `POST /api/crawl/enrich-next`, one lead per tick.
+Enrichment loop is the same pattern with `POST /api/crawl/enrich-next`, one leased lead per scheduler call. The lease recovers stale `running` work, respects `retry_wait`, and terminalizes repeated failures.
 
 ## 7) Scoring and ranking (exact mental model)
 
@@ -167,6 +178,8 @@ Also tracked per lead:
   - Researchers cannot crawl, export, edit settings, or manage users
 - Storage:
   - Supabase Postgres in production; SQLite fallback remains for local DB tests
+- Public posture:
+  - Invite-only app access, public trust pages, and public demo links only when demos are published and not revoked
 
 ## 11) Test and operation quick commands
 
@@ -196,5 +209,5 @@ Also tracked per lead:
 ## 13) Scope boundaries (intentional)
 
 - No automatic outbound sending (email, call, text) in-app
-- Demo generation is intentionally out of this code path
-- Crawl and enrichment execution use client polling for local operation
+- Public demo links are draft-first, publishable, unpublishable/revocable, and view-counted best effort
+- Crawl and enrichment execution use scheduler endpoints; local operation can still poll one unit/job at a time

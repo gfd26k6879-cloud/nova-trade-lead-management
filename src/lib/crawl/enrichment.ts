@@ -1,4 +1,4 @@
-import { getPlaceDetails } from "@/lib/google-places";
+import { PlacesApiError, getPlaceDetails } from "@/lib/google-places";
 import { computeScore } from "@/lib/scoring";
 import { classifyWebsite } from "@/lib/classify-website";
 import { extractReviewInsights } from "@/lib/review-intelligence";
@@ -8,6 +8,8 @@ import {
   getActiveCrawlRun,
   getLatestCrawlRun,
   getUnenrichedLeads,
+  leaseNextLeadForEnrichment,
+  markLeadEnrichmentFailed,
   updateLeadEnrichment,
   getSettings,
   API_ENDPOINT_PLACE_DETAILS,
@@ -37,12 +39,10 @@ export async function enrichNextLead(): Promise<EnrichResult> {
     return { status: "idle" };
   }
 
-  const leads = await getUnenrichedLeads(1);
-  if (leads.length === 0) {
+  const lead = await leaseNextLeadForEnrichment();
+  if (!lead) {
     return { status: "idle" };
   }
-
-  const lead = leads[0];
   const includeAtmosphere = lead.score >= settings.enrichment_stage_b_min_score;
 
   try {
@@ -211,6 +211,11 @@ export async function enrichNextLead(): Promise<EnrichResult> {
     };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
+    const failurePolicy = classifyEnrichmentFailure(err, lead.enrichment_attempt_count, lead.enrichment_max_attempts);
+    await markLeadEnrichmentFailed(lead.id, errorMessage, failurePolicy.code, {
+      nextRetryAt: failurePolicy.nextRetryAt,
+      terminal: failurePolicy.terminal,
+    });
     await createAuditLog("enrichment_error", "lead", lead.id, { error: errorMessage });
     return {
       status: "error",
@@ -219,6 +224,50 @@ export async function enrichNextLead(): Promise<EnrichResult> {
       error: errorMessage,
     };
   }
+}
+
+type EnrichmentFailurePolicy = {
+  code: string;
+  terminal: boolean;
+  nextRetryAt?: string;
+};
+
+const ENRICHMENT_RETRY_BASE_DELAY_SECONDS = 60;
+const ENRICHMENT_RETRY_MAX_DELAY_SECONDS = 15 * 60;
+
+function classifyEnrichmentFailure(error: unknown, attemptCount: number, maxAttempts: number): EnrichmentFailurePolicy {
+  const attempts = Math.max(1, Math.floor(Number(attemptCount) || 1));
+  const max = Math.max(1, Math.floor(Number(maxAttempts) || 3));
+
+  const retry = (code: string): EnrichmentFailurePolicy => {
+    if (attempts >= max) return { code: `${code}_exhausted`, terminal: true };
+    return { code, terminal: false, nextRetryAt: nextEnrichmentRetryAt(attempts) };
+  };
+
+  if (error instanceof PlacesApiError) {
+    if (error.status === 429 || error.status >= 500) return retry(`google_${error.status}`);
+    return { code: `google_${error.status}`, terminal: true };
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (/api key is not configured|permission|forbidden|unauthorized|invalid api key/i.test(message)) {
+    return { code: "google_places_configuration", terminal: true };
+  }
+  if (isTransientEnrichmentError(message)) return retry("network_transient");
+  return retry("generic_error");
+}
+
+function nextEnrichmentRetryAt(attemptCount: number): string {
+  const exponent = Math.max(0, Math.floor(attemptCount) - 1);
+  const delaySeconds = Math.min(
+    ENRICHMENT_RETRY_MAX_DELAY_SECONDS,
+    ENRICHMENT_RETRY_BASE_DELAY_SECONDS * Math.pow(2, exponent),
+  );
+  return new Date(Date.now() + delaySeconds * 1000).toISOString();
+}
+
+function isTransientEnrichmentError(message: string): boolean {
+  return /fetch failed|network|timeout|timed out|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket/i.test(message);
 }
 
 function hasMaterialIdentityChange(

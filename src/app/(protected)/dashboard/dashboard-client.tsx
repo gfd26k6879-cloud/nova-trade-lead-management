@@ -20,7 +20,7 @@ import {
   getDashboardSummaryPanelsAction,
 } from "@/lib/crawl/actions";
 import { queueMissingAiVerificationsAction } from "@/lib/leads/actions";
-import type { AdminFulfillmentSummary, StatisticsSummary, TeamBoardSummary } from "@/lib/db/queries";
+import type { AdminFulfillmentSummary, LaunchReadinessSummary, StatisticsSummary, TeamBoardSummary } from "@/lib/db/queries";
 import type { DiscoverySizeEstimate, DiscoveryMode, PaginationPolicy } from "@/lib/discovery-sizing";
 
 const CATEGORY_OPTIONS = [
@@ -197,6 +197,7 @@ interface DashboardStats {
   countiesCompleted: number;
   aiQueueStats: AiQueueStats;
   schedulerHealth: SchedulerHealth;
+  launchReadiness: LaunchReadinessSummary;
   googleDiscoveryDefaults: {
     discoveryMode: DiscoveryMode;
     paginationPolicy: PaginationPolicy;
@@ -829,6 +830,10 @@ export function DashboardClient({
           <p className="text-xs font-medium" style={{ color: "#991b1b" }}>Latest discovery error</p>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{stats.lastError}</p>
         </section>
+      )}
+
+      {stats.launchReadiness.totalCount > 0 && (
+        <LaunchReadinessPanel summary={stats.launchReadiness} />
       )}
 
       <section className="grid gap-4 lg:grid-cols-3">
@@ -1610,6 +1615,44 @@ function MetricCard({ label, value, sub }: { label: string; value: string; sub?:
       <p className="mt-0.5 text-lg font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
       {sub && <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{sub}</span>}
     </div>
+  );
+}
+
+function LaunchReadinessPanel({ summary }: { summary: LaunchReadinessSummary }) {
+  const pct = summary.totalCount > 0 ? Math.round((summary.readyCount / summary.totalCount) * 100) : 0;
+  return (
+    <section className="glass rounded-2xl p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h3 className="section-label">Launch checklist</h3>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+            Invite-only public posture: trust pages can be public, app access stays admin-invited.
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>{summary.readyCount} / {summary.totalCount}</p>
+          <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>{pct}% ready · {summary.blockers} open</p>
+        </div>
+      </div>
+      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        {summary.items.map((item) => (
+          <Link
+            key={item.key}
+            href={item.href}
+            className="rounded-xl px-3 py-3 transition hover:-translate-y-0.5"
+            style={{ background: item.ready ? "rgba(34,197,94,0.1)" : "rgba(245,158,11,0.12)", border: item.ready ? "1px solid rgba(34,197,94,0.18)" : "1px solid rgba(245,158,11,0.22)" }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{item.label}</p>
+              <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: "rgba(255,255,255,0.5)", color: item.ready ? "#166534" : "#92400e" }}>
+                {item.ready ? "Ready" : "Open"}
+              </span>
+            </div>
+            <p className="mt-2 text-xs leading-5" style={{ color: "var(--text-secondary)" }}>{item.detail}</p>
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }
 

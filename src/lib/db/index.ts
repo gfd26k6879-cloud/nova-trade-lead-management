@@ -19,6 +19,7 @@ export interface DbClient {
   prepare(query: string): DbStatement;
   exec(query: string): Promise<void>;
   withStatementTimeout?<T>(timeoutMs: number, fn: () => Promise<T>): Promise<T>;
+  withTransaction?<T>(fn: () => Promise<T>): Promise<T>;
 }
 
 let _db: DbClient | null = null;
@@ -60,6 +61,88 @@ function runSqliteMigrations(db: Database.Database): void {
       // Column already exists, safe to ignore.
     }
   }
+  rebuildSqliteLeadsForEnrichmentStatusConstraint(db);
+}
+
+function rebuildSqliteLeadsForEnrichmentStatusConstraint(db: Database.Database): void {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'leads'")
+    .get() as { sql?: string } | undefined;
+  if (!row?.sql) return;
+
+  const existingColumns = getSqliteColumnNames(db, "leads");
+  const statusConstraintIsCurrent = row.sql.includes("'running'") && row.sql.includes("'retry_wait'") && row.sql.includes("'error'");
+  const leaseColumnsExist = [
+    "enrichment_attempt_count",
+    "enrichment_started_at",
+    "enrichment_finished_at",
+    "enrichment_next_retry_at",
+    "enrichment_last_error",
+    "enrichment_last_error_code",
+    "enrichment_max_attempts",
+  ].every((column) => existingColumns.has(column));
+  if (statusConstraintIsCurrent && leaseColumnsExist) return;
+
+  const tempTable = "leads__launch_readiness_migration";
+  const createLeadsSql = extractCreateTableSql("leads").replace(
+    "CREATE TABLE IF NOT EXISTS leads",
+    `CREATE TABLE ${tempTable}`,
+  );
+
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(`DROP TABLE IF EXISTS ${tempTable}`);
+    db.exec(createLeadsSql);
+    const nextColumns = getSqliteColumnNames(db, tempTable);
+    const copiedColumns = Array.from(existingColumns).filter((column) => nextColumns.has(column));
+    const columnSql = copiedColumns.map(quoteSqliteIdentifier).join(", ");
+    db.exec(`INSERT INTO ${tempTable} (${columnSql}) SELECT ${columnSql} FROM leads`);
+    db.exec("DROP TABLE leads");
+    db.exec(`ALTER TABLE ${tempTable} RENAME TO leads`);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    try {
+      db.exec(`DROP TABLE IF EXISTS ${tempTable}`);
+    } catch {
+      // Keep the original migration error.
+    }
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function getSqliteColumnNames(db: Database.Database, table: string): Set<string> {
+  const rows = db.prepare(`PRAGMA table_info(${quoteSqliteIdentifier(table)})`).all() as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
+}
+
+function extractCreateTableSql(table: string): string {
+  const startMarker = `CREATE TABLE IF NOT EXISTS ${table} (`;
+  const start = SCHEMA_SQL.indexOf(startMarker);
+  if (start === -1) throw new Error(`Could not find ${table} table schema.`);
+
+  let depth = 0;
+  for (let index = start; index < SCHEMA_SQL.length; index++) {
+    const char = SCHEMA_SQL[index];
+    if (char === "(") depth++;
+    if (char === ")") {
+      depth--;
+      if (depth === 0) {
+        return `${SCHEMA_SQL.slice(start, index + 1)};`;
+      }
+    }
+  }
+  throw new Error(`Could not parse ${table} table schema.`);
+}
+
+function quoteSqliteIdentifier(identifier: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
+    throw new Error(`Unsafe SQLite identifier: ${identifier}`);
+  }
+  return `"${identifier}"`;
 }
 
 class SqliteClient implements DbClient {
@@ -83,6 +166,18 @@ class SqliteClient implements DbClient {
 
   async withStatementTimeout<T>(_timeoutMs: number, fn: () => Promise<T>): Promise<T> {
     return fn();
+  }
+
+  async withTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    await this.exec("BEGIN IMMEDIATE");
+    try {
+      const result = await scopedDbClient.run(this, fn);
+      await this.exec("COMMIT");
+      return result;
+    } catch (error) {
+      await this.exec("ROLLBACK");
+      throw error;
+    }
   }
 }
 
@@ -142,6 +237,21 @@ class PostgresClient implements DbClient {
     }
   }
 
+  async withTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.scoped) return fn();
+    try {
+      const result = await (this.sql as Sql).begin(async (sql) => {
+        return scopedDbClient.run(new PostgresClient(sql, true), fn);
+      });
+      return result as T;
+    } catch (error) {
+      if (isTransientPostgresConnectionError(error)) {
+        await resetPostgresClient(this.sql as Sql);
+      }
+      throw error;
+    }
+  }
+
   private async runReadQuery<T>(
     query: string,
     run: (sql: Sql | TransactionSql) => Promise<T>,
@@ -182,6 +292,14 @@ export async function withDbStatementTimeout<T>(timeoutMs: number, fn: () => Pro
   const db = await getDb();
   if (typeof db.withStatementTimeout === "function") {
     return db.withStatementTimeout(timeoutMs, fn);
+  }
+  return fn();
+}
+
+export async function withDbTransaction<T>(fn: () => Promise<T>): Promise<T> {
+  const db = await getDb();
+  if (typeof db.withTransaction === "function") {
+    return db.withTransaction(fn);
   }
   return fn();
 }

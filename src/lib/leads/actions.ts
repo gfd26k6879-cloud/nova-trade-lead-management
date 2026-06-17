@@ -26,6 +26,9 @@ import {
   getOutreachEvents as dbGetOutreachEvents,
   createDemoForLead as dbCreateDemoForLead,
   getDemoByLeadId as dbGetDemoByLeadId,
+  publishDemoForLead as dbPublishDemoForLead,
+  revokeDemoForLead as dbRevokeDemoForLead,
+  unpublishDemoForLead as dbUnpublishDemoForLead,
   getAllLeadsForRecompute,
   batchUpdateScores,
   bulkUpdateLeadStatus as dbBulkUpdateStatus,
@@ -643,6 +646,48 @@ export async function createDemoForLeadAction(leadId: string) {
   if (!demo) return { error: "Unable to create demo" };
   await createAuditLog("demo_created", "lead", leadId, { demoId: demo.id, slug: demo.slug });
   revalidatePath(`/leads/${leadId}`);
+  return { success: true, demo };
+}
+
+export async function publishDemoForLeadAction(leadId: string) {
+  const session = await requirePermission("demo:create");
+  await ensureDbReady();
+  const lead = await queryLeadById(leadId);
+  if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(leadId, session);
+  if (!ownership.ok) return { error: ownership.error };
+  const demo = await dbPublishDemoForLead(leadId, session.userId);
+  if (!demo) return { error: "Unable to publish demo" };
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath(`/demo/${demo.slug}`);
+  return { success: true, demo };
+}
+
+export async function unpublishDemoForLeadAction(leadId: string) {
+  const session = await requirePermission("demo:create");
+  await ensureDbReady();
+  const lead = await queryLeadById(leadId);
+  if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(leadId, session);
+  if (!ownership.ok) return { error: ownership.error };
+  const demo = await dbUnpublishDemoForLead(leadId, session.userId);
+  if (!demo) return { error: "Demo not found" };
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath(`/demo/${demo.slug}`);
+  return { success: true, demo };
+}
+
+export async function revokeDemoForLeadAction(leadId: string, reason?: string) {
+  const session = await requirePermission("demo:create");
+  await ensureDbReady();
+  const lead = await queryLeadById(leadId);
+  if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(leadId, session);
+  if (!ownership.ok) return { error: ownership.error };
+  const demo = await dbRevokeDemoForLead(leadId, session.userId, reason?.trim() || null);
+  if (!demo) return { error: "Demo not found" };
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath(`/demo/${demo.slug}`);
   return { success: true, demo };
 }
 
