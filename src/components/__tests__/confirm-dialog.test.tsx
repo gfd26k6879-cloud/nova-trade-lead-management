@@ -36,4 +36,20 @@ describe("ConfirmDialog", () => {
 
     expect(html).toBe("");
   });
+
+  it("disables both actions and exposes progress while confirmation is running", () => {
+    const html = renderToStaticMarkup(
+      <ConfirmDialog
+        open
+        busy
+        title="Resume discovery?"
+        message="The worker will continue processing queued cells."
+        onCancel={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    expect(html.match(/disabled=""/g)).toHaveLength(2);
+    expect(html).toContain("Working...");
+  });
 });

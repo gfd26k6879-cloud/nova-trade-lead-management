@@ -34,17 +34,18 @@ export async function runInternalWorkerRoute(
   request: NextRequest,
   workerName: SchedulerWorkerName,
   fallbackPermission: Permission,
-  task: () => Promise<unknown>,
+  task: (signal?: AbortSignal) => Promise<unknown>,
 ) {
   const logRouteTiming = startRouteTiming(request.nextUrl.pathname);
   try {
+    const auth = await authorizeInternalWorkerRequest(request, fallbackPermission);
+
     await withWorkerDbTimeout(workerName, async () => {
       await ensureDbReady();
       if (shouldRunStaleWorkerCleanupOnRoute()) {
         await markStaleWorkerRunsInterrupted();
       }
     });
-    const auth = await authorizeInternalWorkerRequest(request, fallbackPermission);
 
     const settings = await withWorkerDbTimeout(workerName, getSettings);
     if (auth.source === "cron" && !isSchedulerWorkerEnabled(settings, workerName)) {
@@ -57,7 +58,9 @@ export async function runInternalWorkerRoute(
 
     const run = await withWorkerDbTimeout(workerName, () => startWorkerRun(workerName, auth.source));
     try {
-      const taskResult = await withWorkerRouteDeadline(() => withWorkerDbTimeout(workerName, task));
+      const taskResult = await withWorkerRouteDeadline(
+        (signal) => withWorkerDbTimeout(workerName, () => task(signal)),
+      );
       const result = normalizeTaskResult(taskResult);
       const status = classifyWorkerStatus(result);
       await withWorkerDbTimeout(workerName, () => completeWorkerRun(run.id, status, result, 200, result.error ?? null));
@@ -72,12 +75,10 @@ export async function runInternalWorkerRoute(
     }
   } catch (err) {
     if (err instanceof UnauthorizedError) {
-      await recordWorkerRouteFailure(request, workerName, "error", err.status, buildAuthFailureMessage(request, err.message));
       logRouteTiming(err.status, { workerName, reason: "unauthorized" });
       return NextResponse.json({ status: "error", error: err.message }, { status: err.status });
     }
     if (err instanceof ForbiddenError) {
-      await recordWorkerRouteFailure(request, workerName, "error", err.status, err.message);
       logRouteTiming(err.status, { workerName, reason: "forbidden" });
       return NextResponse.json({ status: "error", error: err.message }, { status: err.status });
     }
@@ -120,14 +121,20 @@ function getWorkerRouteTimeoutMs(): number {
   return DEFAULT_WORKER_ROUTE_TIMEOUT_MS;
 }
 
-function withWorkerRouteDeadline<T>(fn: () => Promise<T>): Promise<T> {
+function withWorkerRouteDeadline<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const timeoutMs = getWorkerRouteTimeoutMs();
+  const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | null = null;
   const deadline = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(new WorkerRouteTimeoutError()), timeoutMs);
+    timeout = setTimeout(() => {
+      const error = new WorkerRouteTimeoutError();
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
   });
 
-  return Promise.race([fn(), deadline]).finally(() => {
+  const task = Promise.resolve().then(() => fn(controller.signal));
+  return Promise.race([task, deadline]).finally(() => {
     if (timeout) clearTimeout(timeout);
   });
 }
@@ -144,26 +151,4 @@ function withWorkerDbTimeout<T>(workerName: SchedulerWorkerName, fn: () => Promi
 
 function shouldRunStaleWorkerCleanupOnRoute(): boolean {
   return process.env.WORKER_STALE_CLEANUP_ON_ROUTE === "1";
-}
-
-async function recordWorkerRouteFailure(
-  request: NextRequest,
-  workerName: SchedulerWorkerName,
-  status: SchedulerRunStatus,
-  httpStatus: number,
-  error: string,
-): Promise<void> {
-  try {
-    const triggerSource = request.headers.get("authorization")?.trim() ? "cron" : "session";
-    const run = await startWorkerRun(workerName, triggerSource);
-    await completeWorkerRun(run.id, status, { status: "error", error, authFailure: true }, httpStatus, error);
-  } catch (recordError) {
-    console.error("Failed to record worker route failure", recordError);
-  }
-}
-
-function buildAuthFailureMessage(request: NextRequest, fallback: string): string {
-  const hasBearer = /^Bearer\s+.+/i.test(request.headers.get("authorization") ?? "");
-  if (!hasBearer) return fallback;
-  return "Worker cron authentication failed. Check WORKER_CRON_SECRET or CRON_SECRET in Vercel and the Supabase Vault worker_cron_secret value.";
 }

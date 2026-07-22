@@ -5,39 +5,16 @@ import { useCallback, useState } from "react";
 import Link from "next/link";
 import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { ManualLeadModal } from "@/components/manual-lead-modal";
+import { StatusNotice, type Notice } from "@/components/status-notice";
+import { TextPromptDialog } from "@/components/text-prompt-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
 import { ScoreBandLegend } from "@/components/score-band-legend";
 import { bulkArchiveLeadsAction, bulkRestoreArchivedLeadsAction, bulkUpdateLeadStatusAction } from "@/lib/leads/actions";
 import { getBusinessTypeLabel } from "@/lib/business-types";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
-
-interface Lead {
-  id: string;
-  place_id: string;
-  name: string | null;
-  phone: string | null;
-  address: string | null;
-  rating: number | null;
-  review_count: number | null;
-  website_status: string;
-  business_type: string;
-  score: number;
-  status: string;
-  is_excluded: boolean;
-  exclusion_reason: string | null;
-  archived_at: string | null;
-  archive_reason: string | null;
-  enrichment_status: string;
-  ai_verification_status: string;
-  ai_checked_at: string | null;
-  ai_queue_status: string;
-  ai_website_viability_status: string | null;
-  ai_confidence: number;
-  assigned_to_user_id?: string | null;
-  assigned_user_email?: string | null;
-  assigned_user_display_name?: string | null;
-}
+import type { Lead } from "@/lib/db/queries";
 
 interface Props {
   leads: Lead[];
@@ -114,7 +91,12 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
   const [search, setSearch] = useState(filters.search ?? "");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkStatus, setBulkStatus] = useState("verified");
-  const [bulkMsg, setBulkMsg] = useState<string | null>(null);
+  const [bulkMsg, setBulkMsg] = useState<Notice | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const [archiveReason, setArchiveReason] = useState("");
+  const [archiveReasonError, setArchiveReasonError] = useState<string | null>(null);
+  const [statusConfirmOpen, setStatusConfirmOpen] = useState(false);
   const [manualLeadOpen, setManualLeadOpen] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(
     !!(filters.minReviews || filters.minRating || filters.minScore || filters.category)
@@ -159,48 +141,74 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
     }
   };
 
-  const handleBulkUpdate = async () => {
+  const applyBulkUpdate = async () => {
     if (selected.size === 0) return;
-    const result = await bulkUpdateLeadStatusAction(Array.from(selected), bulkStatus) as { count?: number; error?: string };
-    if (result.error) {
-      setBulkMsg(result.error ?? "Error");
+    setBulkBusy(true);
+    try {
+      const result = await bulkUpdateLeadStatusAction(Array.from(selected), bulkStatus) as { count?: number; error?: string };
+      if (result.error) {
+        setBulkMsg({ text: result.error ?? "Error", tone: "danger" });
+        return;
+      }
+      setBulkMsg({ text: `Updated ${result.count ?? 0} leads to "${bulkStatus.replace(/_/g, " ")}"`, tone: "success" });
+      setSelected(new Set());
+      setTimeout(() => setBulkMsg(null), 3000);
+      router.refresh();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkUpdate = () => {
+    if (bulkStatus === "closed_won" || bulkStatus === "closed_lost") {
+      setStatusConfirmOpen(true);
       return;
     }
-    setBulkMsg(`Updated ${result.count ?? 0} leads to "${bulkStatus.replace(/_/g, " ")}"`);
-    setSelected(new Set());
-    setTimeout(() => setBulkMsg(null), 3000);
-    router.refresh();
+    void applyBulkUpdate();
   };
 
   const handleBulkArchive = async () => {
     if (selected.size === 0) return;
-    const reason = window.prompt("Archive reason (required, at least 5 characters)");
-    if (!reason || reason.trim().length < 5) {
-      setBulkMsg("Archive reason must be at least 5 characters.");
+    const reason = archiveReason.trim();
+    if (reason.length < 5) {
+      setArchiveReasonError("Archive reason must be at least 5 characters.");
       return;
     }
-    const result = await bulkArchiveLeadsAction(Array.from(selected), reason) as { count?: number; error?: string };
-    if (result.error) {
-      setBulkMsg(result.error ?? "Error");
-      return;
+    setBulkBusy(true);
+    try {
+      const result = await bulkArchiveLeadsAction(Array.from(selected), reason) as { count?: number; error?: string };
+      if (result.error) {
+        setBulkMsg({ text: result.error ?? "Error", tone: "danger" });
+        return;
+      }
+      setBulkMsg({ text: `Archived ${result.count ?? 0} leads`, tone: "success" });
+      setSelected(new Set());
+      setArchiveDialogOpen(false);
+      setArchiveReason("");
+      setArchiveReasonError(null);
+      setTimeout(() => setBulkMsg(null), 3000);
+      router.refresh();
+    } finally {
+      setBulkBusy(false);
     }
-    setBulkMsg(`Archived ${result.count ?? 0} leads`);
-    setSelected(new Set());
-    setTimeout(() => setBulkMsg(null), 3000);
-    router.refresh();
   };
 
   const handleBulkRestore = async () => {
     if (selected.size === 0) return;
-    const result = await bulkRestoreArchivedLeadsAction(Array.from(selected)) as { count?: number; error?: string };
-    if (result.error) {
-      setBulkMsg(result.error ?? "Error");
-      return;
+    setBulkBusy(true);
+    try {
+      const result = await bulkRestoreArchivedLeadsAction(Array.from(selected)) as { count?: number; error?: string };
+      if (result.error) {
+        setBulkMsg({ text: result.error ?? "Error", tone: "danger" });
+        return;
+      }
+      setBulkMsg({ text: `Restored ${result.count ?? 0} leads`, tone: "success" });
+      setSelected(new Set());
+      setTimeout(() => setBulkMsg(null), 3000);
+      router.refresh();
+    } finally {
+      setBulkBusy(false);
     }
-    setBulkMsg(`Restored ${result.count ?? 0} leads`);
-    setSelected(new Set());
-    setTimeout(() => setBulkMsg(null), 3000);
-    router.refresh();
   };
 
   return (
@@ -390,15 +398,19 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
                 <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
               ))}
             </select>
-            <button type="button" className="btn-primary text-xs" onClick={handleBulkUpdate}>Apply Status</button>
+            <button type="button" className="btn-primary text-xs" disabled={bulkBusy} onClick={handleBulkUpdate}>{bulkBusy ? "Applying..." : "Apply Status"}</button>
             {canArchive && filters.archived === "archived" && (
-              <button type="button" className="btn-glass text-xs" onClick={handleBulkRestore}>Restore selected</button>
+              <button type="button" className="btn-glass text-xs" disabled={bulkBusy} onClick={handleBulkRestore}>Restore selected</button>
             )}
             {canArchive && filters.archived !== "archived" && (
-              <button type="button" className="btn-glass text-xs" onClick={handleBulkArchive}>Archive selected</button>
+              <button type="button" className="btn-glass text-xs" disabled={bulkBusy} onClick={() => {
+                setArchiveReason("");
+                setArchiveReasonError(null);
+                setArchiveDialogOpen(true);
+              }}>Archive selected</button>
             )}
-            <button type="button" className="btn-glass text-xs" onClick={() => setSelected(new Set())}>Clear</button>
-            {bulkMsg && <span className="text-xs" style={{ color: "#166534" }}>{bulkMsg}</span>}
+            <button type="button" className="btn-glass text-xs" disabled={bulkBusy} onClick={() => setSelected(new Set())}>Clear</button>
+            {bulkMsg && <StatusNotice notice={bulkMsg} compact />}
           </div>
         )}
 
@@ -499,7 +511,7 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
                           </span>
                         )}
                         {lead.enrichment_status === "enriched" && (
-                          <span className="ml-1 inline-block rounded px-1.5 py-0.5 text-[0.65rem] font-medium" style={{ background: "rgba(34,197,94,0.1)", color: "#166534" }}>E</span>
+                          <span className="ml-1 inline-block rounded px-1.5 py-0.5 text-[0.65rem] font-medium" style={{ background: "var(--success-bg)", color: "var(--success-text)" }}>E</span>
                         )}
                       </td>
                     </tr>
@@ -534,6 +546,37 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
           </>
         )}
       </section>
+      <TextPromptDialog
+        open={archiveDialogOpen}
+        title={`Archive ${selected.size} selected lead${selected.size === 1 ? "" : "s"}?`}
+        message="Archived leads leave active inventory but keep their history, outreach, demos, and AI artifacts."
+        label="Archive reason"
+        value={archiveReason}
+        confirmLabel="Archive selected"
+        busy={bulkBusy}
+        error={archiveReasonError}
+        onChange={(value) => {
+          setArchiveReason(value);
+          setArchiveReasonError(null);
+        }}
+        onCancel={() => setArchiveDialogOpen(false)}
+        onConfirm={handleBulkArchive}
+      />
+      <ConfirmDialog
+        open={statusConfirmOpen}
+        title={`Mark ${selected.size} lead${selected.size === 1 ? "" : "s"} ${bulkStatus.replace(/_/g, " ")}?`}
+        message="Closing leads changes pipeline reporting and removes them from active outreach views. Confirm the selected rows are correct."
+        confirmLabel={`Mark ${bulkStatus.replace(/_/g, " ")}`}
+        busy={bulkBusy}
+        onCancel={() => setStatusConfirmOpen(false)}
+        onConfirm={async () => {
+          try {
+            await applyBulkUpdate();
+          } finally {
+            setStatusConfirmOpen(false);
+          }
+        }}
+      />
       <ManualLeadModal open={manualLeadOpen} onClose={() => setManualLeadOpen(false)} />
     </PageShell>
   );

@@ -9,7 +9,8 @@ interface ConfirmDialogProps {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  onConfirm: () => void;
+  busy?: boolean;
+  onConfirm: () => void | Promise<void>;
   onCancel: () => void;
 }
 
@@ -19,6 +20,7 @@ export function ConfirmDialog({
   message,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
+  busy = false,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -31,7 +33,7 @@ export function ConfirmDialog({
     open,
     dialogRef,
     initialFocusRef: cancelButtonRef,
-    onClose: onCancel,
+    onClose: () => { if (!busy) onCancel(); },
   });
 
   if (!open) return null;
@@ -40,7 +42,7 @@ export function ConfirmDialog({
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center"
       style={{ background: "rgba(0,0,0,0.3)", backdropFilter: "blur(4px)" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+      onClick={(e) => { if (!busy && e.target === e.currentTarget) onCancel(); }}
     >
       <div
         ref={dialogRef}
@@ -54,8 +56,8 @@ export function ConfirmDialog({
         <h3 id={titleId} className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{title}</h3>
         <p id={descriptionId} className="mt-2 text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>{message}</p>
         <div className="mt-5 flex items-center justify-end gap-3">
-          <button ref={cancelButtonRef} type="button" className="btn-glass text-xs" onClick={onCancel}>{cancelLabel}</button>
-          <button type="button" className="btn-primary text-xs" onClick={onConfirm}>{confirmLabel}</button>
+          <button ref={cancelButtonRef} type="button" className="btn-glass text-xs" disabled={busy} onClick={onCancel}>{cancelLabel}</button>
+          <button type="button" className="btn-primary text-xs" disabled={busy} onClick={onConfirm}>{busy ? "Working..." : confirmLabel}</button>
         </div>
       </div>
     </div>

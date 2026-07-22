@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { recomputeAllLeadQualityScores, repairAiWebsiteFindingConsistency } from "@/lib/db/queries";
 import { runInternalWorkerRoute } from "@/lib/internal-worker-route";
+import { throwIfWorkerAborted } from "@/lib/worker-abort";
 
 const DEFAULT_SCORE_RECOMPUTE_BATCH_SIZE = 100;
 
 export async function POST(request: NextRequest) {
-  return runInternalWorkerRoute(request, "score_recompute", "scores:recompute", async () => {
+  return runInternalWorkerRoute(request, "score_recompute", "scores:recompute", async (signal) => {
+    throwIfWorkerAborted(signal);
     const batchSize = getScoreRecomputeBatchSize();
-    const repaired = await repairAiWebsiteFindingConsistency(batchSize);
-    const count = await recomputeAllLeadQualityScores(batchSize);
+    const repaired = await repairAiWebsiteFindingConsistency(batchSize, signal);
+    throwIfWorkerAborted(signal);
+    const count = await recomputeAllLeadQualityScores(batchSize, signal);
+    throwIfWorkerAborted(signal);
     return { status: repaired + count > 0 ? "processed" : "idle", count, repaired };
   });
 }

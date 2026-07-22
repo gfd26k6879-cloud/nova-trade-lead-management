@@ -1,5 +1,11 @@
 import type { Lead } from "@/lib/db/queries";
+import {
+  fetchSafeHttpUrl,
+  type SafeHttpFetch,
+  type SafeHttpLookup,
+} from "@/lib/safe-http";
 import type { AiRecommendation, AiVerificationResult } from "./lead-verification";
+import { createTimeoutAbortScope } from "@/lib/abort-scope";
 
 export const WEBSITE_VIABILITY_STATUSES = [
   "usable",
@@ -40,9 +46,8 @@ export interface NormalizedAiVerification {
   websiteViability: WebsiteViabilityResult | null;
 }
 
-type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
-
 const DEFAULT_TIMEOUT_MS = 7000;
+const MAX_BODY_BYTES = 120_000;
 const MAX_BODY_CHARS = 120_000;
 
 const BROKEN_PATTERNS = [
@@ -110,11 +115,12 @@ const GENERIC_NAME_TOKENS = new Set([
 export async function assessWebsiteViability(
   lead: Lead,
   candidateUrl: string,
-  options: { fetchImpl?: FetchLike; timeoutMs?: number } = {},
+  options: { fetchImpl?: SafeHttpFetch; lookupImpl?: SafeHttpLookup; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<WebsiteViabilityResult> {
+  options.signal?.throwIfAborted();
   const requestedUrl = normalizeCandidateUrl(candidateUrl);
   const startedAt = Date.now();
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const fetchImpl = options.fetchImpl;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (!requestedUrl) {
@@ -125,15 +131,15 @@ export async function assessWebsiteViability(
     };
   }
 
-  const head = await fetchWithTimeout(fetchImpl, requestedUrl, "HEAD", timeoutMs);
+  const head = await fetchWithTimeout(fetchImpl, options.lookupImpl, requestedUrl, "HEAD", timeoutMs, options.signal);
   let chosen = head;
   let body = "";
 
   if (!head.response || head.response.status >= 400 || head.response.status === 403 || head.response.status === 405) {
-    chosen = await fetchWithTimeout(fetchImpl, requestedUrl, "GET", timeoutMs);
+    chosen = await fetchWithTimeout(fetchImpl, options.lookupImpl, requestedUrl, "GET", timeoutMs, options.signal);
     body = chosen.body;
   } else {
-    const get = await fetchWithTimeout(fetchImpl, requestedUrl, "GET", timeoutMs);
+    const get = await fetchWithTimeout(fetchImpl, options.lookupImpl, requestedUrl, "GET", timeoutMs, options.signal);
     if (get.response) {
       chosen = get;
       body = get.body;
@@ -141,7 +147,7 @@ export async function assessWebsiteViability(
   }
 
   const response = chosen.response;
-  const finalUrl = response?.url || requestedUrl;
+  const finalUrl = chosen.finalUrl || requestedUrl;
   const statusCode = response?.status ?? null;
   const title = extractTitle(body);
   const readableText = htmlToText(body).slice(0, 20_000);
@@ -155,7 +161,7 @@ export async function assessWebsiteViability(
     statusCode,
     method: chosen.method,
     responseMs,
-    redirected: finalUrl !== requestedUrl,
+    redirected: chosen.redirectCount > 0,
     ssl: finalUrl.startsWith("https://"),
     title,
     contentLength: body.length,
@@ -365,31 +371,99 @@ function normalizeCandidateUrl(value: string): string | null {
   }
 }
 
-async function fetchWithTimeout(fetchImpl: FetchLike, url: string, method: "HEAD" | "GET", timeoutMs: number): Promise<{
+async function fetchWithTimeout(fetchImpl: SafeHttpFetch | undefined, lookupImpl: SafeHttpLookup | undefined, url: string, method: "HEAD" | "GET", timeoutMs: number, signal?: AbortSignal): Promise<{
   method: "HEAD" | "GET";
   response: Response | null;
   body: string;
   error: string | null;
+  finalUrl: string;
+  redirectCount: number;
 }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abortScope = createTimeoutAbortScope(signal, timeoutMs);
   try {
-    const response = await fetchImpl(url, {
+    const result = await fetchSafeHttpUrl(url, {
       method,
-      redirect: "follow",
-      signal: controller.signal,
+      signal: abortScope.signal,
       headers: {
         "User-Agent": "NoSiteLeads-WebsiteViability/1.0",
         "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1",
       },
+    }, {
+      fetchImpl,
+      lookupImpl,
     });
-    const body = method === "GET" ? (await response.text()).slice(0, MAX_BODY_CHARS) : "";
-    return { method, response, body, error: null };
+    const response = result.response;
+    const body = method === "GET" ? await readCappedResponseText(response) : "";
+    return {
+      method,
+      response,
+      body,
+      error: null,
+      finalUrl: result.finalUrl,
+      redirectCount: result.redirectCount,
+    };
   } catch (error) {
+    signal?.throwIfAborted();
     const message = error instanceof Error ? error.message : "request failed";
-    return { method, response: null, body: "", error: message };
+    return { method, response: null, body: "", error: message, finalUrl: url, redirectCount: 0 };
   } finally {
-    clearTimeout(timeout);
+    abortScope.dispose();
+  }
+}
+
+async function readCappedResponseText(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  let streamDone = false;
+
+  try {
+    while (totalBytes < MAX_BODY_BYTES) {
+      const result = await reader.read();
+      if (result.done) {
+        streamDone = true;
+        break;
+      }
+      if (!result.value || result.value.byteLength === 0) continue;
+
+      const remainingBytes = MAX_BODY_BYTES - totalBytes;
+      const chunk = result.value.byteLength > remainingBytes
+        ? result.value.slice(0, remainingBytes)
+        : result.value;
+      chunks.push(chunk);
+      totalBytes += chunk.byteLength;
+    }
+  } finally {
+    if (streamDone) {
+      reader.releaseLock();
+    } else {
+      try {
+        await reader.cancel("Website viability response exceeded the body byte limit.");
+      } catch {
+        // The request signal may already have cancelled the response stream.
+      }
+    }
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return decodeResponseBytes(bytes, response.headers.get("content-type")).slice(0, MAX_BODY_CHARS);
+}
+
+function decodeResponseBytes(bytes: Uint8Array, contentType: string | null): string {
+  const charsetMatch = contentType?.match(/charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))/i);
+  const charset = charsetMatch?.[1] ?? charsetMatch?.[2] ?? charsetMatch?.[3] ?? "utf-8";
+  try {
+    return new TextDecoder(charset.trim()).decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
   }
 }
 

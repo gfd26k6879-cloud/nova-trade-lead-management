@@ -1,9 +1,9 @@
 import { test, expect } from "@playwright/test";
 
-import { login, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
+import { login, openAdminPage, requireE2EAuth } from "./auth-fixtures";
 
 test("Settings controls verification", async ({ page }) => {
-  skipIfMissingAuth();
+  requireE2EAuth();
   const results: { step: string; pass: boolean; note?: string }[] = [];
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));

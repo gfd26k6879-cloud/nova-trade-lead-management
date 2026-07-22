@@ -3,6 +3,21 @@ import { type NextRequest, NextResponse } from "next/server";
 import { applyNoStoreHeaders } from "@/lib/http-cache";
 import { getSupabaseServerCookieOptions } from "@/lib/supabase/cookies";
 
+const PROTECTED_PAGE_PREFIXES = [
+  "/dashboard",
+  "/coverage",
+  "/explore",
+  "/scheduler",
+  "/quality",
+  "/leads",
+  "/queue",
+  "/statistics",
+  "/settings",
+  "/users",
+  "/fulfillment",
+  "/team",
+] as const;
+
 export async function proxy(request: NextRequest) {
   const security = createSecurityContext();
   const { pathname } = request.nextUrl;
@@ -13,7 +28,7 @@ export async function proxy(request: NextRequest) {
     return withProxySecurityHeaders(applyNoStoreHeaders(NextResponse.redirect(aliasUrl)), security);
   }
 
-  const isProtectedPage = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users", "/fulfillment", "/team"].some((prefix) =>
+  const isProtectedPage = PROTECTED_PAGE_PREFIXES.some((prefix) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`)
   );
   const isProtectedApi = pathname.startsWith("/api/crawl") || pathname.startsWith("/api/export");
@@ -217,8 +232,7 @@ function getRouteAlias(pathname: string): string | null {
   };
   if (aliases[normalized]) return aliases[normalized];
 
-  const canonicalRoutes = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users", "/fulfillment", "/team"];
-  const canonical = canonicalRoutes.find((route) => route === normalized);
+  const canonical = PROTECTED_PAGE_PREFIXES.find((route) => route === normalized);
   return canonical && pathname !== canonical ? canonical : null;
 }
 

@@ -14,6 +14,8 @@ describe("primary navigation", () => {
       "Fulfillment",
       "All Leads",
       "Quality",
+      "Scheduler",
+      "Statistics",
       "Settings",
       "Users",
     ]);

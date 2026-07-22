@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { PageShell } from "@/components/page-shell";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   getCoverageCellLedgerAction,
   getCoverageDiscoveryItemListAction,
@@ -23,47 +24,14 @@ import {
   stopCrawlRunAction,
 } from "@/lib/crawl/actions";
 import { refreshStaleUnitsAction } from "@/lib/leads/actions";
-import type { CountryCode, LocationCellType } from "@/lib/geography";
-
-interface MarketCoverageSummary {
-  marketId: string;
-  marketName: string;
-  countryCode: CountryCode;
-  countryLabel: string;
-  adminArea1: string | null;
-  totalCells: number;
-  activeCells: number;
-  discoveredCells: number;
-  totalUnits: number;
-  doneUnits: number;
-  failedUnits: number;
-  openUnits: number;
-  canceledUnits: number;
-  leadsDiscovered: number;
-  activeLeads: number;
-  lastRunAt: string | null;
-}
-
-interface LocationCellCoverage {
-  cellId: string;
-  marketId: string;
-  marketName: string;
-  countryCode: CountryCode;
-  cellType: LocationCellType;
-  cellLabel: string;
-  postalCode: string | null;
-  locality: string | null;
-  adminArea1: string | null;
-  adminArea2: string | null;
-  totalUnits: number;
-  doneUnits: number;
-  failedUnits: number;
-  openUnits: number;
-  canceledUnits: number;
-  leadsDiscovered: number;
-  activeLeads: number;
-  lastRunAt: string | null;
-}
+import type { CountryCode } from "@/lib/geography";
+import type {
+  CrawlProgress,
+  DiscoveryItemSummary,
+  LocationCellCoverage,
+  MarketCoverageSummary,
+} from "@/lib/db/queries";
+import { getStatusToneStyle } from "@/lib/status-tone";
 
 interface FailedUnit {
   zip: string;
@@ -90,46 +58,6 @@ interface CrawlRunSummary {
   market_id: string | null;
 }
 
-interface DiscoveryItem {
-  id: string;
-  name: string;
-  scopeLabel: string;
-  status: string;
-  mode: string;
-  discoveryMode: "coverage_probe" | "lead_harvest" | null;
-  marketId: string | null;
-  marketName: string | null;
-  countryCode: CountryCode | null;
-  categories: string[];
-  discoveredCount: number;
-  errorCount: number;
-  apiCallsUsed: number;
-  lastError: string | null;
-  createdAt: string;
-  startedAt: string | null;
-  endedAt: string | null;
-  totalUnits: number;
-  doneUnits: number;
-  failedUnits: number;
-  retryWaitUnits: number;
-  openUnits: number;
-  runningUnits: number;
-  canceledUnits: number;
-  pagesFetched: number;
-  rawPlacesSeen: number;
-  newPlacesSeen: number;
-  duplicatePlacesSeen: number;
-}
-
-interface CrawlProgress {
-  total: number;
-  done: number;
-  failed: number;
-  retryWait: number;
-  pending: number;
-  running: number;
-  canceled: number;
-}
 
 interface CrawlWorkerState {
   enabled: boolean;
@@ -216,7 +144,7 @@ interface Props {
   selectedRunId?: string | null;
   markets: MarketCoverageSummary[];
   cells: LocationCellCoverage[];
-  discoveryItems: DiscoveryItem[];
+  discoveryItems: DiscoveryItemSummary[];
   loadWarnings: string[];
   run: CrawlRunSummary | null;
   progress: CrawlProgress | null;
@@ -622,7 +550,7 @@ export function CoverageClient({
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" className="btn-glass text-xs" onClick={() => router.refresh()}>Refresh</button>
-            <Link href="/dashboard#run-controls" className="btn-primary text-xs">Start New Discovery</Link>
+            <Link href="/dashboard#discovery" className="btn-primary text-xs">Start New Discovery</Link>
           </div>
         </div>
 
@@ -646,7 +574,7 @@ export function CoverageClient({
                   ))}
                 </select>
               </label>
-              <div className="min-w-0 overflow-hidden rounded-xl p-3 text-sm" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>
+              <div className="min-w-0 overflow-hidden rounded-xl p-3 text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)", color: "var(--text-secondary)" }}>
                 <p className="break-words font-semibold" style={{ color: "var(--text-primary)" }}>{selectedDiscoveryItem?.name ?? run.name ?? "Selected discovery item"}</p>
                 <p className="mt-1 break-words text-xs">{selectedDiscoveryItem?.scopeLabel ?? run.scope_label ?? "Selected discovery item"} · Counts below are scoped to this discovery item.</p>
               </div>
@@ -674,7 +602,7 @@ export function CoverageClient({
               <Metric label="New directory candidates" value={String(newCandidateCount)} />
               <Metric label="Duplicates" value={String(duplicateCandidateCount)} />
             </div>
-            <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.42)", color: "var(--text-secondary)" }}>
+            <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)", color: "var(--text-secondary)" }}>
               {selectedDiscoveryMode === "coverage_probe" ? (
                 <p><strong style={{ color: "var(--text-primary)" }}>Coverage probe:</strong> candidates are stored in the directory database (`places_master` + observations), but active sales leads are not created until you run a lead harvest.</p>
               ) : selectedDiscoveryMode === "lead_harvest" ? (
@@ -744,8 +672,8 @@ export function CoverageClient({
                 ]}
               />
             )}
-            <div className="mt-4 h-2.5 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }}>
-              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${runPct}%`, background: runPct === 100 ? "#166534" : "var(--accent)" }} />
+            <div className="mt-4 h-2.5 overflow-hidden rounded-full" style={{ background: "var(--status-muted-bg)" }}>
+              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${runPct}%`, background: runPct === 100 ? "var(--success-text)" : "var(--accent)" }} />
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2">
               {(run.status === "running" || run.status === "queued") && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handlePause}>{busy === "pause" ? "Pausing..." : "Pause Discovery"}</button>}
@@ -778,7 +706,7 @@ export function CoverageClient({
           </>
         ) : <EmptyPanel label="No discovery run exists yet. Open Revenue, choose markets/cells and categories, then start a run." />}
         {loadWarnings.length > 0 && (
-          <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#92400e" }}>
+          <div className="mt-4 rounded-xl border px-4 py-3 text-sm" style={getStatusToneStyle("warning")}>
             <p className="font-semibold">Some coverage panels are temporarily unavailable.</p>
             <p className="mt-1 text-xs">{loadWarnings.join("; ")}</p>
           </div>
@@ -813,7 +741,7 @@ export function CoverageClient({
                 <h3 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>{market.marketName}</h3>
                 <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>{market.countryLabel}{market.adminArea1 ? ` - ${market.adminArea1}` : ""}</p>
               </div>
-              <span className="rounded-lg px-2 py-1 text-xs" style={{ background: "rgba(255,255,255,0.48)", color: "var(--text-secondary)" }}>{market.discoveredCells}/{market.activeCells} cells</span>
+              <span className="rounded-lg px-2 py-1 text-xs" style={{ background: "var(--surface-card)", color: "var(--text-secondary)" }}>{market.discoveredCells}/{market.activeCells} cells</span>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
               <Metric label="Units" value={`${market.doneUnits}/${market.totalUnits}`} />
@@ -847,7 +775,7 @@ export function CoverageClient({
           <div className="overflow-x-auto">
             <table className="glass-table min-w-[1180px]">
               <thead><tr><th>Market</th><th>Cell</th><th>Type</th><th>Area</th><th>Total</th><th>Done</th><th>Failed</th><th>Open</th><th>Leads</th><th>Last run</th></tr></thead>
-              <tbody>{visibleCells.map((cell) => <tr key={cell.cellId}><td>{cell.marketName}</td><td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{cell.cellLabel}</td><td>{cell.cellType.replace(/_/g, " ")}</td><td>{[cell.locality, cell.adminArea1, cell.countryCode].filter(Boolean).join(", ")}</td><td>{cell.totalUnits}</td><td>{cell.doneUnits}</td><td style={{ color: cell.failedUnits > 0 ? "#991b1b" : undefined }}>{cell.failedUnits}</td><td>{cell.openUnits}</td><td>{cell.activeLeads}</td><td>{formatDateTime(cell.lastRunAt)}</td></tr>)}</tbody>
+              <tbody>{visibleCells.map((cell) => <tr key={cell.cellId}><td>{cell.marketName}</td><td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{cell.cellLabel}</td><td>{cell.cellType.replace(/_/g, " ")}</td><td>{[cell.locality, cell.adminArea1, cell.countryCode].filter(Boolean).join(", ")}</td><td>{cell.totalUnits}</td><td>{cell.doneUnits}</td><td style={{ color: cell.failedUnits > 0 ? "var(--danger-text)" : undefined }}>{cell.failedUnits}</td><td>{cell.openUnits}</td><td>{cell.activeLeads}</td><td>{formatDateTime(cell.lastRunAt)}</td></tr>)}</tbody>
             </table>
           </div>
         )}
@@ -882,7 +810,7 @@ export function CoverageClient({
                     <div className="font-medium" style={{ color: "var(--text-primary)" }}>{candidate.name ?? "Unnamed business"}</div>
                     <div className="max-w-80 truncate text-xs" style={{ color: "var(--text-tertiary)" }}>{candidate.address ?? candidate.placeId}</div>
                   </td>
-                  <td>{candidate.websiteUri ? <a href={candidate.websiteUri} target="_blank" rel="noreferrer" className="underline underline-offset-2">Website</a> : <span style={{ color: "#991b1b" }}>No website</span>}</td>
+                  <td>{candidate.websiteUri ? <a href={candidate.websiteUri} target="_blank" rel="noreferrer" className="underline underline-offset-2">Website</a> : <span style={{ color: "var(--danger-text)" }}>No website</span>}</td>
                   <td>{candidate.phone ?? "Missing"}</td>
                   <td>{candidate.rating ? `${candidate.rating.toFixed(1)} (${candidate.userRatingCount ?? 0})` : "Unrated"}</td>
                   <td>{candidate.category ?? candidate.primaryType ?? candidate.categories[0] ?? "Unknown"}</td>
@@ -934,25 +862,28 @@ export function CoverageClient({
       {(progressStatus === "error" || progressStatus === "timeout") && <section className="glass rounded-2xl p-6"><RetryPanel label="Run progress is temporarily unavailable." status={progressStatus} onRetry={() => loadProgressPanel(effectiveRunId)} /></section>}
       {geography && <section className="glass rounded-2xl p-6"><h3 className="section-label">Colorado compatibility</h3><p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>{geography.zipCodesCompleted}/{geography.zipCodesSelected} selected Colorado ZIP-compatible cells completed. {geography.zipCodesNotSelected} active Colorado cells were not selected for this run.</p></section>}
       {confirmAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
-          <div className="w-full max-w-lg rounded-2xl p-6 shadow-2xl" style={{ background: "rgba(255,255,255,0.96)", border: "1px solid rgba(255,255,255,0.65)" }}>
-            <h3 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>{confirmAction.title}</h3>
-            <p className="mt-3 text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>{confirmAction.message}</p>
-            <div className="mt-6 flex flex-wrap justify-end gap-2">
-              <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={() => setConfirmAction(null)}>Keep item unchanged</button>
-              <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={async () => {
-                await confirmAction.action();
-                setConfirmAction(null);
-              }}>{confirmAction.actionLabel}</button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          open
+          title={confirmAction.title}
+          message={confirmAction.message}
+          confirmLabel={confirmAction.actionLabel}
+          cancelLabel="Keep item unchanged"
+          busy={busy !== null}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={async () => {
+            try {
+              await confirmAction.action();
+            } finally {
+              setConfirmAction(null);
+            }
+          }}
+        />
       )}
     </PageShell>
   );
 }
 
-function formatDiscoveryItemLabel(item: DiscoveryItem): string {
+function formatDiscoveryItemLabel(item: DiscoveryItemSummary): string {
   const units = item.totalUnits === 1 ? "1 unit" : `${item.totalUnits} units`;
   return `${item.name} - ${formatDateTime(item.createdAt)} - ${units} - ${formatLabel(item.status)}`;
 }
@@ -962,7 +893,7 @@ function Select({ label, value, onChange, options, labels = {} }: { label: strin
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.45)" }}><p className="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>{label}</p><p className="mt-1 text-base font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p></div>;
+  return <div className="rounded-xl border px-3 py-2" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)" }}><p className="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>{label}</p><p className="mt-1 text-base font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p></div>;
 }
 
 function OperationalPanel({
@@ -999,18 +930,21 @@ function OperationalPanel({
 }
 
 function operationalPanelColors(tone: "danger" | "warning" | "info") {
-  if (tone === "danger") return { background: "rgba(239,68,68,0.09)", border: "rgba(239,68,68,0.28)", text: "#991b1b" };
-  if (tone === "warning") return { background: "rgba(245,158,11,0.1)", border: "rgba(245,158,11,0.26)", text: "#92400e" };
-  return { background: "rgba(37,99,235,0.08)", border: "rgba(37,99,235,0.22)", text: "#1d4ed8" };
+  const style = getStatusToneStyle(tone);
+  return {
+    background: String(style.background),
+    border: String(style.borderColor),
+    text: String(style.color),
+  };
 }
 
 function EmptyPanel({ label }: { label: string }) {
-  return <div className="rounded-xl p-5 text-sm" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>{label}</div>;
+  return <div className="rounded-xl border p-5 text-sm" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)", color: "var(--text-secondary)" }}>{label}</div>;
 }
 
 function RetryPanel({ label, status, onRetry }: { label: string; status: PanelStatus; onRetry: () => void }) {
   return (
-    <div className="rounded-xl p-5 text-sm" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.22)", color: "#92400e" }}>
+    <div className="rounded-xl border p-5 text-sm" style={getStatusToneStyle("warning")}>
       <p className="font-semibold">{label}</p>
       <p className="mt-1 text-xs">Diagnostic: {status === "timeout" ? "coverage_load_timeout" : "coverage_data_unavailable"}</p>
       <button type="button" className="btn-glass mt-3 text-xs" onClick={onRetry}>Retry this panel</button>
@@ -1020,23 +954,19 @@ function RetryPanel({ label, status, onRetry }: { label: string; status: PanelSt
 
 function Alert({ text, tone }: { text: string; tone: "error" }) {
   void tone;
-  return <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", color: "#991b1b" }}>{text}</div>;
+  return <div className="rounded-xl border px-4 py-3 text-sm" role="alert" style={getStatusToneStyle("danger")}>{text}</div>;
 }
 
 function StatusPill({ status }: { status: string }) {
-  return <span className="rounded-full px-2.5 py-1 text-xs font-medium capitalize" style={{ background: statusColor(status).background, color: statusColor(status).color }}>{status.replace(/_/g, " ")}</span>;
+  return <span className="rounded-full border px-2.5 py-1 text-xs font-medium capitalize" style={getStatusToneStyle(statusTone(status))}>{status.replace(/_/g, " ")}</span>;
 }
 
-function statusColor(status: string) {
-  if (status === "done") return { background: "rgba(22,101,52,0.1)", color: "#166534" };
-  if (status === "failed") return { background: "rgba(239,68,68,0.1)", color: "#991b1b" };
-  if (status === "blocked") return { background: "rgba(239,68,68,0.14)", color: "#991b1b" };
-  if (status === "retry_wait") return { background: "rgba(245,158,11,0.12)", color: "#92400e" };
-  if (status === "running") return { background: "rgba(37,99,235,0.1)", color: "#1d4ed8" };
-  if (status === "queued" || status === "pending") return { background: "rgba(79,70,229,0.1)", color: "#4338ca" };
-  if (status === "paused") return { background: "rgba(100,116,139,0.12)", color: "#475569" };
-  if (status === "canceled") return { background: "rgba(180,83,9,0.1)", color: "#92400e" };
-  return { background: "rgba(100,116,139,0.12)", color: "#475569" };
+function statusTone(status: string): "success" | "danger" | "warning" | "info" | "muted" {
+  if (status === "done") return "success";
+  if (status === "failed" || status === "blocked") return "danger";
+  if (status === "retry_wait" || status === "canceled") return "warning";
+  if (status === "running" || status === "queued" || status === "pending") return "info";
+  return "muted";
 }
 
 function formatRunStatus(status: string | null): string {

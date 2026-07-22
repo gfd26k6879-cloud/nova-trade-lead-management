@@ -834,7 +834,7 @@ export async function runAiVerificationAction(leadId: string, options: { force?:
   if (!lead) return { error: "Lead not found" };
 
   const result = await performAiVerification(lead, options.force ?? false);
-  if ("verification" in result && result.verification?.input_hash) {
+  if ("success" in result && result.success && result.verification.input_hash) {
     await markLeadAiVerified(leadId, result.verification.input_hash);
   }
   revalidateLeadViews();
@@ -1264,7 +1264,7 @@ export async function runAiVerificationBatchAction(input: { limit?: number; busi
 
   for (const lead of leads) {
     const result = await performAiVerification(lead, false, settings);
-    if ("verification" in result && result.verification?.input_hash) {
+    if ("success" in result && result.success && result.verification.input_hash) {
       await markLeadAiVerified(lead.id, result.verification.input_hash);
     }
     results.push({
@@ -1338,7 +1338,7 @@ export async function runQualityAiVerificationBatchAction(input: {
 
   for (const lead of leads) {
     const result = await performAiVerification(lead, false, settings);
-    if ("verification" in result && result.verification?.input_hash) {
+    if ("success" in result && result.success && result.verification.input_hash) {
       await markLeadAiVerified(lead.id, result.verification.input_hash);
     }
     results.push({

@@ -6,6 +6,8 @@ import { useCallback, useMemo, useState } from "react";
 import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { HelpTip } from "@/components/help-tip";
 import { PageShell } from "@/components/page-shell";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { StatusNotice, type Notice } from "@/components/status-notice";
 import { getAiVerificationDisplay } from "@/lib/ai-verification-display";
 import {
   addLeadNoteAction,
@@ -15,10 +17,10 @@ import {
   queueQualityEnrichmentBatchAction,
   runQualityAiVerificationBatchAction,
   updateLeadPhoneVerificationStatusAction,
-  updateLeadStatusAction,
 } from "@/lib/leads/actions";
 import { getBusinessTypeLabel } from "@/lib/business-types";
 import type { LocationCell, LocationMarket, QualityFilters, QualityLead, QualitySummary } from "@/lib/db/queries";
+import { getStatusToneStyle, type StatusTone } from "@/lib/status-tone";
 
 const BUCKET_OPTIONS = [
   { value: "", label: "All quality buckets" },
@@ -85,9 +87,14 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
   const [zip, setZip] = useState(filters.zip ?? "");
   const [batchLimit, setBatchLimit] = useState("25");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<Notice | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+  const [pendingPaidBatch, setPendingPaidBatch] = useState<{
+    name: string;
+    input: Parameters<typeof runQualityAiVerificationBatchAction>[0];
+    count: number;
+  } | null>(null);
 
   const page = filters.page ?? 1;
   const pageSize = filters.pageSize ?? 50;
@@ -127,8 +134,8 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
     updateFilters({ [key]: value || null });
   }, [updateFilters]);
 
-  const flash = (text: string) => {
-    setMessage(text);
+  const flash = (text: string, tone: Notice["tone"] = "success") => {
+    setMessage({ text, tone });
     setTimeout(() => setMessage(null), 3500);
   };
 
@@ -156,9 +163,9 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
     try {
       const result = await runQualityAiVerificationBatchAction(input);
       if ("error" in result) {
-        flash(result.error ?? "AI verification failed");
+        flash(result.error ?? "AI verification failed", "danger");
       } else {
-        flash(`Processed ${result.processed}. Verified ${result.verified}, cached ${result.cached}, errors ${result.errors}.`);
+        flash(`Processed ${result.processed}. Verified ${result.verified}, cached ${result.cached}, errors ${result.errors}.`, result.errors > 0 ? "warning" : "success");
         setSelected(new Set());
         router.refresh();
       }
@@ -172,7 +179,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
     try {
       const result = await queueQualityAiVerificationBatchAction(input);
       if ("error" in result) {
-        flash(result.error ?? "Unable to queue AI verification");
+        flash(result.error ?? "Unable to queue AI verification", "danger");
       } else {
         flash(`Sent ${result.queued} to the AI queue. They will show as "Waiting for AI" until the worker processes them.`);
         setSelected(new Set());
@@ -188,7 +195,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
     try {
       const result = await queueQualityEnrichmentBatchAction(input);
       if ("error" in result) {
-        flash(result.error ?? "Unable to queue enrichment");
+        flash(result.error ?? "Unable to queue enrichment", "danger");
       } else {
         flash(`${result.queued} leads are in the enrichment backlog.`);
         setSelected(new Set());
@@ -203,7 +210,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
     setBusy(`phone-${leadId}`);
     const result = await updateLeadPhoneVerificationStatusAction(leadId, status);
     setBusy(null);
-    if ("error" in result) flash(result.error ?? "Unable to update phone");
+    if ("error" in result) flash(result.error ?? "Unable to update phone", "danger");
     else {
       flash("Phone status updated");
       router.refresh();
@@ -214,7 +221,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
     setBusy(`bucket-${leadId}`);
     const result = await markLeadQualityBucketAction(leadId, bucket);
     setBusy(null);
-    if ("error" in result) flash(result.error ?? "Unable to update quality bucket");
+    if ("error" in result) flash(result.error ?? "Unable to update quality bucket", "danger");
     else {
       flash("Quality bucket updated");
       router.refresh();
@@ -223,13 +230,18 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
 
   const markContacted = async (lead: QualityLead) => {
     setBusy(`contact-${lead.id}`);
-    await updateLeadStatusAction(lead.id, "contacted");
-    const result = await logOutreachEventAction(lead.id, lead.phone ? "call" : "other", "Marked contacted from Quality workspace");
-    setBusy(null);
-    if ("error" in result) flash(result.error ?? "Unable to log contact");
-    else {
+    try {
+      const result = await logOutreachEventAction(lead.id, lead.phone ? "call" : "other", "Marked contacted from Quality workspace");
+      if ("error" in result) {
+        flash(result.error ?? "Unable to log contact", "danger");
+        return;
+      }
       flash("Contact logged");
       router.refresh();
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Unable to log contact", "danger");
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -239,7 +251,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
     setBusy(`note-${leadId}`);
     const result = await addLeadNoteAction(leadId, body);
     setBusy(null);
-    if ("error" in result) flash(result.error ?? "Unable to add note");
+    if ("error" in result) flash(result.error ?? "Unable to add note", "danger");
     else {
       setNoteDrafts((current) => ({ ...current, [leadId]: "" }));
       flash("Note added");
@@ -307,7 +319,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
         {activeFilterChips.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2" aria-label="Active quality filters">
             {activeFilterChips.map((chip) => (
-              <span key={chip.key} className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium" style={{ borderColor: "rgba(99,102,241,0.24)", background: "rgba(99,102,241,0.09)", color: "#4338ca" }} title={chip.help}>
+              <span key={chip.key} className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium" style={{ borderColor: "var(--info-border)", background: "var(--info-bg)", color: "var(--info-text)" }} title={chip.help}>
                 {chip.label}: {chip.value}
                 <button type="button" className="text-xs font-bold" aria-label={`Remove ${chip.label} filter`} title={`Remove ${chip.label} filter`} onClick={() => updateFilters(chip.remove)}>
                   x
@@ -407,7 +419,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
           <button type="button" className="btn-glass text-xs" title="Put the top matching leads into the AI queue. They will show as Waiting for AI until the worker processes them." disabled={busy !== null} onClick={() => queueAiBatch("queue-ai", batchInput())}>
             {busy === "queue-ai" ? "Sending..." : `Send Top ${batchLimitNumber()} to AI Queue`}
           </button>
-          <button type="button" className="btn-glass text-xs" title="Process the top matching leads immediately in this request. Results should change from Not sent or Waiting to a completed AI outcome." disabled={busy !== null} onClick={() => runBatch("run-now", batchInput())}>
+          <button type="button" className="btn-glass text-xs" title="Process the top matching leads immediately in this request. Results should change from Not sent or Waiting to a completed AI outcome." disabled={busy !== null} onClick={() => setPendingPaidBatch({ name: "run-now", input: batchInput(), count: batchLimitNumber() })}>
             {busy === "run-now" ? "Processing..." : `Process AI Now (${batchLimitNumber()})`}
           </button>
           <button type="button" className="btn-glass text-xs" title="Put only the selected rows into the enrichment backlog." disabled={busy !== null || selectedIds.length === 0} onClick={() => queueEnrichmentBatch("selected-enrichment", batchInput(selectedIds))}>
@@ -417,9 +429,27 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
             {busy === "selected-ai" ? "Sending..." : `Send Selected to AI Queue (${selectedIds.length})`}
           </button>
           <HelpTip>Send to AI Queue means waiting for a background worker. Process AI Now runs verification immediately and should produce a completed AI outcome.</HelpTip>
-          {message && <span className="text-xs" style={{ color: "#166534" }}>{message}</span>}
+          {message && <StatusNotice notice={message} compact />}
         </div>
       </section>
+
+      <ConfirmDialog
+        open={Boolean(pendingPaidBatch)}
+        title="Process paid AI verification now?"
+        message={`This immediately sends up to ${pendingPaidBatch?.count ?? 0} matching leads to the configured AI model and can incur usage charges. Queuing is safer when you do not need results in this request.`}
+        confirmLabel="Process AI now"
+        cancelLabel="Keep queued workflow"
+        busy={busy === pendingPaidBatch?.name}
+        onCancel={() => setPendingPaidBatch(null)}
+        onConfirm={async () => {
+          if (!pendingPaidBatch) return;
+          try {
+            await runBatch(pendingPaidBatch.name, pendingPaidBatch.input);
+          } finally {
+            setPendingPaidBatch(null);
+          }
+        }}
+      />
 
       <section className="glass rounded-2xl p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -431,7 +461,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
         </div>
 
         {leads.length === 0 ? (
-          <div className="rounded-xl p-5 text-center text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+          <div className="rounded-xl border p-5 text-center text-sm" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)", color: "var(--text-tertiary)" }}>
             No quality candidates match these filters.
           </div>
         ) : (
@@ -480,7 +510,7 @@ export function QualityClient({ summary, leads, total, filters, businessTypeCoun
                       <div className="text-xs" style={{ color: "var(--text-tertiary)" }}>{lead.postal_code ?? lead.country_code ?? ""}</div>
                     </td>
                     <td>
-                      <span style={badge("#4338ca", "rgba(99,102,241,0.1)")} title={enrichmentHelp(lead.enrichment_status)}>{enrichmentLabel(lead.enrichment_status)}</span>
+                      <span style={badge("info")} title={enrichmentHelp(lead.enrichment_status)}>{enrichmentLabel(lead.enrichment_status)}</span>
                     </td>
                     <td>
                       <span style={websiteFindingStyle(lead)}>{websiteFindingLabel(lead)}</span>
@@ -583,25 +613,31 @@ function websiteFindingLabel(lead: QualityLead): string {
 
 function websiteFindingStyle(lead: QualityLead): React.CSSProperties {
   const status = lead.ai_verification_status;
-  if (status === "no_site_found") return badge("#166534", "rgba(34,197,94,0.12)");
-  if (status === "weak_site_found") return badge("#92400e", "rgba(245,158,11,0.13)");
-  if (status === "uncertain" || status === "mismatch") return badge("#4338ca", "rgba(99,102,241,0.12)");
-  return badge("#4b5563", "rgba(107,114,128,0.12)");
+  if (status === "no_site_found") return badge("success");
+  if (status === "weak_site_found") return badge("warning");
+  if (status === "uncertain" || status === "mismatch") return badge("info");
+  return badge("muted");
 }
 
-function badge(color: string, background: string): React.CSSProperties {
-  return { color, background, padding: "2px 8px", borderRadius: "6px", fontSize: "0.75rem", fontWeight: 600 };
+function badge(tone: StatusTone): React.CSSProperties {
+  return {
+    ...getStatusToneStyle(tone),
+    padding: "2px 8px",
+    borderRadius: "6px",
+    fontSize: "0.75rem",
+    fontWeight: 600,
+  };
 }
 
 function ArtifactBadge({ type, status }: { type: "brief" | "report"; status: string | null }) {
   const label = artifactBadgeLabel(type, status);
   const style = status === "complete"
-    ? badge("#166534", "rgba(34,197,94,0.1)")
+    ? badge("success")
     : status === "queued" || status === "running"
-      ? badge("#4338ca", "rgba(99,102,241,0.1)")
+      ? badge("info")
       : status === "error"
-        ? badge("#991b1b", "rgba(239,68,68,0.1)")
-        : badge("#4b5563", "rgba(107,114,128,0.1)");
+        ? badge("danger")
+        : badge("muted");
   return <span style={{ ...style, fontSize: "0.68rem" }} title={artifactHelp(type, status)}>{label}</span>;
 }
 

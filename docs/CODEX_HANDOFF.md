@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: June 16, 2026
+Historical handoff: June 16, 2026. The July 12, 2026 remediation checkpoint below supersedes its unqualified current-state claims.
 
 ## Active Workspace
 
@@ -14,12 +14,30 @@ The old local folder was archived because it was stale:
 
 GitHub and Vercel deploy from the active repo. Do not continue work from the archived folder.
 
+## July 12, 2026 Remediation Checkpoint
+
+- The active local branch is `codex/agile-discovery-engine`; the whole-app remediation is intentionally uncommitted, unpushed, undeployed, and includes three unapplied tracked Supabase migrations.
+- Node 24 `npm run release:check` passed: TypeScript, ESLint, 96 Vitest files / 515 tests, recovery-contract verification, a production build, and five public read-only Playwright checks.
+- Protected-page proxy coverage now has one canonical route list and includes `/explore`; the current production build redirects an unauthenticated `/explore` request to `/login` with private no-store caching before the protected layout runs.
+- AI queue audit bookkeeping is now non-critical: an audit-write failure cannot reprocess discovery or enrichment after the core queue operation succeeds, and a failed queue attempt's audit write cannot turn completed discovery/enrichment work into a retry.
+- Isolated local desktop/mobile browser QA passed for the public login/privacy flow, password-recovery navigation, and unauthenticated protected-route redirects. Authenticated admin/researcher browser QA remains blocked by absent approved E2E state or credentials.
+- Live read-only checks confirmed `https://www.nosite.xyz/api/health` and `/login` return 200 and `/queue` redirects to `/login` with the expected security headers. This does not prove the local branch is deployed.
+- Live `https://www.nosite.xyz/robots.txt` now contains the intended invite-only rules without a prepended Cloudflare-wide `Allow: /` policy. The former Managed-robots follow-up is resolved as of this checkpoint.
+- The local workspace still has no `DATABASE_URL` or linked Supabase CLI project, but read-only Supabase/Vercel connector checks now verify current migration, scheduler/backlog, privilege, deployment, and runtime-error state. Production backup/restore and authenticated browser workflows remain explicitly unverified.
+
+## July 12, 2026 Read-Only Production Evidence
+
+- Supabase `nosite-leads-prod` is `ACTIVE_HEALTHY`; its tracked remote migration history currently ends at `202606160001_launch_readiness_reliability`. The three newer local migrations (`202607100001`, `202607120001`, and `202607120002`) are not applied.
+- All 23 public application tables deny direct `SELECT` and `INSERT` to both `anon` and `authenticated`; the advisor's repeated RLS-with-no-policy notices are intentional deny-by-default, not an observed data-access leak.
+- Production is operationally paused: all five scheduler flags are disabled, no worker run exists in the last seven days, 5,744 leads remain in the AI `queued` state (last updated June 12), and one crawl run is paused. Re-enabling this will trigger provider work and was not performed.
+- Vercel production deployment `dpl_9ozH32aFsC6qgtJdK9tiWNetUec7` is `READY` at commit `783127179c8db009c388aa34d8078452063736c5`; it is the pre-remediation baseline, not this uncommitted local work. Vercel reported no runtime error clusters in the last seven days.
+
 ## Current Production State
 
 - GitHub repo: `https://github.com/Masihhedayati/lead-generation`
 - Production app: `https://www.nosite.xyz`
-- Latest deployed commit at handoff: `9a05b43`
-- Latest deployment ID at handoff: `dpl_CDrrrd8C32nKzcT1WHd3U2jkY8jP`
+- Latest deployed commit confirmed July 12: `783127179c8db009c388aa34d8078452063736c5`
+- Latest production deployment confirmed July 12: `dpl_9ozH32aFsC6qgtJdK9tiWNetUec7`
 - Vercel project: `lead-generation`
 - Runtime: Next.js 16.2.6, React 19.2.6, Node 24.x on Vercel
 - Database: Supabase Postgres in production, SQLite locally when `DATABASE_URL` is not set
@@ -100,7 +118,7 @@ Production smoke checks after deploy:
 - Unauthenticated worker and explore API probes returned `401`.
 - Production deployment is ready and aliased to `https://www.nosite.xyz`, `https://nosite.xyz`, and existing Vercel aliases.
 - Still not performed: authenticated admin/researcher browser smoke, because `E2E_STORAGE_STATE` and `E2E_SUPABASE_EMAIL`/`E2E_SUPABASE_PASSWORD` were unavailable.
-- Still owner-level follow-up: Cloudflare Managed robots content still prepends a broad `User-agent: *` / `Allow: /` block before the app's stricter invite-only robots rules.
+- Superseded July 12, 2026: live `robots.txt` no longer prepends a broad Cloudflare `Allow: /` block; the invite-only policy is now the full observed response.
 
 ## Important Caveats
 

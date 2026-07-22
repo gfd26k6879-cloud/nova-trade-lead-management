@@ -335,10 +335,36 @@ describe("AI lead verification request", () => {
       await callOpenAILeadVerifier(makeLead(), "sk-test");
     } catch (error) {
       expect(error).toBeInstanceOf(OpenAIResponseParseError);
+      expect((error as OpenAIResponseParseError).inputTokens).toBe(100);
+      expect((error as OpenAIResponseParseError).outputTokens).toBe(2400);
+      expect((error as OpenAIResponseParseError).estimatedCost).toBeGreaterThan(0);
       const diagnostic = serializeOpenAIResponseParseError(error as OpenAIResponseParseError);
       expect(diagnostic.stage).toBe("lead_verifier");
       expect(JSON.stringify(diagnostic)).toContain("max_output_tokens");
       expect(JSON.stringify(diagnostic)).toContain("resp_parse_failure");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("carries billed usage when a successful OpenAI response has no text output", async () => {
+    const raw = {
+      id: "resp_no_text",
+      status: "completed",
+      output: [],
+      usage: { input_tokens: 80, output_tokens: 12, total_tokens: 92 },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(raw), { status: 200 })));
+
+    try {
+      await callOpenAILeadVerifier(makeLead(), "sk-test");
+      expect.fail("Expected a response parse error.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(OpenAIResponseParseError);
+      expect((error as OpenAIResponseParseError).stage).toBe("lead_verifier");
+      expect((error as OpenAIResponseParseError).inputTokens).toBe(80);
+      expect((error as OpenAIResponseParseError).outputTokens).toBe(12);
+      expect((error as OpenAIResponseParseError).estimatedCost).toBeGreaterThan(0);
     } finally {
       vi.unstubAllGlobals();
     }

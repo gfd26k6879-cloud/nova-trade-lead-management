@@ -53,6 +53,34 @@ describe("proxy security headers", () => {
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
   });
 
+  it.each([
+    "/dashboard",
+    "/coverage",
+    "/explore",
+    "/scheduler",
+    "/quality",
+    "/leads",
+    "/queue",
+    "/statistics",
+    "/settings",
+    "/users",
+    "/fulfillment",
+    "/team",
+  ])("routes %s through the protected session boundary", async (pathname) => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "");
+
+    const response = await proxy(new NextRequest(`https://example.test${pathname}`));
+    const redirect = new URL(response.headers.get("location") ?? "https://example.test/");
+
+    expect(response.status).toBe(307);
+    expect(redirect.pathname).toBe("/login");
+    expect(redirect.searchParams.get("error")).toBe("missing_config");
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store, max-age=0, must-revalidate, no-transform");
+  });
+
   it("clears stale Supabase auth cookies without leaking auth errors from protected redirects", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://project.supabase.co");

@@ -1,3 +1,10 @@
+import {
+  fetchSafeHttpUrl,
+  type SafeHttpFetch,
+  type SafeHttpLookup,
+} from "@/lib/safe-http";
+import { createTimeoutAbortScope } from "@/lib/abort-scope";
+
 export interface WebsiteHealth {
   statusCode: number;
   ssl: boolean;
@@ -7,33 +14,37 @@ export interface WebsiteHealth {
   healthy: boolean;
 }
 
-export async function checkWebsiteHealth(url: string, timeoutMs = 5000): Promise<WebsiteHealth> {
+export interface WebsiteHealthCheckOptions {
+  fetchImpl?: SafeHttpFetch;
+  lookupImpl?: SafeHttpLookup;
+  signal?: AbortSignal;
+}
+
+export async function checkWebsiteHealth(
+  url: string,
+  timeoutMs = 5000,
+  options: WebsiteHealthCheckOptions = {},
+): Promise<WebsiteHealth> {
   const start = Date.now();
   let redirectCount = 0;
   let currentUrl = url;
   let statusCode = 0;
   const ssl = currentUrl.startsWith("https://");
+  const abortScope = createTimeoutAbortScope(options.signal, timeoutMs);
 
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    const response = await fetch(currentUrl, {
+    const result = await fetchSafeHttpUrl(currentUrl, {
       method: "HEAD",
-      redirect: "follow",
-      signal: controller.signal,
+      signal: abortScope.signal,
       headers: { "User-Agent": "NoSiteLeads-HealthCheck/1.0" },
+    }, {
+      fetchImpl: options.fetchImpl,
+      lookupImpl: options.lookupImpl,
     });
-
-    clearTimeout(timer);
-
+    const response = result.response;
     statusCode = response.status;
-    const finalUrl = response.url || currentUrl;
-
-    if (finalUrl !== currentUrl) {
-      redirectCount = countRedirects(currentUrl, finalUrl);
-    }
-    currentUrl = finalUrl;
+    redirectCount = result.redirectCount;
+    currentUrl = result.finalUrl;
 
     const responseMs = Date.now() - start;
     const healthy = statusCode >= 200 && statusCode < 400 && responseMs < 3000;
@@ -46,27 +57,19 @@ export async function checkWebsiteHealth(url: string, timeoutMs = 5000): Promise
       finalUrl: currentUrl,
       healthy,
     };
-  } catch (err) {
+  } catch {
+    options.signal?.throwIfAborted();
     const responseMs = Date.now() - start;
-    const isTimeout = err instanceof Error && err.name === "AbortError";
 
     return {
-      statusCode: isTimeout ? 0 : 0,
+      statusCode: 0,
       ssl,
       redirectCount,
       responseMs,
       finalUrl: currentUrl,
       healthy: false,
     };
-  }
-}
-
-function countRedirects(original: string, final: string): number {
-  try {
-    const origHost = new URL(original).hostname;
-    const finalHost = new URL(final).hostname;
-    return origHost !== finalHost ? 2 : 1;
-  } catch {
-    return 1;
+  } finally {
+    abortScope.dispose();
   }
 }

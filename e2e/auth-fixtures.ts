@@ -1,13 +1,19 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+
+import { assertE2EAuth, assertMutationSafety, hasE2EAuth } from "../scripts/e2e-safety.mjs";
 
 export const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 export const EMAIL = process.env.E2E_SUPABASE_EMAIL ?? process.env.NOSITE_BOOTSTRAP_ADMIN_EMAIL ?? "";
 export const PASSWORD = process.env.E2E_SUPABASE_PASSWORD ?? "";
-export const STORAGE_STATE = process.env.E2E_STORAGE_STATE ?? "";
-export const HAS_E2E_AUTH = Boolean(STORAGE_STATE || (EMAIL && PASSWORD));
+export const STORAGE_STATE = process.env.E2E_STORAGE_STATE?.trim() ?? "";
+export const HAS_E2E_AUTH = hasE2EAuth();
 
-export function skipIfMissingAuth(): void {
-  test.skip(!HAS_E2E_AUTH, "Set E2E_SUPABASE_EMAIL/E2E_SUPABASE_PASSWORD or E2E_STORAGE_STATE to run E2E auth tests");
+export function requireE2EAuth(): void {
+  assertE2EAuth();
+}
+
+export function requireMutationOptIn(): void {
+  assertMutationSafety();
 }
 
 export async function login(page: Page): Promise<void> {

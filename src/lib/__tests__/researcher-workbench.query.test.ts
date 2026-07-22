@@ -9,7 +9,17 @@ vi.mock("@/lib/db/index", () => {
     getDb: () => testDb,
     generateId: () => crypto.randomUUID(),
     nowISO: () => "2026-05-15T12:00:00.000Z",
-    withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
+    withDbTransaction: async <T>(fn: () => Promise<T>) => {
+      testDb.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await fn();
+        testDb.exec("COMMIT");
+        return result;
+      } catch (error) {
+        testDb.exec("ROLLBACK");
+        throw error;
+      }
+    },
   };
 });
 
@@ -160,6 +170,56 @@ describe("researcher workbench queries", () => {
     expect(lead?.decision_maker_reached).toBe(true);
     expect(lead?.quoted_amount).toBe(2500);
     expect(lead?.reminder_date).toBe("2026-05-20");
+  });
+
+  it("rolls back the outreach event when the lead update fails", async () => {
+    insertLead({ id: "lead-rollback", assignedTo: "user-1" });
+    testDb.exec(`
+      CREATE TRIGGER fail_outreach_lead_update
+      BEFORE UPDATE ON leads
+      WHEN NEW.last_contacted_at IS NOT OLD.last_contacted_at
+      BEGIN
+        SELECT RAISE(ABORT, 'blocked outreach lead update');
+      END;
+    `);
+
+    await expect(createOutreachEvent({
+      leadId: "lead-rollback",
+      channel: "call",
+      actorUserId: "user-1",
+      actorEmail: "one@example.com",
+      outcome: "contacted",
+    })).rejects.toThrow("blocked outreach lead update");
+
+    await expect(getOutreachEvents("lead-rollback")).resolves.toEqual([]);
+    const lead = await getLeadById("lead-rollback");
+    expect(lead?.status).toBe("new");
+    expect(lead?.last_contacted_at).toBeNull();
+  });
+
+  it("rolls back the contact state when quality recomputation fails", async () => {
+    insertLead({ id: "lead-score-rollback", assignedTo: "user-1" });
+    testDb.exec(`
+      CREATE TRIGGER fail_outreach_quality_recompute
+      BEFORE UPDATE OF lead_quality_score ON leads
+      BEGIN
+        SELECT RAISE(ABORT, 'blocked quality recompute');
+      END;
+    `);
+
+    await expect(createOutreachEvent({
+      leadId: "lead-score-rollback",
+      channel: "call",
+      actorUserId: "user-1",
+      actorEmail: "one@example.com",
+      outcome: "contacted",
+    })).rejects.toThrow("blocked quality recompute");
+
+    await expect(getOutreachEvents("lead-score-rollback")).resolves.toEqual([]);
+    const lead = await getLeadById("lead-score-rollback");
+    expect(lead?.status).toBe("new");
+    expect(lead?.first_contacted_at).toBeNull();
+    expect(lead?.last_contacted_at).toBeNull();
   });
 
   it("deduplicates open admin requests and rolls them up to team leads", async () => {

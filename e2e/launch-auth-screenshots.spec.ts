@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 
-import { BASE_URL, login, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, requireE2EAuth } from "./auth-fixtures";
 
 const SCREENSHOT_ROOT = "test-results/launch-auth-screenshots";
 
@@ -11,6 +11,9 @@ const protectedRoutes = [
   "/explore",
   "/leads",
   "/quality",
+  "/queue",
+  "/fulfillment",
+  "/settings",
   "/team",
   "/statistics",
   "/users",
@@ -23,7 +26,7 @@ const viewports = [
 ] as const;
 
 test.describe("Launch authenticated screenshot QA", () => {
-  skipIfMissingAuth();
+  requireE2EAuth();
   test.setTimeout(180_000);
 
   test("captures protected desktop and mobile launch routes", async ({ page }, testInfo) => {

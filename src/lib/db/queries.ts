@@ -37,6 +37,8 @@ import {
   type LocationCellType,
 } from "@/lib/geography";
 import type { AppRole } from "@/lib/permissions";
+import { throwIfWorkerAborted } from "@/lib/worker-abort";
+import { readPlaceCacheMetadata } from "@/lib/place-cache-contract";
 
 // ─── Types ───
 
@@ -1552,7 +1554,15 @@ export async function ensureDbReady(): Promise<void>{
       }
     })();
   }
-  await dbReadyPromise;
+  const pending = dbReadyPromise;
+  try {
+    await pending;
+  } catch (error) {
+    if (dbReadyPromise === pending) {
+      dbReadyPromise = null;
+    }
+    throw error;
+  }
 }
 
 function shouldRunRuntimePostgresRepairs(): boolean {
@@ -1691,8 +1701,10 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
   }
 }
 
-export async function repairAiWebsiteFindingConsistency(limit = 500): Promise<number> {
+export async function repairAiWebsiteFindingConsistency(limit = 500, signal?: AbortSignal): Promise<number> {
+  throwIfWorkerAborted(signal);
   const db = await getDb();
+  throwIfWorkerAborted(signal);
   const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
   const rows = await db.prepare(
     `SELECT id
@@ -1726,6 +1738,7 @@ export async function repairAiWebsiteFindingConsistency(limit = 500): Promise<nu
      ORDER BY updated_at ASC
      LIMIT ?`
   ).all(safeLimit) as Array<{ id: string }>;
+  throwIfWorkerAborted(signal);
 
   if (rows.length === 0) return 0;
 
@@ -1766,8 +1779,11 @@ export async function repairAiWebsiteFindingConsistency(limit = 500): Promise<nu
   );
 
   for (const row of rows) {
+    throwIfWorkerAborted(signal);
     await update.run(timestamp, row.id);
+    throwIfWorkerAborted(signal);
     await updateLeadQualityScores(row.id);
+    throwIfWorkerAborted(signal);
   }
 
   return rows.length;
@@ -5709,18 +5725,90 @@ export async function getAiUsageForActor(
   const sources = requestSources.map((source) => source.trim()).filter(Boolean);
   if (!actorUserId || sources.length === 0) return { calls: 0, cost: 0 };
   const placeholders = sources.map(() => "?").join(",");
-  const row = await db.prepare(
-    `SELECT COALESCE(COUNT(*), 0) as calls,
-            COALESCE(SUM(estimated_cost), 0) as cost
+  const params = [actorUserId, ...sources, sinceIso];
+  const events = await db.prepare(
+    `SELECT id, verification_id, estimated_cost, was_cached, metadata
      FROM ai_usage_events
      WHERE actor_user_id = ?
        AND request_source IN (${placeholders})
+       AND created_at >= ?`
+  ).all(...params) as Array<{
+    id: string;
+    verification_id: string | null;
+    estimated_cost: number;
+    was_cached: number | boolean;
+    metadata: unknown;
+  }>;
+  const verifications = await db.prepare(
+    `SELECT id, estimated_cost
+     FROM ai_lead_verifications
+     WHERE requested_by_user_id = ?
+       AND request_source IN (${placeholders})
        AND created_at >= ?
-       AND COALESCE(success, 1) = 1`
-  ).get(actorUserId, ...sources, sinceIso) as { calls: number; cost: number } | undefined;
+       AND estimated_cost > 0`
+  ).all(...params) as Array<{ id: string; estimated_cost: number }>;
+  const artifacts = await db.prepare(
+    `SELECT id, estimated_cost, attempt_count
+     FROM lead_ai_artifacts
+     WHERE requested_by_user_id = ?
+       AND request_source IN (${placeholders})
+       AND updated_at >= ?
+       AND estimated_cost > 0`
+  ).all(...params) as Array<{ id: string; estimated_cost: number; attempt_count: number }>;
+
+  const operationUsage = new Map<string, { calls: number; cost: number }>();
+  let standaloneCalls = 0;
+  let standaloneCost = 0;
+  for (const event of events) {
+    const metadata = safeParseJson<Record<string, unknown>>(event.metadata, {});
+    const artifactId = typeof metadata.artifactId === "string"
+      ? metadata.artifactId
+      : typeof metadata.artifact_id === "string"
+        ? metadata.artifact_id
+        : null;
+    const operationKey = !toBoolean(event.was_cached)
+      ? event.verification_id
+        ? `verification:${event.verification_id}`
+        : artifactId
+          ? `artifact:${artifactId}`
+          : null
+      : null;
+    const cost = Math.max(0, Number(event.estimated_cost ?? 0));
+    if (operationKey) {
+      const current = operationUsage.get(operationKey) ?? { calls: 0, cost: 0 };
+      operationUsage.set(operationKey, {
+        calls: current.calls + 1,
+        cost: current.cost + cost,
+      });
+    } else {
+      standaloneCalls += 1;
+      standaloneCost += cost;
+    }
+  }
+
+  for (const verification of verifications) {
+    const key = `verification:${verification.id}`;
+    const current = operationUsage.get(key) ?? { calls: 0, cost: 0 };
+    operationUsage.set(key, {
+      calls: Math.max(1, current.calls),
+      cost: Math.max(current.cost, Number(verification.estimated_cost ?? 0)),
+    });
+  }
+  for (const artifact of artifacts) {
+    const key = `artifact:${artifact.id}`;
+    const current = operationUsage.get(key) ?? { calls: 0, cost: 0 };
+    // Artifact rows are the durable, cumulative fallback when an attempt event is lost.
+    // An artifact updated in the active window is conservatively charged in full because
+    // the current schema has no per-attempt canonical timestamps.
+    operationUsage.set(key, {
+      calls: Math.max(current.calls, Math.max(1, Number(artifact.attempt_count) || 0)),
+      cost: Math.max(current.cost, Number(artifact.estimated_cost ?? 0)),
+    });
+  }
+
   return {
-    calls: Number(row?.calls ?? 0),
-    cost: Number(row?.cost ?? 0),
+    calls: standaloneCalls + Array.from(operationUsage.values()).reduce((sum, usage) => sum + usage.calls, 0),
+    cost: roundCurrency(standaloneCost + Array.from(operationUsage.values()).reduce((sum, usage) => sum + usage.cost, 0)),
   };
 }
 
@@ -5972,14 +6060,14 @@ export async function markLeadAiArtifactComplete(
          content_json = ?,
          sources_json = ?,
          confidence = ?,
-         usage_input_tokens = ?,
-         usage_output_tokens = ?,
-         estimated_cost = ?,
+         usage_input_tokens = usage_input_tokens + ?,
+         usage_output_tokens = usage_output_tokens + ?,
+         estimated_cost = estimated_cost + ?,
          error = NULL,
          last_error = NULL,
          next_retry_at = NULL,
          updated_at = ?
-     WHERE id = ?`
+     WHERE id = ? AND status = 'running'`
   ).run(
     JSON.stringify(input.content_json),
     JSON.stringify(input.sources_json),
@@ -6009,13 +6097,34 @@ export async function markLeadAiArtifactRetry(
   id: string,
   message: string,
   maxAttempts = 3,
-): Promise<{ status: "queued" | "error"; nextRetryAt: string | null; attemptCount: number; maxAttempts: number }> {
+  usage: { input_tokens: number; output_tokens: number; estimated_cost: number } = {
+    input_tokens: 0,
+    output_tokens: 0,
+    estimated_cost: 0,
+  },
+): Promise<{ status: "queued" | "error" | "complete"; nextRetryAt: string | null; attemptCount: number; maxAttempts: number }> {
   const db = await getDb();
+  const inputTokens = Math.max(0, Math.floor(Number(usage.input_tokens) || 0));
+  const outputTokens = Math.max(0, Math.floor(Number(usage.output_tokens) || 0));
+  const estimatedCost = roundCurrency(Math.max(0, Number(usage.estimated_cost) || 0));
   const row = await db.prepare(
-    "SELECT attempt_count, max_attempts FROM lead_ai_artifacts WHERE id = ?"
-  ).get<{ attempt_count: number; max_attempts: number }>(id);
+    "SELECT status, attempt_count, max_attempts FROM lead_ai_artifacts WHERE id = ?"
+  ).get<{ status: string; attempt_count: number; max_attempts: number }>(id);
   const currentAttempts = Math.max(0, Number(row?.attempt_count ?? 0));
   const safeMaxAttempts = Math.max(1, Math.floor(Number(row?.max_attempts ?? maxAttempts) || maxAttempts));
+  if (row?.status === "complete") {
+    if (inputTokens > 0 || outputTokens > 0 || estimatedCost > 0) {
+      await db.prepare(
+        `UPDATE lead_ai_artifacts
+         SET usage_input_tokens = usage_input_tokens + ?,
+             usage_output_tokens = usage_output_tokens + ?,
+             estimated_cost = estimated_cost + ?,
+             updated_at = ?
+         WHERE id = ? AND status = 'complete'`
+      ).run(inputTokens, outputTokens, estimatedCost, nowISO(), id);
+    }
+    return { status: "complete", nextRetryAt: null, attemptCount: currentAttempts, maxAttempts: safeMaxAttempts };
+  }
   const retryable = currentAttempts < safeMaxAttempts;
   const retryDelayMinutes = Math.min(120, Math.max(5, 5 * 2 ** Math.max(currentAttempts - 1, 0)));
   const nextRetry = retryable
@@ -6023,16 +6132,50 @@ export async function markLeadAiArtifactRetry(
     : null;
   const status: "queued" | "error" = retryable ? "queued" : "error";
 
-  await db.prepare(
+  const transition = await db.prepare(
     `UPDATE lead_ai_artifacts
      SET status = ?,
          error = CASE WHEN ? = 'error' THEN ? ELSE NULL END,
          last_error = ?,
          next_retry_at = ?,
          max_attempts = ?,
+         usage_input_tokens = usage_input_tokens + ?,
+         usage_output_tokens = usage_output_tokens + ?,
+         estimated_cost = estimated_cost + ?,
          updated_at = ?
-     WHERE id = ?`
-  ).run(status, status, message.slice(0, 1000), message.slice(0, 1000), nextRetry, safeMaxAttempts, nowISO(), id);
+     WHERE id = ? AND status IN ('queued', 'running')`
+  ).run(
+    status,
+    status,
+    message.slice(0, 1000),
+    message.slice(0, 1000),
+    nextRetry,
+    safeMaxAttempts,
+    inputTokens,
+    outputTokens,
+    estimatedCost,
+    nowISO(),
+    id,
+  );
+
+  if (transition.changes === 0) {
+    const current = await db.prepare(
+      "SELECT status FROM lead_ai_artifacts WHERE id = ?"
+    ).get<{ status: string }>(id);
+    if (current?.status === "complete") {
+      if (inputTokens > 0 || outputTokens > 0 || estimatedCost > 0) {
+        await db.prepare(
+          `UPDATE lead_ai_artifacts
+           SET usage_input_tokens = usage_input_tokens + ?,
+               usage_output_tokens = usage_output_tokens + ?,
+               estimated_cost = estimated_cost + ?,
+               updated_at = ?
+           WHERE id = ? AND status = 'complete'`
+        ).run(inputTokens, outputTokens, estimatedCost, nowISO(), id);
+      }
+      return { status: "complete", nextRetryAt: null, attemptCount: currentAttempts, maxAttempts: safeMaxAttempts };
+    }
+  }
 
   return { status, nextRetryAt: nextRetry, attemptCount: currentAttempts, maxAttempts: safeMaxAttempts };
 }
@@ -6078,12 +6221,6 @@ export async function markLeadAiVerified(leadId: string, inputHash: string): Pro
       updated_at = ?
      WHERE id = ?`
   ).run(inputHash, nowISO(), leadId);
-  const latest = await getLatestAiVerification(leadId);
-  if (latest && latest.error == null && latest.input_hash === inputHash) {
-    await updateLeadAiVerificationSummary(leadId, latest, 0);
-    return result.changes;
-  }
-  await updateLeadQualityScores(leadId);
   return result.changes;
 }
 
@@ -6617,8 +6754,10 @@ function isWeakWebsiteViability(status: WebsiteViabilityStatus | null): boolean 
   return status === "broken" || status === "parked" || status === "placeholder";
 }
 
-export async function recomputeAllLeadQualityScores(limit = 100000): Promise<number>{
+export async function recomputeAllLeadQualityScores(limit = 100000, signal?: AbortSignal): Promise<number>{
+  throwIfWorkerAborted(signal);
   const db = await getDb();
+  throwIfWorkerAborted(signal);
   const safeLimit = Math.max(1, Math.min(100000, Math.floor(limit)));
   const rows = await db.prepare(
     `SELECT id
@@ -6629,8 +6768,11 @@ export async function recomputeAllLeadQualityScores(limit = 100000): Promise<num
      ORDER BY updated_at DESC
      LIMIT ?`
   ).all(safeLimit) as Array<{ id: string }>;
+  throwIfWorkerAborted(signal);
   for (const row of rows) {
+    throwIfWorkerAborted(signal);
     await updateLeadQualityScores(row.id);
+    throwIfWorkerAborted(signal);
   }
   return rows.length;
 }
@@ -8348,10 +8490,12 @@ export async function getCachedPlaceResponse(
   if (!row) return null;
 
   const parsed = safeParseJson<Record<string, unknown>>(row.raw_json, {});
+  // Raw Google reviews are never part of the runtime cache contract. Older rows
+  // are treated as Stage A until the explicit derived-intelligence metadata exists.
+  delete parsed.reviews;
   if (requireAtmosphere) {
-    const hasReviews = Array.isArray(parsed.reviews) && parsed.reviews.length > 0;
-    const hasEditorial = typeof (parsed.editorialSummary as { text?: string } | undefined)?.text === "string";
-    if (!hasReviews && !hasEditorial) {
+    const metadata = readPlaceCacheMetadata(parsed);
+    if (metadata?.detailsStage !== "stage-b" || !metadata.reviewInsights) {
       return null;
     }
   }
@@ -8848,7 +8992,6 @@ export async function getPublishedDemoBySlug(slug: string): Promise<PublishedDem
 }
 
 export async function createOutreachEvent(input: OutreachEventInput): Promise<OutreachEvent>{
-  const db = await getDb();
   const id = generateId();
   const now = nowISO();
   const outcome = input.outcome ?? "contacted";
@@ -8856,88 +8999,91 @@ export async function createOutreachEvent(input: OutreachEventInput): Promise<Ou
   const quotedAmount = Math.max(0, Number(input.quotedAmount ?? 0) || 0);
   const closeValue = Math.max(0, Number(input.closeValue ?? 0) || 0);
 
-  await db.prepare(
-    `INSERT INTO outreach_events (
-      id, lead_id, channel, actor_user_id, actor_email,
-      contact_person_name, contact_person_role, decision_maker_reached,
-      outcome, objection_reason, quoted_amount, close_value,
-      follow_up_at, next_step, note, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    id,
-    input.leadId,
-    input.channel,
-    input.actorUserId ?? null,
-    input.actorEmail ?? null,
-    input.contactPersonName ?? null,
-    input.contactPersonRole ?? null,
-    decisionMakerReached ? 1 : 0,
-    outcome,
-    input.objectionReason ?? null,
-    quotedAmount,
-    closeValue,
-    input.followUpAt ?? null,
-    input.nextStep ?? null,
-    input.note ?? null,
-    now,
-  );
+  return withDbTransaction(async () => {
+    const db = await getDb();
+    await db.prepare(
+      `INSERT INTO outreach_events (
+        id, lead_id, channel, actor_user_id, actor_email,
+        contact_person_name, contact_person_role, decision_maker_reached,
+        outcome, objection_reason, quoted_amount, close_value,
+        follow_up_at, next_step, note, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      id,
+      input.leadId,
+      input.channel,
+      input.actorUserId ?? null,
+      input.actorEmail ?? null,
+      input.contactPersonName ?? null,
+      input.contactPersonRole ?? null,
+      decisionMakerReached ? 1 : 0,
+      outcome,
+      input.objectionReason ?? null,
+      quotedAmount,
+      closeValue,
+      input.followUpAt ?? null,
+      input.nextStep ?? null,
+      input.note ?? null,
+      now,
+    );
 
-  await db.prepare(
-    `UPDATE leads SET
-      last_contacted_at = ?,
-      first_contacted_at = COALESCE(first_contacted_at, ?),
-      first_reply_at = CASE
-        WHEN ? = 1 OR ? IN ('decision_maker_reached','meeting_set','quoted','closed_won') THEN COALESCE(first_reply_at, ?)
-        ELSE first_reply_at
-      END,
-      meeting_booked_at = CASE WHEN ? = 'meeting_set' THEN COALESCE(meeting_booked_at, ?) ELSE meeting_booked_at END,
-      demo_sent_at = CASE WHEN ? = 'demo_sent' THEN COALESCE(demo_sent_at, ?) ELSE demo_sent_at END,
-      reminder_date = COALESCE(?, reminder_date),
-      status = CASE
-        WHEN status IN ('closed_won','closed_lost') THEN status
-        WHEN ? = 'demo_sent' THEN 'preview_sent'
-        WHEN ? = 'meeting_set' THEN 'meeting_set'
-        WHEN ? = 'closed_won' THEN 'closed_won'
-        WHEN ? = 'closed_lost' THEN 'closed_lost'
-        ELSE 'contacted'
-      END,
-      pitch_outcome = ?,
-      objection_reason = COALESCE(?, objection_reason),
-      decision_maker_reached = CASE WHEN ? = 1 THEN 1 ELSE decision_maker_reached END,
-      quoted_amount = CASE WHEN ? > 0 THEN ? ELSE quoted_amount END,
-      close_value = CASE WHEN ? > 0 THEN ? ELSE close_value END,
-      updated_at = ?
-     WHERE id = ?`
-  ).run(
-    now,
-    now,
-    decisionMakerReached ? 1 : 0,
-    outcome,
-    now,
-    outcome,
-    now,
-    outcome,
-    now,
-    input.followUpAt ?? null,
-    outcome,
-    outcome,
-    outcome,
-    outcome,
-    outcome,
-    input.objectionReason ?? null,
-    decisionMakerReached ? 1 : 0,
-    quotedAmount,
-    quotedAmount,
-    closeValue,
-    closeValue,
-    now,
-    input.leadId,
-  );
+    await db.prepare(
+      `UPDATE leads SET
+        last_contacted_at = ?,
+        first_contacted_at = COALESCE(first_contacted_at, ?),
+        first_reply_at = CASE
+          WHEN ? = 1 OR ? IN ('decision_maker_reached','meeting_set','quoted','closed_won') THEN COALESCE(first_reply_at, ?)
+          ELSE first_reply_at
+        END,
+        meeting_booked_at = CASE WHEN ? = 'meeting_set' THEN COALESCE(meeting_booked_at, ?) ELSE meeting_booked_at END,
+        demo_sent_at = CASE WHEN ? = 'demo_sent' THEN COALESCE(demo_sent_at, ?) ELSE demo_sent_at END,
+        reminder_date = COALESCE(?, reminder_date),
+        status = CASE
+          WHEN status IN ('closed_won','closed_lost') THEN status
+          WHEN ? = 'demo_sent' THEN 'preview_sent'
+          WHEN ? = 'meeting_set' THEN 'meeting_set'
+          WHEN ? = 'closed_won' THEN 'closed_won'
+          WHEN ? = 'closed_lost' THEN 'closed_lost'
+          ELSE 'contacted'
+        END,
+        pitch_outcome = ?,
+        objection_reason = COALESCE(?, objection_reason),
+        decision_maker_reached = CASE WHEN ? = 1 THEN 1 ELSE decision_maker_reached END,
+        quoted_amount = CASE WHEN ? > 0 THEN ? ELSE quoted_amount END,
+        close_value = CASE WHEN ? > 0 THEN ? ELSE close_value END,
+        updated_at = ?
+       WHERE id = ?`
+    ).run(
+      now,
+      now,
+      decisionMakerReached ? 1 : 0,
+      outcome,
+      now,
+      outcome,
+      now,
+      outcome,
+      now,
+      input.followUpAt ?? null,
+      outcome,
+      outcome,
+      outcome,
+      outcome,
+      outcome,
+      input.objectionReason ?? null,
+      decisionMakerReached ? 1 : 0,
+      quotedAmount,
+      quotedAmount,
+      closeValue,
+      closeValue,
+      now,
+      input.leadId,
+    );
 
-  await updateLeadQualityScores(input.leadId);
-  const event = await db.prepare("SELECT * FROM outreach_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-  if (!event) throw new Error("Unable to create outreach event");
-  return parseOutreachEventRow(event);
+    await updateLeadQualityScores(input.leadId);
+    const event = await db.prepare("SELECT * FROM outreach_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    if (!event) throw new Error("Unable to create outreach event");
+    return parseOutreachEventRow(event);
+  });
 }
 
 export async function getOutreachEvents(leadId: string): Promise<OutreachEvent[]>{

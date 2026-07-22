@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   getDb: vi.fn(),
@@ -63,6 +63,10 @@ describe("/api/health", () => {
     routeTimingMocks.startRouteTiming.mockReturnValue(routeTimingMocks.logRouteTiming);
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns only coarse public health fields while preserving no-store headers and status timing", async () => {
     const response = await GET();
     const json = await response.json();
@@ -75,6 +79,22 @@ describe("/api/health", () => {
     expect(json).not.toHaveProperty("durationMs");
     expect(Object.keys(json).sort()).toEqual(["checkedAt", "status"]);
     expect(response.headers.get("Cache-Control")).toContain("no-store");
+    expect(queryMocks.getSettings).toHaveBeenCalledTimes(1);
     expect(routeTimingMocks.logRouteTiming).toHaveBeenCalledWith(200, { healthStatus: "ok" });
+  });
+
+  it("returns a bounded 503 response when a health dependency never settles", async () => {
+    vi.useFakeTimers();
+    queryMocks.getSettings.mockImplementation(() => new Promise(() => {}));
+
+    const responsePromise = GET();
+    await vi.advanceTimersByTimeAsync(6_000);
+    const response = await responsePromise;
+    const json = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(json.status).toBe("error");
+    expect(queryMocks.getSettings).toHaveBeenCalledTimes(1);
+    expect(routeTimingMocks.logRouteTiming).toHaveBeenCalledWith(503, { healthStatus: "error" });
   });
 });

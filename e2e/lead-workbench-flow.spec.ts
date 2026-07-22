@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { BASE_URL, login, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, requireE2EAuth, requireMutationOptIn } from "./auth-fixtures";
 
 test.describe("Lead workbench manual flow", () => {
-  skipIfMissingAuth();
+  requireE2EAuth();
+  requireMutationOptIn();
   test.setTimeout(90_000);
 
   test("creates a manual lead, logs a preset call outcome, and archives it", async ({ page }) => {

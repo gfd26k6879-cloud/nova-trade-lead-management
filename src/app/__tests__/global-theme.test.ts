@@ -37,4 +37,38 @@ describe("global theme tokens", () => {
     expect(themeToggle).toContain("btn-icon");
     expect(themeToggle).not.toContain('nextTheme === "dark" ? "Dark" : "Light"');
   });
+
+  it("keeps critical workflow states on semantic light/dark tokens", () => {
+    const quality = readFileSync(join(process.cwd(), "src/app/(protected)/quality/quality-client.tsx"), "utf8");
+    const settings = readFileSync(join(process.cwd(), "src/app/(protected)/settings/settings-client.tsx"), "utf8");
+    const kanban = readFileSync(join(process.cwd(), "src/app/(protected)/leads/kanban-client.tsx"), "utf8");
+
+    expect(quality).toContain('getStatusToneStyle');
+    expect(quality).not.toMatch(/badge\("#[0-9a-f]/i);
+    expect(settings).toContain('getStatusToneStyle');
+    expect(settings).not.toMatch(/color:\s*settings\.[^?]+\?\s*"#[0-9a-f]/i);
+    expect(kanban).toContain('var(--surface-card)');
+    expect(kanban).not.toContain("window.prompt");
+    expect(kanban).not.toContain("STATUS_COLORS");
+  });
+
+  it("keeps protected operational surfaces on theme-aware tokens", () => {
+    const operationalSurfaces = [
+      "src/app/(protected)/leads/[id]/lead-detail-client.tsx",
+      "src/app/(protected)/dashboard/dashboard-client.tsx",
+      "src/app/(protected)/scheduler/scheduler-client.tsx",
+      "src/app/(protected)/coverage/coverage-client.tsx",
+      "src/app/(protected)/fulfillment/fulfillment-client.tsx",
+      "src/app/(protected)/team/page.tsx",
+      "src/components/manual-lead-modal.tsx",
+    ];
+
+    for (const path of operationalSurfaces) {
+      const source = readFileSync(join(process.cwd(), path), "utf8");
+      expect(source).toContain("var(--surface");
+      expect(source).not.toMatch(/rgba\(\s*255\s*,\s*255\s*,\s*255/i);
+      expect(source).not.toMatch(/text-(?:red|orange|amber|yellow|green|emerald|blue|cyan|indigo|violet)-\d+/i);
+      expect(source).not.toMatch(/color:\s*[^,\n}]*["']#[0-9a-f]{3,8}["']/i);
+    }
+  });
 });

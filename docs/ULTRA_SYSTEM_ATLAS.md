@@ -9,21 +9,21 @@ flowchart LR
   operator[Operator] --> ui["Next.js App Router (React + TypeScript)"]
   ui --> actions["Server Actions"]
   ui --> routes["Route Handlers (API endpoints)"]
-  actions --> sqlite[(SQLite database)]
+  actions --> data[("Supabase Postgres (production) / SQLite (local fallback)")]
   routes --> crawl["Crawl worker"]
   routes --> enrich["Enrichment worker"]
   crawl --> places["Google Places API (Application Programming Interface)"]
   enrich --> places
-  crawl --> sqlite
-  enrich --> sqlite
-  sqlite --> views["Dashboard / Leads / Kanban / Queue / Coverage / Settings"]
+  crawl --> data
+  enrich --> data
+  data --> views["Dashboard / Leads / Kanban / Queue / Coverage / Settings"]
 ```
 
 ## 2) Route map (what each screen does)
 
 | Route | File | Purpose | Primary data path |
 |---|---|---|---|
-| `/login` | `src/app/login/page.tsx` | Invite-only sign in | `loginAction()` -> cookie session |
+| `/login` | `src/app/login/page.tsx` | Invite-only sign in | `loginAction()` -> Supabase Auth session cookie |
 | `/dashboard` | `src/app/(protected)/dashboard/page.tsx` | Crawl controls + launch checklist + run stats + cost + conversion | `getDashboardStatsAction()` + polling |
 | `/coverage` | `src/app/(protected)/coverage/page.tsx` | Zip progress and failures | coverage queries from `queries.ts` |
 | `/explore` | `src/app/(protected)/explore/page.tsx` | Map/list exploration of discovered leads | lead and map queries |
@@ -55,8 +55,8 @@ flowchart LR
 
 | Area | File | What it owns |
 |---|---|---|
-| Authentication | `src/lib/auth.ts` | Static username/password + cookie session |
-| Database bootstrap | `src/lib/db/index.ts` | SQLite connection + schema apply |
+| Authentication | `src/lib/auth.ts` | Supabase Auth session validation and app-role authorization |
+| Database bootstrap | `src/lib/db/index.ts` | Supabase Postgres through `DATABASE_URL`, with SQLite fallback locally |
 | Database schema | `src/lib/db/schema.ts` | Tables, constraints, indexes, migrations |
 | Data access | `src/lib/db/queries.ts` | Typed queries and writes |
 | Crawl loop | `src/lib/crawl/worker.ts` | Unit pick, Places fetch, dedupe, scoring, persistence |
@@ -91,7 +91,7 @@ sequenceDiagram
   participant API as process-next route
   participant W as Crawl worker
   participant GP as Google Places API
-  participant DB as SQLite
+  participant DB as Supabase Postgres / SQLite fallback
 
   UI->>API: POST every ~3 seconds
   API->>W: processNextUnit()

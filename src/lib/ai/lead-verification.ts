@@ -6,9 +6,11 @@ import {
   getConfiguredOpenAIModel,
   getOpenAIApiKey,
   OPENAI_RESPONSES_ENDPOINT,
+  type OpenAIUsageEstimate,
 } from "./config";
 import { buildLeadIdentityEvidencePacket, type EvidenceGrade, type IdentityMatchValue, type WebsiteCandidateAssessment } from "./lead-evidence";
 import type { WebsiteViabilityResult } from "./website-viability";
+import { createTimeoutAbortScope } from "@/lib/abort-scope";
 
 export const AI_VERIFICATION_STATUSES = [
   "site_found",
@@ -80,14 +82,38 @@ export interface OpenAILeadVerificationResponse {
   estimatedCost: number;
 }
 
-export class OpenAIResponseParseError extends Error {
+export type OpenAIUsageErrorStage = "lead_verifier" | "lead_adjudicator" | "artifact_final" | "artifact_review";
+
+export class OpenAIUsageError extends Error {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly estimatedCost: number;
+
   constructor(
     message: string,
-    readonly stage: "lead_verifier" | "lead_adjudicator",
-    readonly responseText: string,
-    readonly raw: Record<string, unknown>,
+    readonly stage: OpenAIUsageErrorStage,
+    usage: OpenAIUsageEstimate,
   ) {
     super(message);
+    this.name = "OpenAIUsageError";
+    this.inputTokens = usage.inputTokens;
+    this.outputTokens = usage.outputTokens;
+    this.estimatedCost = usage.estimatedCost;
+  }
+}
+
+export class OpenAIResponseParseError extends OpenAIUsageError {
+  constructor(
+    message: string,
+    stage: OpenAIUsageErrorStage,
+    readonly responseText: string,
+    readonly raw: Record<string, unknown>,
+    usageOverride?: OpenAIUsageEstimate,
+  ) {
+    const usage = usageOverride ?? estimateOpenAIUsageCost(
+      raw.usage as { input_tokens?: number; output_tokens?: number; total_tokens?: number } | undefined,
+    );
+    super(message, stage, usage);
     this.name = "OpenAIResponseParseError";
   }
 }
@@ -239,15 +265,19 @@ export function buildLeadVerificationAdjudicationRequest(
   };
 }
 
-export async function callOpenAILeadVerifier(lead: Lead, apiKeyOverride?: string): Promise<OpenAILeadVerificationResponse> {
+export async function callOpenAILeadVerifier(
+  lead: Lead,
+  apiKeyOverride?: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<OpenAILeadVerificationResponse> {
+  options.signal?.throwIfAborted();
   const apiKey = (apiKeyOverride || getOpenAIApiKey()).trim();
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not configured.");
   }
 
   const body = buildLeadVerificationRequest(lead);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45_000);
+  const abortScope = createTimeoutAbortScope(options.signal, 45_000);
 
   try {
     const response = await fetch(OPENAI_RESPONSES_ENDPOINT, {
@@ -257,7 +287,7 @@ export async function callOpenAILeadVerifier(lead: Lead, apiKeyOverride?: string
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal: abortScope.signal,
     });
 
     const raw = await response.json().catch(() => ({})) as Record<string, unknown>;
@@ -266,8 +296,7 @@ export async function callOpenAILeadVerifier(lead: Lead, apiKeyOverride?: string
       throw new Error(message);
     }
 
-    const text = extractResponseText(raw);
-    const result = parseOpenAILeadVerificationText(text, raw, "lead_verifier");
+    const result = parseOpenAILeadVerificationResponse(raw, "lead_verifier");
     const usage = estimateOpenAIUsageCost(raw.usage as { input_tokens?: number; output_tokens?: number; total_tokens?: number } | undefined);
 
     return {
@@ -279,7 +308,7 @@ export async function callOpenAILeadVerifier(lead: Lead, apiKeyOverride?: string
       estimatedCost: usage.estimatedCost,
     };
   } finally {
-    clearTimeout(timeout);
+    abortScope.dispose();
   }
 }
 
@@ -289,15 +318,16 @@ export async function callOpenAILeadVerificationAdjudicator(
   websiteViability: WebsiteViabilityResult | null,
   candidateAssessment: WebsiteCandidateAssessment,
   apiKeyOverride?: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<OpenAILeadVerificationResponse> {
+  options.signal?.throwIfAborted();
   const apiKey = (apiKeyOverride || getOpenAIApiKey()).trim();
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not configured.");
   }
 
   const body = buildLeadVerificationAdjudicationRequest(lead, result, websiteViability, candidateAssessment);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45_000);
+  const abortScope = createTimeoutAbortScope(options.signal, 45_000);
 
   try {
     const response = await fetch(OPENAI_RESPONSES_ENDPOINT, {
@@ -307,7 +337,7 @@ export async function callOpenAILeadVerificationAdjudicator(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal: abortScope.signal,
     });
 
     const raw = await response.json().catch(() => ({})) as Record<string, unknown>;
@@ -316,8 +346,7 @@ export async function callOpenAILeadVerificationAdjudicator(
       throw new Error(message);
     }
 
-    const text = extractResponseText(raw);
-    const parsed = parseOpenAILeadVerificationText(text, raw, "lead_adjudicator");
+    const parsed = parseOpenAILeadVerificationResponse(raw, "lead_adjudicator");
     const resultWithBounds = enforceAdjudicationBounds(parsed, result, candidateAssessment);
     const usage = estimateOpenAIUsageCost(raw.usage as { input_tokens?: number; output_tokens?: number; total_tokens?: number } | undefined);
 
@@ -330,7 +359,7 @@ export async function callOpenAILeadVerificationAdjudicator(
       estimatedCost: usage.estimatedCost,
     };
   } finally {
-    clearTimeout(timeout);
+    abortScope.dispose();
   }
 }
 
@@ -350,6 +379,11 @@ export function serializeOpenAIResponseParseError(error: OpenAIResponseParseErro
     stage: error.stage,
     responseText: truncateForDiagnostics(error.responseText, 12_000),
     response: summarizeOpenAIResponse(error.raw),
+    usage: {
+      inputTokens: error.inputTokens,
+      outputTokens: error.outputTokens,
+      estimatedCost: error.estimatedCost,
+    },
   };
 }
 
@@ -431,12 +465,13 @@ function extractResponseText(raw: Record<string, unknown>): string {
   return text;
 }
 
-function parseOpenAILeadVerificationText(
-  text: string,
+function parseOpenAILeadVerificationResponse(
   raw: Record<string, unknown>,
   stage: OpenAIResponseParseError["stage"],
 ): AiVerificationResult {
+  let text = "";
   try {
+    text = extractResponseText(raw);
     return parseAiVerificationResponse(text);
   } catch (error) {
     const message = error instanceof Error ? error.message : "AI verification response could not be parsed.";

@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
 
 const HEALTH_DB_TIMEOUT_MS = 5_000;
 const HEALTH_CHECK_DEADLINE_MS = 6_000;
+const HEALTH_ROUTE_DEADLINE_MS = 7_000;
 
 type HealthStatus = "ok" | "degraded" | "error";
 type HealthCheck = {
@@ -21,20 +22,6 @@ export async function GET() {
   const logRouteTiming = startRouteTiming("/api/health");
   const checks: Record<string, HealthCheck> = {};
 
-  checks.database = await runCheck(async () => {
-    await withDbStatementTimeout(HEALTH_DB_TIMEOUT_MS, async () => {
-      await ensureDbReady();
-      const db = await getDb();
-      const row = await db.prepare("SELECT 1 AS ok").get<{ ok?: number | string }>();
-      if (String(row?.ok) !== "1") throw new Error("Database probe did not return ok.");
-    });
-  }, "error", true);
-
-  checks.settings = await runCheck(async () => {
-    const settings = await withDbStatementTimeout(HEALTH_DB_TIMEOUT_MS, getSettings);
-    if (!settings.ai_model) throw new Error("Settings row is missing ai_model.");
-  }, "error", true);
-
   checks.supabaseAuth = checkRequiredEnv({
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
@@ -43,17 +30,25 @@ export async function GET() {
   checks.appUrl = checkAppUrlEnv(process.env.NEXT_PUBLIC_APP_URL);
   checks.databaseUrl = checkRequiredEnv({ DATABASE_URL: process.env.DATABASE_URL });
   checks.supabaseAdmin = checkRequiredEnv({ SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY });
-  checks.workerCronSecret = await checkWorkerCronSecret();
 
-  checks.openai = await runCheck(async () => {
-    const settings = await withDbStatementTimeout(HEALTH_DB_TIMEOUT_MS, getSettings);
-    if (!settings.openai_api_key_configured) throw new Error("OpenAI key is not configured in env or settings.");
-  }, "degraded", true);
-
-  checks.googlePlaces = await runCheck(async () => {
-    const settings = await withDbStatementTimeout(HEALTH_DB_TIMEOUT_MS, getSettings);
-    if (!settings.google_places_api_key_configured) throw new Error("Google Places key is not configured in env or settings.");
-  }, "degraded", true);
+  try {
+    const [database, settings, workerCronSecret] = await runWithDeadline(
+      () => Promise.all([checkDatabase(), checkSettings(), checkWorkerCronSecret()]),
+      HEALTH_ROUTE_DEADLINE_MS,
+    );
+    checks.database = database;
+    checks.settings = settings.settings;
+    checks.openai = settings.openai;
+    checks.googlePlaces = settings.googlePlaces;
+    checks.workerCronSecret = workerCronSecret;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    checks.database = { status: "error", message };
+    checks.settings = { status: "error", message };
+    checks.workerCronSecret = { status: "error", message };
+    checks.openai = { status: "degraded", message: "Settings health was unavailable before the route deadline." };
+    checks.googlePlaces = { status: "degraded", message: "Settings health was unavailable before the route deadline." };
+  }
 
   const criticalKeys = ["database", "settings", "supabaseAuth", "databaseUrl", "supabaseAdmin", "workerCronSecret"];
   const ready = criticalKeys.every((key) => checks[key]?.status === "ok");
@@ -70,25 +65,74 @@ export async function GET() {
   ));
 }
 
+async function checkDatabase(): Promise<HealthCheck> {
+  return runCheck(async () => {
+    await withDbStatementTimeout(HEALTH_DB_TIMEOUT_MS, async () => {
+      await ensureDbReady();
+      const db = await getDb();
+      const row = await db.prepare("SELECT 1 AS ok").get<{ ok?: number | string }>();
+      if (String(row?.ok) !== "1") throw new Error("Database probe did not return ok.");
+    });
+  }, "error", true);
+}
+
+async function checkSettings(): Promise<{ settings: HealthCheck; openai: HealthCheck; googlePlaces: HealthCheck }> {
+  const settingsResult = await runValueCheck(async () => {
+    const settings = await withDbStatementTimeout(HEALTH_DB_TIMEOUT_MS, getSettings);
+    if (!settings.ai_model) throw new Error("Settings row is missing ai_model.");
+    return settings;
+  }, "error", true);
+  const settingsCheck = settingsResult.check;
+  const settings = settingsResult.value;
+
+  if (settingsCheck.status !== "ok" || !settings) {
+    const message = settingsCheck.message ?? "Settings health is unavailable.";
+    return {
+      settings: settingsCheck,
+      openai: { status: "degraded", message },
+      googlePlaces: { status: "degraded", message },
+    };
+  }
+
+  return {
+    settings: settingsCheck,
+    openai: settings.openai_api_key_configured
+      ? { status: "ok" }
+      : { status: "degraded", message: "OpenAI key is not configured in env or settings." },
+    googlePlaces: settings.google_places_api_key_configured
+      ? { status: "ok" }
+      : { status: "degraded", message: "Google Places key is not configured in env or settings." },
+  };
+}
+
 async function runCheck(fn: () => Promise<void>, failureStatus: HealthStatus = "error", retryTransient = false): Promise<HealthCheck> {
+  const result = await runValueCheck(fn, failureStatus, retryTransient);
+  return result.check;
+}
+
+async function runValueCheck<T>(fn: () => Promise<T>, failureStatus: HealthStatus = "error", retryTransient = false): Promise<{ check: HealthCheck; value?: T }> {
   try {
-    await runWithDeadline(fn, HEALTH_CHECK_DEADLINE_MS);
-    return { status: "ok" };
+    const value = await runWithDeadline(fn, HEALTH_CHECK_DEADLINE_MS);
+    return { check: { status: "ok" }, value };
   } catch (error) {
     if (retryTransient && isTransientDbError(error)) {
       try {
-        await runWithDeadline(fn, HEALTH_CHECK_DEADLINE_MS);
-        return { status: "ok" };
+        const value = await runWithDeadline(fn, HEALTH_CHECK_DEADLINE_MS);
+        return { check: { status: "ok" }, value };
       } catch (retryError) {
         return {
-          status: failureStatus,
-          message: retryError instanceof Error ? retryError.message : String(retryError),
+          check: {
+            status: failureStatus,
+            message: retryError instanceof Error ? retryError.message : String(retryError),
+          },
         };
       }
     }
     return {
-      status: failureStatus,
-      message: error instanceof Error ? error.message : String(error),
+      check: {
+        status: failureStatus,
+        message: error instanceof Error ? error.message : String(error),
+      },
     };
   }
 }

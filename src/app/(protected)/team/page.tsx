@@ -320,7 +320,7 @@ function ActivityCard({ activity, showActor }: { activity: TeamBoardSummary["lat
       {details.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
           {details.map((detail) => (
-            <span key={detail} className="rounded-lg px-2 py-1 text-xs" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-secondary)", border: "1px solid rgba(255,255,255,0.45)" }}>
+            <span key={detail} className="rounded-lg px-2 py-1 text-xs" style={{ background: "var(--surface-muted)", color: "var(--text-secondary)", border: "1px solid var(--surface-card-border)" }}>
               {detail}
             </span>
           ))}

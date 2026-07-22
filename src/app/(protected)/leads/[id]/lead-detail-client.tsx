@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
+import { useDialogFocus } from "@/components/use-dialog-focus";
 import { createAdminRequestAction } from "@/lib/admin-requests/actions";
 import { getScoreBandStyle, resolveScoreBand, type ScoreBandThresholds } from "@/lib/score-bands";
 import { getBusinessTypeLabel } from "@/lib/business-types";
@@ -46,126 +47,20 @@ import {
   unpublishDemoForLeadAction,
 } from "@/lib/leads/actions";
 import type { AppRole } from "@/lib/permissions";
-import type { AdminRequestType } from "@/lib/db/queries";
-
-interface Lead {
-  id: string;
-  place_id: string;
-  name: string | null;
-  address: string | null;
-  phone: string | null;
-  categories: string[];
-  rating: number | null;
-  review_count: number | null;
-  website_uri: string | null;
-  website_status: string;
-  maps_uri: string | null;
-  business_status: string | null;
-  price_level: string | null;
-  photo_count: number;
-  has_opening_hours: boolean;
-  primary_type: string | null;
-  score: number;
-  status: string;
-  is_excluded: boolean;
-  exclusion_reason: string | null;
-  excluded_at: string | null;
-  archived_at: string | null;
-  archived_by_user_id: string | null;
-  archive_reason: string | null;
-  selling_niche: string | null;
-  business_type: string;
-  win_probability_score: number;
-  lead_quality_score: number;
-  quality_bucket: string;
-  easy_build_score: number;
-  cash_speed_score: number;
-  need_score: number;
-  quality_reason: string | null;
-  recommended_offer: string;
-  next_best_action: string | null;
-  phone_verification_status: string;
-  ai_verification_status: string;
-  ai_confidence: number;
-  ai_found_website_url: string | null;
-  ai_recommendation: string | null;
-  ai_summary: string | null;
-  ai_checked_at: string | null;
-  ai_website_viability_status: string | null;
-  ai_website_health: Record<string, unknown> | null;
-  ai_queue_status: string;
-  raw_opportunity_score: number;
-  verification_score: number;
-  sales_priority_score: number;
-  pitch_outcome: string | null;
-  objection_reason: string | null;
-  decision_maker_reached: boolean;
-  quoted_amount: number;
-  close_value: number;
-  demo_sent_at: string | null;
-  ai_website_feedback_status: string | null;
-  ai_corrected_website_url: string | null;
-  ai_false_positive_reason: string | null;
-  ai_reviewer_notes: string | null;
-  ai_feedback_at: string | null;
-  qualification_status: string;
-  disqualification_reason: string | null;
-  website_verified_at: string | null;
-  contactability_score: number;
-  estimated_deal_value: number;
-  notes: string | null;
-  reminder_date: string | null;
-  enrichment_status: string;
-  enriched_at: string | null;
-  review_highlights: string[] | null;
-  editorial_summary: string | null;
-  website_health: Record<string, unknown> | null;
-  website_checked_at: string | null;
-  verification: Record<string, boolean>;
-  discovered_at: string;
-  first_contacted_at: string | null;
-  first_reply_at: string | null;
-  meeting_booked_at: string | null;
-  last_contacted_at: string | null;
-  assigned_to_user_id: string | null;
-  assigned_user_email: string | null;
-  assigned_user_display_name: string | null;
-}
+import type {
+  AdminRequest,
+  AdminRequestType,
+  AiLeadVerification,
+  Demo,
+  Lead,
+  LeadAiArtifact,
+  LeadNote,
+  OutreachEvent,
+} from "@/lib/db/queries";
 
 interface DensityResult {
   count: number;
   label: string;
-}
-
-interface OutreachEvent {
-  id: string;
-  lead_id: string;
-  channel: string;
-  actor_email: string | null;
-  contact_person_name: string | null;
-  contact_person_role: string | null;
-  decision_maker_reached: boolean;
-  outcome: string;
-  objection_reason: string | null;
-  quoted_amount: number;
-  close_value: number;
-  follow_up_at: string | null;
-  next_step: string | null;
-  note: string | null;
-  created_at: string;
-}
-
-interface AdminRequest {
-  id: string;
-  request_type: AdminRequestType;
-  status: string;
-  priority: string;
-  summary: string | null;
-  contact_person_name: string | null;
-  budget_hint: string | null;
-  due_at: string | null;
-  next_step: string | null;
-  created_at: string;
 }
 
 interface OutreachPackage {
@@ -174,69 +69,6 @@ interface OutreachPackage {
   valueProps: string[];
   callToAction: string;
   fullMessage: string;
-}
-
-interface Demo {
-  id: string;
-  slug: string;
-  is_published: boolean;
-  published_at?: string | null;
-  revoked_at?: string | null;
-  view_count?: number;
-  last_viewed_at?: string | null;
-}
-
-interface AiVerification {
-  id: string;
-  lead_id: string;
-  model: string;
-  status: string;
-  confidence: number;
-  found_website_url: string | null;
-  found_email: string | null;
-  found_phone: string | null;
-  social_profiles: string[];
-  sources: Array<{ url: string; title: string | null; evidence: string }>;
-  recommendation: string;
-  reason: string;
-  summary: string;
-  website_viability_status: string | null;
-  website_health_json: Record<string, unknown> | null;
-  website_viability_reason: string | null;
-  raw_json?: Record<string, unknown>;
-  estimated_cost: number;
-  error: string | null;
-  created_at: string;
-}
-
-interface LeadNote {
-  id: string;
-  lead_id: string;
-  author_user_id: string;
-  author_email: string | null;
-  body: string;
-  created_at: string;
-  updated_at: string;
-  deleted_at: string | null;
-}
-
-interface LeadAiArtifact {
-  id: string;
-  lead_id: string;
-  artifact_type: "business_detail" | "competitive_report";
-  status: "queued" | "running" | "complete" | "error";
-  model: string;
-  input_hash: string;
-  prompt_version: string;
-  content_json: Record<string, unknown>;
-  sources_json: Array<{ url: string; title: string | null; evidence: string }>;
-  confidence: number;
-  usage_input_tokens: number;
-  usage_output_tokens: number;
-  estimated_cost: number;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
 }
 
 const STATUS_OPTIONS = ["new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost"];
@@ -319,11 +151,11 @@ const WORK_UPDATE_OPTIONS: Array<{ value: WorkUpdateAction; label: string }> = [
 
 const channelBadgeStyle = (ch: string): React.CSSProperties => {
   const colors: Record<string, { bg: string; color: string }> = {
-    call: { bg: "rgba(34,197,94,0.1)", color: "#16a34a" },
-    text: { bg: "rgba(99,102,241,0.1)", color: "#6366f1" },
-    email: { bg: "rgba(14,165,233,0.1)", color: "#0284c7" },
-    walkin: { bg: "rgba(245,158,11,0.1)", color: "#d97706" },
-    other: { bg: "rgba(0,0,0,0.05)", color: "var(--text-secondary)" },
+    call: { bg: "var(--success-bg)", color: "var(--success-text)" },
+    text: { bg: "var(--info-bg)", color: "var(--info-text)" },
+    email: { bg: "var(--info-bg)", color: "var(--info-text)" },
+    walkin: { bg: "var(--warning-bg)", color: "var(--warning-text)" },
+    other: { bg: "var(--status-muted-bg)", color: "var(--status-muted-text)" },
   };
   const c = colors[ch] ?? colors.other;
   return { background: c.bg, color: c.color, padding: "2px 8px", borderRadius: "6px", fontSize: "0.7rem", fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "0.05em" };
@@ -360,7 +192,7 @@ export function LeadDetailClient({
   initialAdminRequests: AdminRequest[];
   initialLeadNotes: LeadNote[];
   initialDemo: Demo | null;
-  initialAiVerification: AiVerification | null;
+  initialAiVerification: AiLeadVerification | null;
   initialAiArtifacts: LeadAiArtifact[];
   scoreBreakdown?: ScoreBreakdown;
   density?: DensityResult;
@@ -392,7 +224,7 @@ export function LeadDetailClient({
   const [meetingBooked, setMeetingBooked] = useState(lead.meeting_booked_at);
   const [demo, setDemo] = useState<Demo | null>(initialDemo);
   const [demoLoading, setDemoLoading] = useState(false);
-  const [aiVerification, setAiVerification] = useState<AiVerification | null>(initialAiVerification);
+  const [aiVerification, setAiVerification] = useState<AiLeadVerification | null>(initialAiVerification);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiApplying, setAiApplying] = useState<string | null>(null);
   const [artifactLoading, setArtifactLoading] = useState<string | null>(null);
@@ -400,8 +232,8 @@ export function LeadDetailClient({
   const [leadNoteBody, setLeadNoteBody] = useState("");
   const [noteLoading, setNoteLoading] = useState(false);
   const [assignedToUserId, setAssignedToUserId] = useState(lead.assigned_to_user_id);
-  const [qualityBucket, setQualityBucket] = useState(lead.quality_bucket);
-  const [phoneVerificationStatus, setPhoneVerificationStatus] = useState(lead.phone_verification_status);
+  const [qualityBucket, setQualityBucket] = useState<string>(lead.quality_bucket);
+  const [phoneVerificationStatus, setPhoneVerificationStatus] = useState<string>(lead.phone_verification_status);
   const [aiFeedbackStatus, setAiFeedbackStatus] = useState(lead.ai_website_feedback_status ?? "uncertain");
   const [aiCorrectedWebsiteUrl, setAiCorrectedWebsiteUrl] = useState(lead.ai_corrected_website_url ?? "");
   const [aiFalsePositiveReason, setAiFalsePositiveReason] = useState(lead.ai_false_positive_reason ?? "");
@@ -416,7 +248,7 @@ export function LeadDetailClient({
   const [factPhone, setFactPhone] = useState(lead.phone ?? "");
   const [factAddress, setFactAddress] = useState(lead.address ?? "");
   const [factWebsiteUrl, setFactWebsiteUrl] = useState(lead.website_uri ?? "");
-  const [factBusinessType, setFactBusinessType] = useState(lead.business_type ?? "");
+  const [factBusinessType, setFactBusinessType] = useState<string>(lead.business_type ?? "");
   const [factPrimaryType, setFactPrimaryType] = useState(lead.primary_type ?? "");
   const [factStatus, setFactStatus] = useState(lead.status);
   const [factNotes, setFactNotes] = useState(lead.notes ?? "");
@@ -919,7 +751,7 @@ export function LeadDetailClient({
         ? await runAiVerificationAction(lead.id, { force })
         : await runResearcherAiCheckAction(lead.id);
       if ("verification" in result && result.verification) {
-        setAiVerification(result.verification as AiVerification);
+        setAiVerification(result.verification as AiLeadVerification);
         flash(result.cached ? "AI check loaded from cache" : isAdmin ? "AI verification complete" : "AI check complete");
         router.refresh();
       } else if ("error" in result) {
@@ -1066,7 +898,7 @@ export function LeadDetailClient({
     try {
       const result = await repairLeadAiWebsiteViabilityAction(lead.id);
       if ("verification" in result && result.verification) {
-        setAiVerification(result.verification as AiVerification);
+        setAiVerification(result.verification as AiLeadVerification);
         flash("Website viability re-checked");
         router.refresh();
       } else if ("error" in result) {
@@ -1281,7 +1113,7 @@ export function LeadDetailClient({
         <div className="flex flex-wrap items-center justify-end gap-2">
           <span
             className="rounded-md border px-2 py-0.5 text-xs font-semibold capitalize"
-            style={{ background: "rgba(99,102,241,0.08)", borderColor: "rgba(99,102,241,0.18)", color: "#6366f1" }}
+            style={{ background: "var(--info-bg)", borderColor: "var(--info-border)", color: "var(--info-text)" }}
           >
             {currentUser.role}
           </span>
@@ -1291,7 +1123,7 @@ export function LeadDetailClient({
           {archivedAt && (
             <span
               className="rounded-md border px-2 py-0.5 text-xs font-semibold"
-              style={{ background: "rgba(15,23,42,0.1)", borderColor: "rgba(15,23,42,0.2)", color: "#0f172a" }}
+              style={{ background: "var(--status-muted-bg)", borderColor: "var(--status-muted-border)", color: "var(--status-muted-text)" }}
               title={archiveReason || "Archived from active inventory"}
             >
               Archived
@@ -1300,7 +1132,7 @@ export function LeadDetailClient({
           {isExcluded && (
             <span
               className="rounded-md border px-2 py-0.5 text-xs font-semibold"
-              style={{ background: "rgba(107,114,128,0.12)", borderColor: "rgba(107,114,128,0.24)", color: "#4b5563" }}
+              style={{ background: "var(--status-muted-bg)", borderColor: "var(--status-muted-border)", color: "var(--status-muted-text)" }}
               title={exclusionReason || "Excluded from scoring and queue"}
             >
               Excluded
@@ -1309,7 +1141,7 @@ export function LeadDetailClient({
           <ScoreBandBadge score={lead.score} thresholds={scoreThresholds} />
           {saveMsg && (
             <span className="rounded-lg px-3 py-1 text-xs font-medium"
-              style={{ background: "rgba(34,197,94,0.1)", color: "#16a34a" }}>
+              style={{ background: "var(--success-bg)", color: "var(--success-text)" }}>
               {saveMsg}
             </span>
           )}
@@ -1380,7 +1212,7 @@ export function LeadDetailClient({
               </div>
             </div>
             {!canEditLead && (
-              <p className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(245,158,11,0.12)", color: "#92400e" }}>
+              <p className="mt-4 rounded-xl border px-4 py-3 text-sm" style={{ background: "var(--warning-bg)", borderColor: "var(--warning-border)", color: "var(--warning-text)" }}>
                 {isClaimedByOther ? `This lead is already owned by ${lead.assigned_user_display_name || lead.assigned_user_email || "another researcher"}.` : "Claim this lead before changing workflow, notes, follow-ups, or contact history."}
               </p>
             )}
@@ -1415,7 +1247,7 @@ export function LeadDetailClient({
                 {logging ? "Logging..." : "Log outcome"}
               </button>
             </div>
-            <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.42)" }}>
+            <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl px-3 py-2" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
               <span className="text-xs font-medium uppercase" style={{ color: "var(--text-tertiary)" }}>Call presets</span>
               {CALL_OUTCOME_PRESETS.map((preset) => (
                 <button
@@ -1465,12 +1297,12 @@ export function LeadDetailClient({
                 <textarea className="glass-input w-full" rows={3} value={eventNote} onChange={(e) => setEventNote(e.target.value)} disabled={!canEditLead} placeholder="What happened?" />
               </label>
             </div>
-            <details className="mt-4 rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.42)" }}>
+            <details className="mt-4 rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
               <summary className="cursor-pointer text-sm font-medium" style={{ color: "var(--text-primary)" }}>
                 Deal details and objections
               </summary>
               <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-                <label className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.35)" }}>
+                <label className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "var(--surface-muted)" }}>
                   <input type="checkbox" checked={decisionMakerReached} onChange={(e) => setDecisionMakerReached(e.target.checked)} disabled={!canEditLead} />
                   <span className="text-sm" style={{ color: "var(--text-primary)" }}>Decision maker reached</span>
                 </label>
@@ -1497,7 +1329,7 @@ export function LeadDetailClient({
             ) : (
               <div className="mt-3 space-y-3">
                 {activityTimeline.map((item) => (
-                  <article key={item.id} className="flex items-start gap-3 rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+                  <article key={item.id} className="flex items-start gap-3 rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
                     <span style={item.kind === "outreach" ? channelBadgeStyle(item.channel ?? "other") : channelBadgeStyle("other")}>
                       {item.kind === "outreach" ? item.channel === "walkin" ? "in person" : item.channel ?? "outreach" : "note"}
                     </span>
@@ -1562,7 +1394,7 @@ export function LeadDetailClient({
             <section className="glass rounded-2xl p-6">
               <div className="flex items-center justify-between">
                 <h3 className="section-label">Enrichment Data</h3>
-                <span className="rounded-lg px-2.5 py-1 text-xs font-medium" style={{ background: "rgba(34,197,94,0.1)", color: "#16a34a" }}>Enriched</span>
+                <span className="rounded-lg px-2.5 py-1 text-xs font-medium" style={{ background: "var(--success-bg)", color: "var(--success-text)" }}>Enriched</span>
               </div>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <div><span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Photos</span><p className="text-sm" style={{ color: "var(--text-primary)" }}>{lead.photo_count} photos</p></div>
@@ -1574,7 +1406,7 @@ export function LeadDetailClient({
                 <div className="mt-4">
                   <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Review Insights</span>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {lead.review_highlights.map((h) => <span key={h} className="rounded-lg px-2 py-1 text-xs" style={{ background: "rgba(99,102,241,0.1)", color: "#6366f1" }}>{h}</span>)}
+                    {lead.review_highlights.map((h) => <span key={h} className="rounded-lg px-2 py-1 text-xs" style={{ background: "var(--info-bg)", color: "var(--info-text)" }}>{h}</span>)}
                   </div>
                 </div>
               )}
@@ -1598,8 +1430,8 @@ export function LeadDetailClient({
                   <h3 className="section-label">Market Density</h3>
                   <div className="mt-2 flex items-center gap-2">
                     <span className="rounded-lg px-2 py-1 text-xs font-medium" style={{
-                      background: density.label === "Very High" ? "rgba(239,68,68,0.1)" : density.label === "High" ? "rgba(245,158,11,0.1)" : "rgba(34,197,94,0.1)",
-                      color: density.label === "Very High" ? "#dc2626" : density.label === "High" ? "#d97706" : "#16a34a",
+                      background: density.label === "Very High" ? "var(--danger-bg)" : density.label === "High" ? "var(--warning-bg)" : "var(--success-bg)",
+                      color: density.label === "Very High" ? "var(--danger-text)" : density.label === "High" ? "var(--warning-text)" : "var(--success-text)",
                     }}>{density.label}</span>
                     <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{density.count} similar businesses nearby</span>
                   </div>
@@ -1623,7 +1455,7 @@ export function LeadDetailClient({
               {factWebsiteUrl || lead.website_uri ? (
                 <a className="btn-glass text-xs" href={factWebsiteUrl || lead.website_uri || "#"} target="_blank" rel="noopener noreferrer">Open website</a>
               ) : (
-                <span className="rounded-lg px-2 py-1 text-xs" style={{ background: "rgba(239,68,68,0.1)", color: "#dc2626" }}>No website</span>
+                <span className="rounded-lg px-2 py-1 text-xs" style={{ background: "var(--danger-bg)", color: "var(--danger-text)" }}>No website</span>
               )}
             </div>
             <div className="mt-4 grid gap-3 lg:grid-cols-3">
@@ -1673,28 +1505,28 @@ export function LeadDetailClient({
               </div>
             </div>
             {!canUseResearcherAiTools && !isAdmin && (
-              <p className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(245,158,11,0.12)", color: "var(--text-secondary)", border: "1px solid rgba(245,158,11,0.24)" }}>
+              <p className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "var(--warning-bg)", color: "var(--warning-text)", border: "1px solid var(--warning-border)" }}>
                 {aiToolsClaimMessage}
               </p>
             )}
 
             <div className="mt-4 grid gap-4 lg:grid-cols-4">
-              <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+              <div className="rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
                 <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Status</span>
                 <div className="mt-1">
                   <AiVerificationBadge status={currentAiStatus} checkedAt={currentAiCheckedAt} queueStatus={lead.ai_queue_status} viability={currentViability} confidence={aiVerification?.confidence ?? lead.ai_confidence} showDetail />
                 </div>
               </div>
-              <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+              <div className="rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
                 <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Found Website</span>
                 {foundAiWebsite ? <a className="link-accent mt-1 block truncate text-sm" href={foundAiWebsite} target="_blank" rel="noopener noreferrer">{foundAiWebsite}</a> : <p className="mt-1 text-sm" style={{ color: "var(--text-primary)" }}>None found</p>}
               </div>
-              <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+              <div className="rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
                 <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Recommendation</span>
                 <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{(aiVerification?.recommendation ?? lead.ai_recommendation ?? "manual_review").replace(/_/g, " ")}</p>
                 <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>{aiVerification?.created_at ? new Date(aiVerification.created_at).toLocaleString() : lead.ai_checked_at ? new Date(lead.ai_checked_at).toLocaleString() : "Not checked yet"}</p>
               </div>
-              <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+              <div className="rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
                 <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Website Viability</span>
                 <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{formatViabilityLabel(currentViability)}</p>
                 <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>{formatHealthSummary(currentHealth)}</p>
@@ -1702,7 +1534,7 @@ export function LeadDetailClient({
             </div>
 
             {(currentHealth || currentViabilityReason) && (
-              <div className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-primary)" }}>
+              <div className="mt-4 rounded-xl p-4 text-sm" style={{ background: "var(--surface-muted)", color: "var(--text-primary)" }}>
                 <div className="grid gap-2 sm:grid-cols-4">
                   <HealthMeta label="HTTP" value={String(currentHealth?.statusCode ?? "N/A")} />
                   <HealthMeta label="Final URL" value={String(currentHealth?.finalUrl ?? foundAiWebsite ?? "N/A")} link={String(currentHealth?.finalUrl ?? foundAiWebsite ?? "") || undefined} />
@@ -1713,13 +1545,13 @@ export function LeadDetailClient({
             )}
 
             {(aiVerification?.summary || lead.ai_summary) && (
-              <p className="mt-4 rounded-xl p-4 text-sm leading-relaxed" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-primary)" }}>
+              <p className="mt-4 rounded-xl p-4 text-sm leading-relaxed" style={{ background: "var(--surface-muted)", color: "var(--text-primary)" }}>
                 {aiVerification?.summary ?? lead.ai_summary}
               </p>
             )}
 
             {aiVerification && (
-              <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+              <div className="mt-4 rounded-xl p-4" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h4 className="section-label">Evidence</h4>
@@ -1728,11 +1560,11 @@ export function LeadDetailClient({
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <span className="rounded-md px-2 py-1 text-xs font-semibold capitalize" style={{ background: "rgba(99,102,241,0.12)", color: "var(--text-primary)", border: "1px solid rgba(99,102,241,0.24)" }}>
+                    <span className="rounded-md px-2 py-1 text-xs font-semibold capitalize" style={{ background: "var(--info-bg)", color: "var(--info-text)", border: "1px solid var(--info-border)" }}>
                       {aiEvidence.evidenceGrade}
                     </span>
                     {aiEvidence.candidateScore !== null && (
-                      <span className="rounded-md px-2 py-1 text-xs font-semibold" style={{ background: "rgba(34,197,94,0.1)", color: "var(--text-primary)", border: "1px solid rgba(34,197,94,0.2)" }}>
+                      <span className="rounded-md px-2 py-1 text-xs font-semibold" style={{ background: "var(--success-bg)", color: "var(--success-text)", border: "1px solid var(--success-border)" }}>
                         {aiEvidence.candidateScore} candidate score
                       </span>
                     )}
@@ -1744,7 +1576,7 @@ export function LeadDetailClient({
                   <EvidenceList title="Quality flags" items={aiEvidence.siteQualityFlags} />
                 </div>
                 {aiEvidence.manualReviewReason && (
-                  <p className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(245,158,11,0.1)", color: "var(--text-secondary)" }}>
+                  <p className="mt-3 rounded-lg px-3 py-2 text-xs" style={{ background: "var(--warning-bg)", color: "var(--warning-text)" }}>
                     {aiEvidence.manualReviewReason}
                   </p>
                 )}
@@ -1772,7 +1604,7 @@ export function LeadDetailClient({
                 {showAiSources && (
                   <div className="mt-2 grid gap-2 lg:grid-cols-2">
                     {aiVerification.sources.map((source) => (
-                      <a key={`${source.url}-${source.evidence}`} className="rounded-xl px-4 py-3 text-sm hover:opacity-80" href={source.url} target="_blank" rel="noopener noreferrer" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-primary)" }}>
+                      <a key={`${source.url}-${source.evidence}`} className="rounded-xl px-4 py-3 text-sm hover:opacity-80" href={source.url} target="_blank" rel="noopener noreferrer" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)", color: "var(--text-primary)" }}>
                         <span className="block truncate font-medium">{source.title ?? source.url}</span>
                         <span className="mt-1 block text-xs" style={{ color: "var(--text-tertiary)" }}>{source.evidence}</span>
                       </a>
@@ -1834,12 +1666,12 @@ export function LeadDetailClient({
               </div>
             </div>
             {demo && (
-              <div className="mt-3 rounded-xl px-3 py-3 text-xs" style={{ background: "rgba(99,102,241,0.08)", color: "var(--text-secondary)" }}>
+              <div className="mt-3 rounded-xl px-3 py-3 text-xs" style={{ background: "var(--info-bg)", color: "var(--text-secondary)", border: "1px solid var(--info-border)" }}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <span className="block font-medium" style={{ color: "var(--text-primary)" }}>Demo lifecycle</span>
                     <div className="mt-1 flex flex-wrap items-center gap-2">
-                      <span className="rounded-full px-2 py-0.5 font-medium" style={{ background: demoIsPublic ? "rgba(34,197,94,0.14)" : "rgba(15,23,42,0.08)", color: "var(--text-primary)" }}>{demoStatusLabel}</span>
+                      <span className="rounded-full px-2 py-0.5 font-medium" style={{ background: demoIsPublic ? "var(--success-bg)" : "var(--status-muted-bg)", color: demoIsPublic ? "var(--success-text)" : "var(--status-muted-text)" }}>{demoStatusLabel}</span>
                       <span>{Number(demo.view_count ?? 0)} views</span>
                       {demo.last_viewed_at && <span>Last viewed {new Date(demo.last_viewed_at).toLocaleDateString()}</span>}
                     </div>
@@ -1866,7 +1698,7 @@ export function LeadDetailClient({
                   <button type="button" className="btn-glass text-xs" onClick={() => setShowPkg(false)}>Close</button>
                 </div>
               </div>
-              <div className="mt-4 whitespace-pre-wrap rounded-xl p-4 text-sm leading-relaxed" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-primary)" }}>{outreachPkg.fullMessage}</div>
+              <div className="mt-4 whitespace-pre-wrap rounded-xl p-4 text-sm leading-relaxed" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)", color: "var(--text-primary)" }}>{outreachPkg.fullMessage}</div>
             </section>
           )}
 
@@ -1881,7 +1713,7 @@ export function LeadDetailClient({
               </button>
             </div>
             {!canUseResearcherAiTools && !isAdmin && (
-              <p className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(245,158,11,0.12)", color: "var(--text-secondary)", border: "1px solid rgba(245,158,11,0.24)" }}>
+              <p className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "var(--warning-bg)", color: "var(--warning-text)", border: "1px solid var(--warning-border)" }}>
                 {aiToolsClaimMessage}
               </p>
             )}
@@ -1922,7 +1754,7 @@ export function LeadDetailClient({
             </div>
 
             <div className="mt-5 grid gap-4 xl:grid-cols-2">
-              <section className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.52)" }}>
+              <section className="rounded-2xl p-4" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}>
                 <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Edit business info</h4>
                 <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
                   Human-owned facts are editable. Scores and AI fields update through correction actions.
@@ -1970,7 +1802,7 @@ export function LeadDetailClient({
                 </button>
               </section>
 
-              <section className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.42)", border: "1px solid rgba(255,255,255,0.52)" }}>
+              <section className="rounded-2xl p-4" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}>
                 <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Operator workflow</h4>
                 <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>
                   Internal state updates for research notes, follow-ups, and routing.
@@ -2054,7 +1886,7 @@ export function LeadDetailClient({
                 <div>
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="section-label">Lead Exclusion</h3>
-                    {isExcluded && <span className="text-xs font-medium" style={{ color: "#4b5563" }}>Excluded</span>}
+                    {isExcluded && <span className="text-xs font-medium" style={{ color: "var(--status-muted-text)" }}>Excluded</span>}
                   </div>
                   <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
                     Excluded leads stay visible for audit, but are ignored by qualified counts, queue, enrichment ranking, and score bands.
@@ -2069,7 +1901,7 @@ export function LeadDetailClient({
                     </button>
                   </div>
                   {isExcluded && (
-                    <div className="mt-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(107,114,128,0.08)", color: "#4b5563" }}>
+                    <div className="mt-2 rounded-lg px-3 py-2 text-xs" style={{ background: "var(--status-muted-bg)", color: "var(--status-muted-text)" }}>
                       <span>Excluded on: {excludedAt ? new Date(excludedAt).toLocaleString() : "-"}</span>
                       {exclusionReason && <span className="ml-2">Reason: {exclusionReason}</span>}
                     </div>
@@ -2079,7 +1911,7 @@ export function LeadDetailClient({
                 <div>
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="section-label">Lead Archive</h3>
-                    {archivedAt && <span className="text-xs font-medium" style={{ color: "#0f172a" }}>Archived</span>}
+                    {archivedAt && <span className="text-xs font-medium" style={{ color: "var(--status-muted-text)" }}>Archived</span>}
                   </div>
                   <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
                     Archive removes this lead from active inventory without deleting notes, outreach history, demos, or AI artifacts.
@@ -2107,7 +1939,7 @@ export function LeadDetailClient({
                     </button>
                   </div>
                   {archivedAt && (
-                    <div className="mt-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(15,23,42,0.08)", color: "#0f172a" }}>
+                    <div className="mt-2 rounded-lg px-3 py-2 text-xs" style={{ background: "var(--status-muted-bg)", color: "var(--status-muted-text)" }}>
                       <span>Archived on: {new Date(archivedAt).toLocaleString()}</span>
                       {archiveReason && <span className="ml-2">Reason: {archiveReason}</span>}
                     </div>
@@ -2161,7 +1993,7 @@ export function LeadDetailClient({
               {leadNotes.length === 0 ? (
                 <p className="text-sm" style={{ color: "var(--text-tertiary)" }}>No team notes yet.</p>
               ) : leadNotes.map((note) => (
-                <article key={note.id} className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+                <article key={note.id} className="rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>{note.author_email ?? "Unknown user"}</span>
                     <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{formatRelativeTime(note.created_at)}</span>
@@ -2203,16 +2035,27 @@ export function ArchiveConfirmDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  useDialogFocus({
+    open,
+    dialogRef,
+    initialFocusRef: cancelButtonRef,
+    onClose: () => { if (!loading) onCancel(); },
+  });
+
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4 py-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 px-4 py-8" onClick={(event) => { if (!loading && event.target === event.currentTarget) onCancel(); }}>
       <section
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="archive-confirm-title"
+        tabIndex={-1}
         className="glass-heavy w-full max-w-md rounded-2xl p-6 shadow-2xl"
-        style={{ border: "1px solid rgba(255,255,255,0.55)" }}
+        style={{ background: "var(--surface-modal)", border: "1px solid var(--surface-card-border)" }}
       >
         <h2 id="archive-confirm-title" className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
           Archive lead?
@@ -2220,12 +2063,12 @@ export function ArchiveConfirmDialog({
         <p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>
           This removes <strong>{leadName}</strong> from active inventory without deleting notes, outreach history, demos, or AI artifacts.
         </p>
-        <div className="mt-4 rounded-xl px-3 py-2 text-sm" style={{ background: "rgba(255,255,255,0.5)", color: "var(--text-secondary)" }}>
+        <div className="mt-4 rounded-xl border px-3 py-2 text-sm" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)", color: "var(--text-secondary)" }}>
           <span className="section-label block">Reason</span>
           <span>{reason}</span>
         </div>
         <div className="mt-5 flex flex-wrap justify-end gap-2">
-          <button type="button" className="btn-glass text-sm" disabled={loading} onClick={onCancel}>
+          <button ref={cancelButtonRef} type="button" className="btn-glass text-sm" disabled={loading} onClick={onCancel}>
             Cancel
           </button>
           <button type="button" className="btn-primary text-sm" disabled={loading} onClick={onConfirm}>
@@ -2242,7 +2085,7 @@ function ProfileField({ label, value, link, action }: {
   action?: { label: string; onClick: () => void };
 }) {
   return (
-    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+    <div className="rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
       <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
       <div className="mt-0.5 flex items-center justify-between gap-2">
         {link ? (
@@ -2260,10 +2103,10 @@ function ProfileField({ label, value, link, action }: {
 
 function WorkflowStep({ label, active, done }: { label: string; active: boolean; done: boolean }) {
   const style = done
-    ? { background: "rgba(34,197,94,0.12)", color: "#15803d", borderColor: "rgba(34,197,94,0.22)" }
+    ? { background: "var(--success-bg)", color: "var(--success-text)", borderColor: "var(--success-border)" }
     : active
-      ? { background: "rgba(99,102,241,0.12)", color: "#4f46e5", borderColor: "rgba(99,102,241,0.24)" }
-      : { background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)", borderColor: "rgba(255,255,255,0.45)" };
+      ? { background: "var(--info-bg)", color: "var(--info-text)", borderColor: "var(--info-border)" }
+      : { background: "var(--status-muted-bg)", color: "var(--status-muted-text)", borderColor: "var(--status-muted-border)" };
   return (
     <span className="rounded-md border px-2.5 py-1 font-semibold" style={style}>
       {label}
@@ -2273,7 +2116,7 @@ function WorkflowStep({ label, active, done }: { label: string; active: boolean;
 
 function QualityMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+    <div className="rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
       <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
       <p className="mt-1 text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
     </div>
@@ -2282,7 +2125,7 @@ function QualityMetric({ label, value }: { label: string; value: string }) {
 
 function CallSheetField({ label, value, href }: { label: string; value: string; href?: string }) {
   return (
-    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+    <div className="rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
       <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
       {href ? (
         <Link href={href} target="_blank" className="link-accent mt-1 block truncate text-sm">{value}</Link>
@@ -2322,7 +2165,7 @@ function ArtifactPanel({
 }) {
   const isReady = !!artifact;
   return (
-    <section className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+    <section className="rounded-xl p-4" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{title}</h4>
@@ -2336,7 +2179,7 @@ function ArtifactPanel({
             </p>
           )}
           {artifact && latestJob && latestJob.id !== artifact.id && (
-            <p className="mt-1 text-xs" style={{ color: "#b45309" }}>Regenerate recommended: newer evidence is queued or errored.</p>
+            <p className="mt-1 text-xs" style={{ color: "var(--warning-text)" }}>Regenerate recommended: newer evidence is queued or errored.</p>
           )}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -2369,7 +2212,7 @@ function BusinessDetailView({ artifact }: { artifact: LeadAiArtifact }) {
           <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Website Sections</span>
           <div className="mt-2 space-y-2">
             {sections.slice(0, 5).map((section, index) => (
-              <div key={`${String(section.title)}-${index}`} className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.35)" }}>
+              <div key={`${String(section.title)}-${index}`} className="rounded-lg px-3 py-2" style={{ background: "var(--surface-muted)" }}>
                 <p className="font-medium">{String(section.title ?? "Section")}</p>
                 <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>{String(section.goal ?? "")}</p>
               </div>
@@ -2379,7 +2222,7 @@ function BusinessDetailView({ artifact }: { artifact: LeadAiArtifact }) {
       )}
       <div>
         <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Website Prompt</span>
-        <p className="mt-1 line-clamp-6 whitespace-pre-wrap rounded-lg px-3 py-2 text-xs leading-relaxed" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+        <p className="mt-1 line-clamp-6 whitespace-pre-wrap rounded-lg px-3 py-2 text-xs leading-relaxed" style={{ background: "var(--surface-muted)", color: "var(--text-secondary)" }}>
           {String(content.website_generation_prompt ?? "No prompt generated.")}
         </p>
       </div>
@@ -2417,7 +2260,7 @@ function OperatorPitchPanel({ content }: { content: Record<string, unknown> }) {
   ].filter(([, value]) => typeof value === "string" && value.trim());
   if (!content.pitchAngleType && !content.verificationCaveat && snippets.length === 0 && claimSupport.length === 0) return null;
   return (
-    <div className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+    <div className="rounded-xl p-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
           <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>Pitch stance</span>
@@ -2430,7 +2273,7 @@ function OperatorPitchPanel({ content }: { content: Record<string, unknown> }) {
       </div>
       <div className="mt-3 grid gap-2">
         {snippets.map(([label, value]) => (
-          <div key={String(label)} className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.28)" }}>
+          <div key={String(label)} className="rounded-lg px-3 py-2" style={{ background: "var(--surface-muted)" }}>
             <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{String(label)}</span>
             <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--text-secondary)" }}>{String(value)}</p>
           </div>
@@ -2443,7 +2286,7 @@ function OperatorPitchPanel({ content }: { content: Record<string, unknown> }) {
 
 function EmptyArtifactState({ label }: { label: string }) {
   return (
-    <div className="rounded-xl px-4 py-6 text-center text-sm" style={{ background: "rgba(255,255,255,0.28)", color: "var(--text-tertiary)" }}>
+    <div className="rounded-xl px-4 py-6 text-center text-sm" style={{ background: "var(--surface-muted)", color: "var(--text-tertiary)" }}>
       {label}
     </div>
   );
@@ -2451,7 +2294,7 @@ function EmptyArtifactState({ label }: { label: string }) {
 
 function EvidenceList({ title, items }: { title: string; items: string[] }) {
   return (
-    <div className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.28)" }}>
+    <div className="rounded-lg px-3 py-2" style={{ background: "var(--surface-muted)" }}>
       <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{title}</span>
       {items.length > 0 ? (
         <ul className="mt-1 space-y-1">
@@ -2511,7 +2354,7 @@ function ArtifactSources({ sources }: { sources: LeadAiArtifact["sources_json"] 
             target="_blank"
             rel="noopener noreferrer"
             className="rounded-lg px-3 py-2 text-xs hover:opacity-80"
-            style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}
+            style={{ background: "var(--surface-muted)", color: "var(--text-secondary)" }}
           >
             <span className="block truncate font-medium" style={{ color: "var(--text-primary)" }}>{source.title ?? source.url}</span>
             <span className="mt-1 block">{source.evidence}</span>
@@ -2556,10 +2399,10 @@ function artifactStateLabel(artifact: LeadAiArtifact | null, hasComplete = false
 
 function artifactBadgeStyle(artifact: LeadAiArtifact | null, hasComplete: boolean): React.CSSProperties {
   const label = artifactStateLabel(artifact, hasComplete);
-  if (label === "Ready") return { background: "rgba(34,197,94,0.1)", color: "#16a34a" };
-  if (label === "Generating") return { background: "rgba(99,102,241,0.1)", color: "#6366f1" };
-  if (label === "Error") return { background: "rgba(239,68,68,0.1)", color: "#dc2626" };
-  return { background: "rgba(107,114,128,0.1)", color: "#4b5563" };
+  if (label === "Ready") return { background: "var(--success-bg)", color: "var(--success-text)" };
+  if (label === "Generating") return { background: "var(--info-bg)", color: "var(--info-text)" };
+  if (label === "Error") return { background: "var(--danger-bg)", color: "var(--danger-text)" };
+  return { background: "var(--status-muted-bg)", color: "var(--status-muted-text)" };
 }
 
 function buildPitchBriefText(artifact: LeadAiArtifact | null): string {
@@ -2726,18 +2569,18 @@ function VerificationChecklist({
       <div className="flex items-center justify-between">
         <h3 className="section-label">Verification</h3>
         <span className="text-xs font-medium" style={{
-          color: allDone ? "#16a34a" : "var(--text-tertiary)",
+          color: allDone ? "var(--success-text)" : "var(--text-tertiary)",
         }}>
           {allDone ? "Verified" : `${checked}/${total}`}
         </span>
       </div>
 
-      <div className="h-1.5 w-full overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }}>
+      <div className="h-1.5 w-full overflow-hidden rounded-full" style={{ background: "var(--status-muted-bg)" }}>
         <div
           className="h-full rounded-full transition-all duration-300"
           style={{
             width: `${(checked / total) * 100}%`,
-            background: allDone ? "#16a34a" : "var(--accent)",
+            background: allDone ? "var(--success-text)" : "var(--accent)",
           }}
         />
       </div>

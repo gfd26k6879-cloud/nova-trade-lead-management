@@ -107,14 +107,71 @@ describe("lead AI artifact queries", () => {
     expect(leased?.id).toBe(first.id);
     expect(leased?.attempt_count).toBe(1);
 
-    const retry = await markLeadAiArtifactRetry(first.id, "budget exhausted", 3);
+    const retry = await markLeadAiArtifactRetry(first.id, "budget exhausted", 3, {
+      input_tokens: 40,
+      output_tokens: 20,
+      estimated_cost: 0.05,
+    });
     expect(retry.status).toBe("queued");
     expect(retry.nextRetryAt).toBeTruthy();
 
-    const retryingRow = testDb.prepare("SELECT status, last_error, next_retry_at FROM lead_ai_artifacts WHERE id = ?").get(first.id) as Record<string, unknown>;
+    const retryingRow = testDb.prepare(
+      "SELECT status, last_error, next_retry_at, usage_input_tokens, usage_output_tokens, estimated_cost FROM lead_ai_artifacts WHERE id = ?",
+    ).get(first.id) as Record<string, unknown>;
     expect(retryingRow.status).toBe("queued");
     expect(retryingRow.last_error).toBe("budget exhausted");
     expect(retryingRow.next_retry_at).toBeTruthy();
+    expect(retryingRow.usage_input_tokens).toBe(40);
+    expect(retryingRow.usage_output_tokens).toBe(20);
+    expect(retryingRow.estimated_cost).toBe(0.05);
+
+    await markLeadAiArtifactRunning(first.id);
+    await markLeadAiArtifactComplete(first.id, {
+      content_json: { artifact_type: "business_detail" },
+      sources_json: [],
+      confidence: 0.8,
+      usage_input_tokens: 60,
+      usage_output_tokens: 30,
+      estimated_cost: 0.07,
+    });
+    const completedRow = testDb.prepare(
+      "SELECT usage_input_tokens, usage_output_tokens, estimated_cost FROM lead_ai_artifacts WHERE id = ?",
+    ).get(first.id) as Record<string, unknown>;
+    expect(completedRow.usage_input_tokens).toBe(100);
+    expect(completedRow.usage_output_tokens).toBe(50);
+    expect(completedRow.estimated_cost).toBeCloseTo(0.12, 8);
+  });
+
+  it("does not overwrite a completed artifact with a retry transition", async () => {
+    const artifact = await createLeadAiArtifactJob({
+      lead_id: "lead-1",
+      artifact_type: "business_detail",
+      model: "gpt-5.4-mini",
+      input_hash: "hash-complete",
+      prompt_version: "lead-intelligence-v1",
+    });
+    await markLeadAiArtifactRunning(artifact.id);
+    await markLeadAiArtifactComplete(artifact.id, {
+      content_json: { artifact_type: "business_detail", website_generation_prompt: "Build this site." },
+      sources_json: [],
+      confidence: 0.8,
+      usage_input_tokens: 100,
+      usage_output_tokens: 80,
+      estimated_cost: 0.01,
+    });
+
+    const retry = await markLeadAiArtifactRetry(artifact.id, "late timeout", 3);
+
+    expect(retry.status).toBe("complete");
+    const completed = testDb.prepare(
+      "SELECT status, error, last_error, next_retry_at FROM lead_ai_artifacts WHERE id = ?",
+    ).get(artifact.id) as Record<string, unknown>;
+    expect(completed).toMatchObject({
+      status: "complete",
+      error: null,
+      last_error: null,
+      next_retry_at: null,
+    });
   });
 
   it("leases a specific researcher artifact job without taking the global queue", async () => {

@@ -1,6 +1,6 @@
 # NoSite Leads
 
-For the fastest complete system map, use `docs/ULTRA_SYSTEM_ATLAS.md`. For production deployment, use `docs/VERCEL_SUPABASE_DEPLOYMENT.md`. For current Codex handoff context, use `docs/CODEX_HANDOFF.md`.
+For the fastest complete system map, use `docs/ULTRA_SYSTEM_ATLAS.md`. For production deployment, use `docs/VERCEL_SUPABASE_DEPLOYMENT.md`. For backup/restore, use `docs/DATA_RECOVERY.md`. For current Codex handoff context, use `docs/CODEX_HANDOFF.md`.
 
 **Source of truth:** GitHub and Vercel deploy from `/Users/stevmq/lead-generation`. Do not use similarly named local folders for application changes unless they have first been reconciled into this Git repo.
 
@@ -82,7 +82,7 @@ src/
 │   ├── classify-website.ts   # Website status classifier
 │   ├── scoring.ts            # Lead scoring with factor breakdown
 │   ├── outreach-package.ts   # Template-based outreach generator
-│   ├── auth.ts               # Local cookie-based auth
+│   ├── auth.ts               # Supabase-backed session and app-role authorization
 │   └── __tests__/            # Unit tests
 └── data/
     └── colorado-zips.json    # Static zip code dataset
@@ -129,12 +129,19 @@ src/
 |---------|-------------|
 | `npm run dev` | Start development server |
 | `npm run build` | Production build |
+| `npm run typecheck` | Run TypeScript without emitting files |
 | `npm run test` | Run unit tests |
 | `npm run test:watch` | Run tests in watch mode |
 | `npm run lint` | Run ESLint |
-| `npm run test:e2e` | Run Playwright E2E tests |
+| `npm run test:e2e:public` | Run public read-only Playwright smoke |
+| `npm run test:e2e` | Run public and authenticated read-only Playwright suites; fails without E2E auth |
+| `npm run test:e2e:mutating` | Run explicitly enabled mutation workflows on an approved target |
+| `npm run release:check` | Run the Node 24 local release gate |
 | `npm run db:export:sqlite` | Export ignored JSON files from local SQLite |
+| `npm run db:verify:recovery` | Run read-only recovery contract/schema/export checks |
 | `npm run db:import:supabase` | Import exported JSON into Supabase Postgres |
+
+See [`docs/TESTING.md`](docs/TESTING.md) for the suite boundaries, auth requirements, and remote mutation guard.
 
 ## Key Features
 
@@ -172,6 +179,10 @@ src/
 
 Local development uses SQLite at `nosite-leads.db` when `DATABASE_URL` is not set. Production uses Supabase Postgres through the `DATABASE_URL` transaction pooler connection string. Apply every file in `supabase/migrations/` in timestamp order; later migrations add auth, scheduler, enrichment lease, and demo lifecycle fields.
 
+Export/import never applies migrations or backs up Supabase Auth/Vault. Follow
+[`docs/DATA_RECOVERY.md`](docs/DATA_RECOVERY.md) for the 23-table recovery
+contract, protected-column exclusions, verification, restore order, and rollback.
+
 Core tables:
 
 - `zip_codes` — Colorado zip codes with city/lat/lng
@@ -189,7 +200,7 @@ Core tables:
 - Invite-only access only; no self-serve signup or billing
 - No automated outreach sending (copy-to-clipboard only)
 - Colorado zip codes only by default (expandable via data file)
-- Authenticated rendered browser QA requires `E2E_STORAGE_STATE` or `E2E_SUPABASE_EMAIL`/`E2E_SUPABASE_PASSWORD`
+- Authenticated rendered browser QA requires `E2E_STORAGE_STATE` or `E2E_SUPABASE_EMAIL`/`E2E_SUPABASE_PASSWORD`; missing auth fails the authenticated gate instead of reporting skipped success
 
 ## API Compliance
 

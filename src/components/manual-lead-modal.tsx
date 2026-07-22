@@ -99,7 +99,7 @@ export function ManualLeadModal({ open, onClose }: Props) {
         aria-describedby={descriptionId}
         tabIndex={-1}
         className="glass-heavy max-h-[calc(100vh-4rem)] w-full max-w-3xl overflow-y-auto rounded-2xl p-6 shadow-2xl"
-        style={{ border: "1px solid rgba(255,255,255,0.55)" }}
+        style={{ border: "1px solid var(--surface-card-border)" }}
       >
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -114,7 +114,7 @@ export function ManualLeadModal({ open, onClose }: Props) {
         </div>
 
         {error && (
-          <div aria-live="polite" className="mt-4 rounded-xl px-3 py-2 text-sm" style={{ background: "rgba(239,68,68,0.1)", color: "#991b1b" }}>
+          <div role="alert" aria-live="assertive" className="mt-4 rounded-xl border px-3 py-2 text-sm" style={{ background: "var(--danger-bg)", borderColor: "var(--danger-border)", color: "var(--danger-text)" }}>
             {error}
           </div>
         )}

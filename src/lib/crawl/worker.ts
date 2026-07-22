@@ -31,6 +31,8 @@ import {
   createAuditLog,
 } from "@/lib/db/queries";
 import { enqueueAiVerificationForLead } from "@/lib/ai/verification-worker";
+import { runAiPostSuccessBookkeeping } from "@/lib/ai/post-success-bookkeeping";
+import { throwIfWorkerAborted } from "@/lib/worker-abort";
 
 const SKIP_BUSINESS_STATUSES = new Set(["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"]);
 export interface ProcessResult {
@@ -62,26 +64,32 @@ const DEFAULT_UNIT_MAX_ATTEMPTS = 3;
 const TRANSIENT_RETRY_BASE_DELAY_SECONDS = 60;
 const TRANSIENT_RETRY_MAX_DELAY_SECONDS = 15 * 60;
 
-export async function processNextUnit(): Promise<ProcessResult> {
+export async function processNextUnit(signal?: AbortSignal): Promise<ProcessResult> {
+  throwIfWorkerAborted(signal);
   const run = await getProcessingCrawlRun();
+  throwIfWorkerAborted(signal);
 
   if (!run) {
     return { status: "idle" };
   }
 
   const unit = await leaseNextCrawlUnit(run.id);
+  throwIfWorkerAborted(signal);
 
   if (!unit) {
     const progress = await getCrawlProgress(run.id);
+    throwIfWorkerAborted(signal);
     if (progress.pending === 0 && progress.running === 0) {
       const terminalStatus = progress.failed > 0 ? "error" : "done";
       await updateCrawlRunStatus(run.id, terminalStatus);
+      throwIfWorkerAborted(signal);
       return { status: terminalStatus, progress };
     }
     return { status: "idle", progress };
   }
 
   const settings = await getSettings();
+  throwIfWorkerAborted(signal);
   const selection = run.selection_json ?? {};
   const discoveryMode = normalizeDiscoveryMode(selection.discoveryMode, "lead_harvest");
   const defaultPaginationPolicy = settings.google_auto_pagination_enabled
@@ -115,13 +123,15 @@ export async function processNextUnit(): Promise<ProcessResult> {
     let pagesFetched = Math.max(0, Math.floor(unit.pages_fetched ?? 0));
 
     while (pagesFetched < unitMaxPages) {
+      throwIfWorkerAborted(signal);
       const result = await textSearch(
         query,
         pageToken,
         settings.rate_limit_ms,
         locationBias,
-        { fieldMask },
+        { fieldMask, signal },
       );
+      throwIfWorkerAborted(signal);
       apiCalls++;
 
       await logApiUsageEvent({
@@ -145,16 +155,19 @@ export async function processNextUnit(): Promise<ProcessResult> {
           paginationPolicy,
         },
       });
+      throwIfWorkerAborted(signal);
 
       let pageRawPlaces = 0;
       let pageNewPlaces = 0;
       let pageDuplicatePlaces = 0;
 
       for (const place of result.places) {
+        throwIfWorkerAborted(signal);
         pageRawPlaces++;
         const placeId = extractPlaceId(place.id);
         if (!placeId) continue;
         const existedInPlaces = await placeMasterExists(placeId);
+        throwIfWorkerAborted(signal);
 
         await recordPlaceObservation({
           place_id: placeId,
@@ -165,6 +178,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
           field_mask: fieldMask,
           raw_json: JSON.stringify(place),
         });
+        throwIfWorkerAborted(signal);
 
         const categories = place.types ?? [];
         const photoCount = place.photos?.length ?? 0;
@@ -187,6 +201,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
           lat: place.location?.latitude ?? null,
           lng: place.location?.longitude ?? null,
         });
+        throwIfWorkerAborted(signal);
 
         if (discoveryMode === "coverage_probe") {
           if (existedInPlaces) {
@@ -257,6 +272,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
           locality: unit.city,
           postal_code: unit.zip,
         });
+        throwIfWorkerAborted(signal);
         if (created) {
           leadsFound++;
           pageNewPlaces++;
@@ -267,11 +283,17 @@ export async function processNextUnit(): Promise<ProcessResult> {
         if (settings.ai_enabled && settings.ai_auto_verify_enabled && settings.ai_verify_after_discovery) {
           try {
             await enqueueAiVerificationForLead(leadId, "places_discovery", { settings });
+            throwIfWorkerAborted(signal);
           } catch (error) {
-            await createAuditLog("ai_verification_enqueue_failed", "lead", leadId, {
-              reason: "places_discovery",
-              error: error instanceof Error ? error.message : String(error),
-            });
+            throwIfWorkerAborted(signal);
+            await runAiPostSuccessBookkeeping(
+              { operation: "queue_failure_audit", leadId },
+              () => createAuditLog("ai_verification_enqueue_failed", "lead", leadId, {
+                reason: "places_discovery",
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            );
+            throwIfWorkerAborted(signal);
           }
         }
       }
@@ -289,14 +311,20 @@ export async function processNextUnit(): Promise<ProcessResult> {
         maxDuplicateRate: settings.google_auto_pagination_max_duplicate_rate,
       });
       pageToken = shouldContinue ? result.nextPageToken : undefined;
+      throwIfWorkerAborted(signal);
       await recordUnitPageFetch(unit.id, pageToken ?? null, pageRawPlaces, pageNewPlaces, pageDuplicatePlaces);
+      throwIfWorkerAborted(signal);
       if (!pageToken) break;
     }
 
+    throwIfWorkerAborted(signal);
     await markUnitDone(unit.id, leadsFound);
+    throwIfWorkerAborted(signal);
     await incrementCrawlRunCounters(run.id, leadsFound, 0, apiCalls);
+    throwIfWorkerAborted(signal);
 
     const progress = await getCrawlProgress(run.id);
+    throwIfWorkerAborted(signal);
 
     return {
       status: "processed",
@@ -309,6 +337,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
       progress,
     };
   } catch (err) {
+    throwIfWorkerAborted(signal);
     const googleError = err instanceof PlacesApiError ? err : null;
     const rawErrorMessage = err instanceof Error ? err.message : String(err);
     const errorMessage = googleError ? formatPlacesApiErrorForOperator(googleError) : rawErrorMessage;
@@ -341,13 +370,18 @@ export async function processNextUnit(): Promise<ProcessResult> {
       } catch {
         // Preserve the original worker error path.
       }
+      throwIfWorkerAborted(signal);
       apiCalls++;
     }
+    throwIfWorkerAborted(signal);
     await incrementCrawlRunCounters(run.id, 0, 1, apiCalls);
+    throwIfWorkerAborted(signal);
 
     if (failurePolicy.type === "block_run") {
       await markUnitFailed(unit.id, errorMessage, failurePolicy.code);
+      throwIfWorkerAborted(signal);
       await blockCrawlRun(run.id, failurePolicy.reason, failurePolicy.code);
+      throwIfWorkerAborted(signal);
       await createAuditLog("crawl_run_blocked", "crawl_run", run.id, {
         unitId: unit.id,
         category: unit.category,
@@ -355,6 +389,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
         errorCode: failurePolicy.code,
         reason: failurePolicy.reason,
       });
+      throwIfWorkerAborted(signal);
       return {
         status: "blocked",
         unitId: unit.id,
@@ -369,6 +404,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
 
     if (failurePolicy.type === "retry") {
       await markUnitRetryWait(unit.id, errorMessage, failurePolicy.nextRetryAt, failurePolicy.code);
+      throwIfWorkerAborted(signal);
       return {
         status: "retry_wait",
         unitId: unit.id,
@@ -383,8 +419,10 @@ export async function processNextUnit(): Promise<ProcessResult> {
 
     if (failurePolicy.clearPageToken) {
       await updateUnitPageToken(unit.id, null);
+      throwIfWorkerAborted(signal);
     }
     await markUnitFailed(unit.id, errorMessage, failurePolicy.code);
+    throwIfWorkerAborted(signal);
 
     return {
       status: "error",

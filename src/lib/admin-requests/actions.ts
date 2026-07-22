@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { requirePermission } from "@/lib/auth";
+import { canReadLeadForSession } from "@/lib/lead-access";
 import {
   createAdminRequest as dbCreateAdminRequest,
   createAuditLog,
@@ -35,6 +36,7 @@ export async function createAdminRequestAction(leadId: string, input: unknown) {
   const lead = await getLeadById(leadId);
   if (!lead) return { error: "Lead not found." };
   if (session.role !== "admin") {
+    if (!await canReadLeadForSession(session, lead)) return { error: "Lead not found." };
     if (!lead.assigned_to_user_id) return { error: "Claim this lead before sending it to Steve." };
     if (lead.assigned_to_user_id !== session.userId) return { error: `Taken by ${leadOwnerLabel(lead)}.` };
   }

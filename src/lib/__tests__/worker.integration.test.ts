@@ -33,6 +33,8 @@ vi.mock("@/lib/google-places", () => {
   }
   return {
     textSearch: vi.fn(),
+    getPlaceDetails: vi.fn(),
+    sanitizePlaceDetailsForStorage: (place: unknown) => place,
     PlacesApiError,
     TEXT_SEARCH_FIELD_MASK: "places.id,places.displayName,places.websiteUri,places.rating",
     TEXT_SEARCH_PRO_FIELD_MASK: "places.id,places.displayName,places.formattedAddress,places.location",
@@ -40,15 +42,18 @@ vi.mock("@/lib/google-places", () => {
 });
 
 import { processNextUnit } from "@/lib/crawl/worker";
-import { PlacesApiError, textSearch } from "@/lib/google-places";
-import { createCrawlUnitsForSelection } from "@/lib/db/queries";
+import { enrichNextLead } from "@/lib/crawl/enrichment";
+import { getPlaceDetails, PlacesApiError, textSearch } from "@/lib/google-places";
+import { createCrawlUnitsForSelection, recomputeAllLeadQualityScores } from "@/lib/db/queries";
 
 const mockTextSearch = textSearch as ReturnType<typeof vi.fn>;
+const mockGetPlaceDetails = getPlaceDetails as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   testDb = createTestDb();
   seedTestZip(testDb);
   mockTextSearch.mockReset();
+  mockGetPlaceDetails.mockReset();
 });
 
 afterEach(() => {
@@ -91,6 +96,18 @@ describe("crawl worker integration", () => {
     expect(row.name).toBe("Test Business");
   });
 
+  it("forwards the route AbortSignal into Google Text Search", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestUnit(testDb, { runId });
+    const controller = new AbortController();
+    mockTextSearch.mockResolvedValueOnce(mockTextSearchResponse([]));
+
+    await processNextUnit(controller.signal);
+
+    expect(mockTextSearch).toHaveBeenCalledTimes(1);
+    expect(mockTextSearch.mock.calls[0][4]).toMatchObject({ signal: controller.signal });
+  });
+
   it("queues AI verification after discovery when enabled", async () => {
     const runId = seedTestRun(testDb);
     seedTestUnit(testDb, { runId, zip: "80202", category: "dentist" });
@@ -105,6 +122,37 @@ describe("crawl worker integration", () => {
     const row = testDb.prepare("SELECT ai_queue_status, ai_input_hash FROM leads WHERE place_id = 'ai-queued'").get() as Record<string, unknown>;
     expect(row.ai_queue_status).toBe("queued");
     expect(row.ai_input_hash).toBeTruthy();
+  });
+
+  it("keeps discovery complete when optional AI queue auditing fails", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestUnit(testDb, { runId, zip: "80202", category: "dentist" });
+    testDb.prepare("UPDATE settings SET ai_enabled = 1, ai_auto_verify_enabled = 1, ai_verify_after_discovery = 1").run();
+    testDb.exec(`
+      CREATE TRIGGER fail_ai_queue_audit
+      BEFORE INSERT ON audit_logs
+      BEGIN
+        SELECT RAISE(ABORT, 'audit unavailable');
+      END;
+    `);
+    mockTextSearch.mockResolvedValueOnce(mockTextSearchResponse([makePlaceResult({ id: "places/queue-audit-failure" })]));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const result = await processNextUnit();
+
+      expect(result.status).toBe("processed");
+      expect(errorSpy).toHaveBeenCalledWith(
+        "ai_post_success_bookkeeping_failed",
+        expect.objectContaining({ operation: "queue_audit" }),
+      );
+      const lead = testDb.prepare("SELECT ai_queue_status FROM leads WHERE place_id = 'queue-audit-failure'").get() as { ai_queue_status: string };
+      const unit = testDb.prepare("SELECT status FROM crawl_units WHERE id = 'unit-1'").get() as { status: string };
+      expect(lead.ai_queue_status).toBe("queued");
+      expect(unit.status).toBe("done");
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("resumes from saved page token when a unit has more pages available", async () => {
@@ -258,6 +306,49 @@ describe("crawl worker integration", () => {
     expect(unit.last_error).toContain("API quota exceeded");
     expect(unit.last_error_code).toBe("generic_error");
     expect(unit.next_retry_at).toBeTruthy();
+  });
+
+  it("does not schedule a crawl retry when the route aborts an in-flight search", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestUnit(testDb, { runId });
+    const controller = new AbortController();
+    const deadlineError = new Error("worker route deadline elapsed");
+    mockTextSearch.mockImplementationOnce(async () => {
+      controller.abort(deadlineError);
+      throw deadlineError;
+    });
+
+    await expect(processNextUnit(controller.signal)).rejects.toBe(deadlineError);
+
+    const unit = testDb.prepare(
+      "SELECT status, next_retry_at, last_error, last_error_code FROM crawl_units WHERE id = 'unit-1'",
+    ).get() as Record<string, unknown>;
+    expect(unit).toMatchObject({
+      status: "running",
+      next_retry_at: null,
+      last_error: null,
+      last_error_code: null,
+    });
+    const run = testDb.prepare("SELECT error_count FROM crawl_runs WHERE id = ?").get(runId) as { error_count: number };
+    expect(run.error_count).toBe(0);
+  });
+
+  it("does not persist crawl success mutations after an in-flight search is aborted", async () => {
+    const runId = seedTestRun(testDb);
+    seedTestUnit(testDb, { runId });
+    const controller = new AbortController();
+    const deadlineError = new Error("worker route deadline elapsed");
+    mockTextSearch.mockImplementationOnce(async () => {
+      controller.abort(deadlineError);
+      return mockTextSearchResponse([makePlaceResult({ id: "places/late-result" })]);
+    });
+
+    await expect(processNextUnit(controller.signal)).rejects.toBe(deadlineError);
+
+    const place = testDb.prepare("SELECT place_id FROM places_master WHERE place_id = 'late-result'").get();
+    const lead = testDb.prepare("SELECT id FROM leads WHERE place_id = 'late-result'").get();
+    expect(place).toBeUndefined();
+    expect(lead).toBeUndefined();
   });
 
   it("moves Google 429 responses into retry wait with backoff", async () => {
@@ -491,5 +582,130 @@ describe("crawl worker integration", () => {
     expect(result.zip).toBe("80202");
     expect(result.category).toBe("dentist");
     expect(mockTextSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves existing review intelligence when Stage A has no review metadata", async () => {
+    testDb.prepare(
+      `INSERT INTO leads (
+        id, place_id, name, score, website_status, enrichment_status, review_highlights
+      ) VALUES ('enrich-stage-a', 'enrich-stage-a-place', 'Stage A Dental', 10, 'none', 'pending', ?)`,
+    ).run(JSON.stringify(["needs online booking"]));
+    testDb.prepare("UPDATE settings SET enrichment_stage_b_min_score = 100").run();
+    const controller = new AbortController();
+    mockGetPlaceDetails.mockResolvedValueOnce({
+      place: makePlaceResult({ id: "places/enrich-stage-a-place" }),
+      fromCache: true,
+      sku: "places_place_details_enterprise",
+      fieldMask: "id,displayName",
+    });
+
+    await expect(enrichNextLead(controller.signal)).resolves.toMatchObject({ status: "enriched" });
+
+    expect(mockGetPlaceDetails).toHaveBeenCalledWith(
+      "enrich-stage-a-place",
+      expect.any(Number),
+      expect.objectContaining({ includeAtmosphere: false, signal: controller.signal }),
+    );
+    const lead = testDb.prepare(
+      "SELECT review_highlights FROM leads WHERE id = 'enrich-stage-a'",
+    ).get() as { review_highlights: string };
+    expect(JSON.parse(lead.review_highlights)).toEqual(["needs online booking"]);
+  });
+
+  it("persists derived review intelligence restored from a raw-review-free Stage-B cache hit", async () => {
+    testDb.prepare(
+      `INSERT INTO leads (id, place_id, name, score, website_status, enrichment_status)
+       VALUES ('enrich-stage-b', 'enrich-stage-b-place', 'Stage B Dental', 100, 'none', 'pending')`,
+    ).run();
+    testDb.prepare("UPDATE settings SET enrichment_stage_b_min_score = 0").run();
+    mockGetPlaceDetails.mockResolvedValueOnce({
+      place: makePlaceResult({ id: "places/enrich-stage-b-place" }),
+      fromCache: true,
+      sku: "places_place_details_enterprise_plus_atmosphere",
+      fieldMask: "id,displayName,reviews,editorialSummary",
+      reviewInsights: {
+        keywords: ["outdated presence"],
+        painPoints: ["outdated presence"],
+        sentimentRatio: 0.5,
+        totalReviews: 3,
+      },
+    });
+
+    await expect(enrichNextLead()).resolves.toMatchObject({ status: "enriched" });
+
+    const lead = testDb.prepare(
+      "SELECT review_highlights FROM leads WHERE id = 'enrich-stage-b'",
+    ).get() as { review_highlights: string };
+    expect(JSON.parse(lead.review_highlights)).toEqual(["outdated presence"]);
+    const master = testDb.prepare(
+      "SELECT review_highlights FROM places_master WHERE place_id = 'enrich-stage-b-place'",
+    ).get() as { review_highlights: string };
+    expect(JSON.parse(master.review_highlights)).toEqual(["outdated presence"]);
+  });
+
+  it("does not record enrichment failure or success after an in-flight details request is aborted", async () => {
+    testDb.prepare(
+      `INSERT INTO leads (id, place_id, name, score, website_status, enrichment_status)
+       VALUES ('enrich-abort', 'enrich-abort-place', 'Abort Dental', 10, 'none', 'pending')`,
+    ).run();
+    const controller = new AbortController();
+    const deadlineError = new Error("worker route deadline elapsed");
+    mockGetPlaceDetails.mockImplementationOnce(async () => {
+      controller.abort(deadlineError);
+      throw deadlineError;
+    });
+
+    await expect(enrichNextLead(controller.signal)).rejects.toBe(deadlineError);
+
+    const lead = testDb.prepare(
+      `SELECT enrichment_status, enrichment_next_retry_at, enrichment_last_error, enrichment_last_error_code
+       FROM leads WHERE id = 'enrich-abort'`,
+    ).get() as Record<string, unknown>;
+    expect(lead).toMatchObject({
+      enrichment_status: "running",
+      enrichment_next_retry_at: null,
+      enrichment_last_error: null,
+      enrichment_last_error_code: null,
+    });
+  });
+
+  it("does not persist enrichment success after a late details response observes abort", async () => {
+    testDb.prepare(
+      `INSERT INTO leads (id, place_id, name, score, website_status, enrichment_status)
+       VALUES ('enrich-late', 'enrich-late-place', 'Late Dental', 10, 'none', 'pending')`,
+    ).run();
+    const controller = new AbortController();
+    const deadlineError = new Error("worker route deadline elapsed");
+    mockGetPlaceDetails.mockImplementationOnce(async () => {
+      controller.abort(deadlineError);
+      return {
+        place: makePlaceResult({ id: "places/enrich-late-place", displayName: { text: "Late Mutation" } }),
+        fromCache: true,
+        sku: "places_details_enterprise",
+        fieldMask: "id,displayName",
+      };
+    });
+
+    await expect(enrichNextLead(controller.signal)).rejects.toBe(deadlineError);
+
+    const lead = testDb.prepare("SELECT name, enrichment_status FROM leads WHERE id = 'enrich-late'").get() as Record<string, unknown>;
+    expect(lead).toMatchObject({ name: "Late Dental", enrichment_status: "running" });
+    const observation = testDb.prepare("SELECT id FROM place_observations WHERE lead_id = 'enrich-late'").get();
+    expect(observation).toBeUndefined();
+  });
+
+  it("does not begin score recomputation when its worker signal is already aborted", async () => {
+    testDb.prepare(
+      `INSERT INTO leads (id, place_id, name, score, website_status, enrichment_status, last_quality_scored_at)
+       VALUES ('score-abort', 'score-abort-place', 'Score Abort', 10, 'none', 'pending', NULL)`,
+    ).run();
+    const controller = new AbortController();
+    const deadlineError = new Error("worker route deadline elapsed");
+    controller.abort(deadlineError);
+
+    await expect(recomputeAllLeadQualityScores(100, controller.signal)).rejects.toBe(deadlineError);
+
+    const lead = testDb.prepare("SELECT last_quality_scored_at FROM leads WHERE id = 'score-abort'").get() as Record<string, unknown>;
+    expect(lead.last_quality_scored_at).toBeNull();
   });
 });

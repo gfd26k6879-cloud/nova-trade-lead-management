@@ -7,11 +7,14 @@ This is the production path for NoSite Leads. It keeps the app invite-only with 
 Run these before pushing:
 
 ```bash
-npm run lint
-npm run test
-npm run build
+npm run release:check
 npm run test:e2e
 ```
+
+`release:check` is the safe local Node 24 gate and includes the public read-only
+browser project. `test:e2e` adds protected read-only workflows and fails if no
+E2E auth is configured. See `docs/TESTING.md`. Mutating E2E is never part of
+this default release path.
 
 For the launch screenshot QA pass, run the dedicated authenticated screenshot
 spec after setting either `E2E_STORAGE_STATE` or both Supabase E2E credentials:
@@ -79,28 +82,40 @@ After applying migrations, verify at minimum:
 
 ## 3. Migrate Local Data
 
+The complete backup, restore, rollback, protected-column, and migration-drift
+procedure is in [`DATA_RECOVERY.md`](DATA_RECOVERY.md). Export/import does not
+apply migrations or back up Supabase Auth/Vault.
+
 Export local SQLite data:
 
 ```bash
-npm run db:export:sqlite
+npm run db:export:sqlite -- --db nosite-leads.db --out data-export
 ```
 
-By default this writes ignored JSON files to `data-export/` and intentionally blanks encrypted API keys from `settings`. To migrate encrypted key values, run with `MIGRATE_ENCRYPTED_KEYS=1` only if production will reuse the same `NOSITE_SESSION_SECRET`.
+This writes a versioned, checksummed 23-table archive to ignored
+`data-export/`. OpenAI, Google Places, and Google Maps browser encrypted key
+columns are always excluded; `MIGRATE_ENCRYPTED_KEYS=1` is rejected.
+
+Validate the source schema and archive without connecting to Supabase:
+
+```bash
+npm run db:verify:recovery -- --db nosite-leads.db --dir data-export
+npm run db:import:supabase -- --dir data-export --dry-run
+```
+
+Reconcile/apply migrations and restore Supabase Auth users with matching UUIDs
+before import. These are explicit operator steps, not part of either script.
 
 Import into Supabase:
 
 ```bash
-$env:DATABASE_URL="postgresql://..."
-npm run db:import:supabase
+DATABASE_URL='postgresql://...' npm run db:import:supabase -- --dir data-export
 ```
 
-Validate expected row counts after import:
-
-- `leads`: 5,653
-- `crawl_units`: 4,280
-- `place_observations`: 4,652
-- `places_master`: 3,113
-- `settings`: 1
+The importer validates target tables, columns, primary keys, JSONB types, and
+referenced Auth users before writing, then upserts all tables in one
+transaction. Validate target row counts against that archive's `manifest.json`;
+do not rely on historical hard-coded counts.
 
 ## 4. GitHub
 
@@ -313,4 +328,4 @@ Do these after the first working deployment:
 - Add Vercel and Supabase log review to the weekly operating routine.
 - Keep crawl/enrichment chunked through the scheduler endpoints.
 - Keep outbound messaging manual until compliance is designed.
-- Move to Supabase Auth only when multi-user accounts are needed.
+- Keep Supabase Auth as the current invite-only identity boundary; do not introduce a parallel static-cookie login path.

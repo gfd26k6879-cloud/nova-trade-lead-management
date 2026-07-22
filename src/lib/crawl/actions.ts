@@ -3,6 +3,10 @@
 import { z } from "zod";
 import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
 import {
+  ReadOnlyActionDeadlineError,
+  withReadOnlyActionDeadline,
+} from "@/lib/read-only-action-deadline";
+import {
   ensureDbReady,
   createCrawlRun,
   createCrawlUnits,
@@ -254,17 +258,6 @@ function classifyDashboardSummaryFailure(error: unknown): DashboardSummaryLoadEr
   if (isDbStatementTimeoutError(error)) return "db_statement_timeout";
   if (isTransientDbError(error)) return "transient_db_error";
   return "summary_panels_unavailable";
-}
-
-class ReadOnlyActionDeadlineError extends Error {
-  constructor(actionName: string, timeoutMs: number) {
-    super(`${actionName} exceeded its internal response deadline of ${timeoutMs}ms.`);
-    this.name = "ReadOnlyActionDeadlineError";
-  }
-}
-
-function withReadOnlyActionDeadline<T>(_actionName: string, _timeoutMs: number, promise: Promise<T>): Promise<T> {
-  return promise;
 }
 
 type CoverageLoadError = "db_statement_timeout" | "transient_db_error" | "coverage_load_timeout" | "coverage_data_unavailable";
