@@ -15,7 +15,7 @@ import { PageShell } from "@/components/page-shell";
 import { startRouteTiming } from "@/lib/route-timing";
 import { QualityClient } from "./quality-client";
 
-export const metadata: Metadata = { title: "Quality | NoSite Leads" };
+export const metadata: Metadata = { title: "Quality | Nova Trade Lead Management" };
 
 interface Props {
   searchParams: Promise<{

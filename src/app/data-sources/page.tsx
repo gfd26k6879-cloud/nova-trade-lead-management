@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { PublicTrustPage, PUBLIC_TRUST_ROBOTS, SUPPORT_CONTACT } from "@/app/_components/public-trust-page";
 
 export const metadata: Metadata = {
-  title: "Data Sources | NoSite Leads",
-  description: "Data-source and Google Places API compliance posture for NoSite Leads.",
+  title: "Data Sources | Nova Trade Lead Management",
+  description: "Data-source and Google Places API compliance posture for Nova Trade Lead Management.",
   robots: PUBLIC_TRUST_ROBOTS,
 };
 
@@ -13,7 +13,7 @@ export default function DataSourcesPage() {
       currentPath="/data-sources"
       eyebrow="Data sources"
       title="Business discovery data comes from official sources"
-      description="NoSite Leads is built for controlled lead research. Its Google local-business discovery data comes from the official Google Places API only, with clear limits around reviews, scraping, outreach, and demos."
+      description="Nova Trade Lead Management is built for controlled lead research. Its Google local-business discovery data comes from the official Google Places API only, with clear limits around reviews, scraping, outreach, and demos."
       facts={[
         { label: "Google source", value: "Official Google Places API only." },
         { label: "Reviews", value: "Aggregate rating signals only; no Google review scraping or storage." },
@@ -22,7 +22,7 @@ export default function DataSourcesPage() {
       sections={[
         {
           title: "Google Places API",
-          body: "NoSite Leads uses the official Google Places API for Google local-business discovery and enrichment. The app does not scrape Google Search result pages, Google Maps pages, or Google review pages.",
+          body: "Nova Trade Lead Management uses the official Google Places API for Google local-business discovery and enrichment. The app does not scrape Google Search result pages, Google Maps pages, or Google review pages.",
         },
         {
           title: "Stored fields",
@@ -35,7 +35,7 @@ export default function DataSourcesPage() {
         },
         {
           title: "No automated outbound",
-          body: "The data is used to prioritize manual review and follow-up. NoSite Leads does not automatically send emails, calls, texts, social messages, or other outbound communications.",
+          body: "The data is used to prioritize manual review and follow-up. Nova Trade Lead Management does not automatically send emails, calls, texts, social messages, or other outbound communications.",
         },
         {
           title: "Corrections and removals",

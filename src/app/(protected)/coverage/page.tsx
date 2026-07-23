@@ -3,7 +3,7 @@ import { requirePermission } from "@/lib/auth";
 import { startRouteTiming } from "@/lib/route-timing";
 import { CoverageClient } from "./coverage-client";
 
-export const metadata: Metadata = { title: "Coverage | NoSite Leads" };
+export const metadata: Metadata = { title: "Coverage | Nova Trade Lead Management" };
 
 type CoverageSearchParams = { run?: string | string[] };
 

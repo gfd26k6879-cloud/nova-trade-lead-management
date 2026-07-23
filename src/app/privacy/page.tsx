@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { PublicTrustPage, PUBLIC_TRUST_ROBOTS, SUPPORT_CONTACT } from "@/app/_components/public-trust-page";
 
 export const metadata: Metadata = {
-  title: "Privacy | NoSite Leads",
-  description: "Privacy, retention, export, and correction policies for the invite-only NoSite Leads workspace.",
+  title: "Privacy | Nova Trade Lead Management",
+  description: "Privacy, retention, export, and correction policies for the invite-only Nova Trade Lead Management workspace.",
   robots: PUBLIC_TRUST_ROBOTS,
 };
 
@@ -12,12 +12,12 @@ export default function PrivacyPage() {
     <PublicTrustPage
       currentPath="/privacy"
       eyebrow="Privacy"
-      title="How NoSite Leads handles business and workspace data"
-      description="NoSite Leads is an invite-only lead research workspace. The public product surface is limited to trust, support, terms, and data-source information; the application itself requires an invited account."
+      title="How Nova Trade Lead Management handles business and workspace data"
+      description="Nova Trade Lead Management is an invite-only lead research workspace. The public product surface is limited to trust, support, terms, and data-source information; the application itself requires an invited account."
       facts={[
         { label: "Access", value: "Invite-only workspace; app and login surfaces are not public marketing pages." },
         { label: "Google data", value: "Google local-business data comes from the official Google Places API only." },
-        { label: "Outreach", value: "NoSite Leads does not automate outbound email, SMS, calls, or social messages." },
+        { label: "Outreach", value: "Nova Trade Lead Management does not automate outbound email, SMS, calls, or social messages." },
       ]}
       sections={[
         {
@@ -32,9 +32,9 @@ export default function PrivacyPage() {
         {
           title: "What is not collected",
           items: [
-            "NoSite Leads does not scrape Google Search, Google Maps pages, or Google review pages.",
-            "NoSite Leads does not store Google review content or create a shadow review database.",
-            "NoSite Leads does not send automated outbound messages; operators must choose whether and how to contact a business.",
+            "Nova Trade Lead Management does not scrape Google Search, Google Maps pages, or Google review pages.",
+            "Nova Trade Lead Management does not store Google review content or create a shadow review database.",
+            "Nova Trade Lead Management does not send automated outbound messages; operators must choose whether and how to contact a business.",
           ],
         },
         {

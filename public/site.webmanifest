@@ -1,6 +1,6 @@
 {
-  "name": "NoSite Leads",
-  "short_name": "NoSite",
+  "name": "Nova Trade Lead Management",
+  "short_name": "Nova Trade",
   "description": "Private lead discovery and outreach workspace.",
   "start_url": "/queue",
   "scope": "/",

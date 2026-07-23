@@ -1,8 +1,8 @@
-# NoSite Leads
+# Nova Trade Lead Management
 
 For the fastest complete system map, use `docs/ULTRA_SYSTEM_ATLAS.md`. For production deployment, use `docs/VERCEL_SUPABASE_DEPLOYMENT.md`. For backup/restore, use `docs/DATA_RECOVERY.md`. For current Codex handoff context, use `docs/CODEX_HANDOFF.md`.
 
-**Source of truth:** GitHub and Vercel deploy from `/Users/stevmq/lead-generation`. Do not use similarly named local folders for application changes unless they have first been reconciled into this Git repo.
+**Source of truth:** This repository is the Nova Trade Lead Management application.
 
 Private invite-only lead discovery and outreach CRM (Customer Relationship Management) for website-sales operations. Discovers local businesses with weak or missing websites via the official Google Places API (Application Programming Interface), scores and prioritizes them, and provides manual outreach, quality review, fulfillment, demo, and team-accountability tools.
 

@@ -68,7 +68,7 @@ export function PublicTrustPage({
             </span>
             <span>
               <span className="block text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-                NoSite Leads
+                Nova Trade Lead Management
               </span>
               <span className="block text-xs" style={{ color: "var(--text-tertiary)" }}>
                 Invite-only workspace
@@ -162,7 +162,7 @@ export function PublicTrustPage({
           className="flex flex-col gap-3 border-t py-6 text-sm sm:flex-row sm:items-center sm:justify-between"
           style={{ borderColor: "var(--glass-border-light)", color: "var(--text-tertiary)" }}
         >
-          <span>NoSite Leads is public only for trust, support, and data-source information.</span>
+                <span>Nova Trade Lead Management is public only for trust, support, and data-source information.</span>
           <span className="font-medium" style={{ color: "var(--accent)" }} aria-label="support at nosite dot xyz">
             {SUPPORT_CONTACT}
           </span>

@@ -9,14 +9,14 @@ const LEGACY_VERCEL_HOST = "lead-generation-orcin.vercel.app";
 const API_BASE_URL = "https://api.supabase.com/v1";
 
 const INVITE_TEMPLATE = [
-  "<h2>Welcome to NoSite Leads</h2>",
+  "<h2>Welcome to Nova Trade Lead Management</h2>",
   "<p>You have been invited to create your workspace account.</p>",
   `<p><a href="{{ .RedirectTo }}&amp;token_hash={{ .TokenHash }}&amp;type=invite">Set up account</a></p>`,
   "<p>This link can only be used once. If it looks expired, ask an admin for a fresh invite.</p>",
 ].join("");
 
 const RECOVERY_TEMPLATE = [
-  "<h2>Reset your NoSite Leads password</h2>",
+  "<h2>Reset your Nova Trade Lead Management password</h2>",
   "<p>We received a request to reset your workspace password.</p>",
   `<p><a href="{{ .RedirectTo }}&amp;token_hash={{ .TokenHash }}&amp;type=recovery">Reset password</a></p>`,
   "<p>This link can only be used once. If you did not request this, you can ignore this email.</p>",
@@ -24,9 +24,9 @@ const RECOVERY_TEMPLATE = [
 
 const REQUIRED_CONFIG = {
   site_url: CANONICAL_APP_URL,
-  mailer_subjects_invite: "Set up your NoSite Leads account",
+  mailer_subjects_invite: "Set up your Nova Trade Lead Management account",
   mailer_templates_invite_content: INVITE_TEMPLATE,
-  mailer_subjects_recovery: "Reset your NoSite Leads password",
+  mailer_subjects_recovery: "Reset your Nova Trade Lead Management password",
   mailer_templates_recovery_content: RECOVERY_TEMPLATE,
 };
 

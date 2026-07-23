@@ -82,7 +82,7 @@ describe("fetchSafeHttpUrl", () => {
 
     const result = await fetchSafeHttpUrl("https://leads.example/health", {
       method: "HEAD",
-      headers: { "User-Agent": "NoSiteLeads-Test/1.0" },
+      headers: { "User-Agent": "NovaTradeLeadManagement-Test/1.0" },
     }, { fetchImpl, lookupImpl: publicLookup() });
 
     expect(result.finalUrl).toBe("https://leads.example/health");

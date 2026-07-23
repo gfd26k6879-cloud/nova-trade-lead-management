@@ -7,7 +7,7 @@ import { ensureDbReady, getResearcherWorkbench, getScoreBandThresholds } from "@
 import { startRouteTiming } from "@/lib/route-timing";
 import { QueueClient } from "./queue-client";
 
-export const metadata: Metadata = { title: "Workbench | NoSite Leads" };
+export const metadata: Metadata = { title: "Workbench | Nova Trade Lead Management" };
 
 export default async function QueuePage() {
   const logRouteTiming = startRouteTiming("/queue");

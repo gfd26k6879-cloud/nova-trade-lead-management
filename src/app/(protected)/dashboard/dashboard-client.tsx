@@ -185,7 +185,7 @@ export function DashboardClient({
   const [coreError, setCoreError] = useState<string | null>(null);
 
   useEffect(() => {
-    document.title = "Admin Command Center | NoSite Leads";
+    document.title = "Admin Command Center | Nova Trade Lead Management";
   }, []);
 
   const loadCoreStats = useCallback(async () => {

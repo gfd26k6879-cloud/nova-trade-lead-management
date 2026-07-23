@@ -36,7 +36,7 @@ export async function checkWebsiteHealth(
     const result = await fetchSafeHttpUrl(currentUrl, {
       method: "HEAD",
       signal: abortScope.signal,
-      headers: { "User-Agent": "NoSiteLeads-HealthCheck/1.0" },
+      headers: { "User-Agent": "NovaTradeLeadManagement-HealthCheck/1.0" },
     }, {
       fetchImpl: options.fetchImpl,
       lookupImpl: options.lookupImpl,

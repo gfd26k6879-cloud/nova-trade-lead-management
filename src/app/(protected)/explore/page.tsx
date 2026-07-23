@@ -8,7 +8,7 @@ import { constrainExploreFiltersForSession } from "@/lib/lead-access";
 import { startRouteTiming } from "@/lib/route-timing";
 import { ExploreClient } from "./explore-client";
 
-export const metadata: Metadata = { title: "Lead Explorer | NoSite Leads" };
+export const metadata: Metadata = { title: "Lead Explorer | Nova Trade Lead Management" };
 
 interface Props {
   searchParams: Promise<ExploreParams>;

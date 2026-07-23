@@ -602,7 +602,7 @@ export function UsersClient({
       <ConfirmDialog
         open={Boolean(removeCandidate)}
         title="Remove user?"
-        message={removeCandidate ? `Remove ${removeCandidate.email} from NoSite Leads. Their territory access will be deleted and active lead ownership will be released.` : ""}
+        message={removeCandidate ? `Remove ${removeCandidate.email} from Nova Trade Lead Management. Their territory access will be deleted and active lead ownership will be released.` : ""}
         confirmLabel={pending ? "Removing..." : "Remove user"}
         cancelLabel="Keep user"
         onCancel={() => {

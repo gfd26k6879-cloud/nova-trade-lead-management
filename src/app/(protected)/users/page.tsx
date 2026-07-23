@@ -8,7 +8,7 @@ import { ensureDbReady, listLocationMarkets, listUserMarketAccessForUsers, type 
 import { startRouteTiming } from "@/lib/route-timing";
 import { UsersClient } from "./users-client";
 
-export const metadata: Metadata = { title: "Users | NoSite Leads" };
+export const metadata: Metadata = { title: "Users | Nova Trade Lead Management" };
 
 export default async function UsersPage() {
   const logRouteTiming = startRouteTiming("/users");

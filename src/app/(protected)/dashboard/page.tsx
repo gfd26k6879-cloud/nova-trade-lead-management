@@ -9,7 +9,7 @@ import {
 import { startRouteTiming } from "@/lib/route-timing";
 import { DashboardClient } from "./dashboard-client";
 
-export const metadata: Metadata = { title: "Admin Command Center | NoSite Leads" };
+export const metadata: Metadata = { title: "Admin Command Center | Nova Trade Lead Management" };
 
 export default async function DashboardPage() {
   const logRouteTiming = startRouteTiming("/dashboard");

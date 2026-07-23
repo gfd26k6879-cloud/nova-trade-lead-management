@@ -15,7 +15,7 @@ import { PageShell } from "@/components/page-shell";
 import { startRouteTiming } from "@/lib/route-timing";
 import { FulfillmentClient } from "./fulfillment-client";
 
-export const metadata: Metadata = { title: "Fulfillment | NoSite Leads" };
+export const metadata: Metadata = { title: "Fulfillment | Nova Trade Lead Management" };
 
 interface Props {
   searchParams: Promise<{

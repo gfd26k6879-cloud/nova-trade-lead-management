@@ -16,7 +16,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params;
   await ensureDbReady();
   const lead = await getLeadById(id);
-  return { title: `${lead?.name ?? "Lead"} | NoSite Leads` };
+  return { title: `${lead?.name ?? "Lead"} | Nova Trade Lead Management` };
 }
 
 export default async function LeadDetailPage({ params }: Props) {

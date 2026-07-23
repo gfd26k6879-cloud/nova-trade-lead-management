@@ -6,7 +6,7 @@ import { ensureDbReady, getResearcherTeamBoardSummary, getTeamBoardSummary, type
 import { PageShell } from "@/components/page-shell";
 import { startRouteTiming } from "@/lib/route-timing";
 
-export const metadata: Metadata = { title: "Team Board | NoSite Leads" };
+export const metadata: Metadata = { title: "Team Board | Nova Trade Lead Management" };
 
 export default async function TeamBoardPage() {
   const logRouteTiming = startRouteTiming("/team");

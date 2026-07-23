@@ -66,7 +66,7 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
           <BrandMark />
           <div>
             <h1 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-              NoSite Leads
+              Nova Trade Lead Management
             </h1>
             <p className="text-[0.6875rem] leading-tight" style={{ color: "var(--text-tertiary)" }}>
               {email} - {role}

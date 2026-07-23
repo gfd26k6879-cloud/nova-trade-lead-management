@@ -5,7 +5,7 @@ import { BrandMark } from "@/components/brand-mark";
 import { loginAction } from "./actions";
 
 export const metadata: Metadata = {
-  title: "Login | NoSite Leads",
+  title: "Login | Nova Trade Lead Management",
 };
 
 type LoginPageProps = {
@@ -29,7 +29,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         <div className="mb-8">
           <BrandMark size="login" className="mb-4" priority />
           <h1 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
-            NoSite Leads
+            Nova Trade Lead Management
           </h1>
           <p className="mt-1 text-sm" style={{ color: "var(--text-tertiary)" }}>
             Sign in to your workspace

@@ -122,7 +122,7 @@ export async function GET(request: NextRequest) {
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="nosite-leads-${date}.csv"`,
+        "Content-Disposition": `attachment; filename="nova-trade-leads-${date}.csv"`,
       },
     });
   } catch (err) {

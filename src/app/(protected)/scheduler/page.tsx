@@ -5,7 +5,7 @@ import { buildSchedulerOperationsFallback } from "@/lib/db/queries";
 import { startRouteTiming } from "@/lib/route-timing";
 import { SchedulerClient } from "./scheduler-client";
 
-export const metadata: Metadata = { title: "Scheduler | NoSite Leads" };
+export const metadata: Metadata = { title: "Scheduler | Nova Trade Lead Management" };
 
 export default async function SchedulerPage() {
   const logRouteTiming = startRouteTiming("/scheduler");

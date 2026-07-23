@@ -7,7 +7,7 @@ import { PageShell } from "@/components/page-shell";
 import { startRouteTiming } from "@/lib/route-timing";
 import { StatisticsClient } from "./statistics-client";
 
-export const metadata: Metadata = { title: "Statistics | NoSite Leads" };
+export const metadata: Metadata = { title: "Statistics | Nova Trade Lead Management" };
 
 interface Props {
   searchParams: Promise<{

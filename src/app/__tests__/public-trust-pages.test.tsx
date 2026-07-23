@@ -28,7 +28,7 @@ describe("public trust pages", () => {
 
     expect(support).toContain("Correction or removal path");
     expect(support).toContain("Retention and export help");
-    expect(support).toContain("NoSite Leads does not provide automated outbound sending");
+    expect(support).toContain("Nova Trade Lead Management does not provide automated outbound sending");
 
     expect(dataSources).toContain("official Google Places API only");
     expect(dataSources).toContain("no Google review scraping or storage");

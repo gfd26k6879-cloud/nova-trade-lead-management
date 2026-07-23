@@ -6,7 +6,7 @@ import { constrainLeadFiltersForSession, shouldRedirectResearcherLeadList } from
 import { LeadsClient } from "./leads-client";
 import { KanbanClient } from "./kanban-client";
 
-export const metadata: Metadata = { title: "Leads | NoSite Leads" };
+export const metadata: Metadata = { title: "Leads | Nova Trade Lead Management" };
 const KANBAN_PAGE_SIZE = 100;
 
 interface Props {

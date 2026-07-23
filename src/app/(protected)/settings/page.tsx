@@ -5,7 +5,7 @@ import { ensureDbReady, getSettings, type Settings } from "@/lib/db/queries";
 import { startRouteTiming } from "@/lib/route-timing";
 import { SettingsClient } from "./settings-client";
 
-export const metadata: Metadata = { title: "Settings | NoSite Leads" };
+export const metadata: Metadata = { title: "Settings | Nova Trade Lead Management" };
 
 export default async function SettingsPage() {
   const logRouteTiming = startRouteTiming("/settings");

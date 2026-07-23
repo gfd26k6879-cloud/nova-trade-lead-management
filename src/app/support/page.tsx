@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { PublicTrustPage, PUBLIC_TRUST_ROBOTS, SUPPORT_CONTACT } from "@/app/_components/public-trust-page";
 
 export const metadata: Metadata = {
-  title: "Support | NoSite Leads",
-  description: "Support, correction, removal, export, and demo ownership contact paths for NoSite Leads.",
+  title: "Support | Nova Trade Lead Management",
+  description: "Support, correction, removal, export, and demo ownership contact paths for Nova Trade Lead Management.",
   robots: PUBLIC_TRUST_ROBOTS,
 };
 
@@ -30,7 +30,7 @@ export default function SupportPage() {
           items: [
             "Include the business name, location, website if available, and the specific detail that should be corrected or removed.",
             "If the request concerns a generated demo page, include the demo URL or the page title visible in the browser.",
-            "NoSite Leads reviews requests against the current workspace record and corrects or removes inaccurate, unwanted, or stale references where appropriate.",
+            "Nova Trade Lead Management reviews requests against the current workspace record and corrects or removes inaccurate, unwanted, or stale references where appropriate.",
           ],
         },
         {
@@ -43,7 +43,7 @@ export default function SupportPage() {
         },
         {
           title: "Outbound sending",
-          body: "NoSite Leads does not provide automated outbound sending. Operators are responsible for any manual email, phone, SMS, or in-person outreach they choose to perform.",
+          body: "Nova Trade Lead Management does not provide automated outbound sending. Operators are responsible for any manual email, phone, SMS, or in-person outreach they choose to perform.",
         },
       ]}
     />

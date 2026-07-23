@@ -20,7 +20,7 @@ const geistMono = Geist_Mono({
 const themeBootstrapScript = `
 (() => {
   try {
-    const storedTheme = window.localStorage.getItem("nosite-theme");
+    const storedTheme = window.localStorage.getItem("nova-trade-theme");
     const systemTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     const theme = storedTheme === "dark" || storedTheme === "light" ? storedTheme : systemTheme;
     document.documentElement.dataset.theme = theme;
@@ -30,7 +30,7 @@ const themeBootstrapScript = `
 `;
 
 export const metadata: Metadata = {
-  title: "NoSite Leads",
+  title: "Nova Trade Lead Management",
   description: "Private lead discovery and outreach workspace.",
   manifest: "/site.webmanifest",
   icons: {
