@@ -15,6 +15,7 @@ import {
   getSchedulerWorkerMetadata,
   type SchedulerWorkerName,
 } from "@/lib/scheduler/worker-metadata";
+import { getStatusToneStyle, type StatusTone } from "@/lib/status-tone";
 
 type SchedulerOperations = Awaited<ReturnType<typeof getSchedulerOperationsAction>>;
 type SchedulerWorker = SchedulerOperations["health"]["workers"][number];
@@ -125,7 +126,7 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
       </section>
 
       {operations.health.database.staleClientReads.length > 0 && (
-        <section className="rounded-2xl p-4 text-sm" style={{ background: "rgba(245,158,11,0.12)", color: "#92400e", border: "1px solid rgba(245,158,11,0.22)" }}>
+        <section className="rounded-2xl border p-4 text-sm" style={getStatusToneStyle("warning")}>
           <div className="font-semibold">Database reads may be stalled</div>
           <p className="mt-1">
             {operations.health.database.staleClientReads.length} active ClientRead query
@@ -135,7 +136,7 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
       )}
 
       {authWarnings.length > 0 && (
-        <section className="rounded-2xl p-4 text-sm" style={{ background: "rgba(239,68,68,0.10)", color: "#991b1b", border: "1px solid rgba(239,68,68,0.22)" }}>
+        <section className="rounded-2xl border p-4 text-sm" role="alert" style={getStatusToneStyle("danger")}>
           <div className="font-semibold">Auth recovery configuration needs attention</div>
           <p className="mt-1">{authWarnings.join(" ")}</p>
           {operations.health.auth?.callbackUrl && (
@@ -161,7 +162,7 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
                 const metadata = getSchedulerWorkerMetadata(step.workerName);
                 const worker = workersByName.get(step.workerName);
                 return (
-                  <article key={step.workerName} className="rounded-xl p-4" style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.48)" }}>
+                  <article key={step.workerName} className="rounded-xl p-4" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
                     <div className="flex items-center justify-between gap-2">
                       <span className="section-label">Step {index + 1}</span>
                       <StatusPill worker={worker} />
@@ -289,7 +290,7 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
                     <td>
                       <details>
                         <summary className="cursor-pointer">{formatWorkerResult(run)}</summary>
-                        <pre className="mt-2 max-w-xl overflow-auto rounded-lg p-3 text-xs" style={{ background: "rgba(15,23,42,0.08)", color: "var(--text-secondary)" }}>
+                        <pre className="mt-2 max-w-xl overflow-auto rounded-lg p-3 text-xs" style={{ background: "var(--surface-muted)", color: "var(--text-secondary)" }}>
                           {JSON.stringify({ result: run.result_json, error: run.error }, null, 2)}
                         </pre>
                       </details>
@@ -339,8 +340,8 @@ function WorkerCard({ worker, loading, onToggle }: { worker: SchedulerWorker; lo
           <span>{formatNumber(worker.progress.completed)} completed</span>
           <span>{progressPct}%</span>
         </div>
-        <div className="h-2 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.08)" }}>
-          <div className="h-full rounded-full transition-all duration-500" style={{ width: `${progressPct}%`, background: worker.enabled ? "var(--accent)" : "#9ca3af" }} />
+        <div className="h-2 overflow-hidden rounded-full" style={{ background: "var(--status-muted-bg)" }}>
+          <div className="h-full rounded-full transition-all duration-500" style={{ width: `${progressPct}%`, background: worker.enabled ? "var(--accent)" : "var(--status-muted-text)" }} />
         </div>
       </div>
 
@@ -351,9 +352,9 @@ function WorkerCard({ worker, loading, onToggle }: { worker: SchedulerWorker; lo
         <MetricTile label="24h Errors" value={formatNumber(worker.errors24h)} />
       </div>
 
-      <div className="mt-4 rounded-xl p-4" style={{ background: worker.enabled ? "rgba(255,255,255,0.36)" : "rgba(107,114,128,0.10)", border: "1px solid rgba(255,255,255,0.45)" }}>
+      <div className="mt-4 rounded-xl p-4" style={{ background: worker.enabled ? "var(--surface-muted)" : "var(--status-muted-bg)", border: `1px solid ${worker.enabled ? "var(--surface-card-border)" : "var(--status-muted-border)"}` }}>
         <p className="section-label">Next Action</p>
-        <p className="mt-2 text-sm leading-relaxed" style={{ color: nextAction.tone === "warning" ? "#b45309" : "var(--text-secondary)" }}>{nextAction.message}</p>
+        <p className="mt-2 text-sm leading-relaxed" style={{ color: nextAction.tone === "warning" ? "var(--warning-text)" : "var(--text-secondary)" }}>{nextAction.message}</p>
         <p className="mt-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
           Last run: {worker.lastRun ? `${formatDateTime(worker.lastRun.started_at)} · ${formatWorkerResult(worker.lastRun)}` : "Never"}
         </p>
@@ -380,7 +381,7 @@ function BacklogPanel({ title, rows }: { title: string; rows: Array<[string, str
 
 function InfoRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="rounded-xl p-3" style={{ background: "rgba(255,255,255,0.34)", border: "1px solid rgba(255,255,255,0.45)" }}>
+    <div className="rounded-xl p-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
       <p className="section-label">{label}</p>
       <p className={`mt-1 text-sm ${mono ? "font-mono" : ""}`} style={{ color: "var(--text-primary)" }}>{value}</p>
     </div>
@@ -425,7 +426,7 @@ function BreakdownCard({ title, rows }: { title: string; rows: Array<{ key: stri
                 <span style={{ color: "var(--text-secondary)" }}>{titleCase(row.key)}</span>
                 <span style={{ color: "var(--text-primary)" }}>{formatNumber(row.count)} · {pct}%</span>
               </div>
-              <div className="h-1.5 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.08)" }}>
+              <div className="h-1.5 overflow-hidden rounded-full" style={{ background: "var(--status-muted-bg)" }}>
                 <div className="h-full rounded-full" style={{ width: `${pct}%`, background: "var(--accent)" }} />
               </div>
             </div>
@@ -438,7 +439,7 @@ function BreakdownCard({ title, rows }: { title: string; rows: Array<{ key: stri
 
 function MetricTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.45)" }}>
+    <div className="rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
       <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
       <p className="mt-1 text-lg font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
       {sub && <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--text-tertiary)" }}>{sub}</p>}
@@ -450,7 +451,7 @@ function StatusPill({ worker }: { worker?: SchedulerWorker }) {
   const label = !worker ? "Unknown" : !worker.enabled ? "Paused" : worker.warning ? "Needs attention" : worker.lastRun?.status ? titleCase(worker.lastRun.status) : "No runs";
   const style = statusStyle(worker);
   return (
-    <span className="rounded-md px-2.5 py-1 text-xs font-medium" style={{ background: style.bg, color: style.fg }}>
+    <span className="rounded-md border px-2.5 py-1 text-xs font-medium" style={style}>
       {label}
     </span>
   );
@@ -458,21 +459,22 @@ function StatusPill({ worker }: { worker?: SchedulerWorker }) {
 
 function StatusBadge({ status }: { status: string }) {
   const style = runStatusStyle(status);
-  return <span className="rounded-md px-2 py-1 text-xs font-medium" style={{ background: style.bg, color: style.fg }}>{status === "budget_limit" ? "Stopped" : titleCase(status)}</span>;
+  return <span className="rounded-md border px-2 py-1 text-xs font-medium" style={style}>{status === "budget_limit" ? "Stopped" : titleCase(status)}</span>;
 }
 
 function statusStyle(worker?: SchedulerWorker) {
-  if (!worker || !worker.enabled) return { bg: "rgba(107,114,128,0.12)", fg: "#4b5563" };
-  if (worker.warning) return { bg: "rgba(245,158,11,0.14)", fg: "#b45309" };
-  if (worker.lastRun?.status === "error" || worker.lastRun?.status === "budget_limit") return { bg: "rgba(239,68,68,0.12)", fg: "#dc2626" };
-  return { bg: "rgba(34,197,94,0.12)", fg: "#16a34a" };
+  if (!worker || !worker.enabled) return getStatusToneStyle("muted");
+  if (worker.warning) return getStatusToneStyle("warning");
+  if (worker.lastRun?.status === "error" || worker.lastRun?.status === "budget_limit") return getStatusToneStyle("danger");
+  return getStatusToneStyle("success");
 }
 
 function runStatusStyle(status: string) {
-  if (status === "error" || status === "budget_limit") return { bg: "rgba(239,68,68,0.12)", fg: "#dc2626" };
-  if (status === "disabled") return { bg: "rgba(107,114,128,0.12)", fg: "#4b5563" };
-  if (status === "processed") return { bg: "rgba(34,197,94,0.12)", fg: "#16a34a" };
-  return { bg: "rgba(99,102,241,0.12)", fg: "var(--accent)" };
+  let tone: StatusTone = "info";
+  if (status === "error" || status === "budget_limit") tone = "danger";
+  else if (status === "disabled" || status === "interrupted") tone = "muted";
+  else if (status === "processed" || status === "idle") tone = "success";
+  return getStatusToneStyle(tone);
 }
 
 function getNextAction(worker: SchedulerWorker): { message: string; tone: "normal" | "warning" } {

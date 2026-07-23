@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { Lead } from "@/lib/db/queries";
+import { getDefaultScoreBandThresholds } from "@/lib/score-bands";
 
 let currentParams = new URLSearchParams();
 
@@ -28,7 +29,7 @@ function renderExplore(role: "admin" | "researcher" = "admin", leads: Lead[] = [
       mapPointLimit={200}
       zipCoverage={[]}
       filters={{ mode: "work_ready", sortBy: "opportunity", view: "cards", archived: "active", includeExcluded: false }}
-      scoreThresholds={{ high: 20, medium: 10 }}
+      scoreThresholds={getDefaultScoreBandThresholds()}
       businessTypeCounts={[{ id: "dental", label: "Dental", total: 3, active: 2 }]}
       currentUser={{ userId: "user-1", email: "user@example.com", role }}
       googleMapsApiKey={null}
@@ -123,6 +124,13 @@ function makeLead(overrides: Partial<Lead> = {}): Lead {
     notes: null,
     reminder_date: null,
     enrichment_status: "pending",
+    enrichment_attempt_count: 0,
+    enrichment_started_at: null,
+    enrichment_finished_at: null,
+    enrichment_next_retry_at: null,
+    enrichment_last_error: null,
+    enrichment_last_error_code: null,
+    enrichment_max_attempts: 3,
     enriched_at: null,
     review_highlights: null,
     editorial_summary: null,

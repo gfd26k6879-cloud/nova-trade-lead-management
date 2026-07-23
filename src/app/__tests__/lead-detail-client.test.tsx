@@ -1,6 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { getDefaultScoreBandThresholds } from "@/lib/score-bands";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -148,7 +149,7 @@ function renderLead(
       initialDemo={null}
       initialAiVerification={(related.initialAiVerification ?? null) as never}
       initialAiArtifacts={(related.initialAiArtifacts ?? []) as never}
-      scoreThresholds={{ high: 20, medium: 10 }}
+      scoreThresholds={getDefaultScoreBandThresholds()}
       currentUser={currentUser}
       initialTab={related.initialTab}
     />,
@@ -251,8 +252,12 @@ describe("LeadDetailClient archive UX", () => {
       { initialTab: "verification" },
     );
 
+    expect(html).toContain("Website correction");
+    expect(html).toContain("Official website found");
+    expect(html).toContain("Candidate website - review");
+    expect(html).toContain("Save website correction");
     expect(html).toContain("Run AI check");
-    expect(html).toContain("Creates research evidence only");
+    expect(html).toContain("AI checks create advisory evidence");
     expect(html).not.toContain("Run AI Verify");
     expect(html).not.toContain("Re-check Website Viability");
     expect(html).not.toContain("Advanced AI Accuracy Feedback");

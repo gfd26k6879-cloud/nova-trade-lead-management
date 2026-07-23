@@ -10,6 +10,10 @@ const dbIndexMocks = vi.hoisted(() => ({
   withDbStatementTimeout: vi.fn((_timeoutMs: number, fn: () => Promise<unknown>) => fn()),
 }));
 
+const googlePlacesMocks = vi.hoisted(() => ({
+  textSearch: vi.fn(),
+}));
+
 vi.mock("@/lib/auth", () => ({
   requirePermission: vi.fn(() => Promise.resolve({ userId: "admin-1", email: "admin@example.com", role: "admin" })),
 }));
@@ -19,9 +23,29 @@ vi.mock("@/lib/db/index", () => {
     getDb: () => testDb,
     generateId: () => crypto.randomUUID(),
     nowISO: () => new Date().toISOString(),
+    withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
     isDbStatementTimeoutError: dbIndexMocks.isDbStatementTimeoutError,
     isTransientDbError: dbIndexMocks.isTransientDbError,
     withDbStatementTimeout: dbIndexMocks.withDbStatementTimeout,
+  };
+});
+
+vi.mock("@/lib/google-places", () => {
+  class PlacesApiError extends Error {
+    constructor(
+      public readonly status: number,
+      public readonly body: string,
+      message = `Places API error ${status}: ${body}`,
+    ) {
+      super(message);
+      this.name = "PlacesApiError";
+    }
+  }
+  return {
+    textSearch: googlePlacesMocks.textSearch,
+    PlacesApiError,
+    TEXT_SEARCH_FIELD_MASK: "places.id,places.displayName,places.websiteUri,places.rating",
+    TEXT_SEARCH_PRO_FIELD_MASK: "places.id,places.displayName,places.formattedAddress,places.location",
   };
 });
 
@@ -40,16 +64,27 @@ import {
   startCrawlRunAction,
   stopCrawlRunAction,
 } from "@/lib/crawl/actions";
+import { PlacesApiError } from "@/lib/google-places";
+
+const originalGooglePlacesApiKey = process.env.GOOGLE_PLACES_API_KEY;
 
 beforeEach(() => {
   testDb = createTestDb();
   seedTestZip(testDb, "80202", "Denver", 39.75, -104.99, "Denver");
+  process.env.GOOGLE_PLACES_API_KEY = "test-google-key";
+  googlePlacesMocks.textSearch.mockReset();
+  googlePlacesMocks.textSearch.mockResolvedValue({ places: [] });
   dbIndexMocks.isDbStatementTimeoutError.mockImplementation((error: unknown) => (error as { code?: string }).code === "57014");
   dbIndexMocks.isTransientDbError.mockReturnValue(false);
   dbIndexMocks.withDbStatementTimeout.mockImplementation((_timeoutMs: number, fn: () => Promise<unknown>) => fn());
 });
 
 afterEach(() => {
+  if (originalGooglePlacesApiKey === undefined) {
+    delete process.env.GOOGLE_PLACES_API_KEY;
+  } else {
+    process.env.GOOGLE_PLACES_API_KEY = originalGooglePlacesApiKey;
+  }
   testDb.close();
 });
 
@@ -92,6 +127,29 @@ describe("crawl discovery item actions", () => {
     });
 
     expect("error" in result ? result.error : "").toContain("only 0 remain");
+    expect(testDb.prepare("SELECT COUNT(*) AS count FROM crawl_runs").get()).toMatchObject({ count: 0 });
+  });
+
+  it("blocks starting before creating a run when the Google diagnostic fails", async () => {
+    googlePlacesMocks.textSearch.mockRejectedValueOnce(new PlacesApiError(403, JSON.stringify({
+      error: {
+        code: 403,
+        message: "Places API has not been used in project or it is disabled.",
+        status: "PERMISSION_DENIED",
+      },
+    })));
+
+    const result = await startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    });
+
+    expect("error" in result ? result.error : "").toContain("Google diagnostic failed");
     expect(testDb.prepare("SELECT COUNT(*) AS count FROM crawl_runs").get()).toMatchObject({ count: 0 });
   });
 
@@ -143,6 +201,33 @@ describe("crawl discovery item actions", () => {
     expect(paused.status).toBe("paused");
   });
 
+  it("resumes a blocked item after diagnostic success and clears stale block metadata", async () => {
+    seedTestRun(testDb, { id: "blocked-run", status: "blocked" });
+    seedTestUnit(testDb, { id: "blocked-unit", runId: "blocked-run" });
+    testDb.prepare(
+      "UPDATE crawl_runs SET ended_at = ?, blocked_at = ?, blocked_reason = ?, blocked_error_code = ?, last_error = ? WHERE id = ?",
+    ).run(
+      "2026-06-10T00:00:00.000Z",
+      "2026-06-10T00:00:00.000Z",
+      "Google key blocked",
+      "google_permission_denied",
+      "Google key blocked",
+      "blocked-run",
+    );
+
+    const result = await resumeCrawlRunAction("blocked-run");
+
+    expect(result).toMatchObject({ success: true });
+    expect(testDb.prepare("SELECT status, ended_at, blocked_at, blocked_reason, blocked_error_code, last_error FROM crawl_runs WHERE id = 'blocked-run'").get()).toMatchObject({
+      status: "running",
+      ended_at: null,
+      blocked_at: null,
+      blocked_reason: null,
+      blocked_error_code: null,
+      last_error: null,
+    });
+  });
+
   it("cancels remaining units only for the selected discovery item", async () => {
     seedTestRun(testDb, { id: "paused-run", status: "paused" });
     seedTestRun(testDb, { id: "other-run", status: "paused" });
@@ -168,6 +253,28 @@ describe("crawl discovery item actions", () => {
     expect(result).toMatchObject({ retriedCount: 1 });
     expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'paused-unit'").get()).toMatchObject({ status: "pending" });
     expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'other-unit'").get()).toMatchObject({ status: "failed" });
+  });
+
+  it("blocks retrying failed units when the Google diagnostic fails", async () => {
+    seedTestRun(testDb, { id: "failed-run", status: "error" });
+    seedTestUnit(testDb, { id: "failed-unit", runId: "failed-run" });
+    testDb.prepare("UPDATE crawl_units SET status = 'failed' WHERE id = 'failed-unit'").run();
+    googlePlacesMocks.textSearch.mockRejectedValueOnce(new PlacesApiError(403, JSON.stringify({
+      error: {
+        code: 403,
+        message: "Places API has not been used in project or it is disabled.",
+        status: "PERMISSION_DENIED",
+      },
+    })));
+
+    const result = await retryFailedUnitsAction("failed-run");
+
+    expect("error" in result ? result.error : "").toContain("Google diagnostic failed");
+    expect(testDb.prepare("SELECT status, blocked_error_code FROM crawl_runs WHERE id = 'failed-run'").get()).toMatchObject({
+      status: "blocked",
+      blocked_error_code: "google_403",
+    });
+    expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'failed-unit'").get()).toMatchObject({ status: "failed" });
   });
 
   it("blocks retrying failed units when the cap is exhausted", async () => {

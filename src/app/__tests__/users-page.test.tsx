@@ -26,7 +26,7 @@ vi.mock("@/lib/app-users", () => appUserMocks);
 vi.mock("@/lib/db/index", () => dbIndexMocks);
 vi.mock("@/lib/db/queries", () => queryMocks);
 vi.mock("@/app/(protected)/users/users-client", () => ({
-  UsersClient: () => React.createElement("div", null, "Users loaded"),
+  UsersClient: () => React.createElement("div", null, "Users loaded Send invite Remove user Role Territories"),
 }));
 
 import UsersPage from "@/app/(protected)/users/page";
@@ -51,7 +51,7 @@ describe("UsersPage", () => {
     expect(dbIndexMocks.withDbStatementTimeout).toHaveBeenCalledWith(10_000, expect.any(Function));
   });
 
-  it("renders a local fallback when user territory loading times out", async () => {
+  it("renders a degraded read-only fallback without mutation controls when users loading times out", async () => {
     authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
     dbIndexMocks.withDbStatementTimeout.mockRejectedValue(Object.assign(new Error("timeout"), { code: "57014" }));
 
@@ -59,6 +59,12 @@ describe("UsersPage", () => {
     const text = renderToStaticMarkup(node as React.ReactElement);
 
     expect(text).toContain("Users temporarily unavailable");
-    expect(text).toContain("Users loaded");
+    expect(text).toContain("Reload users");
+    expect(text).toContain("Mutation controls are hidden");
+    expect(text).not.toContain("Users loaded");
+    expect(text).not.toContain("Send invite");
+    expect(text).not.toContain("Remove user");
+    expect(text).not.toContain("Role");
+    expect(text).not.toContain("Territories");
   });
 });

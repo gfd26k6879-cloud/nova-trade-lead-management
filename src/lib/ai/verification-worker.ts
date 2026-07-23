@@ -35,7 +35,9 @@ import {
   normalizeAiVerificationForWebsiteSales,
   type WebsiteViabilityStatus,
 } from "@/lib/ai/website-viability";
+import { runAiPostSuccessBookkeeping } from "@/lib/ai/post-success-bookkeeping";
 import { computeWinProbability } from "@/lib/scoring";
+import { throwIfWorkerAborted } from "@/lib/worker-abort";
 
 export type AiVerificationWorkerResult =
   | { status: "verified"; leadId: string; leadName: string; cached: boolean }
@@ -54,6 +56,7 @@ export interface AiVerificationRunOptions {
   applyToLead?: boolean;
   actorUserId?: string | null;
   requestSource?: string | null;
+  signal?: AbortSignal;
 }
 
 export async function enqueueAiVerificationForLead(
@@ -83,7 +86,22 @@ export async function enqueueAiVerificationForLead(
     isAiVerificationFresh(latest.created_at, settings.ai_cache_ttl_days),
   );
 
-  if (hasFreshSameInput) {
+  if (hasFreshSameInput && latest) {
+    const cachedResult = aiResultFromVerification(latest);
+    const cachedWinProbabilityScore = computeLeadWinProbability(
+      lead,
+      cachedResult,
+      latest.website_viability_status,
+    );
+    const projectionError = await projectAiVerificationToLead(
+      lead.id,
+      latest,
+      cachedWinProbabilityScore,
+    );
+    if (projectionError) {
+      await markLeadAiQueued(lead.id, inputHash, false);
+      return { status: "queued", leadId, reason: projectionError };
+    }
     await markLeadAiVerified(lead.id, inputHash);
     return { status: "cached", leadId, reason: "Fresh AI verification already exists for the same lead identity." };
   }
@@ -94,33 +112,43 @@ export async function enqueueAiVerificationForLead(
 
   const resetAttempts = options.force || lead.ai_input_hash !== inputHash || lead.ai_queue_status === "error";
   await markLeadAiQueued(lead.id, inputHash, resetAttempts);
-  await createAuditLog("ai_verification_queued", "lead", lead.id, { reason, resetAttempts });
+  await runAiPostSuccessBookkeeping(
+    { operation: "queue_audit", leadId: lead.id },
+    () => createAuditLog("ai_verification_queued", "lead", lead.id, { reason, resetAttempts }),
+  );
   return { status: "queued", leadId, reason };
 }
 
-export async function processNextAiVerificationJob(): Promise<AiVerificationWorkerResult> {
+export async function processNextAiVerificationJob(signal?: AbortSignal): Promise<AiVerificationWorkerResult> {
+  throwIfWorkerAborted(signal);
   const settings = await getSettings();
+  throwIfWorkerAborted(signal);
   if (!settings.ai_enabled) return { status: "disabled", reason: "AI verification is disabled in Settings." };
 
   const stats = await getAiQueueStats();
+  throwIfWorkerAborted(signal);
   if (stats.running >= settings.ai_verification_concurrency) {
     return { status: "idle", reason: "AI verification concurrency limit is already reached." };
   }
 
   const lead = await leaseNextAiVerificationJob(settings.ai_max_attempts);
+  throwIfWorkerAborted(signal);
   if (!lead) return { status: "idle", reason: "No AI verification jobs are ready." };
 
   const inputHash = createLeadVerificationInputHash(lead);
 
-  const result = await performAiVerification(lead, false, settings);
+  const result = await performAiVerification(lead, false, settings, { signal });
+  throwIfWorkerAborted(signal);
   if ("error" in result) {
     const error = result.error ?? "AI verification failed.";
     await markLeadAiQueueError(lead.id, error, settings.ai_max_attempts);
+    throwIfWorkerAborted(signal);
     return { status: "error", leadId: lead.id, error };
   }
 
   const verificationHash = result.verification.input_hash ?? inputHash;
   await markLeadAiVerified(lead.id, verificationHash);
+  throwIfWorkerAborted(signal);
   return {
     status: "verified",
     leadId: lead.id,
@@ -182,7 +210,10 @@ export async function performAiVerification(
   settingsArg?: Settings,
   options: AiVerificationRunOptions = {},
 ) {
+  const signal = options.signal;
+  throwIfWorkerAborted(signal);
   const settings = settingsArg ?? await getSettings();
+  throwIfWorkerAborted(signal);
   if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
   const applyToLead = options.applyToLead ?? true;
   const actorUserId = options.actorUserId ?? null;
@@ -193,6 +224,7 @@ export async function performAiVerification(
 
   const inputHash = createLeadVerificationInputHash(lead);
   const latest = await getLatestAiVerification(lead.id);
+  throwIfWorkerAborted(signal);
   const cachedNeedsViability = latest?.found_website_url && latest.website_viability_status == null;
   const cacheHit = Boolean(
     !force &&
@@ -214,15 +246,36 @@ export async function performAiVerification(
       request_source: requestSource,
       metadata: { cacheHit: true, inputHash },
     });
+    throwIfWorkerAborted(signal);
+    if (applyToLead) {
+      const cachedResult = aiResultFromVerification(latest);
+      const cachedWinProbabilityScore = computeLeadWinProbability(
+        lead,
+        cachedResult,
+        latest.website_viability_status,
+      );
+      const projectionError = await projectAiVerificationToLead(
+        lead.id,
+        latest,
+        cachedWinProbabilityScore,
+        signal,
+      );
+      if (projectionError) {
+        return { error: projectionError, verification: latest, cached: true, persisted: true };
+      }
+    }
     return { success: true, cached: true, verification: latest };
   }
 
   try {
     const apiKey = await getConfiguredOpenAiApiKey();
-    const ai = await callOpenAILeadVerifier(lead, apiKey);
+    throwIfWorkerAborted(signal);
+    const ai = await callOpenAILeadVerifier(lead, apiKey, { signal });
+    throwIfWorkerAborted(signal);
     const websiteViability = ai.result.foundWebsiteUrl
-      ? await assessWebsiteViability(lead, ai.result.foundWebsiteUrl)
+      ? await assessWebsiteViability(lead, ai.result.foundWebsiteUrl, { signal })
       : null;
+    throwIfWorkerAborted(signal);
     const normalized = normalizeAiVerificationForWebsiteSales(lead, ai.result, websiteViability);
     const candidateAssessment = scoreWebsiteCandidate(
       lead,
@@ -236,6 +289,7 @@ export async function performAiVerification(
     let adjudicationError: string | null = null;
     let adjudicationInputTokens = 0;
     let adjudicationOutputTokens = 0;
+    let adjudicationEstimatedCost = 0;
     try {
       const adjudicated = await callOpenAILeadVerificationAdjudicator(
         lead,
@@ -243,25 +297,33 @@ export async function performAiVerification(
         normalizedViability,
         candidateAssessment,
         apiKey,
+        { signal },
       );
       normalizedResult = applyWebsiteCandidateAssessment(adjudicated.result, candidateAssessment);
       adjudicationRaw = adjudicated.raw;
       adjudicationInputTokens = adjudicated.inputTokens;
       adjudicationOutputTokens = adjudicated.outputTokens;
+      adjudicationEstimatedCost = adjudicated.estimatedCost;
     } catch (error) {
+      throwIfWorkerAborted(signal);
       adjudicationError = error instanceof Error ? error.message : "AI adjudication failed.";
       if (error instanceof OpenAIResponseParseError) {
         adjudicationRaw = { parseError: serializeOpenAIResponseParseError(error) };
+        adjudicationInputTokens = error.inputTokens;
+        adjudicationOutputTokens = error.outputTokens;
+        adjudicationEstimatedCost = error.estimatedCost;
       }
     }
+    throwIfWorkerAborted(signal);
     if (!normalizedResult.foundWebsiteUrl && normalizedViability?.status === "usable") {
       normalizedViability = null;
     }
     const winProbabilityScore = computeLeadWinProbability(lead, normalizedResult, normalizedViability?.status ?? null);
     const usageInputTokens = ai.inputTokens + adjudicationInputTokens;
     const usageOutputTokens = ai.outputTokens + adjudicationOutputTokens;
-    const estimatedCost = ai.estimatedCost;
+    const estimatedCost = ai.estimatedCost + adjudicationEstimatedCost;
 
+    throwIfWorkerAborted(signal);
     const verification = await createAiLeadVerification({
       lead_id: lead.id,
       model,
@@ -303,40 +365,63 @@ export async function performAiVerification(
       requested_by_user_id: actorUserId,
       request_source: requestSource,
     });
+    throwIfWorkerAborted(signal);
 
-    await logAiUsageEvent({
-      lead_id: lead.id,
-      verification_id: verification.id,
-      model,
-      input_tokens: usageInputTokens,
-      output_tokens: usageOutputTokens,
-      estimated_cost: estimatedCost,
-      actor_user_id: actorUserId,
-      request_source: requestSource,
-      metadata: {
-        status: normalizedResult.status,
-        originalStatus: ai.result.status,
-        recommendation: normalizedResult.recommendation,
-        websiteViability: normalizedViability?.status ?? null,
-        candidateAssessment,
-        adjudicationError,
-        inputHash: ai.inputHash,
-      },
-    });
+    await runAiPostSuccessBookkeeping(
+      { operation: "usage_event", leadId: lead.id, verificationId: verification.id },
+      () => logAiUsageEvent({
+        lead_id: lead.id,
+        verification_id: verification.id,
+        model,
+        input_tokens: usageInputTokens,
+        output_tokens: usageOutputTokens,
+        estimated_cost: estimatedCost,
+        actor_user_id: actorUserId,
+        request_source: requestSource,
+        metadata: {
+          status: normalizedResult.status,
+          originalStatus: ai.result.status,
+          recommendation: normalizedResult.recommendation,
+          websiteViability: normalizedViability?.status ?? null,
+          candidateAssessment,
+          adjudicationError,
+          inputHash: ai.inputHash,
+        },
+      }),
+    );
+    throwIfWorkerAborted(signal);
     if (applyToLead) {
-      await updateLeadAiVerificationSummary(lead.id, verification, winProbabilityScore);
-      await createAuditLog("ai_lead_verified", "lead", lead.id, {
-        verificationId: verification.id,
-        status: verification.status,
-        websiteViability: verification.website_viability_status,
-      });
+      const projectionError = await projectAiVerificationToLead(
+        lead.id,
+        verification,
+        winProbabilityScore,
+        signal,
+      );
+      if (projectionError) {
+        return { error: projectionError, verification, cached: false, persisted: true };
+      }
+    }
+    if (applyToLead) {
+      await runAiPostSuccessBookkeeping(
+        { operation: "completion_audit", leadId: lead.id, verificationId: verification.id },
+        () => createAuditLog("ai_lead_verified", "lead", lead.id, {
+          verificationId: verification.id,
+          status: verification.status,
+          websiteViability: verification.website_viability_status,
+        }),
+      );
+      throwIfWorkerAborted(signal);
     }
     return { success: true, cached: false, verification };
   } catch (error) {
+    throwIfWorkerAborted(signal);
     const message = error instanceof Error ? error.message : "AI verification failed.";
     const parseError = error instanceof OpenAIResponseParseError
       ? serializeOpenAIResponseParseError(error)
       : null;
+    const failureInputTokens = error instanceof OpenAIResponseParseError ? error.inputTokens : 0;
+    const failureOutputTokens = error instanceof OpenAIResponseParseError ? error.outputTokens : 0;
+    const failureEstimatedCost = error instanceof OpenAIResponseParseError ? error.estimatedCost : 0;
     const verification = await createAiLeadVerification({
       lead_id: lead.id,
       model,
@@ -347,24 +432,70 @@ export async function performAiVerification(
       input_hash: inputHash,
       error: message,
       raw_json: parseError ? { parseError } : undefined,
+      usage_input_tokens: failureInputTokens,
+      usage_output_tokens: failureOutputTokens,
+      estimated_cost: failureEstimatedCost,
       requested_by_user_id: actorUserId,
       request_source: requestSource,
     });
-    await logAiUsageEvent({
-      lead_id: lead.id,
-      verification_id: verification.id,
-      model,
-      success: false,
-      estimated_cost: 0,
-      actor_user_id: actorUserId,
-      request_source: requestSource,
-      metadata: { error: message, inputHash, parseErrorStage: parseError?.stage ?? null },
-    });
+    throwIfWorkerAborted(signal);
+    await runAiPostSuccessBookkeeping(
+      { operation: "usage_event", leadId: lead.id, verificationId: verification.id },
+      () => logAiUsageEvent({
+        lead_id: lead.id,
+        verification_id: verification.id,
+        model,
+        success: false,
+        input_tokens: failureInputTokens,
+        output_tokens: failureOutputTokens,
+        estimated_cost: failureEstimatedCost,
+        actor_user_id: actorUserId,
+        request_source: requestSource,
+        metadata: { error: message, inputHash, parseErrorStage: parseError?.stage ?? null },
+      }),
+    );
+    throwIfWorkerAborted(signal);
     if (applyToLead) {
       await markLeadAiError(lead.id, message);
+      throwIfWorkerAborted(signal);
       await createAuditLog("ai_lead_verification_failed", "lead", lead.id, { verificationId: verification.id, error: message });
+      throwIfWorkerAborted(signal);
     }
     return { error: message, verification };
+  }
+}
+
+async function projectAiVerificationToLead(
+  leadId: string,
+  verification: AiLeadVerification,
+  winProbabilityScore: number,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  try {
+    throwIfWorkerAborted(signal);
+    await updateLeadAiVerificationSummary(leadId, verification, winProbabilityScore);
+    throwIfWorkerAborted(signal);
+    return null;
+  } catch (error) {
+    throwIfWorkerAborted(signal);
+    const message = error instanceof Error ? error.message : "Lead verification projection failed.";
+    const retryableMessage = `Verification ${verification.id} persisted, but the lead projection failed: ${message}`;
+    console.error("ai_lead_verification_projection_failed", {
+      leadId,
+      verificationId: verification.id,
+      error: message,
+      retryable: true,
+    });
+    await runAiPostSuccessBookkeeping(
+      { operation: "projection_failure_audit", leadId, verificationId: verification.id },
+      () => createAuditLog("ai_lead_verification_projection_failed", "lead", leadId, {
+        verificationId: verification.id,
+        error: message,
+        retryable: true,
+      }),
+    );
+    throwIfWorkerAborted(signal);
+    return retryableMessage;
   }
 }
 

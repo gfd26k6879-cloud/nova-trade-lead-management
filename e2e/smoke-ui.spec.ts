@@ -1,22 +1,22 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, login, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, openAdminPage, requireE2EAuth } from "./auth-fixtures";
 
 test.describe("UI Smoke Test", () => {
-  skipIfMissingAuth();
+  requireE2EAuth();
   test.setTimeout(60000);
   test.beforeEach(async ({ page }) => {
     await login(page);
   });
 
   test("1. Open app and log in", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     expect(page.url()).toContain("/queue");
     await expect(page.getByRole("heading", { name: "Workbench", exact: true })).toBeVisible({ timeout: 5000 });
   });
 
   test("2. Protected navigation and Dashboard loads", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     await expect(page.getByRole("link", { name: "Workbench", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Explore", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "My Leads", exact: true })).toBeVisible();
@@ -32,7 +32,7 @@ test.describe("UI Smoke Test", () => {
   });
 
   test("2b. Theme toggle and desktop Admin menu work in both themes", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     await page.evaluate(() => localStorage.setItem("nosite-theme", "dark"));
     await page.reload({ waitUntil: "networkidle" });
 
@@ -49,7 +49,7 @@ test.describe("UI Smoke Test", () => {
   });
 
   test("2c. Mobile hamburger opens primary and Admin links", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => localStorage.setItem("nosite-theme", "dark"));
     await page.goto(`${BASE_URL}/queue`, { waitUntil: "networkidle" });
@@ -64,7 +64,7 @@ test.describe("UI Smoke Test", () => {
   });
 
   test("2d. Explore renders in dark mode", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     await page.evaluate(() => localStorage.setItem("nosite-theme", "dark"));
     await page.goto(`${BASE_URL}/explore`, { waitUntil: "networkidle" });
 
@@ -75,7 +75,7 @@ test.describe("UI Smoke Test", () => {
   });
 
   test("3. Dashboard discovery preflight controls", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     await openAdminPage(page, "Admin Home");
     await page.waitForURL(/\/dashboard/, { timeout: 5000 });
     await expect(page.getByRole("heading", { name: "Run scope", exact: true })).toBeVisible({ timeout: 5000 });
@@ -90,7 +90,7 @@ test.describe("UI Smoke Test", () => {
   });
 
   test("4. Settings controls present and interactable", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
@@ -141,7 +141,7 @@ test.describe("UI Smoke Test", () => {
   });
 
   test("5. No permanent settings changes (revert)", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     await openAdminPage(page, "Settings");
     await page.waitForURL(/\/settings/, { timeout: 5000 });
 
@@ -153,7 +153,7 @@ test.describe("UI Smoke Test", () => {
   });
 
   test("6. Report runtime errors", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
@@ -167,7 +167,7 @@ test.describe("UI Smoke Test", () => {
   });
 
   test("7. Business type filter and Statistics page", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     await openAdminPage(page, "All Leads");
     await page.waitForURL(/\/leads/, { timeout: 5000 });
 

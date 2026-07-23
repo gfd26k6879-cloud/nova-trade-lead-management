@@ -14,12 +14,14 @@ import {
   leaseNextCrawlUnit,
   markUnitDone,
   markUnitFailed,
+  markUnitRetryWait,
   incrementCrawlRunCounters,
   updateCrawlRunStatus,
+  blockCrawlRun,
   getCrawlProgress,
   upsertLead,
-  leadExists,
   getSettings,
+  updateUnitPageToken,
   recordUnitPageFetch,
   API_ENDPOINT_TEXT_SEARCH,
   logApiUsageEvent,
@@ -29,10 +31,12 @@ import {
   createAuditLog,
 } from "@/lib/db/queries";
 import { enqueueAiVerificationForLead } from "@/lib/ai/verification-worker";
+import { runAiPostSuccessBookkeeping } from "@/lib/ai/post-success-bookkeeping";
+import { throwIfWorkerAborted } from "@/lib/worker-abort";
 
 const SKIP_BUSINESS_STATUSES = new Set(["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"]);
 export interface ProcessResult {
-  status: "processed" | "idle" | "paused" | "done" | "error";
+  status: "processed" | "idle" | "paused" | "done" | "error" | "blocked" | "retry_wait";
   unitId?: string;
   zip?: string;
   category?: string;
@@ -44,31 +48,48 @@ export interface ProcessResult {
     total: number;
     done: number;
     failed: number;
+    retryWait: number;
     pending: number;
     running: number;
     canceled: number;
   };
 }
 
-export async function processNextUnit(): Promise<ProcessResult> {
+type UnitFailurePolicy =
+  | { type: "block_run"; code: string; reason: string }
+  | { type: "retry"; code: string; nextRetryAt: string }
+  | { type: "fail"; code: string; clearPageToken?: boolean };
+
+const DEFAULT_UNIT_MAX_ATTEMPTS = 3;
+const TRANSIENT_RETRY_BASE_DELAY_SECONDS = 60;
+const TRANSIENT_RETRY_MAX_DELAY_SECONDS = 15 * 60;
+
+export async function processNextUnit(signal?: AbortSignal): Promise<ProcessResult> {
+  throwIfWorkerAborted(signal);
   const run = await getProcessingCrawlRun();
+  throwIfWorkerAborted(signal);
 
   if (!run) {
     return { status: "idle" };
   }
 
   const unit = await leaseNextCrawlUnit(run.id);
+  throwIfWorkerAborted(signal);
 
   if (!unit) {
     const progress = await getCrawlProgress(run.id);
+    throwIfWorkerAborted(signal);
     if (progress.pending === 0 && progress.running === 0) {
-      await updateCrawlRunStatus(run.id, "done");
-      return { status: "done", progress };
+      const terminalStatus = progress.failed > 0 ? "error" : "done";
+      await updateCrawlRunStatus(run.id, terminalStatus);
+      throwIfWorkerAborted(signal);
+      return { status: terminalStatus, progress };
     }
     return { status: "idle", progress };
   }
 
   const settings = await getSettings();
+  throwIfWorkerAborted(signal);
   const selection = run.selection_json ?? {};
   const discoveryMode = normalizeDiscoveryMode(selection.discoveryMode, "lead_harvest");
   const defaultPaginationPolicy = settings.google_auto_pagination_enabled
@@ -102,13 +123,15 @@ export async function processNextUnit(): Promise<ProcessResult> {
     let pagesFetched = Math.max(0, Math.floor(unit.pages_fetched ?? 0));
 
     while (pagesFetched < unitMaxPages) {
+      throwIfWorkerAborted(signal);
       const result = await textSearch(
         query,
         pageToken,
         settings.rate_limit_ms,
         locationBias,
-        { fieldMask },
+        { fieldMask, signal },
       );
+      throwIfWorkerAborted(signal);
       apiCalls++;
 
       await logApiUsageEvent({
@@ -132,16 +155,19 @@ export async function processNextUnit(): Promise<ProcessResult> {
           paginationPolicy,
         },
       });
+      throwIfWorkerAborted(signal);
 
       let pageRawPlaces = 0;
       let pageNewPlaces = 0;
       let pageDuplicatePlaces = 0;
 
       for (const place of result.places) {
+        throwIfWorkerAborted(signal);
         pageRawPlaces++;
         const placeId = extractPlaceId(place.id);
         if (!placeId) continue;
         const existedInPlaces = await placeMasterExists(placeId);
+        throwIfWorkerAborted(signal);
 
         await recordPlaceObservation({
           place_id: placeId,
@@ -152,6 +178,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
           field_mask: fieldMask,
           raw_json: JSON.stringify(place),
         });
+        throwIfWorkerAborted(signal);
 
         const categories = place.types ?? [];
         const photoCount = place.photos?.length ?? 0;
@@ -174,6 +201,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
           lat: place.location?.latitude ?? null,
           lng: place.location?.longitude ?? null,
         });
+        throwIfWorkerAborted(signal);
 
         if (discoveryMode === "coverage_probe") {
           if (existedInPlaces) {
@@ -186,14 +214,6 @@ export async function processNextUnit(): Promise<ProcessResult> {
 
         if (place.businessStatus && SKIP_BUSINESS_STATUSES.has(place.businessStatus)) {
           continue;
-        }
-
-        const existed = await leadExists(placeId);
-        if (existed) {
-          leadsSkipped++;
-          pageDuplicatePlaces++;
-        } else {
-          pageNewPlaces++;
         }
 
         const websiteStatus = classifyWebsite(
@@ -225,7 +245,7 @@ export async function processNextUnit(): Promise<ProcessResult> {
           Object.keys(settings.niche_weights).length > 0 ? settings.niche_weights : undefined,
         );
 
-        const leadId = await upsertLead({
+        const { id: leadId, created } = await upsertLead({
           place_id: placeId,
           name: place.displayName?.text ?? null,
           address: place.formattedAddress ?? null,
@@ -252,17 +272,30 @@ export async function processNextUnit(): Promise<ProcessResult> {
           locality: unit.city,
           postal_code: unit.zip,
         });
+        throwIfWorkerAborted(signal);
+        if (created) {
+          leadsFound++;
+          pageNewPlaces++;
+        } else {
+          leadsSkipped++;
+          pageDuplicatePlaces++;
+        }
         if (settings.ai_enabled && settings.ai_auto_verify_enabled && settings.ai_verify_after_discovery) {
           try {
             await enqueueAiVerificationForLead(leadId, "places_discovery", { settings });
+            throwIfWorkerAborted(signal);
           } catch (error) {
-            await createAuditLog("ai_verification_enqueue_failed", "lead", leadId, {
-              reason: "places_discovery",
-              error: error instanceof Error ? error.message : String(error),
-            });
+            throwIfWorkerAborted(signal);
+            await runAiPostSuccessBookkeeping(
+              { operation: "queue_failure_audit", leadId },
+              () => createAuditLog("ai_verification_enqueue_failed", "lead", leadId, {
+                reason: "places_discovery",
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            );
+            throwIfWorkerAborted(signal);
           }
         }
-        if (!existed) leadsFound++;
       }
 
       pagesFetched++;
@@ -278,14 +311,20 @@ export async function processNextUnit(): Promise<ProcessResult> {
         maxDuplicateRate: settings.google_auto_pagination_max_duplicate_rate,
       });
       pageToken = shouldContinue ? result.nextPageToken : undefined;
+      throwIfWorkerAborted(signal);
       await recordUnitPageFetch(unit.id, pageToken ?? null, pageRawPlaces, pageNewPlaces, pageDuplicatePlaces);
+      throwIfWorkerAborted(signal);
       if (!pageToken) break;
     }
 
+    throwIfWorkerAborted(signal);
     await markUnitDone(unit.id, leadsFound);
+    throwIfWorkerAborted(signal);
     await incrementCrawlRunCounters(run.id, leadsFound, 0, apiCalls);
+    throwIfWorkerAborted(signal);
 
     const progress = await getCrawlProgress(run.id);
+    throwIfWorkerAborted(signal);
 
     return {
       status: "processed",
@@ -298,9 +337,11 @@ export async function processNextUnit(): Promise<ProcessResult> {
       progress,
     };
   } catch (err) {
+    throwIfWorkerAborted(signal);
     const googleError = err instanceof PlacesApiError ? err : null;
     const rawErrorMessage = err instanceof Error ? err.message : String(err);
     const errorMessage = googleError ? formatPlacesApiErrorForOperator(googleError) : rawErrorMessage;
+    const failurePolicy = classifyUnitFailure(err, unit.attempt_count, unit.max_attempts);
     if (googleError || isLikelyBillableGoogleAttemptError(rawErrorMessage)) {
       try {
         await logApiUsageEvent({
@@ -329,10 +370,59 @@ export async function processNextUnit(): Promise<ProcessResult> {
       } catch {
         // Preserve the original worker error path.
       }
+      throwIfWorkerAborted(signal);
       apiCalls++;
     }
-    await markUnitFailed(unit.id, errorMessage);
+    throwIfWorkerAborted(signal);
     await incrementCrawlRunCounters(run.id, 0, 1, apiCalls);
+    throwIfWorkerAborted(signal);
+
+    if (failurePolicy.type === "block_run") {
+      await markUnitFailed(unit.id, errorMessage, failurePolicy.code);
+      throwIfWorkerAborted(signal);
+      await blockCrawlRun(run.id, failurePolicy.reason, failurePolicy.code);
+      throwIfWorkerAborted(signal);
+      await createAuditLog("crawl_run_blocked", "crawl_run", run.id, {
+        unitId: unit.id,
+        category: unit.category,
+        zip: unit.zip,
+        errorCode: failurePolicy.code,
+        reason: failurePolicy.reason,
+      });
+      throwIfWorkerAborted(signal);
+      return {
+        status: "blocked",
+        unitId: unit.id,
+        zip: unit.zip,
+        category: unit.category,
+        error: failurePolicy.reason,
+        leadsFound,
+        apiCalls,
+        progress: await getCrawlProgress(run.id),
+      };
+    }
+
+    if (failurePolicy.type === "retry") {
+      await markUnitRetryWait(unit.id, errorMessage, failurePolicy.nextRetryAt, failurePolicy.code);
+      throwIfWorkerAborted(signal);
+      return {
+        status: "retry_wait",
+        unitId: unit.id,
+        zip: unit.zip,
+        category: unit.category,
+        error: errorMessage,
+        leadsFound,
+        apiCalls,
+        progress: await getCrawlProgress(run.id),
+      };
+    }
+
+    if (failurePolicy.clearPageToken) {
+      await updateUnitPageToken(unit.id, null);
+      throwIfWorkerAborted(signal);
+    }
+    await markUnitFailed(unit.id, errorMessage, failurePolicy.code);
+    throwIfWorkerAborted(signal);
 
     return {
       status: "error",
@@ -345,6 +435,63 @@ export async function processNextUnit(): Promise<ProcessResult> {
       progress: await getCrawlProgress(run.id),
     };
   }
+}
+
+function classifyUnitFailure(error: unknown, attemptCount: number, maxAttempts: number | null | undefined): UnitFailurePolicy {
+  const attemptsUsed = Math.max(1, Math.floor(Number(attemptCount) || 1));
+  const maxAllowedAttempts = Math.max(1, Math.floor(Number(maxAttempts) || DEFAULT_UNIT_MAX_ATTEMPTS));
+  if (error instanceof PlacesApiError) {
+    const googleStatus = extractGoogleStatus(error);
+    if (error.status === 403 && googleStatus === "PERMISSION_DENIED") {
+      return {
+        type: "block_run",
+        code: "google_permission_denied",
+        reason: "Google Places permission denied. Check the production Google Places API key, billing, API restrictions, and Places API entitlement before retrying.",
+      };
+    }
+    if (error.status === 429 || error.status >= 500) {
+      return attemptsUsed >= maxAllowedAttempts
+        ? { type: "fail", code: error.status === 429 ? "google_rate_limited_exhausted" : "google_transient_exhausted" }
+        : { type: "retry", code: error.status === 429 ? "google_rate_limited" : "google_transient_error", nextRetryAt: nextRetryAtForAttempt(attemptsUsed) };
+    }
+    if (error.status === 400 && googleStatus === "INVALID_ARGUMENT" && /page|paging|pageToken/i.test(error.body)) {
+      return { type: "fail", code: "google_invalid_page_token", clearPageToken: true };
+    }
+    return { type: "fail", code: `google_${error.status}` };
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (isTransientNetworkError(message)) {
+    return attemptsUsed >= maxAllowedAttempts
+      ? { type: "fail", code: "network_transient_exhausted" }
+      : { type: "retry", code: "network_transient", nextRetryAt: nextRetryAtForAttempt(attemptsUsed) };
+  }
+
+  return attemptsUsed >= maxAllowedAttempts
+    ? { type: "fail", code: "generic_error_exhausted" }
+    : { type: "retry", code: "generic_error", nextRetryAt: nextRetryAtForAttempt(attemptsUsed) };
+}
+
+function extractGoogleStatus(error: PlacesApiError): string | null {
+  try {
+    const parsed = JSON.parse(error.body) as { error?: { status?: unknown } };
+    return typeof parsed.error?.status === "string" ? parsed.error.status : null;
+  } catch {
+    return null;
+  }
+}
+
+function nextRetryAtForAttempt(attemptCount: number): string {
+  const exponent = Math.max(0, Math.floor(attemptCount) - 1);
+  const delaySeconds = Math.min(
+    TRANSIENT_RETRY_MAX_DELAY_SECONDS,
+    TRANSIENT_RETRY_BASE_DELAY_SECONDS * Math.pow(2, exponent),
+  );
+  return new Date(Date.now() + delaySeconds * 1000).toISOString();
+}
+
+function isTransientNetworkError(message: string): boolean {
+  return /fetch failed|network|timeout|timed out|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(message);
 }
 
 function extractPlaceId(raw: string): string | null {

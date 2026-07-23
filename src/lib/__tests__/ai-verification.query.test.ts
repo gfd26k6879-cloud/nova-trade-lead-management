@@ -9,12 +9,14 @@ vi.mock("@/lib/db/index", () => {
     getDb: () => testDb,
     generateId: () => crypto.randomUUID(),
     nowISO: () => new Date().toISOString(),
+    withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
   };
 });
 
 import {
   applyAiFoundWebsite,
   createAiLeadVerification,
+  createLeadAiArtifactJob,
   getConfiguredOpenAiApiKey,
   getConfiguredGooglePlacesApiKey,
   getConfiguredGoogleMapsBrowserApiKey,
@@ -26,6 +28,9 @@ import {
   getAiWebsiteViabilityRepairLeads,
   getSettings,
   logAiUsageEvent,
+  markLeadAiArtifactComplete,
+  markLeadAiArtifactRetry,
+  markLeadAiArtifactRunning,
   setStoredOpenAiApiKey,
   clearStoredOpenAiApiKey,
   setStoredGooglePlacesApiKey,
@@ -194,6 +199,145 @@ describe("AI verification queries", () => {
     expect(lead.qualification_status).toBe("disqualified");
     expect(lead.score).toBe(0);
     expect(lead.win_probability_score).toBe(0);
+  });
+
+  it("enforces researcher caps from canonical paid work when usage-event inserts are missing without double counting", async () => {
+    const recordedVerification = await createAiLeadVerification({
+      lead_id: "lead-1",
+      model: "gpt-5.4-mini",
+      status: "no_site_found",
+      confidence: 0.8,
+      recommendation: "prioritize",
+      reason: "No official website found.",
+      summary: "No usable official website was found.",
+      estimated_cost: 0.12,
+      requested_by_user_id: "researcher-1",
+      request_source: "researcher_ai_check",
+    });
+    await createAiLeadVerification({
+      lead_id: "lead-1",
+      model: "gpt-5.4-mini",
+      status: "error",
+      confidence: 0,
+      recommendation: "manual_review",
+      reason: "Billable response could not be parsed.",
+      summary: "Billable response could not be parsed.",
+      error: "Billable response could not be parsed.",
+      estimated_cost: 0.08,
+      requested_by_user_id: "researcher-1",
+      request_source: "researcher_ai_check",
+    });
+    await logAiUsageEvent({
+      lead_id: "lead-1",
+      verification_id: recordedVerification.id,
+      model: "gpt-5.4-mini",
+      estimated_cost: 0.12,
+      actor_user_id: "researcher-1",
+      request_source: "researcher_ai_check",
+    });
+
+    const recordedArtifact = await createLeadAiArtifactJob({
+      lead_id: "lead-1",
+      artifact_type: "business_detail",
+      model: "gpt-5.4-mini",
+      input_hash: "artifact-hash-1",
+      prompt_version: "lead-intelligence-v1",
+      requested_by_user_id: "researcher-1",
+      request_source: "researcher_pitch_pack",
+    });
+    await markLeadAiArtifactRunning(recordedArtifact.id);
+    await markLeadAiArtifactRetry(recordedArtifact.id, "First billable attempt failed.", 3, {
+      input_tokens: 40,
+      output_tokens: 20,
+      estimated_cost: 0.08,
+    });
+    await markLeadAiArtifactRunning(recordedArtifact.id);
+    await markLeadAiArtifactComplete(recordedArtifact.id, {
+      content_json: {},
+      sources_json: [],
+      confidence: 0.7,
+      usage_input_tokens: 60,
+      usage_output_tokens: 30,
+      estimated_cost: 0.12,
+    });
+    const unrecordedArtifact = await createLeadAiArtifactJob({
+      lead_id: "lead-1",
+      artifact_type: "competitive_report",
+      model: "gpt-5.4-mini",
+      input_hash: "artifact-hash-2",
+      prompt_version: "lead-intelligence-v1",
+      requested_by_user_id: "researcher-1",
+      request_source: "researcher_pitch_pack",
+    });
+    await markLeadAiArtifactRunning(unrecordedArtifact.id);
+    await markLeadAiArtifactRetry(unrecordedArtifact.id, "Billable final response could not be parsed.", 3, {
+      input_tokens: 120,
+      output_tokens: 60,
+      estimated_cost: 0.3,
+    });
+    await logAiUsageEvent({
+      lead_id: "lead-1",
+      model: "gpt-5.4-mini",
+      estimated_cost: 0.08,
+      actor_user_id: "researcher-1",
+      request_source: "researcher_pitch_pack",
+      metadata: { artifactId: recordedArtifact.id },
+    });
+    await logAiUsageEvent({
+      lead_id: "lead-1",
+      model: "gpt-5.4-mini",
+      estimated_cost: 0.12,
+      actor_user_id: "researcher-1",
+      request_source: "researcher_pitch_pack",
+      metadata: { artifactId: recordedArtifact.id },
+    });
+    await logAiUsageEvent({
+      lead_id: "lead-1",
+      model: "gpt-5.4-mini",
+      success: false,
+      estimated_cost: 0.04,
+      actor_user_id: "researcher-1",
+      request_source: "researcher_ai_check",
+      metadata: { failureStage: "provider" },
+    });
+
+    const actorUsage = await getAiUsageForActor("researcher-1", "2000-01-01T00:00:00.000Z");
+
+    expect(actorUsage.calls).toBe(6);
+    expect(actorUsage.cost).toBeCloseTo(0.74, 8);
+  });
+
+  it("conservatively charges cumulative artifact fallback in the active window after a lost attempt event", async () => {
+    const artifact = await createLeadAiArtifactJob({
+      lead_id: "lead-1",
+      artifact_type: "business_detail",
+      model: "gpt-5.4-mini",
+      input_hash: "cross-window-artifact",
+      prompt_version: "lead-intelligence-v1",
+      requested_by_user_id: "researcher-1",
+      request_source: "researcher_pitch_pack",
+    });
+    await markLeadAiArtifactRunning(artifact.id);
+    await markLeadAiArtifactRetry(artifact.id, "Prior-window billable event was lost.", 3, {
+      input_tokens: 50,
+      output_tokens: 20,
+      estimated_cost: 0.1,
+    });
+    testDb.prepare(
+      "UPDATE lead_ai_artifacts SET created_at = ?, updated_at = ? WHERE id = ?",
+    ).run("2026-06-30T22:00:00.000Z", "2026-06-30T23:00:00.000Z", artifact.id);
+    await markLeadAiArtifactRunning(artifact.id);
+    await markLeadAiArtifactRetry(artifact.id, "Current-window billable event was lost.", 3, {
+      input_tokens: 30,
+      output_tokens: 20,
+      estimated_cost: 0.08,
+    });
+    testDb.prepare("UPDATE lead_ai_artifacts SET updated_at = ? WHERE id = ?")
+      .run("2026-07-01T00:10:00.000Z", artifact.id);
+
+    const actorUsage = await getAiUsageForActor("researcher-1", "2026-07-01T00:00:00.000Z");
+
+    expect(actorUsage).toEqual({ calls: 2, cost: 0.18 });
   });
 
   it("stores researcher attribution on verification rows", async () => {

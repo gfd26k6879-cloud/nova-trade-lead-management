@@ -15,8 +15,14 @@ import {
   OPENAI_LEAD_VERIFICATION_MODEL,
   OPENAI_RESPONSES_ENDPOINT,
 } from "@/lib/ai/config";
-import type { AiVerificationSource } from "@/lib/ai/lead-verification";
+import {
+  OpenAIResponseParseError,
+  OpenAIUsageError,
+  serializeOpenAIResponseParseError,
+  type AiVerificationSource,
+} from "@/lib/ai/lead-verification";
 import { extractVerificationEvidence } from "@/lib/ai/lead-evidence";
+import { createTimeoutAbortScope } from "@/lib/abort-scope";
 
 export const LEAD_INTELLIGENCE_PROMPT_VERSION = "lead-intelligence-v1";
 
@@ -178,7 +184,9 @@ export async function callOpenAILeadArtifact(
   lead: Lead,
   artifactType: LeadAiArtifactType,
   apiKeyOverride?: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<OpenAILeadArtifactResponse> {
+  options.signal?.throwIfAborted();
   const apiKey = (apiKeyOverride || getOpenAIApiKey()).trim();
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
 
@@ -188,23 +196,51 @@ export async function callOpenAILeadArtifact(
   }
 
   const context = await buildLeadArtifactContext(lead);
+  options.signal?.throwIfAborted();
   const inputHash = createLeadArtifactInputHash(artifactType, context);
-  const functionPlanning = await callArtifactFunctionPlanning(apiKey, lead.id, artifactType);
+  const functionPlanning = await callArtifactFunctionPlanning(apiKey, lead.id, artifactType, options.signal);
+  options.signal?.throwIfAborted();
   const functionOutputs = buildRequiredFunctionOutputs(artifactType, context, extractFunctionCalls(functionPlanning.raw));
-  const final = await callArtifactFinal(apiKey, artifactType, context, functionOutputs);
-  const text = extractResponseText(final.raw);
-  let content = parseLeadArtifactResponse(artifactType, text);
+  let final: { raw: Record<string, unknown> };
+  try {
+    final = await callArtifactFinal(apiKey, artifactType, context, functionOutputs, options.signal);
+  } catch (error) {
+    options.signal?.throwIfAborted();
+    const message = error instanceof Error ? error.message : "Lead intelligence final generation failed.";
+    throw new OpenAIUsageError(message, "artifact_final", mergeUsage(functionPlanning.raw.usage));
+  }
+  options.signal?.throwIfAborted();
+  let content: LeadAiArtifactContent;
+  try {
+    content = parseLeadArtifactResponseFromRaw(artifactType, final.raw, "artifact_final");
+  } catch (error) {
+    if (error instanceof OpenAIResponseParseError && error.stage === "artifact_final") {
+      throw new OpenAIResponseParseError(
+        error.message,
+        error.stage,
+        error.responseText,
+        error.raw,
+        mergeUsage(functionPlanning.raw.usage, final.raw.usage),
+      );
+    }
+    throw error;
+  }
   let reviewRaw: Record<string, unknown> | null = null;
   let reviewError: string | null = null;
+  let reviewParseError: Record<string, unknown> | null = null;
   try {
-    const review = await callArtifactReview(apiKey, artifactType, context, content);
+    const review = await callArtifactReview(apiKey, artifactType, context, content, options.signal);
     reviewRaw = review.raw;
-    content = parseLeadArtifactResponse(artifactType, extractResponseText(review.raw));
+    content = parseLeadArtifactResponseFromRaw(artifactType, review.raw, "artifact_review");
   } catch (error) {
+    options.signal?.throwIfAborted();
     reviewError = error instanceof Error ? error.message : "Lead intelligence review failed.";
+    if (error instanceof OpenAIResponseParseError) {
+      reviewParseError = serializeOpenAIResponseParseError(error);
+    }
   }
+  options.signal?.throwIfAborted();
   const usage = mergeUsage(functionPlanning.raw.usage, final.raw.usage, reviewRaw?.usage);
-  const costUsage = mergeUsage(functionPlanning.raw.usage, final.raw.usage);
 
   return {
     content,
@@ -214,11 +250,12 @@ export async function callOpenAILeadArtifact(
       final: final.raw,
       review: reviewRaw,
       reviewError,
+      reviewParseError,
     },
     inputHash,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
-    estimatedCost: costUsage.estimatedCost,
+    estimatedCost: usage.estimatedCost,
   };
 }
 
@@ -232,6 +269,22 @@ export function parseLeadArtifactResponse(artifactType: LeadAiArtifactType, text
   return artifactType === "business_detail"
     ? businessDetailSchema.parse(parsed)
     : competitiveReportSchema.parse(parsed);
+}
+
+function parseLeadArtifactResponseFromRaw(
+  artifactType: LeadAiArtifactType,
+  raw: Record<string, unknown>,
+  stage: "artifact_final" | "artifact_review",
+): LeadAiArtifactContent {
+  let text = "";
+  try {
+    text = extractResponseText(raw);
+    return parseLeadArtifactResponse(artifactType, text);
+  } catch (error) {
+    if (error instanceof OpenAIResponseParseError) throw error;
+    const message = error instanceof Error ? error.message : "Lead intelligence response could not be parsed.";
+    throw new OpenAIResponseParseError(message, stage, text, raw);
+  }
 }
 
 export function extractArtifactSources(content: LeadAiArtifactContent): AiVerificationSource[] {
@@ -477,7 +530,12 @@ function buildVerificationCaveat(aiStatus: string | null | undefined, viability:
   return "Use cautious wording because the website evidence needs human confirmation.";
 }
 
-async function callArtifactFunctionPlanning(apiKey: string, leadId: string, artifactType: LeadAiArtifactType) {
+async function callArtifactFunctionPlanning(
+  apiKey: string,
+  leadId: string,
+  artifactType: LeadAiArtifactType,
+  signal?: AbortSignal,
+) {
   const raw = await callResponsesApi(apiKey, {
     model: OPENAI_LEAD_VERIFICATION_MODEL,
     store: false,
@@ -492,7 +550,7 @@ async function callArtifactFunctionPlanning(apiKey: string, leadId: string, arti
         : "For business_detail, request lead context and pitch evidence.",
     ].join(" "),
     input: `Prepare deterministic context for lead ${leadId} and artifact type ${artifactType}.`,
-  });
+  }, signal);
   return { raw };
 }
 
@@ -501,8 +559,9 @@ async function callArtifactFinal(
   artifactType: LeadAiArtifactType,
   context: LeadArtifactContext,
   functionOutputs: Array<{ name: string; output: unknown }>,
+  signal?: AbortSignal,
 ) {
-  const raw = await callResponsesApi(apiKey, buildArtifactFinalRequest(artifactType, context, functionOutputs));
+  const raw = await callResponsesApi(apiKey, buildArtifactFinalRequest(artifactType, context, functionOutputs), signal);
   return { raw };
 }
 
@@ -511,8 +570,9 @@ async function callArtifactReview(
   artifactType: LeadAiArtifactType,
   context: LeadArtifactContext,
   content: LeadAiArtifactContent,
+  signal?: AbortSignal,
 ) {
-  const raw = await callResponsesApi(apiKey, buildArtifactReviewRequest(artifactType, context, content));
+  const raw = await callResponsesApi(apiKey, buildArtifactReviewRequest(artifactType, context, content), signal);
   return { raw };
 }
 
@@ -591,9 +651,12 @@ export function buildArtifactReviewRequest(
   };
 }
 
-async function callResponsesApi(apiKey: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
+async function callResponsesApi(
+  apiKey: string,
+  body: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const abortScope = createTimeoutAbortScope(signal, 60_000);
   try {
     const response = await fetch(OPENAI_RESPONSES_ENDPOINT, {
       method: "POST",
@@ -602,7 +665,7 @@ async function callResponsesApi(apiKey: string, body: Record<string, unknown>): 
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      signal: abortScope.signal,
     });
     const raw = await response.json().catch(() => ({})) as Record<string, unknown>;
     if (!response.ok) {
@@ -611,7 +674,7 @@ async function callResponsesApi(apiKey: string, body: Record<string, unknown>): 
     }
     return raw;
   } finally {
-    clearTimeout(timeout);
+    abortScope.dispose();
   }
 }
 

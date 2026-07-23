@@ -9,6 +9,7 @@ vi.mock("@/lib/db/index", () => {
     getDb: () => testDb,
     generateId: () => crypto.randomUUID(),
     nowISO: () => new Date().toISOString(),
+    withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
   };
 });
 
@@ -24,17 +25,19 @@ function insertLead(opts: {
   status?: string;
   meetingBookedAt?: string | null;
   updatedAt?: string;
+  phone?: string | null;
 }) {
   testDb.prepare(
     `INSERT INTO leads (
-      id, place_id, name, categories, primary_type, business_type, website_status,
+      id, place_id, name, phone, categories, primary_type, business_type, website_status,
       score, status, is_excluded, qualification_status, estimated_deal_value,
       discovered_at, meeting_booked_at, updated_at
-    ) VALUES (?, ?, ?, '[]', ?, ?, 'none', 10, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, '[]', ?, ?, 'none', 10, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     opts.id,
     `place-${opts.id}`,
     opts.id,
+    opts.phone ?? null,
     opts.businessType === "plumbing" ? "plumber" : "dentist",
     opts.businessType,
     opts.status ?? "new",
@@ -73,6 +76,7 @@ describe("statistics and business type queries", () => {
       meetingBookedAt: "2026-05-05T10:00:00.000Z",
       status: "closed_won",
       updatedAt: "2026-05-06T10:00:00.000Z",
+      phone: "303-555-0100",
     });
     insertLead({
       id: "dental-excluded",
@@ -93,7 +97,7 @@ describe("statistics and business type queries", () => {
       "INSERT INTO outreach_events (id, lead_id, channel, created_at) VALUES ('event-1', 'plumbing-lead', 'call', '2026-05-05T12:00:00.000Z')"
     ).run();
     testDb.prepare(
-      "INSERT INTO demos (id, lead_id, slug, config_json, created_at, updated_at) VALUES ('demo-1', 'plumbing-lead', 'demo-one', '{}', '2026-05-05T12:00:00.000Z', '2026-05-05T12:00:00.000Z')"
+      "INSERT INTO demos (id, lead_id, slug, config_json, is_published, view_count, created_at, updated_at) VALUES ('demo-1', 'plumbing-lead', 'demo-one', '{}', 1, 3, '2026-05-05T12:00:00.000Z', '2026-05-05T12:00:00.000Z')"
     ).run();
     testDb.prepare(
       `INSERT INTO api_usage_events (id, endpoint, sku, estimated_cost, created_at)
@@ -111,6 +115,14 @@ describe("statistics and business type queries", () => {
     expect(stats.kpis.closedWon).toBe(1);
     expect(stats.economics.pipelineValue).toBe(4000);
     expect(stats.economics.apiCost).toBe(2.5);
+    expect(stats.valueProof.qualifiedNoSiteLeads).toBe(1);
+    expect(stats.valueProof.contactableLeads).toBe(1);
+    expect(stats.valueProof.costPerQualifiedLead).toBe(2.5);
+    expect(stats.valueProof.demosPublished).toBe(1);
+    expect(stats.valueProof.demoViews).toBe(3);
+    expect(stats.valueProof.demoToMeetingRate).toBe(100);
+    expect(stats.valueProof.wins).toBe(1);
+    expect(stats.valueProof.losses).toBe(0);
 
     const plumbing = stats.businessTypes.find((row) => row.id === "plumbing");
     const dental = stats.businessTypes.find((row) => row.id === "dental");

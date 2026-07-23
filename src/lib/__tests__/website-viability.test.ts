@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { Lead } from "@/lib/db/queries";
 import type { AiVerificationResult } from "@/lib/ai/lead-verification";
 import { assessWebsiteViability, normalizeAiVerificationForWebsiteSales } from "@/lib/ai/website-viability";
+import type { SafeHttpLookup } from "@/lib/safe-http";
+
+const lookupPublic: SafeHttpLookup = async () => [{ address: "93.184.216.34", family: 4 }];
 
 function makeLead(): Lead {
   return {
@@ -23,11 +26,21 @@ function makeLead(): Lead {
     primary_type: "dentist",
     lat: null,
     lng: null,
+    market_id: null,
+    location_cell_id: null,
+    country_code: "US",
+    admin_area1: "CO",
+    admin_area2: "Denver",
+    locality: "Denver",
+    postal_code: "80202",
     score: 18,
     status: "new",
     is_excluded: false,
     exclusion_reason: null,
     excluded_at: null,
+    archived_at: null,
+    archived_by_user_id: null,
+    archive_reason: null,
     selling_niche: "dental",
     business_type: "dental",
     win_probability_score: 0,
@@ -80,6 +93,13 @@ function makeLead(): Lead {
     notes: null,
     reminder_date: null,
     enrichment_status: "pending",
+    enrichment_attempt_count: 0,
+    enrichment_started_at: null,
+    enrichment_finished_at: null,
+    enrichment_next_retry_at: null,
+    enrichment_last_error: null,
+    enrichment_last_error_code: null,
+    enrichment_max_attempts: 3,
     enriched_at: null,
     review_highlights: null,
     editorial_summary: null,
@@ -97,7 +117,8 @@ function makeLead(): Lead {
 }
 
 function makeAiResult(overrides: Partial<AiVerificationResult> = {}): AiVerificationResult {
-  return {
+  const identityMatch = { name: "near", location: "unknown", phone: "unknown", category: "unknown", summary: "Near business name match." } satisfies AiVerificationResult["identityMatch"];
+  const base: AiVerificationResult = {
     status: "site_found",
     confidence: 0.88,
     foundWebsiteUrl: "https://gatewayparkdental.example",
@@ -108,12 +129,34 @@ function makeAiResult(overrides: Partial<AiVerificationResult> = {}): AiVerifica
     recommendation: "keep",
     reason: "Candidate domain found.",
     summary: "AI found a candidate domain.",
+    candidateWebsites: [],
+    identityMatch,
+    officialSiteEvidence: [],
+    contradictingEvidence: [],
+    siteQualityFlags: [],
+    manualReviewReason: null,
+    evidenceGrade: "weak",
+  };
+  return {
+    ...base,
     ...overrides,
+    candidateWebsites: overrides.candidateWebsites ?? base.candidateWebsites,
+    identityMatch: overrides.identityMatch ?? base.identityMatch,
+    officialSiteEvidence: overrides.officialSiteEvidence ?? base.officialSiteEvidence,
+    contradictingEvidence: overrides.contradictingEvidence ?? base.contradictingEvidence,
+    siteQualityFlags: overrides.siteQualityFlags ?? base.siteQualityFlags,
+    manualReviewReason: overrides.manualReviewReason ?? null,
+    evidenceGrade: overrides.evidenceGrade ?? base.evidenceGrade,
   };
 }
 
-function response(body: string, status = 200, url = "https://gatewayparkdental.example/"): Response {
-  const res = new Response(body, { status, headers: { "content-type": "text/html" } });
+function response(
+  body: BodyInit | null,
+  status = 200,
+  url = "https://gatewayparkdental.example/",
+  contentType = "text/html",
+): Response {
+  const res = new Response(body, { status, headers: { "content-type": contentType } });
   Object.defineProperty(res, "url", { value: url });
   return res;
 }
@@ -125,7 +168,7 @@ describe("website viability checks", () => {
       return response(body, init?.method === "HEAD" ? 404 : 404);
     });
 
-    const viability = await assessWebsiteViability(makeLead(), "https://gatewayparkdental.example", { fetchImpl });
+    const viability = await assessWebsiteViability(makeLead(), "https://gatewayparkdental.example", { fetchImpl, lookupImpl: lookupPublic });
     const normalized = normalizeAiVerificationForWebsiteSales(makeLead(), makeAiResult(), viability);
 
     expect(viability.status).toBe("broken");
@@ -135,7 +178,7 @@ describe("website viability checks", () => {
 
   it("classifies parked domains as weak-site opportunities", async () => {
     const fetchImpl = vi.fn(async () => response("<title>Buy this domain</title>This domain is for sale at Afternic."));
-    const viability = await assessWebsiteViability(makeLead(), "https://gatewayparkdental.example", { fetchImpl });
+    const viability = await assessWebsiteViability(makeLead(), "https://gatewayparkdental.example", { fetchImpl, lookupImpl: lookupPublic });
     const normalized = normalizeAiVerificationForWebsiteSales(makeLead(), makeAiResult({ recommendation: "exclude" }), viability);
 
     expect(viability.status).toBe("parked");
@@ -151,7 +194,7 @@ describe("website viability checks", () => {
       <a>Contact us</a>
     `;
     const fetchImpl = vi.fn(async () => response(html));
-    const viability = await assessWebsiteViability(makeLead(), "https://gatewayparkdental.example", { fetchImpl });
+    const viability = await assessWebsiteViability(makeLead(), "https://gatewayparkdental.example", { fetchImpl, lookupImpl: lookupPublic });
     const normalized = normalizeAiVerificationForWebsiteSales(makeLead(), makeAiResult(), viability);
 
     expect(viability.status).toBe("usable");
@@ -159,16 +202,81 @@ describe("website viability checks", () => {
     expect(normalized.result.recommendation).toBe("update_website");
   });
 
+  it("cancels an oversized hostile response after the capped prefix", async () => {
+    const cancel = vi.fn();
+    let pulls = 0;
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) {
+          controller.enqueue(new TextEncoder().encode(`
+            <title>Gateway Park Dental - Denver Dentist</title>
+            <p>Gateway Park Dental</p>
+            <p>Call 303-555-0100 at 123 Main St in Denver for a dental appointment.</p>
+            <a>Contact us</a>
+            ${"A".repeat(180_000)}
+          `));
+          return;
+        }
+        controller.enqueue(new TextEncoder().encode("Buy this domain. This domain is for sale at Afternic."));
+      },
+      cancel,
+    }, { highWaterMark: 0 });
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => (
+      init?.method === "HEAD" ? response(null) : response(oversizedBody)
+    ));
+
+    const viability = await assessWebsiteViability(makeLead(), "https://gatewayparkdental.example", {
+      fetchImpl,
+      lookupImpl: lookupPublic,
+    });
+
+    expect(viability.status).toBe("usable");
+    expect(viability.health.contentLength).toBeLessThanOrEqual(120_000);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("decodes the capped body with the declared response charset", async () => {
+    const html = "<title>Gateway Park D\xebntal</title><p>Gateway Park Dental 303-555-0100 123 Main St Denver dentist contact</p>";
+    const latin1 = Uint8Array.from(html, (character) => character.charCodeAt(0));
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => (
+      init?.method === "HEAD"
+        ? response(null)
+        : response(latin1, 200, "https://gatewayparkdental.example/", "text/html; charset=iso-8859-1")
+    ));
+
+    const viability = await assessWebsiteViability(makeLead(), "https://gatewayparkdental.example", {
+      fetchImpl,
+      lookupImpl: lookupPublic,
+    });
+
+    expect(viability.status).toBe("usable");
+    expect(viability.health.title).toBe("Gateway Park D\xebntal");
+  });
+
   it("does not let a failed direct URL remain site_found", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("ENOTFOUND");
     });
-    const viability = await assessWebsiteViability(makeLead(), "https://gatewayparkdental.example", { fetchImpl });
+    const viability = await assessWebsiteViability(makeLead(), "https://gatewayparkdental.example", { fetchImpl, lookupImpl: lookupPublic });
     const normalized = normalizeAiVerificationForWebsiteSales(makeLead(), makeAiResult(), viability);
 
     expect(viability.status).toBe("broken");
     expect(normalized.result.status).not.toBe("site_found");
     expect(normalized.result.recommendation).toBe("prioritize");
+  });
+
+  it("blocks private-network website candidates before outbound fetch", async () => {
+    const fetchImpl = vi.fn(async () => response("should not be fetched"));
+
+    const viability = await assessWebsiteViability(makeLead(), "http://169.254.169.254/latest/meta-data", {
+      fetchImpl,
+      lookupImpl: lookupPublic,
+    });
+
+    expect(viability.status).toBe("broken");
+    expect(viability.health.error).toContain("private or special-use");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("treats directory-only website claims as no-site opportunities", async () => {

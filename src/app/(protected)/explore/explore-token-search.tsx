@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { getAiVerificationDisplay } from "@/lib/ai-verification-display";
 import {
   buildExploreSearchSuggestions,
@@ -73,6 +73,7 @@ export function ExploreTokenSearch({
   const [builderOpen, setBuilderOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
+  const listboxId = useId();
   const tokens = useMemo(() => buildExploreSearchTokens(mode, activeChips), [activeChips, mode]);
   const groups = useMemo(() => buildExploreSearchSuggestions({
     mode,
@@ -243,12 +244,19 @@ export function ExploreTokenSearch({
             }}
             placeholder={tokens.length > 1 ? "Add another filter..." : "Try website:none owner:unclaimed or premier plumbing"}
             aria-label="Lead Finder search"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={open && !builderOpen}
+            aria-controls={open && !builderOpen ? listboxId : undefined}
+            aria-activedescendant={open && !builderOpen && flatSuggestions[safeHighlightedIndex]
+              ? `${listboxId}-${flatSuggestions[safeHighlightedIndex].id}`
+              : undefined}
           />
         </div>
       </div>
 
       {errors.length > 0 && (
-        <div className="mt-2 rounded-xl px-3 py-2 text-sm" style={{ background: "var(--danger-bg)", color: "var(--danger-text)" }}>
+        <div role="alert" className="mt-2 rounded-xl border px-3 py-2 text-sm" style={{ background: "var(--danger-bg)", borderColor: "var(--danger-border)", color: "var(--danger-text)" }}>
           {errors.map((error) => <p key={error}>{error}</p>)}
         </div>
       )}
@@ -258,10 +266,10 @@ export function ExploreTokenSearch({
           {builderOpen ? (
             <ExploreBuilder filters={filters} businessTypeCounts={businessTypeCounts} currentRole={currentRole} onApply={onApply} />
           ) : (
-            <div className="grid gap-3 lg:grid-cols-2">
-              {groups.map((group) => (
-                <div key={group.title}>
-                  <p className="section-label">{group.title}</p>
+            <div id={listboxId} role="listbox" aria-label="Lead Finder suggestions" className="grid gap-3 lg:grid-cols-2">
+              {groups.map((group, groupIndex) => (
+                <div key={group.title} role="group" aria-labelledby={`${listboxId}-group-${groupIndex}`}>
+                  <p id={`${listboxId}-group-${groupIndex}`} className="section-label">{group.title}</p>
                   <div className="mt-2 space-y-1">
                     {group.suggestions.map((suggestion) => {
                       const index = flatSuggestions.findIndex((item) => item.id === suggestion.id);
@@ -269,7 +277,11 @@ export function ExploreTokenSearch({
                       return (
                         <button
                           key={suggestion.id}
+                          id={`${listboxId}-${suggestion.id}`}
                           type="button"
+                          role="option"
+                          aria-selected={active}
+                          tabIndex={-1}
                           className="w-full rounded-xl px-3 py-2 text-left text-sm transition"
                           style={{ background: active ? "var(--suggestion-active-bg)" : "var(--suggestion-bg)", color: "var(--text-primary)" }}
                           onMouseEnter={() => setHighlightedIndex(index)}

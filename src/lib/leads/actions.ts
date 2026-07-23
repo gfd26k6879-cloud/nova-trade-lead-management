@@ -26,6 +26,9 @@ import {
   getOutreachEvents as dbGetOutreachEvents,
   createDemoForLead as dbCreateDemoForLead,
   getDemoByLeadId as dbGetDemoByLeadId,
+  publishDemoForLead as dbPublishDemoForLead,
+  revokeDemoForLead as dbRevokeDemoForLead,
+  unpublishDemoForLead as dbUnpublishDemoForLead,
   getAllLeadsForRecompute,
   batchUpdateScores,
   bulkUpdateLeadStatus as dbBulkUpdateStatus,
@@ -55,7 +58,7 @@ import {
   type LeadFilters,
   type QualityFilters,
 } from "@/lib/db/queries";
-import { requirePermission } from "@/lib/auth";
+import { requirePermission, type AppSession } from "@/lib/auth";
 import { canReadLeadForSession, constrainLeadFiltersForSession } from "@/lib/lead-access";
 import type { PhoneVerificationStatus, QualityBucket } from "@/lib/lead-quality";
 import { generateOutreachPackage } from "@/lib/outreach-package";
@@ -144,7 +147,7 @@ const researcherAiFeedbackSchema = z.object({
 });
 const manualWebsiteCorrectionSchema = z.object({
   websiteUrl: z.string().trim().max(500).optional().or(z.literal("")),
-  resolution: z.enum(["official_website_found", "weak_or_basic_site", "social_or_directory_only", "remove_website"]),
+  resolution: z.enum(["official_website_found", "weak_or_basic_site", "candidate_website_needs_review", "social_or_directory_only", "remove_website"]),
   notes: z.string().trim().max(2000).optional().or(z.literal("")),
 });
 const updateLeadFactsSchema = z.object({
@@ -192,6 +195,16 @@ function revalidateLeadViews(): void {
 
 function leadOwnerLabel(lead: { assigned_user_display_name?: string | null; assigned_user_email?: string | null; assigned_to_user_id?: string | null }): string {
   return lead.assigned_user_display_name || lead.assigned_user_email || lead.assigned_to_user_id || "another researcher";
+}
+
+function auditActorOptions(session: AppSession) {
+  return {
+    actor: {
+      userId: session.userId,
+      email: session.email,
+      role: session.role,
+    },
+  };
 }
 
 async function requireLeadOwnershipForMutation(
@@ -317,6 +330,10 @@ export async function updateLeadNotesAction(id: string, notes: string) {
   const ownership = await requireLeadOwnershipForMutation(id, session);
   if (!ownership.ok) return { error: ownership.error };
   await dbUpdateNotes(id, notes);
+  await createAuditLog("lead_notes_updated", "lead", id, {
+    length: notes.length,
+    hasNotes: notes.trim().length > 0,
+  });
   revalidatePath(`/leads/${id}`);
   return { success: true };
 }
@@ -355,7 +372,7 @@ export async function claimLeadAction(id: string) {
     const current = await queryLeadById(id);
     return { error: current ? `Taken by ${leadOwnerLabel(current)}.` : "Lead not found" };
   }
-  await createAuditLog("lead_claimed", "lead", id);
+  await createAuditLog("lead_claimed", "lead", id, undefined, auditActorOptions(session));
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
   return { success: true };
@@ -371,7 +388,7 @@ export async function unclaimLeadAction(id: string) {
     return { error: "Only the assigned researcher or an admin can unclaim this lead." };
   }
   await dbAssignLeadToUser(id, null);
-  await createAuditLog("lead_unclaimed", "lead", id);
+  await createAuditLog("lead_unclaimed", "lead", id, undefined, auditActorOptions(session));
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
   return { success: true };
@@ -395,6 +412,7 @@ export async function updateLeadReminderAction(id: string, date: string | null) 
   const ownership = await requireLeadOwnershipForMutation(id, session);
   if (!ownership.ok) return { error: ownership.error };
   await dbUpdateReminder(id, date);
+  await createAuditLog("lead_reminder_updated", "lead", id, { reminderDate: date });
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
   return { success: true };
@@ -548,7 +566,20 @@ export async function logOutreachEventAction(
     followUpAt: normalizeOptionalText(parsed.data.followUpAt),
     nextStep: normalizeOptionalText(parsed.data.nextStep),
   });
-  await createAuditLog("outreach_logged", "lead", leadId, { channel: parsed.data.channel, outcome: parsed.data.outcome });
+  await createAuditLog("outreach_logged", "lead", leadId, {
+    eventId: event.id,
+    channel: parsed.data.channel,
+    outcome: parsed.data.outcome,
+    contactPersonName: normalizeOptionalText(parsed.data.contactPersonName),
+    contactPersonRole: normalizeOptionalText(parsed.data.contactPersonRole),
+    decisionMakerReached: parsed.data.decisionMakerReached,
+    objectionReason: normalizeOptionalText(parsed.data.objectionReason),
+    quotedAmount: parsed.data.quotedAmount,
+    closeValue: parsed.data.closeValue,
+    followUpAt: normalizeOptionalText(parsed.data.followUpAt),
+    nextStep: normalizeOptionalText(parsed.data.nextStep),
+    hasNote: Boolean(normalizeOptionalText(parsed.data.note)),
+  });
   revalidateLeadViews();
   revalidatePath(`/leads/${leadId}`);
   return { success: true, event };
@@ -571,6 +602,7 @@ export async function markLeadRepliedAction(id: string) {
   if (!ownership.ok) return { error: ownership.error };
   if (lead.first_reply_at) return { error: "Already marked as replied" };
   await updateLeadTimestamp(id, "first_reply_at", null);
+  await createAuditLog("lead_reply_marked", "lead", id);
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
   return { success: true };
@@ -588,6 +620,7 @@ export async function markMeetingBookedAction(id: string) {
   if (lead.status !== "meeting_set" && lead.status !== "closed_won") {
     await dbUpdateStatus(id, "meeting_set");
   }
+  await createAuditLog("lead_meeting_booked", "lead", id);
   revalidateLeadViews();
   revalidatePath(`/leads/${id}`);
   return { success: true };
@@ -613,6 +646,48 @@ export async function createDemoForLeadAction(leadId: string) {
   if (!demo) return { error: "Unable to create demo" };
   await createAuditLog("demo_created", "lead", leadId, { demoId: demo.id, slug: demo.slug });
   revalidatePath(`/leads/${leadId}`);
+  return { success: true, demo };
+}
+
+export async function publishDemoForLeadAction(leadId: string) {
+  const session = await requirePermission("demo:create");
+  await ensureDbReady();
+  const lead = await queryLeadById(leadId);
+  if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(leadId, session);
+  if (!ownership.ok) return { error: ownership.error };
+  const demo = await dbPublishDemoForLead(leadId, session.userId);
+  if (!demo) return { error: "Unable to publish demo" };
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath(`/demo/${demo.slug}`);
+  return { success: true, demo };
+}
+
+export async function unpublishDemoForLeadAction(leadId: string) {
+  const session = await requirePermission("demo:create");
+  await ensureDbReady();
+  const lead = await queryLeadById(leadId);
+  if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(leadId, session);
+  if (!ownership.ok) return { error: ownership.error };
+  const demo = await dbUnpublishDemoForLead(leadId, session.userId);
+  if (!demo) return { error: "Demo not found" };
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath(`/demo/${demo.slug}`);
+  return { success: true, demo };
+}
+
+export async function revokeDemoForLeadAction(leadId: string, reason?: string) {
+  const session = await requirePermission("demo:create");
+  await ensureDbReady();
+  const lead = await queryLeadById(leadId);
+  if (!lead) return { error: "Lead not found" };
+  const ownership = await requireLeadOwnershipForMutation(leadId, session);
+  if (!ownership.ok) return { error: ownership.error };
+  const demo = await dbRevokeDemoForLead(leadId, session.userId, reason?.trim() || null);
+  if (!demo) return { error: "Demo not found" };
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath(`/demo/${demo.slug}`);
   return { success: true, demo };
 }
 
@@ -759,7 +834,7 @@ export async function runAiVerificationAction(leadId: string, options: { force?:
   if (!lead) return { error: "Lead not found" };
 
   const result = await performAiVerification(lead, options.force ?? false);
-  if ("verification" in result && result.verification?.input_hash) {
+  if ("success" in result && result.success && result.verification.input_hash) {
     await markLeadAiVerified(leadId, result.verification.input_hash);
   }
   revalidateLeadViews();
@@ -1189,7 +1264,7 @@ export async function runAiVerificationBatchAction(input: { limit?: number; busi
 
   for (const lead of leads) {
     const result = await performAiVerification(lead, false, settings);
-    if ("verification" in result && result.verification?.input_hash) {
+    if ("success" in result && result.success && result.verification.input_hash) {
       await markLeadAiVerified(lead.id, result.verification.input_hash);
     }
     results.push({
@@ -1263,7 +1338,7 @@ export async function runQualityAiVerificationBatchAction(input: {
 
   for (const lead of leads) {
     const result = await performAiVerification(lead, false, settings);
-    if ("verification" in result && result.verification?.input_hash) {
+    if ("success" in result && result.success && result.verification.input_hash) {
       await markLeadAiVerified(lead.id, result.verification.input_hash);
     }
     results.push({

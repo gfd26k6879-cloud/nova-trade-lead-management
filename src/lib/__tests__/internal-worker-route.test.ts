@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("server-only", () => ({}), { virtual: true });
+vi.mock("server-only", () => ({}));
 
 const authMocks = vi.hoisted(() => ({
   authorizeInternalWorkerRequest: vi.fn(),
@@ -26,6 +26,7 @@ vi.mock("@/lib/db/index", () => dbIndexMocks);
 vi.mock("@/lib/db/queries", () => queryMocks);
 
 import { runInternalWorkerRoute } from "@/lib/internal-worker-route";
+import { ForbiddenError, UnauthorizedError } from "@/lib/auth";
 
 function request(path = "/api/crawl/process-next") {
   return new NextRequest(`https://example.test${path}`);
@@ -33,6 +34,7 @@ function request(path = "/api/crawl/process-next") {
 
 describe("runInternalWorkerRoute", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.useRealTimers();
     process.env.WORKER_ROUTE_TIMEOUT_MS = "";
     queryMocks.ensureDbReady.mockResolvedValue(undefined);
@@ -74,13 +76,34 @@ describe("runInternalWorkerRoute", () => {
     );
   });
 
+  it("aborts the worker task signal when the internal deadline expires", async () => {
+    process.env.WORKER_ROUTE_TIMEOUT_MS = "1";
+    let taskSignal: AbortSignal | undefined;
+
+    const response = await runInternalWorkerRoute(
+      request(),
+      "crawl",
+      "crawl:manage",
+      (signal) => {
+        taskSignal = signal;
+        return new Promise(() => undefined);
+      },
+    );
+
+    expect(response.status).toBe(504);
+    expect(taskSignal).toBeDefined();
+    expect(taskSignal?.aborted).toBe(true);
+    expect(taskSignal?.reason).toMatchObject({
+      name: "WorkerRouteTimeoutError",
+      message: "Worker exceeded internal timeout before Vercel runtime limit.",
+    });
+  });
+
   it("records database statement timeouts as controlled 504 worker errors", async () => {
     const error = Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" });
-    const failingTask = async () => ({ status: "processed" });
-    dbIndexMocks.withDbStatementTimeout.mockImplementation((_timeoutMs: number, fn: () => Promise<unknown>) => {
-      if (fn === failingTask) return Promise.reject(error);
-      return fn();
-    });
+    const failingTask = async () => {
+      throw error;
+    };
 
     const response = await runInternalWorkerRoute(
       request("/api/scores/recompute-stale"),
@@ -100,5 +123,27 @@ describe("runInternalWorkerRoute", () => {
       504,
       "canceling statement due to statement timeout",
     );
+  });
+
+  it.each([
+    [new UnauthorizedError(), 401],
+    [new ForbiddenError(), 403],
+  ])("rejects unauthorized requests before database initialization without recording a run", async (error, status) => {
+    authMocks.authorizeInternalWorkerRequest.mockRejectedValue(error);
+    const task = vi.fn();
+
+    const response = await runInternalWorkerRoute(
+      request(),
+      "crawl",
+      "crawl:manage",
+      task,
+    );
+
+    expect(response.status).toBe(status);
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.markStaleWorkerRunsInterrupted).not.toHaveBeenCalled();
+    expect(queryMocks.startWorkerRun).not.toHaveBeenCalled();
+    expect(queryMocks.completeWorkerRun).not.toHaveBeenCalled();
+    expect(task).not.toHaveBeenCalled();
   });
 });

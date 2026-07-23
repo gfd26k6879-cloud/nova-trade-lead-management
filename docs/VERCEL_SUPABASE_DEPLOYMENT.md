@@ -1,17 +1,42 @@
 # Vercel + Supabase Deployment Runbook
 
-This is the first production path for NoSite Leads. It keeps the app single-admin and uses Supabase only as the server-side Postgres database.
+This is the production path for NoSite Leads. It keeps the app invite-only with admin-created users and uses Supabase as the server-side Postgres database.
 
 ## 1. Codebase Checks
 
 Run these before pushing:
 
 ```bash
-npm run lint
-npm run test
-npm run build
+npm run release:check
 npm run test:e2e
 ```
+
+`release:check` is the safe local Node 24 gate and includes the public read-only
+browser project. `test:e2e` adds protected read-only workflows and fails if no
+E2E auth is configured. See `docs/TESTING.md`. Mutating E2E is never part of
+this default release path.
+
+For the launch screenshot QA pass, run the dedicated authenticated screenshot
+spec after setting either `E2E_STORAGE_STATE` or both Supabase E2E credentials:
+
+```bash
+E2E_BASE_URL=https://www.nosite.xyz \
+E2E_STORAGE_STATE=.auth/admin.json \
+npm run test:e2e:launch
+```
+
+If no storage state is available, use:
+
+```bash
+E2E_BASE_URL=https://www.nosite.xyz \
+E2E_SUPABASE_EMAIL=<admin email> \
+E2E_SUPABASE_PASSWORD=<password> \
+npm run test:e2e:launch
+```
+
+Do not assume `NOSITE_ADMIN_PASSWORD` is a valid E2E login password. Production
+login uses Supabase `signInWithPassword`, so the screenshot audit needs a real
+Supabase auth password or a captured `E2E_STORAGE_STATE` file.
 
 Confirm these stay untracked:
 
@@ -39,32 +64,58 @@ Apply schema:
 supabase db push
 ```
 
-If you do not use the Supabase CLI, paste `supabase/migrations/202605110001_full_schema.sql` into the Supabase SQL editor and run it once.
+If you do not use the Supabase CLI, run every file in `supabase/migrations/`
+through the Supabase SQL editor in timestamp order. Do not apply only
+`202605110001_full_schema.sql`; later migrations add auth-role revokes, RLS
+policy posture, scheduler tables/jobs, Vault-backed worker configuration, and
+location-access hardening that production depends on.
+
+After applying migrations, verify at minimum:
+
+- auth-role table access is revoked except where intentionally granted;
+- RLS/default-privilege hardening migrations have run;
+- `202606160001_launch_readiness_reliability.sql` has run, adding enrichment lease fields and demo lifecycle fields;
+- `worker_cron_secret` and `worker_base_url` exist in Supabase Vault before
+  applying scheduler cron migrations;
+- `cron.job` contains the expected NoSite worker jobs;
+- the Scheduler page reports the same worker set as `src/lib/scheduler/worker-metadata.ts`.
 
 ## 3. Migrate Local Data
+
+The complete backup, restore, rollback, protected-column, and migration-drift
+procedure is in [`DATA_RECOVERY.md`](DATA_RECOVERY.md). Export/import does not
+apply migrations or back up Supabase Auth/Vault.
 
 Export local SQLite data:
 
 ```bash
-npm run db:export:sqlite
+npm run db:export:sqlite -- --db nosite-leads.db --out data-export
 ```
 
-By default this writes ignored JSON files to `data-export/` and intentionally blanks encrypted API keys from `settings`. To migrate encrypted key values, run with `MIGRATE_ENCRYPTED_KEYS=1` only if production will reuse the same `NOSITE_SESSION_SECRET`.
+This writes a versioned, checksummed 23-table archive to ignored
+`data-export/`. OpenAI, Google Places, and Google Maps browser encrypted key
+columns are always excluded; `MIGRATE_ENCRYPTED_KEYS=1` is rejected.
+
+Validate the source schema and archive without connecting to Supabase:
+
+```bash
+npm run db:verify:recovery -- --db nosite-leads.db --dir data-export
+npm run db:import:supabase -- --dir data-export --dry-run
+```
+
+Reconcile/apply migrations and restore Supabase Auth users with matching UUIDs
+before import. These are explicit operator steps, not part of either script.
 
 Import into Supabase:
 
 ```bash
-$env:DATABASE_URL="postgresql://..."
-npm run db:import:supabase
+DATABASE_URL='postgresql://...' npm run db:import:supabase -- --dir data-export
 ```
 
-Validate expected row counts after import:
-
-- `leads`: 5,653
-- `crawl_units`: 4,280
-- `place_observations`: 4,652
-- `places_master`: 3,113
-- `settings`: 1
+The importer validates target tables, columns, primary keys, JSONB types, and
+referenced Auth users before writing, then upserts all tables in one
+transaction. Validate target row counts against that archive's `manifest.json`;
+do not rely on historical hard-coded counts.
 
 ## 4. GitHub
 
@@ -121,7 +172,51 @@ Redeploy after any environment variable change.
 `NEXT_PUBLIC_APP_URL` should be set in Production because welcome invite and reset
 links are generated server-side. Set it to the canonical production origin:
 `https://www.nosite.xyz`. In Supabase Auth, set the Site URL to the same origin
-and allow `https://www.nosite.xyz/auth/callback` as a redirect URL.
+and allow both callback entries as redirect URLs:
+
+```text
+https://www.nosite.xyz/auth/callback
+https://www.nosite.xyz/auth/callback**
+```
+
+The `**` entry covers invite/reset links that include the app's `next` query
+parameter. Without a matching callback redirect URL, Supabase can ignore the
+app-provided `redirectTo` and fall back to the Site URL.
+
+Invite and recovery emails must use the app-provided redirect URL, not
+`{{ .SiteURL }}`, for their primary action links. The app sends Supabase this
+exact redirect URL:
+
+```text
+https://www.nosite.xyz/auth/callback?next=%2Freset-password
+```
+
+The custom Supabase email templates should link to that redirect and append the
+one-time token hash:
+
+```html
+<!-- Invite user template action link -->
+<a href="{{ .RedirectTo }}&amp;token_hash={{ .TokenHash }}&amp;type=invite">Set up account</a>
+
+<!-- Reset password template action link -->
+<a href="{{ .RedirectTo }}&amp;token_hash={{ .TokenHash }}&amp;type=recovery">Reset password</a>
+```
+
+Do not build invite/recovery action links from `{{ .SiteURL }}`. If the
+Supabase Site URL ever drifts back to a Vercel domain, `{{ .SiteURL }}` links
+will send users to the wrong host. `{{ .RedirectTo }}` uses the URL passed by
+the app for that specific invite/reset request.
+
+With a Supabase Management API personal access token, check or reapply the
+production Auth URL/template settings from this repo:
+
+```bash
+SUPABASE_ACCESS_TOKEN=... npm run auth:supabase:check
+SUPABASE_ACCESS_TOKEN=... npm run auth:supabase:apply
+```
+
+The apply command also removes the known legacy
+`lead-generation-orcin.vercel.app` redirect entry from the Auth allowlist.
 
 `NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` is optional and only enables the Explorer's
 manual Google map switch. It must be a browser-restricted Maps JavaScript API key
@@ -214,13 +309,16 @@ After deploy:
 1. Log in.
 2. Confirm the bootstrap admin gets an admin role.
 3. Open `/users` and create the researcher account.
-4. Confirm lead count matches Supabase.
-5. Open `/leads`, `/queue`, `/dashboard`, `/statistics`, and `/settings`.
+4. Open `/dashboard`, `/coverage`, `/explore`, `/leads`, `/quality`, `/team`, `/statistics`, `/users`, and `/scheduler` on desktop and mobile widths.
+5. Confirm lead count matches Supabase.
 6. Confirm CSV export requires admin login.
-7. Save or verify Google/OpenAI keys in Settings.
-8. Run one low-cost Places test after fixing the Google API key.
-9. Run one AI verification and confirm the model remains locked to `gpt-5.4-mini`.
-10. Confirm the Supabase cron job drains `ai_queue_status = 'queued'` over several minutes.
+7. Confirm `/privacy`, `/terms`, `/support`, and `/data-sources` load publicly.
+8. Confirm the deleted legacy batch worker route returns `404`.
+9. Save or verify Google/OpenAI keys in Settings.
+10. Run one low-cost Places test after fixing the Google API key.
+11. Run one AI verification and confirm the model remains locked to `gpt-5.4-mini`.
+12. Confirm the Supabase cron jobs drain queued worker work over several minutes.
+13. Create a draft demo, publish it, open the public link, confirm view count increments best effort, then unpublish/revoke and confirm the public link stops serving.
 
 ## 8. First Hardening Pass
 
@@ -228,6 +326,6 @@ Do these after the first working deployment:
 
 - Add Supabase backups or upgrade to Pro before heavy production usage.
 - Add Vercel and Supabase log review to the weekly operating routine.
-- Keep crawl/enrichment manual and chunked.
+- Keep crawl/enrichment chunked through the scheduler endpoints.
 - Keep outbound messaging manual until compliance is designed.
-- Move to Supabase Auth only when multi-user accounts are needed.
+- Keep Supabase Auth as the current invite-only identity boundary; do not introduce a parallel static-cookie login path.

@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, login, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, requireE2EAuth, requireMutationOptIn } from "./auth-fixtures";
 
 test("Excluded drag behavior only", async ({ page }) => {
-  skipIfMissingAuth();
+  requireE2EAuth();
+  requireMutationOptIn();
   const observations: string[] = [];
   await page.setViewportSize({ width: 1920, height: 1080 });
 
@@ -49,13 +50,15 @@ test("Excluded drag behavior only", async ({ page }) => {
   const targetX = (headerBox?.x ?? colBox.x) + (colBox.width / 2);
   const targetY = (headerBox?.y ?? colBox.y) + 60;
 
-  page.once("dialog", (d) => d.accept(""));
   observations.push(`Attempt 1: mouse move/down/move/up to Excluded header area (${targetX.toFixed(0)}, ${targetY.toFixed(0)})`);
 
   await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2);
   await page.mouse.down();
   await page.mouse.move(targetX, targetY, { steps: 20 });
   await page.mouse.up();
+  const firstDialog = page.getByRole("dialog", { name: "Exclude lead" });
+  await expect(firstDialog).toBeVisible();
+  await firstDialog.getByRole("button", { name: "Exclude lead" }).click();
 
   await page.waitForTimeout(2500);
   const toast1 = page.getByText(/moved to excluded|Lead moved to excluded/i);
@@ -83,6 +86,9 @@ test("Excluded drag behavior only", async ({ page }) => {
   await excludedCol.scrollIntoViewIfNeeded();
   await page.waitForTimeout(200);
   await cardToUse.dragTo(excludedCol, { force: true, targetPosition: { x: 90, y: 50 } });
+  const secondDialog = page.getByRole("dialog", { name: "Exclude lead" });
+  await expect(secondDialog).toBeVisible();
+  await secondDialog.getByRole("button", { name: "Exclude lead" }).click();
   await page.waitForTimeout(2500);
   const toast2 = page.getByText(/moved to excluded|Lead moved to excluded/i);
   const toastVisible2 = await toast2.isVisible().catch(() => false);

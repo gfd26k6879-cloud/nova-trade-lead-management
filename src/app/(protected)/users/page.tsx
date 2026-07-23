@@ -38,6 +38,9 @@ export default async function UsersPage() {
 
   const active = users.filter((user) => user.status === "active").length;
   const researchers = users.filter((user) => user.role === "researcher").length;
+  const researchersWithoutAccess = users.filter((user) => (
+    user.status === "active" && user.role === "researcher" && (accessByUser[user.user_id]?.length ?? 0) === 0
+  )).length;
 
   return (
     <PageShell
@@ -49,18 +52,34 @@ export default async function UsersPage() {
         { label: "Active Users", value: String(active) },
         { label: "Admins", value: String(users.filter((user) => user.role === "admin").length) },
         { label: "Researchers", value: String(researchers) },
+        { label: "No Access", value: String(researchersWithoutAccess) },
         { label: "Disabled", value: String(users.length - active) },
       ]}
     >
       {degradedReason && (
-        <section className="glass rounded-2xl p-5">
-          <p className="section-label">Users temporarily unavailable</p>
-          <p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>
-            Territory assignment data did not finish loading fast enough. Use refresh to retry.
-          </p>
+        <section className="glass rounded-2xl p-5" aria-labelledby="users-degraded-title">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <p className="section-label">Read-only recovery</p>
+              <h3 id="users-degraded-title" className="mt-2 text-base font-semibold" style={{ color: "var(--text-primary)" }}>
+                Users temporarily unavailable
+              </h3>
+              <p className="mt-2 max-w-2xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                User, territory, or market-access data did not finish loading. Mutation controls are hidden until the page can reload a complete users snapshot.
+              </p>
+            </div>
+            <a href="/users" className="btn-primary shrink-0 text-center">
+              Reload users
+            </a>
+          </div>
+          <div className="mt-4 rounded-xl border px-4 py-3 text-xs" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)", color: "var(--text-tertiary)" }}>
+            The rest of the workspace is still available. Retry before inviting users, changing roles or status, removing accounts, or editing territory access.
+          </div>
         </section>
       )}
-      <UsersClient initialUsers={users} markets={markets} initialMarketAccess={accessByUser} />
+      {!degradedReason && (
+        <UsersClient initialUsers={users} markets={markets} initialMarketAccess={accessByUser} />
+      )}
     </PageShell>
   );
 }

@@ -137,6 +137,25 @@ export async function updateAppUserStatus(userId: string, status: AppUserStatus)
     .run(status, nowISO(), userId);
 }
 
+export async function removeAppUser(userId: string): Promise<AppUser | null> {
+  const db = await getDb();
+  const existing = await getAppUserByUserId(userId);
+  const now = nowISO();
+
+  await db.prepare("UPDATE leads SET assigned_to_user_id = NULL WHERE assigned_to_user_id = ?")
+    .run(userId);
+  await db.prepare("UPDATE admin_requests SET assigned_admin_user_id = NULL WHERE assigned_admin_user_id = ?")
+    .run(userId);
+  await db.prepare("UPDATE app_users SET team_lead_user_id = NULL, updated_at = ? WHERE team_lead_user_id = ?")
+    .run(now, userId);
+  await db.prepare("DELETE FROM user_market_access WHERE user_id = ?")
+    .run(userId);
+  await db.prepare("DELETE FROM app_users WHERE user_id = ?")
+    .run(userId);
+
+  return existing;
+}
+
 export async function updateAppUserTeam(input: {
   userId: string;
   isTeamLead: boolean;

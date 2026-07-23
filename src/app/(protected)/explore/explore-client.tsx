@@ -260,12 +260,16 @@ export function ExploreClient({
     }
 
     const controller = new AbortController();
+    let timedOut = false;
     const loadingStateId = window.setTimeout(() => {
       if (controller.signal.aborted) return;
       setMapFetchState("loading");
       setMapError(null);
     }, 0);
-    const timeoutId = window.setTimeout(() => controller.abort(), MAP_FETCH_TIMEOUT_MS);
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, MAP_FETCH_TIMEOUT_MS);
     const params = new URLSearchParams(searchParamsString);
     params.set("limit", "200");
     params.delete("includeTotal");
@@ -298,8 +302,10 @@ export function ExploreClient({
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) {
-          setMapFetchState("timeout");
-          setMapError("Map data is taking too long. The lead list is still usable.");
+          if (timedOut) {
+            setMapFetchState("timeout");
+            setMapError("Map data is taking too long. The lead list is still usable.");
+          }
           return;
         }
         setMapFetchState("error");
@@ -1228,7 +1234,6 @@ function Badge({ label, title, tone = "neutral" }: BadgeMetadata) {
       style={badgeToneStyle(tone)}
       title={title}
       aria-label={`${label}: ${title}`}
-      tabIndex={0}
     >
       {label}
     </span>

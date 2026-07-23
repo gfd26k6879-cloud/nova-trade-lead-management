@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, login, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, requireE2EAuth, requireMutationOptIn } from "./auth-fixtures";
 
-test("Kanban exclusion prompt - explicit dialog handling", async ({ page }) => {
-  skipIfMissingAuth();
+test("Kanban exclusion prompt - accessible app dialog", async ({ page }) => {
+  requireE2EAuth();
+  requireMutationOptIn();
   const results: { step: string; pass: boolean; note?: string }[] = [];
 
   await page.setViewportSize({ width: 1920, height: 1080 });
@@ -31,8 +32,6 @@ test("Kanban exclusion prompt - explicit dialog handling", async ({ page }) => {
   const excludedHeader = page.getByText("Excluded", { exact: true }).first();
   const excludedCol = excludedHeader.locator("../..");
 
-  page.once("dialog", (dialog) => dialog.accept("already has website built"));
-
   await excludedHeader.scrollIntoViewIfNeeded();
   await cardToUse.scrollIntoViewIfNeeded();
   await page.waitForTimeout(300);
@@ -49,6 +48,11 @@ test("Kanban exclusion prompt - explicit dialog handling", async ({ page }) => {
     await page.mouse.down();
     await page.mouse.move(targetX, targetY, { steps: 20 });
     await page.mouse.up();
+
+    const dialog = page.getByRole("dialog", { name: "Exclude lead" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Exclusion reason (optional)").fill("already has website built");
+    await dialog.getByRole("button", { name: "Exclude lead" }).click();
 
     await page.waitForTimeout(2500);
     const toast = await page.getByText(/Lead moved to excluded|moved to excluded/i).isVisible().catch(() => false);

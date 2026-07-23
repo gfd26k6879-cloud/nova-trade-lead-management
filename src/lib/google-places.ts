@@ -1,5 +1,11 @@
 import { inferPlaceDetailsSkuFromFieldMask, type GooglePlacesSku } from "@/lib/google-pricing";
 import { getConfiguredGooglePlacesApiKey } from "@/lib/db/queries";
+import { extractReviewInsights, type ReviewInsights } from "@/lib/review-intelligence";
+import {
+  PLACE_CACHE_METADATA_KEY,
+  createPlaceCacheMetadata,
+  readPlaceCacheMetadata,
+} from "@/lib/place-cache-contract";
 
 const API_BASE = "https://places.googleapis.com/v1";
 
@@ -98,6 +104,7 @@ export interface TextSearchResponse {
 
 export interface TextSearchOptions {
   fieldMask?: string;
+  signal?: AbortSignal;
 }
 
 export class PlacesApiError extends Error {
@@ -114,6 +121,7 @@ export class PlacesApiError extends Error {
 export interface GetPlaceDetailsOptions {
   includeAtmosphere?: boolean;
   cacheTtlDays?: number;
+  signal?: AbortSignal;
 }
 
 export interface PlaceDetailsResult {
@@ -121,6 +129,7 @@ export interface PlaceDetailsResult {
   fromCache: boolean;
   sku: GooglePlacesSku;
   fieldMask: string;
+  reviewInsights?: ReviewInsights;
 }
 
 async function getApiKey(): Promise<string> {
@@ -129,8 +138,27 @@ async function getApiKey(): Promise<string> {
   return key;
 }
 
-async function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  throwIfAborted(signal);
+  if (ms <= 0) return;
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const timer = setTimeout(() => finish(resolve), ms);
+    const onAbort = () => finish(() => {
+      clearTimeout(timer);
+      reject(abortReason(signal));
+    });
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
 }
 
 async function fetchWithRetry(
@@ -139,32 +167,37 @@ async function fetchWithRetry(
   maxRetries = 3,
 ): Promise<Response> {
   let lastError: Error | null = null;
+  const signal = options.signal;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    throwIfAborted(signal);
     try {
       const res = await fetch(url, options);
+      throwIfAborted(signal);
 
       if (res.ok) return res;
 
       const body = await res.text();
+      throwIfAborted(signal);
       const apiError = new PlacesApiError(res.status, body);
 
       if (res.status === 429 || res.status >= 500) {
         lastError = apiError;
         if (attempt < maxRetries) {
           const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
-          await sleep(delay);
+          await sleep(delay, signal);
           continue;
         }
       }
 
       throw apiError;
     } catch (err) {
+      throwIfAborted(signal);
       if (err instanceof Error && !(err instanceof PlacesApiError)) {
         lastError = err;
         if (attempt < maxRetries) {
           const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
-          await sleep(delay);
+          await sleep(delay, signal);
           continue;
         }
       }
@@ -182,9 +215,11 @@ export async function textSearch(
   locationBias?: LocationBias,
   options: TextSearchOptions = {},
 ): Promise<TextSearchResponse> {
+  throwIfAborted(options.signal);
   const apiKey = await getApiKey();
+  throwIfAborted(options.signal);
 
-  if (rateLimitMs > 0) await sleep(rateLimitMs);
+  if (rateLimitMs > 0) await sleep(rateLimitMs, options.signal);
 
   const body = buildTextSearchRequestBody(textQuery, pageToken, locationBias);
   const fieldMask = options.fieldMask ?? TEXT_SEARCH_FIELD_MASK;
@@ -197,9 +232,11 @@ export async function textSearch(
       "X-Goog-FieldMask": fieldMask,
     },
     body: JSON.stringify(body),
+    signal: options.signal,
   });
 
   const data = await res.json();
+  throwIfAborted(options.signal);
   return {
     places: data.places ?? [],
     nextPageToken: data.nextPageToken ?? undefined,
@@ -229,32 +266,38 @@ export async function getPlaceDetails(
   rateLimitMs = 200,
   options: GetPlaceDetailsOptions = {},
 ): Promise<PlaceDetailsResult> {
-  const apiKey = await getApiKey();
   const includeAtmosphere = options.includeAtmosphere ?? false;
   const cacheTtlDays = options.cacheTtlDays ?? 30;
   const fieldMask = includeAtmosphere ? DETAILS_STAGE_B_FIELD_MASK : DETAILS_STAGE_A_FIELD_MASK;
   const sku: GooglePlacesSku = inferPlaceDetailsSkuFromFieldMask(fieldMask);
-
-  if (rateLimitMs > 0) await sleep(rateLimitMs);
-
   const cleanId = placeId.startsWith("places/") ? placeId : `places/${placeId}`;
+  throwIfAborted(options.signal);
 
   if (cacheTtlDays > 0) {
     try {
       const { getCachedPlaceResponse } = await import("@/lib/db/queries");
-      const cached = getCachedPlaceResponse(placeId, cacheTtlDays, includeAtmosphere);
-      if (cached) {
+      const cached = await getCachedPlaceResponse(placeId, cacheTtlDays, includeAtmosphere);
+      throwIfAborted(options.signal);
+      if (isPlaceResult(cached)) {
+        const cacheMetadata = readPlaceCacheMetadata(cached);
         return {
-          place: cached as unknown as PlaceResult,
+          place: cached,
           fromCache: true,
           sku,
           fieldMask,
+          reviewInsights: cacheMetadata?.reviewInsights,
         };
       }
     } catch {
+      throwIfAborted(options.signal);
       // cache read failure is non-critical
     }
   }
+
+  throwIfAborted(options.signal);
+  const apiKey = await getApiKey();
+  throwIfAborted(options.signal);
+  if (rateLimitMs > 0) await sleep(rateLimitMs, options.signal);
 
   const res = await fetchWithRetry(`${API_BASE}/${cleanId}`, {
     method: "GET",
@@ -262,19 +305,69 @@ export async function getPlaceDetails(
       "X-Goog-Api-Key": apiKey,
       "X-Goog-FieldMask": fieldMask,
     },
+    signal: options.signal,
   });
 
-  const data = await res.json();
+  const data = await res.json() as PlaceResult | null;
+  throwIfAborted(options.signal);
+  const reviewInsights = includeAtmosphere
+    ? extractReviewInsights(Array.isArray(data?.reviews) ? data.reviews : [])
+    : undefined;
 
-  try {
-    const { cachePlaceResponse } = await import("@/lib/db/queries");
-    cachePlaceResponse(placeId, JSON.stringify(data));
-  } catch { /* cache failure is non-critical */ }
+  if (cacheTtlDays > 0) {
+    try {
+      throwIfAborted(options.signal);
+      const { cachePlaceResponse } = await import("@/lib/db/queries");
+      await cachePlaceResponse(placeId, JSON.stringify(sanitizePlaceDetailsForStorage(data, {
+        includeAtmosphere,
+        reviewInsights,
+      })));
+    } catch {
+      throwIfAborted(options.signal);
+      // cache failure is non-critical
+    }
+  }
+  throwIfAborted(options.signal);
 
   return {
     place: data ?? null,
     fromCache: false,
     sku,
     fieldMask,
+    reviewInsights,
   };
+}
+
+function isPlaceResult(value: Record<string, unknown> | null): value is Record<string, unknown> & PlaceResult {
+  return Boolean(value && typeof value.id === "string" && value.id.trim());
+}
+
+export function sanitizePlaceDetailsForStorage(
+  place: PlaceResult | Record<string, unknown> | null,
+  options: { includeAtmosphere?: boolean; reviewInsights?: ReviewInsights } = {},
+): Record<string, unknown> | null {
+  if (!place) return null;
+  const sanitized = { ...place } as Record<string, unknown>;
+  const existingMetadata = readPlaceCacheMetadata(sanitized);
+  const rawReviews = Array.isArray(place.reviews) ? place.reviews : [];
+  const includeAtmosphere = existingMetadata?.detailsStage === "stage-b"
+    || options.includeAtmosphere === true
+    || (options.includeAtmosphere === undefined && Object.prototype.hasOwnProperty.call(place, "reviews"));
+  const reviewInsights = options.reviewInsights
+    ?? existingMetadata?.reviewInsights
+    ?? (includeAtmosphere ? extractReviewInsights(rawReviews) : undefined);
+  delete sanitized.reviews;
+  sanitized[PLACE_CACHE_METADATA_KEY] = createPlaceCacheMetadata({
+    includeAtmosphere,
+    reviewInsights,
+  });
+  return sanitized;
+}
+
+function throwIfAborted(signal?: AbortSignal | null): void {
+  if (signal?.aborted) throw abortReason(signal);
+}
+
+function abortReason(signal?: AbortSignal | null): unknown {
+  return signal?.reason ?? new DOMException("The operation was aborted", "AbortError");
 }

@@ -16,50 +16,8 @@ import {
 import { recomputeAllScoresAction } from "@/lib/leads/actions";
 import { getDefaultSocialHosts, getDefaultBasicHosts } from "@/lib/classify-website";
 import { DEFAULT_NICHE_WEIGHTS } from "@/lib/scoring";
-
-interface Settings {
-  niche_weights: Record<string, number>;
-  social_hosts: string[];
-  basic_hosts: string[];
-  rate_limit_ms: number;
-  search_radius_km: number;
-  enrichment_enabled: boolean;
-  website_health_enabled: boolean;
-  cache_ttl_days: number;
-  enrichment_stage_b_min_score: number;
-  ai_enabled: boolean;
-  ai_model: string;
-  ai_batch_limit: number;
-  researcher_ai_daily_run_cap: number;
-  researcher_ai_daily_budget_usd: number;
-  researcher_ai_monthly_budget_usd: number;
-  ai_cache_ttl_days: number;
-  ai_manual_apply_required: boolean;
-  ai_auto_verify_enabled: boolean;
-  ai_verify_after_discovery: boolean;
-  ai_reverify_after_enrichment: boolean;
-  ai_verification_concurrency: number;
-  ai_max_attempts: number;
-  scheduler_ai_verification_enabled: boolean;
-  scheduler_crawl_enabled: boolean;
-  scheduler_enrichment_enabled: boolean;
-  scheduler_artifact_enabled: boolean;
-  scheduler_score_recompute_enabled: boolean;
-  openai_api_key_configured: boolean;
-  openai_api_key_source: "ui" | "env" | "none";
-  google_places_api_key_configured: boolean;
-  google_places_api_key_source: "ui" | "env" | "none";
-  google_maps_browser_api_key_configured: boolean;
-  google_maps_browser_api_key_source: "ui" | "env" | "none";
-  google_text_search_monthly_cap: number;
-  google_enterprise_monthly_cap: number;
-  google_test_run_call_cap: number;
-  google_auto_pagination_enabled: boolean;
-  google_auto_pagination_min_new_candidates: number;
-  google_auto_pagination_max_duplicate_rate: number;
-  google_default_discovery_mode: "coverage_probe" | "lead_harvest";
-  google_default_pagination_policy: "first_page_only" | "auto_yield_based" | "manual_extra_pages";
-}
+import type { Settings } from "@/lib/db/queries";
+import { getStatusToneStyle } from "@/lib/status-tone";
 
 const LEGACY_BUDGET_SETTING_KEYS = [
   "max_calls_per_day",
@@ -73,10 +31,13 @@ const LEGACY_BUDGET_SETTING_KEYS = [
   "ai_monthly_budget_usd",
 ] as const;
 
-function removeLegacyBudgetSettings(input: Settings): Settings {
-  const sanitized = { ...input } as Record<string, unknown>;
-  for (const key of LEGACY_BUDGET_SETTING_KEYS) delete sanitized[key];
-  return sanitized as unknown as Settings;
+type LegacyBudgetSettingKey = (typeof LEGACY_BUDGET_SETTING_KEYS)[number];
+type EditableSettings = Omit<Settings, LegacyBudgetSettingKey>;
+
+function removeLegacyBudgetSettings(input: Settings): EditableSettings {
+  const sanitized = { ...input };
+  for (const key of LEGACY_BUDGET_SETTING_KEYS) Reflect.deleteProperty(sanitized, key);
+  return sanitized;
 }
 
 export function SettingsClient({
@@ -86,7 +47,7 @@ export function SettingsClient({
   initialSettings: Settings;
   loadWarning?: string | null;
 }) {
-  const [settings, setSettings] = useState<Settings>(() => removeLegacyBudgetSettings(initialSettings));
+  const [settings, setSettings] = useState<EditableSettings>(() => removeLegacyBudgetSettings(initialSettings));
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeyLoading, setApiKeyLoading] = useState(false);
@@ -124,12 +85,12 @@ export function SettingsClient({
       const socialHosts = socialText.split("\n").map((s) => s.trim()).filter(Boolean);
       const basicHosts = basicText.split("\n").map((s) => s.trim()).filter(Boolean);
 
-      const updated: Settings = removeLegacyBudgetSettings({
+      const updated: EditableSettings = {
         ...settings,
         niche_weights: nicheWeights,
         social_hosts: socialHosts,
         basic_hosts: basicHosts,
-      });
+      };
 
       await updateSettingsAction(updated);
       setSettings(updated);
@@ -140,7 +101,7 @@ export function SettingsClient({
     }
   };
 
-  const update = <K extends keyof Settings>(key: K, value: Settings[K]) => {
+  const update = <K extends keyof EditableSettings>(key: K, value: EditableSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -150,7 +111,7 @@ export function SettingsClient({
     if ("error" in result) {
       setSaveMsg(result.error ?? "Error saving OpenAI key");
     } else {
-      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
+      setSettings(removeLegacyBudgetSettings(result.settings));
       setApiKeyInput("");
       setSaveMsg("OpenAI API key saved");
     }
@@ -162,7 +123,7 @@ export function SettingsClient({
     setApiKeyLoading(true);
     const result = await clearOpenAiApiKeyAction();
     if ("settings" in result) {
-      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
+      setSettings(removeLegacyBudgetSettings(result.settings));
       setApiKeyInput("");
       setSaveMsg(result.settings.openai_api_key_configured ? "UI key cleared; env key is still configured" : "OpenAI API key cleared");
     } else {
@@ -178,7 +139,7 @@ export function SettingsClient({
     if ("error" in result) {
       setSaveMsg(result.error ?? "Error saving Google Places key");
     } else {
-      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
+      setSettings(removeLegacyBudgetSettings(result.settings));
       setGoogleKeyInput("");
       setSaveMsg("Google Places API key saved");
     }
@@ -190,7 +151,7 @@ export function SettingsClient({
     setGoogleKeyLoading(true);
     const result = await clearGooglePlacesApiKeyAction();
     if ("settings" in result) {
-      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
+      setSettings(removeLegacyBudgetSettings(result.settings));
       setGoogleKeyInput("");
       setSaveMsg(result.settings.google_places_api_key_configured ? "UI Google key cleared; env key is still configured" : "Google Places API key cleared");
     } else {
@@ -206,7 +167,7 @@ export function SettingsClient({
     if ("error" in result) {
       setSaveMsg(result.error ?? "Error saving Google Maps browser key");
     } else {
-      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
+      setSettings(removeLegacyBudgetSettings(result.settings));
       setMapsKeyInput("");
       setSaveMsg("Google Maps browser key saved");
     }
@@ -218,7 +179,7 @@ export function SettingsClient({
     setMapsKeyLoading(true);
     const result = await clearGoogleMapsBrowserApiKeyAction();
     if ("settings" in result) {
-      setSettings(removeLegacyBudgetSettings(result.settings as Settings));
+      setSettings(removeLegacyBudgetSettings(result.settings));
       setMapsKeyInput("");
       setSaveMsg(result.settings.google_maps_browser_api_key_configured ? "UI Maps key cleared; env key is still configured" : "Google Maps browser key cleared");
     } else {
@@ -231,7 +192,7 @@ export function SettingsClient({
   return (
     <PageShell title="Settings" description="Configure lead scoring, classification hosts, API keys, and worker behavior.">
       {loadWarning && (
-        <section className="glass rounded-2xl p-4" style={{ border: "1px solid rgba(239,68,68,0.25)" }}>
+        <section className="glass rounded-2xl p-4" style={{ border: "1px solid var(--danger-border)" }}>
           <p className="section-label">Settings are temporarily unavailable.</p>
           <p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>
             Showing safe read-only defaults so this page does not hang. Reload before saving production settings.
@@ -242,7 +203,7 @@ export function SettingsClient({
       {/* API Controls */}
       <section className="glass rounded-2xl p-6">
         <h3 className="section-label">API Controls</h3>
-        <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+        <div className="mt-4 rounded-xl p-4" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}>
           <div className="flex flex-wrap items-end gap-3">
             <div className="min-w-56 flex-1">
               <label className="mb-1.5 block text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
@@ -276,13 +237,13 @@ export function SettingsClient({
             </button>
           </div>
           <div className="mt-3 flex flex-wrap gap-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            <span className="rounded-md px-2 py-1" style={{ background: settings.google_places_api_key_configured ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)", color: settings.google_places_api_key_configured ? "#166534" : "#991b1b" }}>
+            <span className="rounded-md px-2 py-1" style={getStatusToneStyle(settings.google_places_api_key_configured ? "success" : "danger")}>
               {settings.google_places_api_key_configured ? `Configured via ${settings.google_places_api_key_source}` : "No Google Places key configured"}
             </span>
             <span>Used for crawling, enrichment, and Places billing.</span>
           </div>
         </div>
-        <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+        <div className="mt-4 rounded-xl p-4" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}>
           <div className="flex flex-wrap items-end gap-3">
             <div className="min-w-56 flex-1">
               <label className="mb-1.5 block text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
@@ -316,7 +277,7 @@ export function SettingsClient({
             </button>
           </div>
           <div className="mt-3 flex flex-wrap gap-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            <span className="rounded-md px-2 py-1" style={{ background: settings.google_maps_browser_api_key_configured ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)", color: settings.google_maps_browser_api_key_configured ? "#166534" : "#991b1b" }}>
+            <span className="rounded-md px-2 py-1" style={getStatusToneStyle(settings.google_maps_browser_api_key_configured ? "success" : "danger")}>
               {settings.google_maps_browser_api_key_configured ? `Configured via ${settings.google_maps_browser_api_key_source}` : "No Google Maps browser key configured"}
             </span>
             <span>Used only when Explorer users manually switch to Google map.</span>
@@ -430,7 +391,7 @@ export function SettingsClient({
       {/* AI Verification */}
       <section className="glass rounded-2xl p-6">
         <h3 className="section-label">AI Verification</h3>
-        <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+        <div className="mt-4 rounded-xl p-4" style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}>
           <div className="flex flex-wrap items-end gap-3">
             <div className="min-w-56 flex-1">
               <label className="mb-1.5 block text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
@@ -464,7 +425,7 @@ export function SettingsClient({
             </button>
           </div>
           <div className="mt-3 flex flex-wrap gap-2 text-xs" style={{ color: "var(--text-tertiary)" }}>
-            <span className="rounded-md px-2 py-1" style={{ background: settings.openai_api_key_configured ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)", color: settings.openai_api_key_configured ? "#166534" : "#991b1b" }}>
+            <span className="rounded-md px-2 py-1" style={getStatusToneStyle(settings.openai_api_key_configured ? "success" : "danger")}>
               {settings.openai_api_key_configured ? `Configured via ${settings.openai_api_key_source}` : "No OpenAI key configured"}
             </span>
             <span>The key is encrypted server-side and never shown again.</span>
@@ -611,9 +572,10 @@ export function SettingsClient({
         </button>
         <HelpTip>Fills missing canonical Google Place IDs from cached/place data where possible.</HelpTip>
         {saveMsg && (
-          <span className="text-sm" style={{
-            color: saveMsg.includes("Error") || saveMsg.includes("Invalid") ? "#991b1b" : "#166534"
-          }}>
+          <span
+            className="rounded-md px-2 py-1 text-sm"
+            style={getStatusToneStyle(saveMsg.includes("Error") || saveMsg.includes("Invalid") ? "danger" : "success")}
+          >
             {saveMsg}
           </span>
         )}
@@ -671,7 +633,7 @@ function SchedulerToggle({ label, checked, onChange }: {
   return (
     <label
       className="flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-sm"
-      style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}
+      style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)", color: "var(--text-secondary)" }}
     >
       <span>{label}</span>
       <input

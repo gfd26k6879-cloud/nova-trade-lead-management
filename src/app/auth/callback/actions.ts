@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { z } from "zod";
 
+import { recordOperationalEvent } from "@/lib/operational-logging";
 import { startRouteTiming } from "@/lib/route-timing";
 import { createSupabaseServerClient, isSupabaseAuthConfigured } from "@/lib/supabase/server";
 
@@ -18,6 +19,13 @@ export async function confirmRecoveryTokenAction(formData: FormData) {
 
   if (!isSupabaseAuthConfigured()) {
     logRouteTiming(500, { reason: "missing_auth_config" });
+    await recordOperationalEvent({
+      action: "auth_link_verify_failed",
+      category: "auth",
+      severity: "error",
+      entityType: "auth",
+      metadata: { reason: "missing_auth_config" },
+    });
     redirect("/login?error=missing_config");
   }
 
@@ -29,6 +37,13 @@ export async function confirmRecoveryTokenAction(formData: FormData) {
 
   if (!parsed.success) {
     logRouteTiming(400, { reason: "invalid_auth_link_token" });
+    await recordOperationalEvent({
+      action: "auth_link_verify_failed",
+      category: "auth",
+      severity: "warn",
+      entityType: "auth",
+      metadata: { reason: "invalid_auth_link_token" },
+    });
     redirect("/forgot-password?error=invalid_recovery_link");
   }
 
@@ -40,10 +55,24 @@ export async function confirmRecoveryTokenAction(formData: FormData) {
 
   if (error) {
     logRouteTiming(400, { reason: "verify_otp_failed", error: error.message });
+    await recordOperationalEvent({
+      action: "auth_link_verify_failed",
+      category: "auth",
+      severity: "warn",
+      entityType: "auth",
+      metadata: { reason: "verify_otp_failed", type: parsed.data.type, error: error.message },
+    });
     redirect("/forgot-password?error=expired_link");
   }
 
   const next = normalizeNextPath(parsed.data.next ?? null);
+  await recordOperationalEvent({
+    action: "auth_link_verified",
+    category: "auth",
+    severity: "info",
+    entityType: "auth",
+    metadata: { type: parsed.data.type, next },
+  });
   logRouteTiming(307, { result: "auth_link_verified", type: parsed.data.type, next });
   redirect(next);
 }

@@ -3,6 +3,21 @@ import { type NextRequest, NextResponse } from "next/server";
 import { applyNoStoreHeaders } from "@/lib/http-cache";
 import { getSupabaseServerCookieOptions } from "@/lib/supabase/cookies";
 
+const PROTECTED_PAGE_PREFIXES = [
+  "/dashboard",
+  "/coverage",
+  "/explore",
+  "/scheduler",
+  "/quality",
+  "/leads",
+  "/queue",
+  "/statistics",
+  "/settings",
+  "/users",
+  "/fulfillment",
+  "/team",
+] as const;
+
 export async function proxy(request: NextRequest) {
   const security = createSecurityContext();
   const { pathname } = request.nextUrl;
@@ -13,7 +28,7 @@ export async function proxy(request: NextRequest) {
     return withProxySecurityHeaders(applyNoStoreHeaders(NextResponse.redirect(aliasUrl)), security);
   }
 
-  const isProtectedPage = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users", "/fulfillment", "/team"].some((prefix) =>
+  const isProtectedPage = PROTECTED_PAGE_PREFIXES.some((prefix) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`)
   );
   const isProtectedApi = pathname.startsWith("/api/crawl") || pathname.startsWith("/api/export");
@@ -59,17 +74,27 @@ export async function proxy(request: NextRequest) {
     },
   });
 
-  const { data, error } = await supabase.auth.getUser();
+  let user: unknown = null;
+  let authError: unknown = null;
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    user = data.user;
+    authError = error;
+  } catch (error) {
+    authError = error;
+  }
 
-  if (error || !data.user) {
+  if (authError || !user) {
     if (isProtectedApi) {
-      return withProxySecurityHeaders(applyNoStoreHeaders(NextResponse.json({ error: "Authentication required" }, { status: 401 })), security);
+      const apiResponse = withProxySecurityHeaders(applyNoStoreHeaders(NextResponse.json({ error: "Authentication required" }, { status: 401 })), security);
+      return isStaleSupabaseAuthError(authError) ? expireSupabaseAuthCookies(request, apiResponse) : apiResponse;
     }
 
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";
     loginUrl.search = "";
-    return withProxySecurityHeaders(applyNoStoreHeaders(NextResponse.redirect(loginUrl)), security);
+    const redirectResponse = withProxySecurityHeaders(applyNoStoreHeaders(NextResponse.redirect(loginUrl)), security);
+    return isStaleSupabaseAuthError(authError) ? expireSupabaseAuthCookies(request, redirectResponse) : redirectResponse;
   }
 
   return response;
@@ -100,6 +125,7 @@ function createSecurityContext(): SecurityContext {
   const isDev = process.env.NODE_ENV === "development";
   const googleMapsHosts = ["https://maps.googleapis.com", "https://maps.gstatic.com"];
   const scriptSrc = [`'self'`, `'nonce-${nonce}'`, "'strict-dynamic'", ...googleMapsHosts];
+  const scriptSrcElem = [`'self'`, `'nonce-${nonce}'`, ...googleMapsHosts];
 
   if (isDev) {
     scriptSrc.push("'unsafe-eval'");
@@ -108,6 +134,7 @@ function createSecurityContext(): SecurityContext {
   const directives = [
     "default-src 'self'",
     `script-src ${scriptSrc.join(" ")}`,
+    `script-src-elem ${scriptSrcElem.join(" ")}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
@@ -154,10 +181,41 @@ function getRequestHeadersWithSecurityHeaders(request: NextRequest, security: Se
 
 function withProxySecurityHeaders<T extends { headers: Headers }>(response: T, security: SecurityContext): T {
   response.headers.set("Content-Security-Policy", security.contentSecurityPolicy);
+  appendNoTransformDirective(response.headers);
   response.headers.set("X-Frame-Options", "DENY");
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(self)");
+  return response;
+}
+
+function appendNoTransformDirective(headers: Headers): void {
+  const cacheControl = headers.get("Cache-Control");
+  if (!cacheControl) {
+    headers.set("Cache-Control", "no-transform");
+    return;
+  }
+  if (cacheControl.toLowerCase().split(",").some((directive) => directive.trim() === "no-transform")) return;
+  headers.set("Cache-Control", `${cacheControl}, no-transform`);
+}
+
+function isStaleSupabaseAuthError(error: unknown): boolean {
+  const maybe = error as { code?: unknown; message?: unknown };
+  const code = String(maybe?.code ?? "").toLowerCase();
+  const message = error instanceof Error ? error.message : String(maybe?.message ?? error ?? "");
+  return code === "refresh_token_not_found" || /invalid refresh token|refresh token not found|auth session missing/i.test(message);
+}
+
+function expireSupabaseAuthCookies<T extends NextResponse>(request: NextRequest, response: T): T {
+  const options = getSupabaseServerCookieOptions();
+  for (const cookie of request.cookies.getAll()) {
+    if (!cookie.name.startsWith("sb-") || !cookie.name.includes("auth-token")) continue;
+    response.cookies.set(cookie.name, "", {
+      ...options,
+      expires: new Date(0),
+      maxAge: 0,
+    });
+  }
   return response;
 }
 
@@ -174,8 +232,7 @@ function getRouteAlias(pathname: string): string | null {
   };
   if (aliases[normalized]) return aliases[normalized];
 
-  const canonicalRoutes = ["/dashboard", "/coverage", "/scheduler", "/quality", "/leads", "/queue", "/statistics", "/settings", "/users", "/fulfillment", "/team"];
-  const canonical = canonicalRoutes.find((route) => route === normalized);
+  const canonical = PROTECTED_PAGE_PREFIXES.find((route) => route === normalized);
   return canonical && pathname !== canonical ? canonical : null;
 }
 

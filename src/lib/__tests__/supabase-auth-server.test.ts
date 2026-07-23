@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-vi.mock("server-only", () => ({}), { virtual: true });
+vi.mock("server-only", () => ({}));
 
 import { getSupabaseAuthCookieNames, isStaleSupabaseAuthError } from "@/lib/supabase/server";
 import { vi } from "vitest";

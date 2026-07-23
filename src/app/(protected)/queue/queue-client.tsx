@@ -1,12 +1,14 @@
 "use client";
 
-import { type CSSProperties, type FormEvent, useCallback, useEffect, useState } from "react";
+import { type CSSProperties, type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { HelpTip } from "@/components/help-tip";
 import { PageShell } from "@/components/page-shell";
 import { ScoreBandBadge } from "@/components/score-band-badge";
+import { StatusNotice, type Notice } from "@/components/status-notice";
+import { useDialogFocus } from "@/components/use-dialog-focus";
 import { createAdminRequestAction } from "@/lib/admin-requests/actions";
 import { claimLeadAction, logOutreachEventAction, unclaimLeadAction } from "@/lib/leads/actions";
 import type { AdminRequestType, OutreachOutcome, QueueLead, ResearcherWorkbench } from "@/lib/db/queries";
@@ -55,7 +57,7 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
   const router = useRouter();
   const searchParams = useSearchParams();
   const [busyLeadId, setBusyLeadId] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<Notice | null>(null);
   const [activeLogLead, setActiveLogLead] = useState<QueueLead | null>(null);
   const [logDraft, setLogDraft] = useState<LogDraft>(createLogDraft("call"));
   const [requestBusy, setRequestBusy] = useState<AdminRequestType | null>(null);
@@ -74,27 +76,33 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
     return () => window.clearInterval(interval);
   }, [router]);
 
-  const flash = (text: string) => {
-    setMessage(text);
+  const flash = (text: string, tone: Notice["tone"] = "success") => {
+    setMessage({ text, tone });
     window.setTimeout(() => setMessage(null), 3500);
   };
 
   const claimLead = async (leadId: string) => {
     setBusyLeadId(leadId);
-    const result = await claimLeadAction(leadId);
-    if ("error" in result) flash(result.error ?? "Unable to claim lead");
-    else flash("Lead claimed");
-    router.refresh();
-    setBusyLeadId(null);
+    try {
+      const result = await claimLeadAction(leadId);
+      if ("error" in result) flash(result.error ?? "Unable to claim lead", "danger");
+      else flash("Lead claimed");
+      router.refresh();
+    } finally {
+      setBusyLeadId(null);
+    }
   };
 
   const releaseLead = async (leadId: string) => {
     setBusyLeadId(leadId);
-    const result = await unclaimLeadAction(leadId);
-    if ("error" in result) flash(result.error ?? "Unable to release ownership");
-    else flash("Lead ownership released");
-    router.refresh();
-    setBusyLeadId(null);
+    try {
+      const result = await unclaimLeadAction(leadId);
+      if ("error" in result) flash(result.error ?? "Unable to release ownership", "danger");
+      else flash("Lead ownership released");
+      router.refresh();
+    } finally {
+      setBusyLeadId(null);
+    }
   };
 
   const openLogSheet = (lead: QueueLead, channel: ContactChannel, outcome?: OutreachOutcome) => {
@@ -114,47 +122,57 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
     if (!activeLogLead) return;
 
     setBusyLeadId(activeLogLead.id);
-    const result = await logOutreachEventAction(activeLogLead.id, {
-      channel: logDraft.channel,
-      outcome: logDraft.outcome,
-      contactPersonName: cleanText(logDraft.contactPersonName),
-      note: cleanText(logDraft.note),
-      followUpAt: normalizeDateTime(logDraft.followUpAt),
-      nextStep: cleanText(logDraft.nextStep),
-    });
+    try {
+      const result = await logOutreachEventAction(activeLogLead.id, {
+        channel: logDraft.channel,
+        outcome: logDraft.outcome,
+        contactPersonName: cleanText(logDraft.contactPersonName),
+        note: cleanText(logDraft.note),
+        followUpAt: normalizeDateTime(logDraft.followUpAt),
+        nextStep: cleanText(logDraft.nextStep),
+      });
 
-    if ("error" in result) {
-      flash(result.error ?? "Unable to log outcome");
-    } else {
-      flash("Outcome logged");
-      closeLogSheet();
+      if ("error" in result) {
+        flash(result.error ?? "Unable to log outcome", "danger");
+      } else {
+        flash("Outcome logged");
+        closeLogSheet();
+      }
+      router.refresh();
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Unable to log outcome", "danger");
+    } finally {
+      setBusyLeadId(null);
     }
-    router.refresh();
-    setBusyLeadId(null);
   };
 
   const sendToSteve = async (requestType: AdminRequestType) => {
     if (!activeLogLead) return;
     setRequestBusy(requestType);
-    const result = await createAdminRequestAction(activeLogLead.id, {
-      requestType,
-      contactPersonName: cleanText(logDraft.contactPersonName),
-      summary: buildAdminRequestSummary(requestType, logDraft),
-      dueAt: normalizeDateTime(logDraft.followUpAt),
-      nextStep: cleanText(logDraft.nextStep),
-    });
-    if ("error" in result) {
-      flash(result.error ?? "Unable to send to Steve");
-    } else {
-      flash(result.alreadyExists ? "Already in admin queue" : "Sent to Steve");
-      setActiveLogLead((lead) => lead ? {
-        ...lead,
-        open_website_request_id: requestType === "website_request" ? result.request.id : lead.open_website_request_id,
-        open_quote_request_id: requestType === "quote_request" ? result.request.id : lead.open_quote_request_id,
-      } : lead);
+    try {
+      const result = await createAdminRequestAction(activeLogLead.id, {
+        requestType,
+        contactPersonName: cleanText(logDraft.contactPersonName),
+        summary: buildAdminRequestSummary(requestType, logDraft),
+        dueAt: normalizeDateTime(logDraft.followUpAt),
+        nextStep: cleanText(logDraft.nextStep),
+      });
+      if ("error" in result) {
+        flash(result.error ?? "Unable to send to Steve", "danger");
+      } else {
+        flash(result.alreadyExists ? "Already in admin queue" : "Sent to Steve");
+        setActiveLogLead((lead) => lead ? {
+          ...lead,
+          open_website_request_id: requestType === "website_request" ? result.request.id : lead.open_website_request_id,
+          open_quote_request_id: requestType === "quote_request" ? result.request.id : lead.open_quote_request_id,
+        } : lead);
+      }
+      router.refresh();
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Unable to send to Steve", "danger");
+    } finally {
+      setRequestBusy(null);
     }
-    router.refresh();
-    setRequestBusy(null);
   };
 
   return (
@@ -168,9 +186,7 @@ export function QueueClient({ workbench, scoreThresholds, currentUser }: Props) 
       ]}
     >
       {message && (
-        <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "var(--surface-info)", border: "1px solid var(--surface-info-border)", color: "var(--text-primary)" }}>
-          {message}
-        </div>
+        <StatusNotice notice={message} />
       )}
 
       <section className="glass rounded-2xl p-4">
@@ -640,6 +656,15 @@ function LogOutcomeSheet({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onSendToSteve: (requestType: AdminRequestType) => void;
 }) {
+  const dialogRef = useRef<HTMLFormElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useDialogFocus({
+    open: Boolean(lead),
+    dialogRef,
+    initialFocusRef: closeButtonRef,
+    onClose: () => { if (!busy) onClose(); },
+  });
+
   if (!lead) return null;
 
   const update = <Key extends keyof LogDraft>(key: Key, value: LogDraft[Key]) => {
@@ -647,14 +672,16 @@ function LogOutcomeSheet({
   };
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/45 px-3 py-4 sm:items-center">
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/45 px-3 py-4 sm:items-center" onClick={(event) => { if (!busy && event.target === event.currentTarget) onClose(); }}>
       <form
+        ref={dialogRef}
         onSubmit={onSubmit}
         className="glass-lg max-h-[90vh] w-full max-w-lg overflow-auto rounded-2xl p-5"
         style={{ background: "var(--surface-modal)", boxShadow: "var(--glass-shadow-lg)" }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="workbench-log-outcome-title"
+        tabIndex={-1}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -663,7 +690,7 @@ function LogOutcomeSheet({
               {lead.name ?? "Unknown business"}
             </p>
           </div>
-          <button type="button" className="btn-glass text-sm" onClick={onClose} disabled={busy}>Close</button>
+          <button ref={closeButtonRef} type="button" className="btn-glass text-sm" onClick={onClose} disabled={busy}>Close</button>
         </div>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2">

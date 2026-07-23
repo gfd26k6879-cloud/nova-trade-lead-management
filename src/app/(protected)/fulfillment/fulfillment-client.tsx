@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { HelpTip } from "@/components/help-tip";
+import { StatusNotice, type Notice } from "@/components/status-notice";
 import { updateAdminRequestStatusAction } from "@/lib/admin-requests/actions";
 import type { AdminRequest, AdminRequestStatus, AdminRequestType } from "@/lib/db/queries";
 
@@ -20,11 +21,11 @@ export function FulfillmentClient({
   const router = useRouter();
   const [requests, setRequests] = useState(initialRequests);
   const [pendingId, setPendingId] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<Notice | null>(null);
   const [, startTransition] = useTransition();
 
-  const flash = (text: string) => {
-    setMessage(text);
+  const flash = (text: string, tone: Notice["tone"] = "success") => {
+    setMessage({ text, tone });
     window.setTimeout(() => setMessage(null), 3000);
   };
 
@@ -33,7 +34,7 @@ export function FulfillmentClient({
     startTransition(async () => {
       const result = await updateAdminRequestStatusAction(request.id, status);
       if ("error" in result) {
-        flash(result.error ?? "Unable to update request");
+        flash(result.error ?? "Unable to update request", "danger");
       } else {
         setRequests((current) => current.map((item) => item.id === request.id ? result.request : item));
         flash("Fulfillment request updated");
@@ -47,9 +48,7 @@ export function FulfillmentClient({
   return (
     <div className="space-y-5">
       {message && (
-        <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(99,102,241,0.1)", color: "var(--text-primary)" }}>
-          {message}
-        </div>
+        <StatusNotice notice={message} />
       )}
 
       <section className="glass rounded-2xl p-5">
@@ -101,7 +100,7 @@ function FulfillmentCard({
   return (
     <article
       className="rounded-2xl p-5"
-      style={{ background: "rgba(255,255,255,0.52)", border: "1px solid rgba(255,255,255,0.58)" }}
+      style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)" }}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
@@ -126,7 +125,7 @@ function FulfillmentCard({
         <InfoChip label="Website" value={request.lead_website_status ?? "Unknown"} />
       </div>
 
-      <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.38)" }}>
+      <div className="mt-4 rounded-xl p-4" style={{ background: "var(--surface-muted)" }}>
         <p className="text-sm leading-relaxed" style={{ color: "var(--text-primary)" }}>
           {request.summary ?? "No summary provided."}
         </p>
@@ -188,13 +187,13 @@ function InfoChip({ label, value, href }: { label: string; value: string; href?:
   );
   if (href) {
     return (
-      <a className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.36)" }} href={href}>
+      <a className="rounded-lg px-3 py-2" style={{ background: "var(--surface-muted)" }} href={href}>
         {content}
       </a>
     );
   }
   return (
-    <div className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.36)" }}>
+    <div className="rounded-lg px-3 py-2" style={{ background: "var(--surface-muted)" }}>
       {content}
     </div>
   );

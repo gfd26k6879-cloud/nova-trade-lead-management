@@ -9,10 +9,12 @@ vi.mock("@/lib/db/index", () => {
     getDb: () => testDb,
     generateId: () => crypto.randomUUID(),
     nowISO: () => new Date().toISOString(),
+    withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
   };
 });
 
 import {
+  createAiLeadVerification,
   getAiQueueStats,
   getNextAiVerificationJob,
   leaseNextAiVerificationJob,
@@ -59,6 +61,29 @@ describe("AI queue queries", () => {
 
     await markLeadAiVerified("lead-1", "hash-1");
     expect((await getAiQueueStats()).verified).toBe(1);
+  });
+
+  it("marks the queue verified without overwriting a computed win probability", async () => {
+    await createAiLeadVerification({
+      lead_id: "lead-1",
+      model: "gpt-5.4-mini",
+      status: "no_site_found",
+      confidence: 0.86,
+      recommendation: "prioritize",
+      reason: "No official website found.",
+      summary: "No usable official website was found.",
+      input_hash: "hash-1",
+    });
+    testDb.prepare("UPDATE leads SET win_probability_score = 73 WHERE id = 'lead-1'").run();
+
+    await markLeadAiVerified("lead-1", "hash-1");
+
+    const row = testDb.prepare(
+      "SELECT ai_queue_status, ai_input_hash, win_probability_score FROM leads WHERE id = 'lead-1'",
+    ).get() as Record<string, unknown>;
+    expect(row.ai_queue_status).toBe("verified");
+    expect(row.ai_input_hash).toBe("hash-1");
+    expect(row.win_probability_score).toBe(73);
   });
 
   it("atomically leases one AI verification job", async () => {

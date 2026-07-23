@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { getAiVerificationDisplay, type AiVerificationDisplayInput, type AiVerificationTone } from "@/lib/ai-verification-display";
+import { getStatusToneColor, getStatusToneStyle, type StatusTone } from "@/lib/status-tone";
 
 interface AiVerificationBadgeProps extends AiVerificationDisplayInput {
   confidence?: number | null;
@@ -7,14 +8,19 @@ interface AiVerificationBadgeProps extends AiVerificationDisplayInput {
   showDetail?: boolean;
 }
 
-const TONE_STYLES: Record<AiVerificationTone, { container: CSSProperties; dot: string }> = {
-  muted: { container: { background: "rgba(107,114,128,0.12)", color: "#4b5563", borderColor: "rgba(107,114,128,0.2)" }, dot: "#4b5563" },
-  pending: { container: { background: "rgba(99,102,241,0.12)", color: "#4338ca", borderColor: "rgba(99,102,241,0.22)" }, dot: "#4338ca" },
-  good: { container: { background: "rgba(34,197,94,0.12)", color: "#166534", borderColor: "rgba(34,197,94,0.22)" }, dot: "#166534" },
-  warning: { container: { background: "rgba(245,158,11,0.14)", color: "#92400e", borderColor: "rgba(245,158,11,0.25)" }, dot: "#92400e" },
-  bad: { container: { background: "rgba(239,68,68,0.12)", color: "#991b1b", borderColor: "rgba(239,68,68,0.24)" }, dot: "#991b1b" },
-  review: { container: { background: "rgba(14,165,233,0.12)", color: "#075985", borderColor: "rgba(14,165,233,0.24)" }, dot: "#075985" },
+const AI_TONE_TO_STATUS_TONE: Record<AiVerificationTone, StatusTone> = {
+  muted: "muted",
+  pending: "info",
+  good: "success",
+  warning: "warning",
+  bad: "danger",
+  review: "info",
 };
+
+function verificationToneStyle(tone: AiVerificationTone): { container: CSSProperties; dot: string } {
+  const statusTone = AI_TONE_TO_STATUS_TONE[tone];
+  return { container: getStatusToneStyle(statusTone), dot: getStatusToneColor(statusTone) };
+}
 
 export function AiVerificationBadge({
   status,
@@ -31,15 +37,16 @@ export function AiVerificationBadge({
     : null;
   const checkedLabel = checkedAt ? `Checked ${formatCheckedAt(checkedAt)}` : null;
   const title = [display.detail, confidenceLabel, checkedLabel].filter(Boolean).join(" ");
+  const toneStyle = verificationToneStyle(display.tone);
 
   return (
     <span className={showDetail ? "inline-flex flex-col items-start gap-1" : "inline-flex"}>
       <span
         className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold"
-        style={TONE_STYLES[display.tone].container}
+        style={toneStyle.container}
         title={title}
       >
-        <span className="h-1.5 w-1.5 rounded-full" style={{ background: TONE_STYLES[display.tone].dot }} />
+        <span className="h-1.5 w-1.5 rounded-full" style={{ background: toneStyle.dot }} />
         {compact ? display.label.replace("AI run: ", "") : display.label}
       </span>
       {showDetail && (

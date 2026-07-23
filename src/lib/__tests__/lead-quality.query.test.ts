@@ -9,10 +9,11 @@ vi.mock("@/lib/db/index", () => {
     getDb: () => testDb,
     generateId: () => crypto.randomUUID(),
     nowISO: () => new Date().toISOString(),
+    withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
   };
 });
 
-import { getQualityActionCandidateIds, getQualityAiVerificationCandidates, getQualityLeads, queueLeadsForEnrichment, updateLeadQualityScores } from "@/lib/db/queries";
+import { applyManualWebsiteCorrection, getQualityActionCandidateIds, getQualityAiVerificationCandidates, getQualityLeads, queueLeadsForEnrichment, updateLeadQualityScores } from "@/lib/db/queries";
 
 function insertLead(input: {
   id: string;
@@ -159,6 +160,85 @@ describe("lead quality queries", () => {
     const result = await getQualityLeads({ denverOnly: false });
 
     expect(result.leads.map((lead) => lead.id)).toEqual(["nosite"]);
+  });
+
+  it("keeps manually found candidate websites in manual review", async () => {
+    insertLead({ id: "candidate", name: "Candidate Website Plumbing" });
+
+    const lead = await applyManualWebsiteCorrection("candidate", {
+      websiteUrl: "https://candidate.example",
+      websiteStatus: "custom",
+      resolution: "candidate_website_needs_review",
+      notes: "Researcher found a candidate URL but identity needs review.",
+      actorUserId: "researcher-1",
+    });
+
+    expect(lead).toMatchObject({
+      website_uri: "https://candidate.example",
+      website_status: "custom",
+      quality_bucket: "needs_manual_review",
+      ai_website_feedback_status: "uncertain",
+      is_excluded: false,
+    });
+  });
+
+  it("keeps manually confirmed official websites out of sales queues", async () => {
+    insertLead({ id: "official", name: "Official Site Plumbing" });
+
+    const lead = await applyManualWebsiteCorrection("official", {
+      websiteUrl: "https://official.example",
+      websiteStatus: "custom",
+      resolution: "official_website_found",
+      notes: "Official website found from the business listing.",
+      actorUserId: "researcher-1",
+    });
+
+    expect(lead).toMatchObject({
+      website_uri: "https://official.example",
+      website_status: "custom",
+      quality_bucket: "not_a_fit",
+      is_excluded: true,
+    });
+  });
+
+  it("keeps manually found weak sites as broken-site opportunities", async () => {
+    insertLead({ id: "weak", name: "Weak Site Plumbing" });
+
+    const lead = await applyManualWebsiteCorrection("weak", {
+      websiteUrl: "https://weak.example",
+      websiteStatus: "basic",
+      resolution: "weak_or_basic_site",
+      notes: "The site is a placeholder.",
+      actorUserId: "researcher-1",
+    });
+
+    expect(lead).toMatchObject({
+      website_uri: "https://weak.example",
+      website_status: "basic",
+      quality_bucket: "broken_site_opportunity",
+      ai_website_feedback_status: "incorrect",
+      is_excluded: false,
+    });
+  });
+
+  it("keeps social or directory-only corrections in manual review", async () => {
+    insertLead({ id: "directory", name: "Directory Only Plumbing" });
+
+    const lead = await applyManualWebsiteCorrection("directory", {
+      websiteUrl: "https://directory.example/plumbing",
+      websiteStatus: "social",
+      resolution: "social_or_directory_only",
+      notes: "Only a directory page was found.",
+      actorUserId: "researcher-1",
+    });
+
+    expect(lead).toMatchObject({
+      website_uri: "https://directory.example/plumbing",
+      website_status: "social",
+      quality_bucket: "needs_manual_review",
+      ai_website_feedback_status: "correct",
+      is_excluded: false,
+    });
   });
 
   it("sorts ready-to-call leads ahead of unverified candidates", async () => {

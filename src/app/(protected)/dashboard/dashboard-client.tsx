@@ -20,8 +20,17 @@ import {
   getDashboardSummaryPanelsAction,
 } from "@/lib/crawl/actions";
 import { queueMissingAiVerificationsAction } from "@/lib/leads/actions";
-import type { AdminFulfillmentSummary, StatisticsSummary, TeamBoardSummary } from "@/lib/db/queries";
+import type {
+  AdminFulfillmentSummary,
+  ConversionMetrics,
+  DiscoveryItemSummary,
+  LaunchReadinessSummary,
+  StatisticsSummary,
+  TeamBoardSummary,
+} from "@/lib/db/queries";
+import type { DashboardStatsResult } from "@/lib/dashboard-fallbacks";
 import type { DiscoverySizeEstimate, DiscoveryMode, PaginationPolicy } from "@/lib/discovery-sizing";
+import { getStatusToneStyle, type StatusTone } from "@/lib/status-tone";
 
 const CATEGORY_OPTIONS = [
   "dentist", "lawyer", "hvac", "plumber", "electrician", "roofing",
@@ -36,31 +45,22 @@ const CATEGORY_PRESETS = [
   { label: "Contractors", categories: ["contractor", "hvac", "plumber", "electrician", "roofing"] },
 ];
 
-interface ConversionMetrics {
-  totalContacted: number;
-  totalReplies: number;
-  totalMeetings: number;
-  replyRate: number;
-  meetingRate: number;
-  medianHoursToContact: number | null;
-}
-
 function DiscoveryMiniMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.45)" }}>
+    <div className="rounded-xl px-3 py-2" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
       <p className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>{label}</p>
       <p className="mt-1 font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
     </div>
   );
 }
 
-function formatDiscoveryItemLabel(item: DiscoveryItem): string {
+function formatDiscoveryItemLabel(item: DiscoveryItemSummary): string {
   const created = formatDateTime(item.createdAt);
   const units = item.totalUnits === 1 ? "1 unit" : `${item.totalUnits} units`;
   return `${item.name} · ${created} · ${units} · ${item.status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())}`;
 }
 
-function formatDiscoveryMode(mode: DiscoveryItem["discoveryMode"]): string {
+function formatDiscoveryMode(mode: DiscoveryItemSummary["discoveryMode"]): string {
   if (mode === "coverage_probe") return "coverage probe";
   if (mode === "lead_harvest") return "lead harvest";
   return "legacy discovery";
@@ -97,110 +97,20 @@ function formatDuration(seconds: number): string {
 }
 
 function DiscoveryStatusBadge({ status }: { status: string }) {
-  const color = discoveryStatusColor(status);
+  const style = getStatusToneStyle(discoveryStatusTone(status));
   return (
-    <span className="rounded-full px-2.5 py-1 text-xs font-medium capitalize" style={{ background: color.background, color: color.color }}>
+    <span className="rounded-full border px-2.5 py-1 text-xs font-medium capitalize" style={style}>
       {status.replace(/_/g, " ")}
     </span>
   );
 }
 
-function discoveryStatusColor(status: string) {
-  if (status === "running" || status === "queued") return { background: "rgba(37,99,235,0.1)", color: "#1d4ed8" };
-  if (status === "paused") return { background: "rgba(245,158,11,0.12)", color: "#92400e" };
-  if (status === "done") return { background: "rgba(22,101,52,0.1)", color: "#166534" };
-  if (status === "error" || status === "failed") return { background: "rgba(239,68,68,0.1)", color: "#991b1b" };
-  if (status === "canceled") return { background: "rgba(100,116,139,0.14)", color: "#475569" };
-  return { background: "rgba(100,116,139,0.12)", color: "#475569" };
-}
-
-interface AiQueueStats {
-  notChecked: number;
-  queued: number;
-  running: number;
-  verified: number;
-  error: number;
-  total: number;
-}
-
-interface WorkerRun {
-  status: string;
-  trigger_source: string;
-  http_status: number | null;
-  result_json?: Record<string, unknown>;
-  error: string | null;
-  started_at: string;
-  completed_at: string | null;
-}
-
-type SchedulerWorkerName = "ai_verification" | "crawl" | "enrichment" | "artifact" | "score_recompute";
-
-interface SchedulerWorkerHealth {
-  workerName: SchedulerWorkerName;
-  label: string;
-  enabled: boolean;
-  queueDepth: number;
-  estimatedMinutesToDrain: number | null;
-  lastRun: WorkerRun | null;
-  errors24h: number;
-  processed24h: number;
-  progress: {
-    total: number;
-    pending: number;
-    running: number;
-    completed: number;
-    failed: number;
-    canceled: number;
-  };
-  warning: string | null;
-}
-
-interface SchedulerHealth {
-  workers: SchedulerWorkerHealth[];
-}
-
-interface DashboardStats {
-  runStatus: string;
-  runId: string | null;
-  processingRunStatus: string;
-  processingRunId: string | null;
-  discoveryItems: DiscoveryItem[];
-  leadsTotal: number;
-  leadsToday: number;
-  failedUnits: number;
-  progress: { total: number; done: number; failed: number; pending: number; running: number; canceled: number } | null;
-  todayFocus: number;
-  needsFollowUp: number;
-  conversionMetrics: ConversionMetrics;
-  apiCallsUsed: number;
-  estimatedCost: number;
-  discoveryApiCalls: number;
-  discoveryEstimatedCost: number;
-  enrichmentApiCalls: number;
-  enrichmentEstimatedCost: number;
-  atmosphereEnrichmentCalls: number;
-  atmosphereEstimatedCost: number;
-  monthlyApiCalls: number;
-  monthlyApiCost: number;
-  projectedMonthlyCost: number;
-  lastError: string | null;
-  qualifiedLeadCount: number;
-  costPerQualifiedLead: number | null;
-  zipCodesSelected: number;
-  zipCodesCompleted: number;
-  zipCodesStarted: number;
-  zipCodesNotStarted: number;
-  zipCodesCanceled: number;
-  zipCodesNotSelected: number;
-  activeZipCount: number;
-  countiesSelected: number;
-  countiesCompleted: number;
-  aiQueueStats: AiQueueStats;
-  schedulerHealth: SchedulerHealth;
-  googleDiscoveryDefaults: {
-    discoveryMode: DiscoveryMode;
-    paginationPolicy: PaginationPolicy;
-  };
+function discoveryStatusTone(status: string): StatusTone {
+  if (status === "running" || status === "queued") return "info";
+  if (status === "paused") return "warning";
+  if (status === "done") return "success";
+  if (status === "error" || status === "failed") return "danger";
+  return "muted";
 }
 
 type DashboardCoreStatus = "loadingCore" | "ready" | "degraded" | "error";
@@ -222,48 +132,18 @@ function panelLoadReasonLabel(reason: string | undefined, fallback: string): str
   return fallback;
 }
 
-interface DiscoveryItem {
-  id: string;
-  name: string;
-  scopeLabel: string;
-  status: string;
-  mode: string;
-  discoveryMode: "coverage_probe" | "lead_harvest" | null;
-  marketId: string | null;
-  marketName: string | null;
-  countryCode: string | null;
-  categories: string[];
-  discoveredCount: number;
-  errorCount: number;
-  apiCallsUsed: number;
-  lastError: string | null;
-  createdAt: string;
-  startedAt: string | null;
-  endedAt: string | null;
-  totalUnits: number;
-  doneUnits: number;
-  failedUnits: number;
-  openUnits: number;
-  runningUnits: number;
-  canceledUnits: number;
-  pagesFetched: number;
-  rawPlacesSeen: number;
-  newPlacesSeen: number;
-  duplicatePlacesSeen: number;
-}
-
 export function DashboardClient({
   initialStats,
   teamSummary,
   weeklyStats,
   fulfillmentSummary,
 }: {
-  initialStats: DashboardStats;
+  initialStats: DashboardStatsResult;
   teamSummary: TeamBoardSummary;
   weeklyStats: StatisticsSummary;
   fulfillmentSummary: AdminFulfillmentSummary;
 }) {
-  const [stats, setStats] = useState<DashboardStats>(initialStats);
+  const [stats, setStats] = useState<DashboardStatsResult>(initialStats);
   const [currentTeamSummary, setCurrentTeamSummary] = useState(teamSummary);
   const [currentWeeklyStats, setCurrentWeeklyStats] = useState(weeklyStats);
   const [currentFulfillmentSummary, setCurrentFulfillmentSummary] = useState(fulfillmentSummary);
@@ -271,7 +151,7 @@ export function DashboardClient({
   const [summaryPanelError, setSummaryPanelError] = useState<string | null>(null);
   const [analyticsPanelStatus, setAnalyticsPanelStatus] = useState<DashboardPanelStatus>("loading");
   const [analyticsPanelError, setAnalyticsPanelError] = useState<string | null>(null);
-  const [discoveryItems, setDiscoveryItems] = useState<DiscoveryItem[]>(initialStats.discoveryItems);
+  const [discoveryItems, setDiscoveryItems] = useState<DiscoveryItemSummary[]>(initialStats.discoveryItems);
   const [discoveryItemsStatus, setDiscoveryItemsStatus] = useState<DashboardPanelStatus>("loading");
   const [discoveryItemsError, setDiscoveryItemsError] = useState<string | null>(null);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
@@ -794,8 +674,8 @@ export function DashboardClient({
       ]}
     >
       {coreStatus !== "ready" && (
-        <section className="rounded-2xl px-5 py-4" style={{ background: coreStatus === "loadingCore" ? "rgba(255,255,255,0.38)" : "rgba(245, 158, 11, 0.1)", border: "1px solid rgba(255,255,255,0.5)" }}>
-          <p className="text-xs font-semibold" style={{ color: coreStatus === "loadingCore" ? "var(--text-primary)" : "#b45309" }}>
+        <section className="rounded-2xl px-5 py-4" style={{ background: coreStatus === "loadingCore" ? "var(--surface-muted)" : "var(--warning-bg)", border: `1px solid ${coreStatus === "loadingCore" ? "var(--surface-card-border)" : "var(--warning-border)"}` }}>
+          <p className="text-xs font-semibold" style={{ color: coreStatus === "loadingCore" ? "var(--text-primary)" : "var(--warning-text)" }}>
             {coreStatus === "loadingCore" ? "Loading admin controls" : "Core admin data needs attention"}
           </p>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
@@ -812,8 +692,8 @@ export function DashboardClient({
       )}
 
       {(summaryPanelStatus === "error" || analyticsPanelStatus === "error") && (
-        <section className="rounded-2xl px-5 py-4" style={{ background: "rgba(245, 158, 11, 0.1)", border: "1px solid rgba(245, 158, 11, 0.2)" }}>
-          <p className="text-xs font-semibold" style={{ color: "#92400e" }}>Secondary panels are partially unavailable</p>
+        <section className="rounded-2xl border px-5 py-4" style={getStatusToneStyle("warning")}>
+          <p className="text-xs font-semibold">Secondary panels are partially unavailable</p>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
             {summaryPanelError ?? analyticsPanelError ?? "Team, analytics, or discovery history did not finish loading."}
           </p>
@@ -825,10 +705,14 @@ export function DashboardClient({
       )}
 
       {stats.lastError && (
-        <section className="rounded-2xl px-5 py-4" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)" }}>
-          <p className="text-xs font-medium" style={{ color: "#991b1b" }}>Latest discovery error</p>
+        <section className="rounded-2xl border px-5 py-4" role="alert" style={getStatusToneStyle("danger")}>
+          <p className="text-xs font-medium">Latest discovery error</p>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{stats.lastError}</p>
         </section>
+      )}
+
+      {stats.launchReadiness.totalCount > 0 && (
+        <LaunchReadinessPanel summary={stats.launchReadiness} />
       )}
 
       <section className="grid gap-4 lg:grid-cols-3">
@@ -968,14 +852,14 @@ export function DashboardClient({
 
         {isIdle && (
           <div className="mt-4 grid gap-3 lg:grid-cols-[0.9fr_0.9fr_0.9fr]">
-            <label className="rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+            <label className="rounded-xl p-3 text-xs" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)", color: "var(--text-secondary)" }}>
               <span className="mb-1 block font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Discovery mode</span>
               <select className="glass-input w-full" value={discoveryMode} onChange={(event) => setDiscoveryMode(event.target.value as DiscoveryMode)} disabled={loading}>
                 <option value="coverage_probe">Coverage probe - preview</option>
                 <option value="lead_harvest">Lead harvest - creates leads</option>
               </select>
             </label>
-            <label className="rounded-xl p-3 text-xs" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+            <label className="rounded-xl p-3 text-xs" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)", color: "var(--text-secondary)" }}>
               <span className="mb-1 block font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Pagination</span>
               <select className="glass-input w-full" value={paginationPolicy} onChange={(event) => setPaginationPolicy(event.target.value as PaginationPolicy)} disabled={loading}>
                 <option value="first_page_only">First page only</option>
@@ -983,7 +867,7 @@ export function DashboardClient({
                 <option value="manual_extra_pages">Always fetch up to 3 pages</option>
               </select>
             </label>
-            <label className="rounded-xl p-3 text-xs" style={{ background: testRun ? "rgba(22,101,52,0.08)" : "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)", color: "var(--text-secondary)" }}>
+            <label className="rounded-xl p-3 text-xs" style={{ background: testRun ? "var(--success-bg)" : "var(--surface-muted)", border: `1px solid ${testRun ? "var(--success-border)" : "var(--surface-card-border)"}`, color: "var(--text-secondary)" }}>
               <span className="mb-2 block font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Safety</span>
               <span className="flex items-center gap-2">
                 <input type="checkbox" checked={testRun} disabled={loading} onChange={(event) => setTestRun(event.target.checked)} />
@@ -997,15 +881,15 @@ export function DashboardClient({
         )}
 
         {!isIdle && (
-          <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(245, 158, 11, 0.1)", border: "1px solid rgba(245, 158, 11, 0.2)" }}>
-            <p className="text-sm font-semibold" style={{ color: "#92400e" }}>
+          <div className="mt-4 rounded-xl p-4" style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)" }}>
+            <p className="text-sm font-semibold" style={{ color: "var(--warning-text)" }}>
               A discovery item is {activeRunLabel}. Pause, cancel remaining units, or finish it before starting another Google-consuming run.
             </p>
           </div>
         )}
 
         {isIdle && (
-          <div className="mt-4 rounded-xl p-4" style={{ background: "rgba(255,255,255,0.25)", border: "1px solid rgba(255,255,255,0.35)" }}>
+          <div className="mt-4 rounded-xl p-4" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <p className="mr-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>Categories</p>
               {CATEGORY_PRESETS.map((preset) => (
@@ -1031,9 +915,9 @@ export function DashboardClient({
                   onClick={() => toggleCategory(cat)}
                   className="rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150"
                   style={{
-                    background: selectedCategories.includes(cat) ? "var(--accent)" : "rgba(255,255,255,0.4)",
-                    color: selectedCategories.includes(cat) ? "white" : "var(--text-secondary)",
-                    border: `1px solid ${selectedCategories.includes(cat) ? "var(--accent)" : "rgba(255,255,255,0.5)"}`,
+                    background: selectedCategories.includes(cat) ? "var(--accent)" : "var(--surface-card)",
+                    color: selectedCategories.includes(cat) ? "var(--text-on-accent)" : "var(--text-secondary)",
+                    border: `1px solid ${selectedCategories.includes(cat) ? "var(--accent)" : "var(--surface-card-border)"}`,
                   }}
                 >
                   {formatCategoryLabel(cat)}
@@ -1077,7 +961,7 @@ export function DashboardClient({
         {progress && progress.total > 0 && (
           <div className="mt-5">
             <div className="flex items-center gap-4">
-              <div className="h-2.5 flex-1 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }}>
+              <div className="h-2.5 flex-1 overflow-hidden rounded-full" style={{ background: "var(--status-muted-bg)" }}>
                 <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: "var(--accent)" }} />
               </div>
               <span className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{pct}%</span>
@@ -1107,24 +991,24 @@ export function DashboardClient({
           <Link href="/coverage" className="btn-glass text-sm">Open full monitor</Link>
         </div>
         {!isRunning && !isQueued && pausedDiscoveryItems.length > 0 && (
-          <div className="mt-4 rounded-xl px-4 py-3" style={{ background: "rgba(22,101,52,0.08)", border: "1px solid rgba(22,101,52,0.14)" }}>
-            <p className="text-sm font-semibold" style={{ color: "#166534" }}>
+          <div className="mt-4 rounded-xl px-4 py-3" style={{ background: "var(--success-bg)", border: "1px solid var(--success-border)" }}>
+            <p className="text-sm font-semibold" style={{ color: "var(--success-text)" }}>
               Paused items are preserved. Starting a new probe creates a separate discovery item.
             </p>
           </div>
         )}
         {discoveryItemsStatus === "loading" && discoveryItems.length === 0 ? (
-          <p className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+          <p className="mt-4 rounded-xl p-4 text-sm" style={{ background: "var(--surface-muted)", color: "var(--text-tertiary)" }}>
             Loading discovery items...
           </p>
         ) : discoveryItemsStatus === "error" && discoveryItems.length === 0 ? (
-          <div className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#92400e" }}>
+          <div className="mt-4 rounded-xl border p-4 text-sm" style={getStatusToneStyle("warning")}>
             <p className="font-semibold">Discovery items unavailable</p>
             <p className="mt-1">{discoveryItemsError ?? "This panel did not finish loading. Core dashboard controls remain available."}</p>
             <button type="button" className="btn-glass mt-3 text-xs" onClick={loadDiscoveryItems}>Retry items</button>
           </div>
         ) : discoveryItems.length === 0 ? (
-          <p className="mt-4 rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+          <p className="mt-4 rounded-xl p-4 text-sm" style={{ background: "var(--surface-muted)", color: "var(--text-tertiary)" }}>
             No discovery items exist yet.
           </p>
         ) : (
@@ -1188,14 +1072,14 @@ export function DashboardClient({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="section-label">Latest activity</h3>
-                <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>Recent outreach logged by the team.</p>
+                <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>Recent outreach and operational updates logged by the team.</p>
               </div>
               <Link href="/team" className="btn-glass text-sm">Open Team Board</Link>
             </div>
             <div className="mt-4 space-y-3">
               {currentTeamSummary.latestActivity.length === 0 ? (
-                <p className="rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
-                  No outreach activity has been logged yet.
+                <p className="rounded-xl p-4 text-sm" style={{ background: "var(--surface-muted)", color: "var(--text-tertiary)" }}>
+                  No activity has been logged yet.
                 </p>
               ) : currentTeamSummary.latestActivity.slice(0, 5).map((activity) => (
                 <ActivityRow key={activity.id} activity={activity} />
@@ -1213,7 +1097,7 @@ export function DashboardClient({
             <Link href="/team" className="btn-glass text-sm">Open full board</Link>
           </div>
           {currentTeamSummary.members.length === 0 ? (
-            <p className="rounded-xl p-4 text-sm" style={{ background: "rgba(255,255,255,0.35)", color: "var(--text-tertiary)" }}>
+            <p className="rounded-xl p-4 text-sm" style={{ background: "var(--surface-muted)", color: "var(--text-tertiary)" }}>
               No active team members yet.
             </p>
           ) : (
@@ -1256,8 +1140,8 @@ export function DashboardClient({
           </section>
 
           {pollError && (
-            <section className="rounded-2xl px-5 py-4" style={{ background: "rgba(245, 158, 11, 0.1)", border: "1px solid rgba(245, 158, 11, 0.2)" }}>
-              <p className="text-xs font-semibold" style={{ color: "#b45309" }}>Polling needs attention</p>
+            <section className="rounded-2xl px-5 py-4" style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)" }}>
+              <p className="text-xs font-semibold" style={{ color: "var(--warning-text)" }}>Polling needs attention</p>
               <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>{pollError}</p>
               <Link href="/scheduler" className="link-accent mt-2 inline-block text-sm">Open Scheduler</Link>
             </section>
@@ -1338,7 +1222,7 @@ function AttentionCard({ label, value, href, cta }: { label: string; value: numb
     <Link
       href={href}
       className="rounded-xl p-4 transition-transform hover:-translate-y-0.5"
-      style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}
+      style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}
     >
       <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
       <p className="mt-1 text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
@@ -1356,7 +1240,7 @@ function DiscoveryItemCard({
   onRetry,
   onCancel,
 }: {
-  item: DiscoveryItem;
+  item: DiscoveryItemSummary;
   isActive: boolean;
   loading: boolean;
   onPause: () => void;
@@ -1372,7 +1256,7 @@ function DiscoveryItemCard({
   return (
     <article
       className="rounded-2xl p-4"
-      style={{ background: isActive ? "rgba(79,70,229,0.08)" : "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.42)" }}
+      style={{ background: isActive ? "var(--accent-light)" : "var(--surface-muted)", border: `1px solid ${isActive ? "var(--accent-glow)" : "var(--surface-card-border)"}` }}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -1396,7 +1280,7 @@ function DiscoveryItemCard({
           Probe stored {item.rawPlacesSeen} raw candidates across {item.pagesFetched} page{item.pagesFetched === 1 ? "" : "s"}; it intentionally created 0 active leads.
         </p>
       )}
-      {item.lastError && <p className="mt-3 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(239,68,68,0.08)", color: "#991b1b" }}>{item.lastError}</p>}
+      {item.lastError && <p className="mt-3 rounded-xl border px-3 py-2 text-xs" role="alert" style={getStatusToneStyle("danger")}>{item.lastError}</p>}
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Link href={`/coverage?run=${encodeURIComponent(item.id)}`} className="btn-glass text-xs">Inspect</Link>
         {itemCanPause && <button type="button" className="btn-glass text-xs" disabled={loading} onClick={onPause}>Pause</button>}
@@ -1441,8 +1325,8 @@ function RunScopePanel({
     <section
       className="mt-4 rounded-xl p-4"
       style={{
-        background: blocked ? "rgba(239,68,68,0.08)" : "rgba(255,255,255,0.28)",
-        border: blocked ? "1px solid rgba(239,68,68,0.18)" : "1px solid rgba(255,255,255,0.38)",
+        background: blocked ? "var(--danger-bg)" : "var(--surface-muted)",
+        border: `1px solid ${blocked ? "var(--danger-border)" : "var(--surface-card-border)"}`,
       }}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1486,7 +1370,7 @@ function RunScopePanel({
         <p className="mt-3 text-xs" style={{ color: "var(--text-tertiary)" }}>Estimating run scope...</p>
       )}
       {status === "error" && (
-        <p className="mt-3 text-xs text-red-700">{error ?? "Unable to estimate discovery size."}</p>
+        <p className="mt-3 text-xs" style={{ color: "var(--danger-text)" }}>{error ?? "Unable to estimate discovery size."}</p>
       )}
       {estimate && (
         <div className="mt-3 space-y-1 text-xs">
@@ -1494,10 +1378,10 @@ function RunScopePanel({
             SKU: {estimate.sku.replace(/_/g, " ")} · Cap source: {formatCapSourceLabel(estimate.capSource)} · Current month for SKU: {estimate.monthlyBillableEventsForSku.toLocaleString()} billable calls.
           </p>
           {estimate.blockingReasons.map((reason) => (
-            <p key={reason} className="font-medium text-red-700">{reason}</p>
+            <p key={reason} className="font-medium" style={{ color: "var(--danger-text)" }}>{reason}</p>
           ))}
           {estimate.warnings.map((warning) => (
-            <p key={warning} style={{ color: "#92400e" }}>{warning}</p>
+            <p key={warning} style={{ color: "var(--warning-text)" }}>{warning}</p>
           ))}
         </div>
       )}
@@ -1509,7 +1393,7 @@ function TeamMemberCard({ member }: { member: TeamBoardSummary["members"][number
   return (
     <article
       className="rounded-xl p-4"
-      style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}
+      style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}
     >
       <Link className="link-accent break-words font-semibold" href={`/leads?owner=${encodeURIComponent(member.user_id)}`}>
         {member.display_name || member.email}
@@ -1518,6 +1402,8 @@ function TeamMemberCard({ member }: { member: TeamBoardSummary["members"][number
       <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
         <TeamMetric label="Claimed" value={member.claimed_active} />
         <TeamMetric label="Due today" value={member.due_today} />
+        <TeamMetric label="Activity today" value={member.activity_today} />
+        <TeamMetric label="Contacts today" value={member.contacts_today} />
         <TeamMetric label="Steve queue" value={member.fulfillment_open} />
         <TeamMetric label="Web / Quote" value={`${member.website_requests_open} / ${member.quote_requests_open}`} />
         <TeamMetric label="Stale" value={member.stale_claimed} />
@@ -1531,7 +1417,7 @@ function TeamMemberCard({ member }: { member: TeamBoardSummary["members"][number
 
 function TeamMetric({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-lg px-3 py-2" style={{ background: "rgba(255,255,255,0.35)" }}>
+    <div className="rounded-lg px-3 py-2" style={{ background: "var(--surface-muted)" }}>
       <span className="text-[0.68rem]" style={{ color: "var(--text-tertiary)" }}>{label}</span>
       <p className="font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
     </div>
@@ -1542,21 +1428,30 @@ function ActivityRow({ activity }: { activity: TeamBoardSummary["latestActivity"
   return (
     <article
       className="rounded-xl px-4 py-3"
-      style={{ background: "rgba(255,255,255,0.38)", border: "1px solid rgba(255,255,255,0.5)" }}
+      style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Link className="link-accent break-words font-medium" href={`/leads/${activity.lead_id}`} prefetch={false}>
-          {activity.lead_name ?? "Unknown lead"}
-        </Link>
+        {activity.lead_id ? (
+          <Link className="link-accent break-words font-medium" href={`/leads/${activity.lead_id}`} prefetch={false}>
+            {activity.lead_name ?? "Unknown lead"}
+          </Link>
+        ) : (
+          <p className="break-words font-medium" style={{ color: "var(--text-primary)" }}>
+            {activity.lead_name ?? activityTitle(activity)}
+          </p>
+        )}
         <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>
           {formatDateTime(activity.created_at)}
         </span>
       </div>
       <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-        {activity.actor_email ?? "Someone"} logged {channelLabel(activity.channel)} as {formatOutcome(activity.outcome)}.
+        {activity.actor_email ?? "Someone"} {activityVerb(activity)}.
       </p>
       {activity.note && (
         <p className="mt-2 text-sm" style={{ color: "var(--text-primary)" }}>{activity.note}</p>
+      )}
+      {!activity.note && activity.summary && (
+        <p className="mt-2 text-sm" style={{ color: "var(--text-primary)" }}>{activity.summary}</p>
       )}
     </article>
   );
@@ -1594,7 +1489,7 @@ function ConversionPanel({ metrics, qualifiedLeadCount }: {
 
 function MetricCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-xl px-4 py-3" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)" }}>
+    <div className="rounded-xl px-4 py-3" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)" }}>
       <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{label}</span>
       <p className="mt-0.5 text-lg font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p>
       {sub && <span className="text-xs" style={{ color: "var(--text-tertiary)" }}>{sub}</span>}
@@ -1602,11 +1497,49 @@ function MetricCard({ label, value, sub }: { label: string; value: string; sub?:
   );
 }
 
+function LaunchReadinessPanel({ summary }: { summary: LaunchReadinessSummary }) {
+  const pct = summary.totalCount > 0 ? Math.round((summary.readyCount / summary.totalCount) * 100) : 0;
+  return (
+    <section className="glass rounded-2xl p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h3 className="section-label">Launch checklist</h3>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+            Invite-only public posture: trust pages can be public, app access stays admin-invited.
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>{summary.readyCount} / {summary.totalCount}</p>
+          <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>{pct}% ready · {summary.blockers} open</p>
+        </div>
+      </div>
+      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        {summary.items.map((item) => (
+          <Link
+            key={item.key}
+            href={item.href}
+            className="rounded-xl px-3 py-3 transition hover:-translate-y-0.5"
+            style={{ background: item.ready ? "var(--success-bg)" : "var(--warning-bg)", border: `1px solid ${item.ready ? "var(--success-border)" : "var(--warning-border)"}` }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{item.label}</p>
+              <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: "var(--surface-muted)", color: item.ready ? "var(--success-text)" : "var(--warning-text)" }}>
+                {item.ready ? "Ready" : "Open"}
+              </span>
+            </div>
+            <p className="mt-2 text-xs leading-5" style={{ color: "var(--text-secondary)" }}>{item.detail}</p>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function SummaryChip({ label }: { label: string }) {
   return (
     <span
       className="rounded-full px-2.5 py-1"
-      style={{ background: "rgba(255,255,255,0.45)", border: "1px solid rgba(255,255,255,0.55)", color: "var(--text-secondary)" }}
+      style={{ background: "var(--surface-card)", border: "1px solid var(--surface-card-border)", color: "var(--text-secondary)" }}
     >
       {label}
     </span>
@@ -1643,6 +1576,23 @@ function formatDateTime(value: string): string {
 
 function formatOutcome(outcome: string): string {
   return outcome.replace(/_/g, " ");
+}
+
+function activityTitle(activity: TeamBoardSummary["latestActivity"][number]): string {
+  if (activity.activity_type === "admin_request") return "Admin request";
+  if (activity.activity_type === "note") return "Lead note";
+  return formatOutcome(activity.action || activity.outcome || "Activity");
+}
+
+function activityVerb(activity: TeamBoardSummary["latestActivity"][number]): string {
+  if (activity.activity_type === "outreach") {
+    return `logged ${channelLabel(activity.channel)} as ${formatOutcome(activity.outcome)}`;
+  }
+  if (activity.activity_type === "note") return "added a note";
+  if (activity.activity_type === "admin_request") {
+    return `created a ${formatOutcome(activity.channel)} (${formatOutcome(activity.outcome)})`;
+  }
+  return `recorded ${formatOutcome(activity.action || activity.outcome || "activity")}`;
 }
 
 function channelLabel(channel: string): string {

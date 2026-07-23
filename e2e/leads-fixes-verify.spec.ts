@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, login, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, requireE2EAuth, requireMutationOptIn } from "./auth-fixtures";
 
 test("Leads Kanban/Table view and Excluded column fixes", async ({ page }) => {
-  skipIfMissingAuth();
+  requireE2EAuth();
+  requireMutationOptIn();
   await page.setViewportSize({ width: 1920, height: 1080 });
   const results: { step: string; pass: boolean; evidence?: string }[] = [];
   const errors: string[] = [];

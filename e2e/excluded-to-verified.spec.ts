@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, login, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, requireE2EAuth, requireMutationOptIn } from "./auth-fixtures";
 
 test("Excluded card to Verified column", async ({ page }) => {
-  skipIfMissingAuth();
+  requireE2EAuth();
+  requireMutationOptIn();
   await page.setViewportSize({ width: 1920, height: 1080 });
 
   await login(page);
@@ -43,6 +44,9 @@ test("Excluded card to Verified column", async ({ page }) => {
         await page.mouse.down();
         await page.mouse.move(eBox.x + eBox.width / 2, eBox.y + 60, { steps: 20 });
         await page.mouse.up();
+        const dialog = page.getByRole("dialog", { name: "Exclude lead" });
+        await expect(dialog).toBeVisible();
+        await dialog.getByRole("button", { name: "Exclude lead" }).click();
         await page.waitForTimeout(2500);
         await page.reload();
         await page.waitForLoadState("domcontentloaded");

@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { isAuthConfigured } from "@/lib/auth";
+import { recordOperationalEvent } from "@/lib/operational-logging";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const updatePasswordSchema = z.object({
@@ -15,6 +16,13 @@ const updatePasswordSchema = z.object({
 
 export async function updatePasswordAction(formData: FormData) {
   if (!(await isAuthConfigured())) {
+    await recordOperationalEvent({
+      action: "auth_password_update_failed",
+      category: "auth",
+      severity: "error",
+      entityType: "auth",
+      metadata: { reason: "missing_auth_config" },
+    });
     redirect("/reset-password?error=missing_config");
   }
 
@@ -24,6 +32,13 @@ export async function updatePasswordAction(formData: FormData) {
   });
 
   if (!parsed.success) {
+    await recordOperationalEvent({
+      action: "auth_password_update_failed",
+      category: "auth",
+      severity: "warn",
+      entityType: "auth",
+      metadata: { reason: "invalid_password_form" },
+    });
     redirect(`/reset-password?error=${encodeURIComponent(parsed.error.issues[0]?.message ?? "Invalid password.")}`);
   }
 
@@ -31,6 +46,13 @@ export async function updatePasswordAction(formData: FormData) {
   const { data, error: userError } = await supabase.auth.getUser();
 
   if (userError || !data.user) {
+    await recordOperationalEvent({
+      action: "auth_password_update_failed",
+      category: "auth",
+      severity: "warn",
+      entityType: "auth",
+      metadata: { reason: "expired_or_missing_session", error: userError?.message ?? null },
+    });
     redirect("/forgot-password?error=expired_link");
   }
 
@@ -39,9 +61,27 @@ export async function updatePasswordAction(formData: FormData) {
   });
 
   if (error) {
+    await recordOperationalEvent({
+      action: "auth_password_update_failed",
+      category: "auth",
+      severity: "warn",
+      entityType: "auth",
+      entityId: data.user.id,
+      actor: { userId: data.user.id, email: data.user.email ?? null },
+      metadata: { email: data.user.email ?? null, reason: "supabase_update_error", error: error.message },
+    });
     redirect(`/reset-password?error=${encodeURIComponent(error.message)}`);
   }
 
+  await recordOperationalEvent({
+    action: "auth_password_updated",
+    category: "auth",
+    severity: "info",
+    entityType: "auth",
+    entityId: data.user.id,
+    actor: { userId: data.user.id, email: data.user.email ?? null },
+    metadata: { email: data.user.email ?? null },
+  });
   await supabase.auth.signOut({ scope: "global" });
 
   redirect("/login?reset=success");

@@ -127,7 +127,7 @@ function getStatToneStyles(tone: StatTone): { background: string; border: string
     blue: { background: "var(--score-good-bg)", border: "var(--score-good-border)", text: "var(--score-good-text)" },
     green: { background: "var(--score-high-bg)", border: "var(--score-high-border)", text: "var(--score-high-text)" },
     amber: { background: "var(--score-fair-bg)", border: "var(--score-fair-border)", text: "var(--score-fair-text)" },
-    red: { background: "var(--danger-bg)", border: "var(--danger-text)", text: "var(--danger-text)" },
+    red: { background: "var(--danger-bg)", border: "var(--danger-border)", text: "var(--danger-text)" },
     purple: { background: "var(--score-hot-bg)", border: "var(--score-hot-border)", text: "var(--score-hot-text)" },
     slate: { background: "var(--badge-muted-bg)", border: "var(--chip-border)", text: "var(--badge-muted-text)" },
   };

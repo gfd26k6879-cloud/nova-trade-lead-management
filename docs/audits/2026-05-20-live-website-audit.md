@@ -47,7 +47,7 @@ Commands and tools used:
 
 - `GET /` redirects to `/login`.
 - `GET /dashboard`, `/queue`, `/users`, `/settings`, `/scheduler`, `/quality`, `/statistics`, `/coverage`, and `/leads` redirect anonymous users to `/login`.
-- `GET /api/export/csv`, `/api/workers/tick`, `/api/ai/verify-next`, `/api/crawl/process-next`, `/api/crawl/enrich-next`, and `/api/scores/recompute-stale` return `401` to anonymous users.
+- `GET /api/export/csv`, worker endpoints, and score recompute endpoints reject anonymous users.
 - `/api/health` returns `200` and only minimal health JSON.
 - HSTS is enabled: `strict-transport-security: max-age=63072000; includeSubDomains; preload`.
 - Static JavaScript source-map probes returned `404`.

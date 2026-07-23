@@ -9,12 +9,24 @@ vi.mock("@/lib/db/index", () => {
     getDb: () => testDb,
     generateId: () => crypto.randomUUID(),
     nowISO: () => "2026-05-15T12:00:00.000Z",
+    withDbTransaction: async <T>(fn: () => Promise<T>) => {
+      testDb.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await fn();
+        testDb.exec("COMMIT");
+        return result;
+      } catch (error) {
+        testDb.exec("ROLLBACK");
+        throw error;
+      }
+    },
   };
 });
 
 import {
   claimLeadForUser,
   createAdminRequest,
+  createLeadNote,
   createOutreachEvent,
   getAdminRequests,
   getLeadById,
@@ -160,6 +172,56 @@ describe("researcher workbench queries", () => {
     expect(lead?.reminder_date).toBe("2026-05-20");
   });
 
+  it("rolls back the outreach event when the lead update fails", async () => {
+    insertLead({ id: "lead-rollback", assignedTo: "user-1" });
+    testDb.exec(`
+      CREATE TRIGGER fail_outreach_lead_update
+      BEFORE UPDATE ON leads
+      WHEN NEW.last_contacted_at IS NOT OLD.last_contacted_at
+      BEGIN
+        SELECT RAISE(ABORT, 'blocked outreach lead update');
+      END;
+    `);
+
+    await expect(createOutreachEvent({
+      leadId: "lead-rollback",
+      channel: "call",
+      actorUserId: "user-1",
+      actorEmail: "one@example.com",
+      outcome: "contacted",
+    })).rejects.toThrow("blocked outreach lead update");
+
+    await expect(getOutreachEvents("lead-rollback")).resolves.toEqual([]);
+    const lead = await getLeadById("lead-rollback");
+    expect(lead?.status).toBe("new");
+    expect(lead?.last_contacted_at).toBeNull();
+  });
+
+  it("rolls back the contact state when quality recomputation fails", async () => {
+    insertLead({ id: "lead-score-rollback", assignedTo: "user-1" });
+    testDb.exec(`
+      CREATE TRIGGER fail_outreach_quality_recompute
+      BEFORE UPDATE OF lead_quality_score ON leads
+      BEGIN
+        SELECT RAISE(ABORT, 'blocked quality recompute');
+      END;
+    `);
+
+    await expect(createOutreachEvent({
+      leadId: "lead-score-rollback",
+      channel: "call",
+      actorUserId: "user-1",
+      actorEmail: "one@example.com",
+      outcome: "contacted",
+    })).rejects.toThrow("blocked quality recompute");
+
+    await expect(getOutreachEvents("lead-score-rollback")).resolves.toEqual([]);
+    const lead = await getLeadById("lead-score-rollback");
+    expect(lead?.status).toBe("new");
+    expect(lead?.first_contacted_at).toBeNull();
+    expect(lead?.last_contacted_at).toBeNull();
+  });
+
   it("deduplicates open admin requests and rolls them up to team leads", async () => {
     insertLead({ id: "lead-1", assignedTo: "user-2" });
     testDb.prepare("UPDATE app_users SET is_team_lead = 1, team_label = 'Brother team' WHERE user_id = 'user-1'").run();
@@ -209,7 +271,14 @@ describe("researcher workbench queries", () => {
       channel: "call",
       actorUserId: "user-1",
       actorEmail: "one@example.com",
+      contactPersonName: "Riley",
+      contactPersonRole: "Owner",
+      decisionMakerReached: true,
       outcome: "contacted",
+      note: "Owner asked for a simple website quote.",
+      quotedAmount: 1200,
+      followUpAt: "2026-05-20",
+      nextStep: "Send starter site preview.",
     });
     await createOutreachEvent({
       leadId: "theirs",
@@ -218,7 +287,21 @@ describe("researcher workbench queries", () => {
       actorEmail: "two@example.com",
       outcome: "contacted",
     });
+    await createLeadNote("mine", "user-1", "Research note from the call.");
+    await createAdminRequest({
+      leadId: "mine",
+      requestType: "website_request",
+      createdByUserId: "user-1",
+      createdByEmail: "one@example.com",
+      summary: "Owner wants a website preview.",
+    });
     testDb.prepare("UPDATE outreach_events SET created_at = ?").run(new Date().toISOString());
+    testDb.prepare("UPDATE lead_notes SET created_at = ?, updated_at = ?").run(new Date().toISOString(), new Date().toISOString());
+    testDb.prepare("UPDATE admin_requests SET created_at = ?, updated_at = ?").run(new Date().toISOString(), new Date().toISOString());
+    testDb.prepare(
+      `INSERT INTO audit_logs (id, action, entity_type, entity_id, actor_user_id, actor_email, actor_role, metadata, created_at)
+       VALUES ('audit-1', 'lead_reminder_updated', 'lead', 'mine', 'user-1', 'one@example.com', 'researcher', ?, ?)`
+    ).run(JSON.stringify({ reminderDate: "2026-05-20" }), new Date().toISOString());
 
     const summary = await getResearcherTeamBoardSummary("user-1");
 
@@ -227,14 +310,53 @@ describe("researcher workbench queries", () => {
       user_id: "user-1",
       claimed_active: 1,
       due_today: 1,
+      activity_today: 4,
+      contacts_today: 1,
+      calls_today: 1,
+      decision_makers_today: 1,
+      followups_set_today: 1,
       contacts_7d: 1,
     });
     expect(summary.members.find((member) => member.user_id === "user-2")).toBeUndefined();
-    expect(summary.latestActivity).toHaveLength(1);
-    expect(summary.latestActivity[0]).toMatchObject({
-      lead_id: "mine",
-      actor_email: "one@example.com",
-    });
+    expect(summary.todayActivity).toHaveLength(4);
+    expect(summary.todayActivity).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        activity_type: "outreach",
+        lead_id: "mine",
+        actor_user_id: "user-1",
+        actor_email: "one@example.com",
+        contact_person_name: "Riley",
+        contact_person_role: "Owner",
+        decision_maker_reached: true,
+        note: "Owner asked for a simple website quote.",
+        quoted_amount: 1200,
+        follow_up_at: "2026-05-20",
+        next_step: "Send starter site preview.",
+      }),
+      expect.objectContaining({
+        activity_type: "note",
+        lead_id: "mine",
+        actor_user_id: "user-1",
+        note: "Research note from the call.",
+      }),
+      expect.objectContaining({
+        activity_type: "admin_request",
+        lead_id: "mine",
+        actor_user_id: "user-1",
+        summary: "Owner wants a website preview.",
+      }),
+      expect.objectContaining({
+        activity_type: "audit",
+        action: "lead_reminder_updated",
+        lead_id: "mine",
+        actor_user_id: "user-1",
+        metadata: { reminderDate: "2026-05-20" },
+      }),
+    ]));
+    expect(summary.todayActivity).not.toEqual(expect.arrayContaining([expect.objectContaining({ lead_id: "theirs" })]));
+    expect(summary.latestActivity).toEqual(expect.arrayContaining([
+      expect.objectContaining({ lead_id: "mine", actor_email: "one@example.com" }),
+    ]));
     expect(summary.unassignedReady).toBe(0);
   });
 });

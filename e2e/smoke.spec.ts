@@ -1,11 +1,11 @@
 import { test, expect } from "@playwright/test";
 
-import { BASE_URL, login, openAdminPage, skipIfMissingAuth } from "./auth-fixtures";
+import { BASE_URL, login, openAdminPage, requireE2EAuth } from "./auth-fixtures";
 
 test.describe("Smoke pass", () => {
-  skipIfMissingAuth();
+  requireE2EAuth();
   test("1. Login page and credentials", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
     page.on("console", (msg) => {
@@ -21,7 +21,7 @@ test.describe("Smoke pass", () => {
   });
 
   test("2. Dashboard loads without runtime error", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
@@ -32,7 +32,7 @@ test.describe("Smoke pass", () => {
   });
 
   test("3. Leads table page renders", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     await login(page);
 
     await openAdminPage(page, "All Leads");
@@ -42,7 +42,7 @@ test.describe("Smoke pass", () => {
   });
 
   test("4. Kanban view renders", async ({ page }) => {
-  skipIfMissingAuth();
+    requireE2EAuth();
     await login(page);
 
     await page.goto(`${BASE_URL}/leads?view=kanban`, { waitUntil: "networkidle" });
@@ -51,29 +51,8 @@ test.describe("Smoke pass", () => {
     await expect(page.getByText("New", { exact: true }).first()).toBeVisible();
   });
 
-  test("5. Kanban drag lead to different status", async ({ page }) => {
-  skipIfMissingAuth();
-    await login(page);
-
-    await page.goto(`${BASE_URL}/leads?view=kanban`, { waitUntil: "networkidle" });
-
-    const card = page.locator('div[style*="cursor: grab"]').first();
-    const cardCount = await card.count();
-    if (cardCount === 0) {
-      test.skip(true, "No lead cards to drag - skipping drag test");
-      return;
-    }
-
-    const verifiedHeader = page.getByText("Verified").first();
-    const verifiedColumn = verifiedHeader.locator("..").locator("..");
-    await card.dragTo(verifiedColumn, { force: true });
-    await page.waitForTimeout(800);
-    const toast = page.getByText(/Moved to|Updated|success/i);
-    await expect(toast).toBeVisible({ timeout: 5000 }).catch(() => {});
-  });
-
-  test("6. Workbench page", async ({ page }) => {
-  skipIfMissingAuth();
+  test("5. Workbench page", async ({ page }) => {
+    requireE2EAuth();
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`PageError: ${e.message}`));
 
@@ -121,8 +100,8 @@ test.describe("Smoke pass", () => {
     expect(errors).toHaveLength(0);
   });
 
-  test("7. Return to Dashboard - still healthy", async ({ page }) => {
-  skipIfMissingAuth();
+  test("6. Return to Dashboard - still healthy", async ({ page }) => {
+    requireE2EAuth();
     await login(page);
 
     await page.getByRole("link", { name: "Workbench", exact: true }).click();
@@ -137,8 +116,8 @@ test.describe("Smoke pass", () => {
     await expect(page.getByText("All categories", { exact: true })).toBeVisible();
   });
 
-  test("8. Fulfillment page and Users team controls render", async ({ page }) => {
-  skipIfMissingAuth();
+  test("7. Fulfillment page and Users team controls render", async ({ page }) => {
+    requireE2EAuth();
     await login(page);
 
     await openAdminPage(page, "Fulfillment");

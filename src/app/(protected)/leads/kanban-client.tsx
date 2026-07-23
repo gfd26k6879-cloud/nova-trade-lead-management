@@ -20,6 +20,7 @@ import { PageShell } from "@/components/page-shell";
 import { AiVerificationBadge } from "@/components/ai-verification-badge";
 import { ScoreBandBadge } from "@/components/score-band-badge";
 import { ScoreBandLegend } from "@/components/score-band-legend";
+import { TextPromptDialog } from "@/components/text-prompt-dialog";
 import {
   bulkUpdateLeadStatusAction,
   excludeLeadAction,
@@ -27,30 +28,9 @@ import {
 } from "@/lib/leads/actions";
 import { getBusinessTypeLabel } from "@/lib/business-types";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
+import type { KanbanLead } from "@/lib/db/queries";
 
-interface Lead {
-  id: string;
-  name: string | null;
-  phone: string | null;
-  rating: number | null;
-  review_count: number | null;
-  website_status: string;
-  score: number;
-  status: string;
-  is_excluded: boolean;
-  exclusion_reason: string | null;
-  enrichment_status: string;
-  primary_type: string | null;
-  business_type: string;
-  ai_verification_status: string;
-  ai_checked_at: string | null;
-  ai_queue_status: string;
-  ai_website_viability_status: string | null;
-  ai_confidence: number;
-  assigned_to_user_id: string | null;
-  assigned_user_email: string | null;
-  assigned_user_display_name: string | null;
-}
+type Lead = KanbanLead;
 
 const STATUS_COLUMNS = [
   { key: "new", label: "New" },
@@ -63,22 +43,28 @@ const STATUS_COLUMNS = [
   { key: "excluded", label: "Excluded" },
 ];
 
-const STATUS_COLORS: Record<string, string> = {
-  new: "#6366f1",
-  verified: "#16a34a",
-  contacted: "#d97706",
-  preview_sent: "#9333ea",
-  meeting_set: "#0284c7",
-  closed_won: "#15803d",
-  closed_lost: "#dc2626",
-  excluded: "#4b5563",
+interface StatusColumnStyle {
+  color: string;
+  background: string;
+  border: string;
+}
+
+const STATUS_STYLES: Record<string, StatusColumnStyle> = {
+  new: { color: "var(--info-text)", background: "var(--info-bg)", border: "var(--info-border)" },
+  verified: { color: "var(--success-text)", background: "var(--success-bg)", border: "var(--success-border)" },
+  contacted: { color: "var(--warning-text)", background: "var(--warning-bg)", border: "var(--warning-border)" },
+  preview_sent: { color: "var(--score-hot-text)", background: "var(--score-hot-bg)", border: "var(--score-hot-border)" },
+  meeting_set: { color: "var(--score-good-text)", background: "var(--score-good-bg)", border: "var(--score-good-border)" },
+  closed_won: { color: "var(--score-win-text)", background: "var(--score-win-bg)", border: "var(--score-win-border)" },
+  closed_lost: { color: "var(--danger-text)", background: "var(--danger-bg)", border: "var(--danger-border)" },
+  excluded: { color: "var(--status-muted-text)", background: "var(--status-muted-bg)", border: "var(--status-muted-border)" },
 };
 
 const WEBSITE_BADGE: Record<string, { bg: string; color: string }> = {
-  none: { bg: "rgba(239,68,68,0.1)", color: "#dc2626" },
-  social: { bg: "rgba(245,158,11,0.1)", color: "#d97706" },
-  basic: { bg: "rgba(99,102,241,0.1)", color: "#6366f1" },
-  custom: { bg: "rgba(34,197,94,0.1)", color: "#16a34a" },
+  none: { bg: "var(--danger-bg)", color: "var(--danger-text)" },
+  social: { bg: "var(--warning-bg)", color: "var(--warning-text)" },
+  basic: { bg: "var(--info-bg)", color: "var(--info-text)" },
+  custom: { bg: "var(--success-bg)", color: "var(--success-text)" },
 };
 
 interface Props {
@@ -92,11 +78,19 @@ interface Props {
 }
 
 const COLUMN_SCROLL_HEIGHT = 460;
-const CARD_ROW_HEIGHT = 122;
+const CARD_ROW_HEIGHT = 156;
 const VIRTUALIZE_THRESHOLD = 35;
 const VIRTUAL_OVERSCAN = 4;
 const STATUS_COLUMN_KEYS = new Set(STATUS_COLUMNS.map((col) => col.key));
 const KANBAN_EXCLUSION_REASON = "Excluded from Kanban board";
+
+function statusLabel(status: string): string {
+  return STATUS_COLUMNS.find((col) => col.key === status)?.label ?? status.replace(/_/g, " ");
+}
+
+function isRestrictedCloseStatus(status: string): boolean {
+  return status === "closed_won" || status === "closed_lost" || status === "excluded";
+}
 
 function resolveKanbanExclusionReason(input: string): string {
   const trimmed = input.trim();
@@ -125,6 +119,10 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
   const [columns, setColumns] = useState<Record<string, Lead[]>>(groupedFromServer);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [limitNoticeDismissed, setLimitNoticeDismissed] = useState(false);
+  const [exclusionTarget, setExclusionTarget] = useState<Lead | null>(null);
+  const [exclusionReason, setExclusionReason] = useState("");
+  const [exclusionError, setExclusionError] = useState<string | null>(null);
+  const [exclusionBusy, setExclusionBusy] = useState(false);
 
   useEffect(() => {
     setColumns(groupedFromServer);
@@ -178,44 +176,22 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
     setActiveId(String(event.active.id));
   };
 
-  const handleDragEnd = async (event: DragEndEvent) => {
-    setActiveId(null);
-    const { active, over } = event;
-    if (!over) return;
+  const moveLeadToStatus = useCallback(async (leadId: string, newStatus: string) => {
+    if (!STATUS_COLUMN_KEYS.has(newStatus)) return;
+    const lead = leadById.get(leadId);
+    if (!lead) return;
+    const currentStatus = lead.is_excluded ? "excluded" : lead.status;
+    if (currentStatus === newStatus) return;
 
-    const leadId = String(active.id);
-    const overId = String(over.id);
-    if (!STATUS_COLUMN_KEYS.has(overId)) return;
-    const newStatus = overId;
-    if (!canClose && (newStatus === "closed_won" || newStatus === "closed_lost" || newStatus === "excluded")) {
+    if (!canClose && isRestrictedCloseStatus(newStatus)) {
       toast.error("Only admins can close or exclude leads");
       return;
     }
 
-    const lead = leadById.get(leadId);
-    if (!lead) return;
-
     if (newStatus === "excluded") {
-      if (lead.is_excluded) return;
-
-      const inputReason = window.prompt(
-        `Optional reason for excluding "${lead.name ?? "this lead"}".\nLeave blank to use default reason, or press Cancel to keep it in the current lane.`,
-        "",
-      );
-      if (inputReason === null) {
-        toast.info("Exclude cancelled");
-        return;
-      }
-      const exclusionReason = resolveKanbanExclusionReason(inputReason);
-
-      moveLeadLocally(lead, lead.status, true);
-      const excluded = await excludeLeadAction(leadId, exclusionReason);
-      if ("error" in excluded) {
-        toast.error(excluded.error ?? "Failed to exclude lead");
-        router.refresh();
-      } else {
-        toast.success("Lead moved to excluded");
-      }
+      setExclusionTarget(lead);
+      setExclusionReason("");
+      setExclusionError(null);
       return;
     }
 
@@ -238,11 +214,9 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
         }
       }
 
-      toast.success(`Moved to ${newStatus.replace(/_/g, " ")}`);
+      toast.success(`Moved to ${statusLabel(newStatus)}`);
       return;
     }
-
-    if (lead.status === newStatus) return;
 
     moveLeadLocally(lead, newStatus, false);
 
@@ -251,8 +225,39 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
       toast.error(result.error ?? "Failed to update status");
       router.refresh();
     } else {
-      toast.success(`Moved to ${newStatus.replace(/_/g, " ")}`);
+      toast.success(`Moved to ${statusLabel(newStatus)}`);
     }
+  }, [canClose, leadById, moveLeadLocally, router]);
+
+  const confirmExclusion = useCallback(async () => {
+    if (!exclusionTarget || exclusionBusy) return;
+    setExclusionBusy(true);
+    setExclusionError(null);
+    const reason = resolveKanbanExclusionReason(exclusionReason);
+    moveLeadLocally(exclusionTarget, exclusionTarget.status, true);
+    const excluded = await excludeLeadAction(exclusionTarget.id, reason);
+    if ("error" in excluded) {
+      const message = excluded.error ?? "Failed to exclude lead";
+      setExclusionError(message);
+      toast.error(message);
+      router.refresh();
+      setExclusionBusy(false);
+      return;
+    }
+    toast.success("Lead moved to excluded");
+    setExclusionTarget(null);
+    setExclusionReason("");
+    setExclusionBusy(false);
+  }, [exclusionBusy, exclusionReason, exclusionTarget, moveLeadLocally, router]);
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    setActiveId(null);
+    const { active, over } = event;
+    if (!over) return;
+
+    const leadId = String(active.id);
+    const overId = String(over.id);
+    await moveLeadToStatus(leadId, overId);
   };
 
   const isCapped = total > leads.length;
@@ -266,7 +271,7 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
       {isCapped && !limitNoticeDismissed && (
         <div
           className="mb-4 flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-xs"
-          style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.2)", color: "#92400e" }}
+          style={{ background: "var(--warning-bg)", border: "1px solid var(--warning-border)", color: "var(--warning-text)" }}
         >
           <span>
             Showing the top {displayLimit} leads in Kanban for speed. Narrow filters or switch to table view for the full list.
@@ -325,9 +330,11 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
               key={col.key}
               id={col.key}
               label={col.label}
-              color={STATUS_COLORS[col.key]}
+              tone={STATUS_STYLES[col.key]}
               leads={columns[col.key] ?? []}
               scoreThresholds={scoreThresholds}
+              canClose={canClose}
+              onMoveLead={moveLeadToStatus}
               droppable
             />
           ))}
@@ -337,6 +344,25 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
           {activeLead && <LeadCard lead={activeLead} scoreThresholds={scoreThresholds} isDragging />}
         </DragOverlay>
       </DndContext>
+
+      <TextPromptDialog
+        open={Boolean(exclusionTarget)}
+        title="Exclude lead"
+        message={`Move ${exclusionTarget?.name ?? "this lead"} out of the active Kanban workflow. Leave the reason blank to use the standard exclusion note.`}
+        label="Exclusion reason (optional)"
+        value={exclusionReason}
+        confirmLabel="Exclude lead"
+        busy={exclusionBusy}
+        error={exclusionError}
+        onChange={setExclusionReason}
+        onConfirm={confirmExclusion}
+        onCancel={() => {
+          if (exclusionBusy) return;
+          setExclusionTarget(null);
+          setExclusionReason("");
+          setExclusionError(null);
+        }}
+      />
     </PageShell>
   );
 }
@@ -344,16 +370,20 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
 function KanbanColumn({
   id,
   label,
-  color,
+  tone,
   leads,
   scoreThresholds,
+  canClose,
+  onMoveLead,
   droppable = true,
 }: {
   id: string;
   label: string;
-  color: string;
+  tone: StatusColumnStyle;
   leads: Lead[];
   scoreThresholds: ScoreBandThresholds;
+  canClose: boolean;
+  onMoveLead?: (leadId: string, status: string) => void | Promise<void>;
   droppable?: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id, disabled: !droppable });
@@ -379,17 +409,17 @@ function KanbanColumn({
       data-kanban-column={id}
       className="flex min-w-52 flex-shrink-0 flex-col rounded-2xl p-3 transition-colors"
       style={{
-        background: isOver && droppable ? "rgba(99,102,241,0.08)" : "rgba(255,255,255,0.25)",
-        border: `1px solid ${isOver && droppable ? "rgba(99,102,241,0.25)" : "rgba(255,255,255,0.35)"}`,
+        background: isOver && droppable ? "var(--info-bg)" : "var(--surface-card)",
+        border: `1px solid ${isOver && droppable ? "var(--info-border)" : "var(--surface-card-border)"}`,
         width: "14.28%",
         minWidth: "180px",
       }}
     >
       <div className="mb-3 flex items-center justify-between px-1">
-        <span className="text-xs font-semibold" style={{ color }}>{label}</span>
+        <span className="text-xs font-semibold" style={{ color: tone.color }}>{label}</span>
         <span
           className="rounded-full px-2 py-0.5 text-[0.65rem] font-medium"
-          style={{ background: `${color}18`, color }}
+          style={{ background: tone.background, border: `1px solid ${tone.border}`, color: tone.color }}
         >
           {leads.length}
         </span>
@@ -413,9 +443,9 @@ function KanbanColumn({
                 }}
               >
                 {droppable ? (
-                  <DraggableCard lead={lead} scoreThresholds={scoreThresholds} />
+                  <DraggableCard lead={lead} scoreThresholds={scoreThresholds} canClose={canClose} onMoveLead={onMoveLead} />
                 ) : (
-                  <LeadCard lead={lead} scoreThresholds={scoreThresholds} />
+                  <LeadCard lead={lead} scoreThresholds={scoreThresholds} canClose={canClose} onMoveLead={onMoveLead} />
                 )}
               </div>
             ))}
@@ -424,15 +454,15 @@ function KanbanColumn({
           <div className="flex flex-col gap-2">
             {leads.map((lead) => (
               droppable ? (
-                <DraggableCard key={lead.id} lead={lead} scoreThresholds={scoreThresholds} />
+                <DraggableCard key={lead.id} lead={lead} scoreThresholds={scoreThresholds} canClose={canClose} onMoveLead={onMoveLead} />
               ) : (
-                <LeadCard key={lead.id} lead={lead} scoreThresholds={scoreThresholds} />
+                <LeadCard key={lead.id} lead={lead} scoreThresholds={scoreThresholds} canClose={canClose} onMoveLead={onMoveLead} />
               )
             ))}
           </div>
         )}
         {leads.length === 0 && (
-          <div className="rounded-lg p-3 text-center text-xs" style={{ color: "var(--text-tertiary)", border: "1px dashed rgba(0,0,0,0.1)" }}>
+          <div className="rounded-lg p-3 text-center text-xs" style={{ color: "var(--text-tertiary)", border: "1px dashed var(--glass-border)" }}>
             {droppable ? "Drop here" : "No leads"}
           </div>
         )}
@@ -441,7 +471,17 @@ function KanbanColumn({
   );
 }
 
-function DraggableCard({ lead, scoreThresholds }: { lead: Lead; scoreThresholds: ScoreBandThresholds }) {
+function DraggableCard({
+  lead,
+  scoreThresholds,
+  canClose,
+  onMoveLead,
+}: {
+  lead: Lead;
+  scoreThresholds: ScoreBandThresholds;
+  canClose: boolean;
+  onMoveLead?: (leadId: string, status: string) => void | Promise<void>;
+}) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: lead.id });
 
   return (
@@ -455,22 +495,36 @@ function DraggableCard({ lead, scoreThresholds }: { lead: Lead; scoreThresholds:
         opacity: isDragging ? 0.4 : 1,
       }}
     >
-      <LeadCard lead={lead} scoreThresholds={scoreThresholds} />
+      <LeadCard lead={lead} scoreThresholds={scoreThresholds} canClose={canClose} onMoveLead={onMoveLead} />
     </div>
   );
 }
 
-function LeadCard({ lead, scoreThresholds, isDragging }: { lead: Lead; scoreThresholds: ScoreBandThresholds; isDragging?: boolean }) {
+function LeadCard({
+  lead,
+  scoreThresholds,
+  isDragging,
+  canClose = true,
+  onMoveLead,
+}: {
+  lead: Lead;
+  scoreThresholds: ScoreBandThresholds;
+  isDragging?: boolean;
+  canClose?: boolean;
+  onMoveLead?: (leadId: string, status: string) => void | Promise<void>;
+}) {
   const wb = WEBSITE_BADGE[lead.website_status] ?? WEBSITE_BADGE.custom;
+  const currentStatus = lead.is_excluded ? "excluded" : lead.status;
+  const leadName = lead.name ?? "lead";
 
   return (
     <div
       className="rounded-xl p-3 transition-shadow"
       style={{
-        background: "rgba(255,255,255,0.6)",
-        border: "1px solid rgba(255,255,255,0.5)",
+        background: "var(--glass-bg-heavy)",
+        border: "1px solid var(--glass-border)",
         backdropFilter: "blur(8px)",
-        boxShadow: isDragging ? "0 8px 24px rgba(0,0,0,0.15)" : "0 1px 3px rgba(0,0,0,0.06)",
+        boxShadow: isDragging ? "var(--glass-shadow-lg)" : "var(--glass-shadow)",
         cursor: "grab",
       }}
     >
@@ -491,7 +545,7 @@ function LeadCard({ lead, scoreThresholds, isDragging }: { lead: Lead; scoreThre
           <span
             className="rounded px-1.5 py-0.5 text-[0.6rem] font-medium"
             title={lead.exclusion_reason ?? "Excluded from scoring and queue"}
-            style={{ background: "rgba(107,114,128,0.12)", color: "#4b5563" }}
+            style={{ background: "var(--status-muted-bg)", color: "var(--status-muted-text)" }}
           >
             excluded
           </span>
@@ -529,6 +583,26 @@ function LeadCard({ lead, scoreThresholds, isDragging }: { lead: Lead; scoreThre
       <p className="mt-1 text-[0.62rem]" style={{ color: "var(--text-tertiary)" }}>
         {lead.assigned_to_user_id ? `Owner: ${lead.assigned_user_display_name || lead.assigned_user_email || "Assigned"}` : "Unclaimed"}
       </p>
+      {onMoveLead && (
+        <select
+          className="glass-select mt-2 w-full text-[0.65rem]"
+          value={currentStatus}
+          aria-label={`Move ${leadName} to another status`}
+          style={{ cursor: "default" }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          onChange={(event) => void onMoveLead(lead.id, event.target.value)}
+        >
+          {STATUS_COLUMNS.map((status) => {
+            const restricted = !canClose && isRestrictedCloseStatus(status.key) && status.key !== currentStatus;
+            return (
+              <option key={status.key} value={status.key} disabled={restricted}>
+                {status.label}
+              </option>
+            );
+          })}
+        </select>
+      )}
     </div>
   );
 }

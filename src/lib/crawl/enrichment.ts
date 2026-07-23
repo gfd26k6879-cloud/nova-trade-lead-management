@@ -1,13 +1,14 @@
-import { getPlaceDetails } from "@/lib/google-places";
+import { PlacesApiError, getPlaceDetails, sanitizePlaceDetailsForStorage } from "@/lib/google-places";
 import { computeScore } from "@/lib/scoring";
 import { classifyWebsite } from "@/lib/classify-website";
-import { extractReviewInsights } from "@/lib/review-intelligence";
 import { checkWebsiteHealth } from "@/lib/website-health";
 import { qualifyLead } from "@/lib/qualification";
 import {
   getActiveCrawlRun,
   getLatestCrawlRun,
   getUnenrichedLeads,
+  leaseNextLeadForEnrichment,
+  markLeadEnrichmentFailed,
   updateLeadEnrichment,
   getSettings,
   API_ENDPOINT_PLACE_DETAILS,
@@ -18,7 +19,9 @@ import {
   type Lead,
 } from "@/lib/db/queries";
 import { enqueueAiVerificationForLead } from "@/lib/ai/verification-worker";
+import { runAiPostSuccessBookkeeping } from "@/lib/ai/post-success-bookkeeping";
 import type { WebsiteStatus } from "@/lib/classify-website";
+import { throwIfWorkerAborted } from "@/lib/worker-abort";
 
 export interface EnrichResult {
   status: "enriched" | "idle" | "error";
@@ -28,28 +31,32 @@ export interface EnrichResult {
   remaining?: number;
 }
 
-export async function enrichNextLead(): Promise<EnrichResult> {
+export async function enrichNextLead(signal?: AbortSignal): Promise<EnrichResult> {
+  throwIfWorkerAborted(signal);
   const settings = await getSettings();
+  throwIfWorkerAborted(signal);
   const run = (await getActiveCrawlRun()) ?? (await getLatestCrawlRun());
+  throwIfWorkerAborted(signal);
   const runId = run?.id ?? null;
 
   if (!settings.enrichment_enabled) {
     return { status: "idle" };
   }
 
-  const leads = await getUnenrichedLeads(1);
-  if (leads.length === 0) {
+  const lead = await leaseNextLeadForEnrichment();
+  throwIfWorkerAborted(signal);
+  if (!lead) {
     return { status: "idle" };
   }
-
-  const lead = leads[0];
   const includeAtmosphere = lead.score >= settings.enrichment_stage_b_min_score;
 
   try {
     const detailsResult = await getPlaceDetails(lead.place_id, settings.rate_limit_ms, {
       includeAtmosphere,
       cacheTtlDays: settings.cache_ttl_days,
+      signal,
     });
+    throwIfWorkerAborted(signal);
     const details = detailsResult.place;
 
     if (!detailsResult.fromCache) {
@@ -67,8 +74,10 @@ export async function enrichNextLead(): Promise<EnrichResult> {
           leadScore: lead.score,
         },
       });
+      throwIfWorkerAborted(signal);
     }
 
+    throwIfWorkerAborted(signal);
     await recordPlaceObservation({
       place_id: lead.place_id,
       crawl_run_id: runId,
@@ -76,16 +85,15 @@ export async function enrichNextLead(): Promise<EnrichResult> {
       endpoint: API_ENDPOINT_PLACE_DETAILS,
       sku: detailsResult.sku,
       field_mask: detailsResult.fieldMask,
-      raw_json: JSON.stringify(details ?? {}),
+      raw_json: JSON.stringify(sanitizePlaceDetailsForStorage(details, {
+        includeAtmosphere,
+        reviewInsights: detailsResult.reviewInsights,
+      }) ?? {}),
     });
+    throwIfWorkerAborted(signal);
 
-    let reviewHighlights: string[] = [];
+    const reviewHighlights = detailsResult.reviewInsights?.keywords;
     let editorialSummary: string | null = null;
-
-    if (details?.reviews && details.reviews.length > 0) {
-      const insights = extractReviewInsights(details.reviews);
-      reviewHighlights = insights.keywords;
-    }
 
     if (details?.editorialSummary?.text) {
       editorialSummary = details.editorialSummary.text;
@@ -94,9 +102,11 @@ export async function enrichNextLead(): Promise<EnrichResult> {
     let websiteHealthData: Record<string, unknown> | null = null;
     if (settings.website_health_enabled && lead.website_uri) {
       try {
-        const health = await checkWebsiteHealth(lead.website_uri);
+        const health = await checkWebsiteHealth(lead.website_uri, 5000, { signal });
+        throwIfWorkerAborted(signal);
         websiteHealthData = health as unknown as Record<string, unknown>;
       } catch {
+        throwIfWorkerAborted(signal);
         // Health check failure is non-critical
       }
     }
@@ -142,6 +152,7 @@ export async function enrichNextLead(): Promise<EnrichResult> {
       Object.keys(settings.niche_weights).length > 0 ? settings.niche_weights : undefined,
     );
 
+    throwIfWorkerAborted(signal);
     await updateLeadEnrichment(lead.id, {
       name: details?.displayName?.text ?? null,
       address: details?.formattedAddress ?? null,
@@ -159,13 +170,15 @@ export async function enrichNextLead(): Promise<EnrichResult> {
       primary_type: details?.primaryType ?? null,
       lat: details?.location?.latitude ?? null,
       lng: details?.location?.longitude ?? null,
-      review_highlights: reviewHighlights,
+      ...(reviewHighlights !== undefined ? { review_highlights: reviewHighlights } : {}),
       editorial_summary: editorialSummary,
       website_health: websiteHealthData,
       website_checked_at: websiteHealthData ? new Date().toISOString() : null,
       score: newScore,
     });
+    throwIfWorkerAborted(signal);
 
+    throwIfWorkerAborted(signal);
     await upsertPlaceMaster({
       place_id: lead.place_id,
       name: details?.displayName?.text ?? lead.name,
@@ -184,24 +197,32 @@ export async function enrichNextLead(): Promise<EnrichResult> {
       lat: details?.location?.latitude ?? lead.lat,
       lng: details?.location?.longitude ?? lead.lng,
       editorial_summary: editorialSummary,
-      review_highlights: reviewHighlights,
+      ...(reviewHighlights !== undefined ? { review_highlights: reviewHighlights } : {}),
       website_health: websiteHealthData,
       last_details_at: new Date().toISOString(),
       last_enriched_at: new Date().toISOString(),
     });
+    throwIfWorkerAborted(signal);
 
     if (identityChanged && settings.ai_enabled && settings.ai_auto_verify_enabled && settings.ai_reverify_after_enrichment) {
       try {
         await enqueueAiVerificationForLead(lead.id, "place_details_enrichment", { settings });
+        throwIfWorkerAborted(signal);
       } catch (error) {
-        await createAuditLog("ai_verification_enqueue_failed", "lead", lead.id, {
-          reason: "place_details_enrichment",
-          error: error instanceof Error ? error.message : String(error),
-        });
+        throwIfWorkerAborted(signal);
+        await runAiPostSuccessBookkeeping(
+          { operation: "queue_failure_audit", leadId: lead.id },
+          () => createAuditLog("ai_verification_enqueue_failed", "lead", lead.id, {
+            reason: "place_details_enrichment",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        throwIfWorkerAborted(signal);
       }
     }
 
     const remaining = (await getUnenrichedLeads(1)).length;
+    throwIfWorkerAborted(signal);
 
     return {
       status: "enriched",
@@ -210,8 +231,16 @@ export async function enrichNextLead(): Promise<EnrichResult> {
       remaining,
     };
   } catch (err) {
+    throwIfWorkerAborted(signal);
     const errorMessage = err instanceof Error ? err.message : String(err);
+    const failurePolicy = classifyEnrichmentFailure(err, lead.enrichment_attempt_count, lead.enrichment_max_attempts);
+    await markLeadEnrichmentFailed(lead.id, errorMessage, failurePolicy.code, {
+      nextRetryAt: failurePolicy.nextRetryAt,
+      terminal: failurePolicy.terminal,
+    });
+    throwIfWorkerAborted(signal);
     await createAuditLog("enrichment_error", "lead", lead.id, { error: errorMessage });
+    throwIfWorkerAborted(signal);
     return {
       status: "error",
       leadId: lead.id,
@@ -219,6 +248,50 @@ export async function enrichNextLead(): Promise<EnrichResult> {
       error: errorMessage,
     };
   }
+}
+
+type EnrichmentFailurePolicy = {
+  code: string;
+  terminal: boolean;
+  nextRetryAt?: string;
+};
+
+const ENRICHMENT_RETRY_BASE_DELAY_SECONDS = 60;
+const ENRICHMENT_RETRY_MAX_DELAY_SECONDS = 15 * 60;
+
+function classifyEnrichmentFailure(error: unknown, attemptCount: number, maxAttempts: number): EnrichmentFailurePolicy {
+  const attempts = Math.max(1, Math.floor(Number(attemptCount) || 1));
+  const max = Math.max(1, Math.floor(Number(maxAttempts) || 3));
+
+  const retry = (code: string): EnrichmentFailurePolicy => {
+    if (attempts >= max) return { code: `${code}_exhausted`, terminal: true };
+    return { code, terminal: false, nextRetryAt: nextEnrichmentRetryAt(attempts) };
+  };
+
+  if (error instanceof PlacesApiError) {
+    if (error.status === 429 || error.status >= 500) return retry(`google_${error.status}`);
+    return { code: `google_${error.status}`, terminal: true };
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (/api key is not configured|permission|forbidden|unauthorized|invalid api key/i.test(message)) {
+    return { code: "google_places_configuration", terminal: true };
+  }
+  if (isTransientEnrichmentError(message)) return retry("network_transient");
+  return retry("generic_error");
+}
+
+function nextEnrichmentRetryAt(attemptCount: number): string {
+  const exponent = Math.max(0, Math.floor(attemptCount) - 1);
+  const delaySeconds = Math.min(
+    ENRICHMENT_RETRY_MAX_DELAY_SECONDS,
+    ENRICHMENT_RETRY_BASE_DELAY_SECONDS * Math.pow(2, exponent),
+  );
+  return new Date(Date.now() + delaySeconds * 1000).toISOString();
+}
+
+function isTransientEnrichmentError(message: string): boolean {
+  return /fetch failed|network|timeout|timed out|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket/i.test(message);
 }
 
 function hasMaterialIdentityChange(

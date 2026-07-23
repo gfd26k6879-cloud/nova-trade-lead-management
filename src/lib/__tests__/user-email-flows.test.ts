@@ -31,4 +31,14 @@ describe("user email flows", () => {
     expect(body).toContain("buildPasswordRecoveryUrl");
     expect(body).not.toContain("inviteUserByEmail");
   });
+
+  it("removes users through Supabase Auth with local cleanup and lockout guards", () => {
+    const body = functionBody("removeUserAction", "updateUserTeamAction");
+
+    expect(body).toContain("You cannot remove your own account.");
+    expect(body).toContain("Cannot remove the last active admin.");
+    expect(body).toContain("deleteUser(userId)");
+    expect(body).toContain("removeAppUser(userId)");
+    expect(body).toContain("app_user_removed");
+  });
 });

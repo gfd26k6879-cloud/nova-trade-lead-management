@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { PageShell } from "@/components/page-shell";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   getCoverageCellLedgerAction,
   getCoverageDiscoveryItemListAction,
@@ -16,52 +17,21 @@ import {
   getFailedUnitErrorsAction,
   pauseCrawlRunAction,
   promoteProbeToLeadHarvestAction,
+  resumeRecommendedSchedulerWorkersAction,
   resumeCrawlRunAction,
+  runGoogleDiscoveryDiagnosticAction,
   retryFailedUnitsAction,
   stopCrawlRunAction,
 } from "@/lib/crawl/actions";
 import { refreshStaleUnitsAction } from "@/lib/leads/actions";
-import type { CountryCode, LocationCellType } from "@/lib/geography";
-
-interface MarketCoverageSummary {
-  marketId: string;
-  marketName: string;
-  countryCode: CountryCode;
-  countryLabel: string;
-  adminArea1: string | null;
-  totalCells: number;
-  activeCells: number;
-  discoveredCells: number;
-  totalUnits: number;
-  doneUnits: number;
-  failedUnits: number;
-  openUnits: number;
-  canceledUnits: number;
-  leadsDiscovered: number;
-  activeLeads: number;
-  lastRunAt: string | null;
-}
-
-interface LocationCellCoverage {
-  cellId: string;
-  marketId: string;
-  marketName: string;
-  countryCode: CountryCode;
-  cellType: LocationCellType;
-  cellLabel: string;
-  postalCode: string | null;
-  locality: string | null;
-  adminArea1: string | null;
-  adminArea2: string | null;
-  totalUnits: number;
-  doneUnits: number;
-  failedUnits: number;
-  openUnits: number;
-  canceledUnits: number;
-  leadsDiscovered: number;
-  activeLeads: number;
-  lastRunAt: string | null;
-}
+import type { CountryCode } from "@/lib/geography";
+import type {
+  CrawlProgress,
+  DiscoveryItemSummary,
+  LocationCellCoverage,
+  MarketCoverageSummary,
+} from "@/lib/db/queries";
+import { getStatusToneStyle } from "@/lib/status-tone";
 
 interface FailedUnit {
   zip: string;
@@ -82,46 +52,17 @@ interface CrawlRunSummary {
   discovered_count: number;
   api_calls_used: number;
   last_error: string | null;
+  blocked_reason: string | null;
+  blocked_at: string | null;
+  blocked_error_code: string | null;
   market_id: string | null;
 }
 
-interface DiscoveryItem {
-  id: string;
-  name: string;
-  scopeLabel: string;
-  status: string;
-  mode: string;
-  discoveryMode: "coverage_probe" | "lead_harvest" | null;
-  marketId: string | null;
-  marketName: string | null;
-  countryCode: CountryCode | null;
-  categories: string[];
-  discoveredCount: number;
-  errorCount: number;
-  apiCallsUsed: number;
-  lastError: string | null;
-  createdAt: string;
-  startedAt: string | null;
-  endedAt: string | null;
-  totalUnits: number;
-  doneUnits: number;
-  failedUnits: number;
-  openUnits: number;
-  runningUnits: number;
-  canceledUnits: number;
-  pagesFetched: number;
-  rawPlacesSeen: number;
-  newPlacesSeen: number;
-  duplicatePlacesSeen: number;
-}
 
-interface CrawlProgress {
-  total: number;
-  done: number;
-  failed: number;
-  pending: number;
-  running: number;
-  canceled: number;
+interface CrawlWorkerState {
+  enabled: boolean;
+  googlePlacesKeyConfigured: boolean;
+  googlePlacesKeySource: "ui" | "env" | "none";
 }
 
 interface GeographyProgress {
@@ -153,12 +94,15 @@ interface CrawlUnitPreview {
   finished_at: string | null;
   last_error: string | null;
   next_page_token: string | null;
+  next_retry_at: string | null;
   max_pages: number;
+  max_attempts: number;
   pages_fetched: number;
   raw_places_seen: number;
   new_places_seen: number;
   duplicate_places_seen: number;
   budget_blocked_at: string | null;
+  last_error_code: string | null;
   created_at: string;
 }
 
@@ -200,10 +144,11 @@ interface Props {
   selectedRunId?: string | null;
   markets: MarketCoverageSummary[];
   cells: LocationCellCoverage[];
-  discoveryItems: DiscoveryItem[];
+  discoveryItems: DiscoveryItemSummary[];
   loadWarnings: string[];
   run: CrawlRunSummary | null;
   progress: CrawlProgress | null;
+  crawlWorker?: CrawlWorkerState | null;
   geography: GeographyProgress | null;
   unitPreview: CrawlUnitPreview[];
 }
@@ -220,6 +165,7 @@ export function CoverageClient({
   loadWarnings: initialLoadWarnings,
   run: initialRun,
   progress: initialProgress,
+  crawlWorker: initialCrawlWorker = null,
   geography: initialGeography,
   unitPreview: initialUnitPreview,
 }: Props) {
@@ -230,11 +176,12 @@ export function CoverageClient({
   const [loadWarnings, setLoadWarnings] = useState(initialLoadWarnings);
   const [run, setRun] = useState(initialRun);
   const [progress, setProgress] = useState(initialProgress);
+  const [crawlWorker, setCrawlWorker] = useState(initialCrawlWorker);
   const [geography, setGeography] = useState(initialGeography);
   const [unitPreview, setUnitPreview] = useState(initialUnitPreview);
   const [probeCandidates, setProbeCandidates] = useState<DiscoveryRunCandidate[]>([]);
-  const [discoveryStatus, setDiscoveryStatus] = useState<PanelStatus>("loading");
-  const [discoveryItemsStatus, setDiscoveryItemsStatus] = useState<PanelStatus>("loading");
+  const [discoveryStatus, setDiscoveryStatus] = useState<PanelStatus>(initialRun ? "ready" : "loading");
+  const [discoveryItemsStatus, setDiscoveryItemsStatus] = useState<PanelStatus>(initialDiscoveryItems.length > 0 ? "ready" : "loading");
   const [marketsStatus, setMarketsStatus] = useState<PanelStatus>("idle");
   const [cellsStatus, setCellsStatus] = useState<PanelStatus>("idle");
   const [progressStatus, setProgressStatus] = useState<PanelStatus>("idle");
@@ -248,7 +195,7 @@ export function CoverageClient({
   const [query, setQuery] = useState("");
   const [errors, setErrors] = useState<FailedUnit[]>([]);
   const [showErrors, setShowErrors] = useState(false);
-  const [busy, setBusy] = useState<"pause" | "resume" | "stop" | "retry" | "refresh" | "promote" | null>(null);
+  const [busy, setBusy] = useState<"pause" | "resume" | "stop" | "retry" | "refresh" | "promote" | "diagnostic" | "workers" | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; actionLabel: string; action: () => Promise<void> } | null>(null);
   const [refreshDays, setRefreshDays] = useState(7);
   const effectiveRunId = run?.id ?? selectedRunId ?? null;
@@ -269,10 +216,12 @@ export function CoverageClient({
     try {
       const result = await withCoverageClientTimeout(getCoverageSelectedRunAction(selectedRunId));
       setRun(result.run);
+      setCrawlWorker(result.crawlWorker);
       setPanelWarning("selected_run", result.loadError);
       setDiscoveryStatus(statusFromLoadError(result.loadError));
     } catch {
       setRun(null);
+      setCrawlWorker(null);
       setPanelWarning("selected_run", "coverage_load_timeout");
       setDiscoveryStatus("timeout");
     }
@@ -428,7 +377,26 @@ export function CoverageClient({
   const activeLeadCandidateCount = probeCandidates.filter((candidate) => candidate.hasLead && !candidate.leadIsExcluded).length;
   const runPct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : totalUnits > 0 ? Math.round((doneUnits / totalUnits) * 100) : 0;
   const runStatus = run?.status ?? null;
-  const canStop = runStatus === "running" || runStatus === "queued" || runStatus === "paused";
+  const retryWaitUnits = progress?.retryWait ?? unitPreview.filter((unit) => unit.status === "retry_wait").length;
+  const terminalFailedUnits = progress?.failed ?? failedUnits;
+  const pendingUnits = progress?.pending ?? openUnits;
+  const runningUnits = progress?.running ?? 0;
+  const openUnitCount = pendingUnits + runningUnits;
+  const waitingForWorker = Boolean(
+    run &&
+    crawlWorker &&
+    !crawlWorker.enabled &&
+    openUnitCount > 0 &&
+    (run.status === "running" || run.status === "queued"),
+  );
+  const operationalStatus = run?.status === "blocked"
+    ? "Blocked"
+    : waitingForWorker
+      ? "Waiting for worker"
+      : retryWaitUnits > 0 && runningUnits === 0 && (run?.status === "running" || run?.status === "queued")
+        ? "Retrying later"
+        : formatRunStatus(runStatus);
+  const canStop = runStatus === "running" || runStatus === "queued" || runStatus === "paused" || runStatus === "blocked";
   const selectedDiscoveryItem = discoveryItems.find((item) => item.id === run?.id) ?? null;
   const selectedDiscoveryMode = run?.discoveryMode ?? selectedDiscoveryItem?.discoveryMode ?? null;
   const canPromoteProbe = Boolean(run?.id && run.status === "done" && selectedDiscoveryMode === "coverage_probe");
@@ -441,13 +409,23 @@ export function CoverageClient({
     router.push(`/coverage?run=${encodeURIComponent(value)}`);
   };
 
+  const refreshRunPanels = useCallback(async () => {
+    const runId = effectiveRunId;
+    await Promise.all([
+      loadDiscoveryPanel(),
+      loadProgressPanel(runId),
+      loadUnitPreviewPanel(runId),
+      loadDiscoveryItemsPanel(),
+    ]);
+  }, [effectiveRunId, loadDiscoveryItemsPanel, loadDiscoveryPanel, loadProgressPanel, loadUnitPreviewPanel]);
+
   const handlePause = async () => {
     if (!run?.id) return;
     setBusy("pause");
     const result = await pauseCrawlRunAction(run.id);
     if ("error" in result) toast.error(result.error ?? "Unable to pause run");
     else toast.info("Discovery paused");
-    router.refresh();
+    await refreshRunPanels();
     setBusy(null);
   };
 
@@ -457,7 +435,7 @@ export function CoverageClient({
     const result = await resumeCrawlRunAction(run.id);
     if ("error" in result) toast.error(result.error ?? "Unable to resume run");
     else toast.success("Discovery resumed");
-    router.refresh();
+    await refreshRunPanels();
     setBusy(null);
   };
 
@@ -467,7 +445,7 @@ export function CoverageClient({
     const result = await stopCrawlRunAction(run.id);
     if ("error" in result) toast.error(result.error ?? "Unable to cancel remaining units");
     else toast.success(`Remaining discovery units canceled. ${result.canceledUnits} queued units canceled.`);
-    router.refresh();
+    await refreshRunPanels();
     setBusy(null);
   };
 
@@ -477,7 +455,36 @@ export function CoverageClient({
     const result = await retryFailedUnitsAction(run.id);
     if ("error" in result) toast.error(result.error ?? "Unable to retry failed units");
     else toast.success(`${result.retriedCount} units queued for retry`);
-    router.refresh();
+    await refreshRunPanels();
+    setBusy(null);
+  };
+
+  const handleDiagnostic = async () => {
+    if (!run?.id) return;
+    setBusy("diagnostic");
+    const result = await runGoogleDiscoveryDiagnosticAction(run.id);
+    if (result.diagnostic.ok) {
+      toast.success(`Google diagnostic passed using ${formatKeySource(result.diagnostic.keySource)} key.`);
+    } else {
+      toast.error(result.diagnostic.error);
+    }
+    await refreshRunPanels();
+    setBusy(null);
+  };
+
+  const handleResumeRecommendedWorkers = async () => {
+    setBusy("workers");
+    try {
+      const result = await resumeRecommendedSchedulerWorkersAction();
+      if (!result.googleReady) {
+        toast.error("Google Places API key is missing. Add it before enabling the crawl worker.");
+      } else {
+        toast.success("Recommended workers updated. Crawl worker is enabled.");
+      }
+    } catch {
+      toast.error("Unable to resume workers");
+    }
+    await refreshRunPanels();
     setBusy(null);
   };
 
@@ -497,7 +504,7 @@ export function CoverageClient({
     const result = await refreshStaleUnitsAction(run.id, refreshDays);
     if ("error" in result) toast.error(result.error ?? "Unable to refresh stale units");
     else toast.success(`${result.count} stale units reset for re-crawl`);
-    router.refresh();
+    await refreshRunPanels();
     setBusy(null);
   };
 
@@ -520,10 +527,11 @@ export function CoverageClient({
       title="Coverage"
       description="Track discovery coverage by country, market, and postal/postcode cell. Colorado ZIP coverage remains available as U.S. ZIP cells."
       stats={[
-        { label: "Run Status", value: formatRunStatus(runStatus) },
+        { label: "Run Status", value: operationalStatus },
         { label: "Units Done", value: `${progress?.done ?? doneUnits} / ${progress?.total ?? totalUnits}` },
-        { label: "Open Units", value: String((progress?.pending ?? 0) + (progress?.running ?? openUnits)) },
-        { label: "Failed", value: String(progress?.failed ?? failedUnits) },
+        { label: "Open Units", value: String(openUnitCount) },
+        { label: "Retry Wait", value: String(retryWaitUnits) },
+        { label: "Failed", value: String(terminalFailedUnits) },
       ]}
     >
       {(discoveryStatus === "loading" || discoveryItemsStatus === "loading" || marketsStatus === "loading" || cellsStatus === "loading" || progressStatus === "loading" || unitPreviewStatus === "loading" || probeCandidatesStatus === "loading") && (
@@ -542,7 +550,7 @@ export function CoverageClient({
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" className="btn-glass text-xs" onClick={() => router.refresh()}>Refresh</button>
-            <Link href="/dashboard#run-controls" className="btn-primary text-xs">Start New Discovery</Link>
+            <Link href="/dashboard#discovery" className="btn-primary text-xs">Start New Discovery</Link>
           </div>
         </div>
 
@@ -556,19 +564,19 @@ export function CoverageClient({
           />
         ) : run ? (
           <>
-            <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_2fr]">
-              <label className="flex flex-col gap-1">
+            <div className="mt-5 grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+              <label className="flex min-w-0 flex-col gap-1">
                 <span className="section-label">Selected discovery item</span>
-                <select className="glass-select" value={run.id} onChange={(event) => handleRunSelect(event.target.value)}>
+                <select className="glass-select w-full min-w-0 max-w-full" value={run.id} onChange={(event) => handleRunSelect(event.target.value)}>
                   {!selectedDiscoveryItem && <option value={run.id}>{run.name ?? `Discovery item ${run.id.slice(0, 8)}`} - {formatLabel(run.status)}</option>}
                   {discoveryItems.map((item) => (
                     <option key={item.id} value={item.id}>{formatDiscoveryItemLabel(item)}</option>
                   ))}
                 </select>
               </label>
-              <div className="rounded-xl p-3 text-sm" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>
-                <p className="font-semibold" style={{ color: "var(--text-primary)" }}>{selectedDiscoveryItem?.name ?? run.name ?? "Selected discovery item"}</p>
-                <p className="mt-1 text-xs">{selectedDiscoveryItem?.scopeLabel ?? run.scope_label ?? "Selected discovery item"} · Counts below are scoped to this discovery item.</p>
+              <div className="min-w-0 overflow-hidden rounded-xl p-3 text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)", color: "var(--text-secondary)" }}>
+                <p className="break-words font-semibold" style={{ color: "var(--text-primary)" }}>{selectedDiscoveryItem?.name ?? run.name ?? "Selected discovery item"}</p>
+                <p className="mt-1 break-words text-xs">{selectedDiscoveryItem?.scopeLabel ?? run.scope_label ?? "Selected discovery item"} · Counts below are scoped to this discovery item.</p>
               </div>
             </div>
             {(discoveryItemsStatus === "error" || discoveryItemsStatus === "timeout") && (
@@ -581,7 +589,7 @@ export function CoverageClient({
               </div>
             )}
             <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-              <Metric label="Status" value={formatRunStatus(run.status)} />
+              <Metric label="Status" value={operationalStatus} />
               <Metric label="Completion" value={`${runPct}%`} />
               <Metric label="Discovered" value={String(run.discovered_count)} />
               <Metric label="API Calls" value={String(run.api_calls_used)} />
@@ -594,7 +602,7 @@ export function CoverageClient({
               <Metric label="New directory candidates" value={String(newCandidateCount)} />
               <Metric label="Duplicates" value={String(duplicateCandidateCount)} />
             </div>
-            <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(255,255,255,0.32)", border: "1px solid rgba(255,255,255,0.42)", color: "var(--text-secondary)" }}>
+            <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "var(--surface-muted)", border: "1px solid var(--surface-card-border)", color: "var(--text-secondary)" }}>
               {selectedDiscoveryMode === "coverage_probe" ? (
                 <p><strong style={{ color: "var(--text-primary)" }}>Coverage probe:</strong> candidates are stored in the directory database (`places_master` + observations), but active sales leads are not created until you run a lead harvest.</p>
               ) : selectedDiscoveryMode === "lead_harvest" ? (
@@ -603,24 +611,89 @@ export function CoverageClient({
                 <p>This discovery item predates explicit probe/harvest labeling. Inspect the work queue and candidates before rerunning.</p>
               )}
             </div>
-            <div className="mt-4 h-2.5 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,0.06)" }}>
-              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${runPct}%`, background: runPct === 100 ? "#166534" : "var(--accent)" }} />
+            {run.status === "blocked" && (
+              <OperationalPanel
+                tone="danger"
+                title="Blocked"
+                message={run.blocked_reason ?? run.last_error ?? "Discovery is blocked until an operator resolves the underlying issue."}
+                details={[
+                  run.blocked_error_code ? `Error code: ${run.blocked_error_code}` : null,
+                  run.blocked_at ? `Blocked at: ${formatDateTime(run.blocked_at)}` : null,
+                  `${openUnitCount} open unit${openUnitCount === 1 ? "" : "s"} remain untouched.`,
+                  "Next safe action: run the Google diagnostic, fix the reported key/API/billing issue, then resume after the fix.",
+                ]}
+                actions={(
+                  <>
+                    <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={handleDiagnostic}>
+                      {busy === "diagnostic" ? "Checking..." : "Run Google diagnostic"}
+                    </button>
+                    <button type="button" className="btn-primary text-xs" disabled={busy !== null} onClick={() => setConfirmAction({
+                      title: "Resume after fixing the block?",
+                      message: `This runs a Google diagnostic first, then resumes ${run.name ?? "this discovery item"} only if the diagnostic passes and the remaining call cap is safe.`,
+                      actionLabel: busy === "resume" ? "Resuming..." : "Resume after fix",
+                      action: handleResume,
+                    })}>
+                      Resume after fix
+                    </button>
+                  </>
+                )}
+              />
+            )}
+            {waitingForWorker && (
+              <OperationalPanel
+                tone="warning"
+                title="Waiting for worker"
+                message="Waiting for worker: crawl scheduler is paused."
+                details={[
+                  `Google key source: ${formatKeySource(crawlWorker?.googlePlacesKeySource ?? "none")}.`,
+                  crawlWorker?.googlePlacesKeyConfigured ? "Required Google key is present." : "Google Places API key is missing.",
+                  `${openUnitCount} open unit${openUnitCount === 1 ? "" : "s"} are ready but no crawl worker is enabled.`,
+                ]}
+                actions={(
+                  <>
+                    <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={handleDiagnostic}>
+                      {busy === "diagnostic" ? "Checking..." : "Run Google diagnostic"}
+                    </button>
+                    <button type="button" className="btn-primary text-xs" disabled={busy !== null || !crawlWorker?.googlePlacesKeyConfigured} onClick={handleResumeRecommendedWorkers}>
+                      {busy === "workers" ? "Updating..." : "Enable recommended workers"}
+                    </button>
+                  </>
+                )}
+              />
+            )}
+            {retryWaitUnits > 0 && run.status !== "blocked" && (
+              <OperationalPanel
+                tone="info"
+                title="Retrying later"
+                message={`${retryWaitUnits} unit${retryWaitUnits === 1 ? "" : "s"} hit transient Google/network errors and are waiting for retry backoff.`}
+                details={[
+                  "429, 5xx, and network timeouts retry automatically within the unit attempt cap.",
+                  "Permission errors do not retry automatically; they block the whole run.",
+                ]}
+              />
+            )}
+            <div className="mt-4 h-2.5 overflow-hidden rounded-full" style={{ background: "var(--status-muted-bg)" }}>
+              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${runPct}%`, background: runPct === 100 ? "var(--success-text)" : "var(--accent)" }} />
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2">
               {(run.status === "running" || run.status === "queued") && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handlePause}>{busy === "pause" ? "Pausing..." : "Pause Discovery"}</button>}
-              {run.status === "paused" && <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={() => setConfirmAction({
-                title: "Resume this discovery item?",
-                message: `This will resume ${run.name ?? "this discovery item"} and can consume Google Places quota while workers process ${progress?.pending ?? 0} open units.`,
+              {(run.status === "paused" || run.status === "blocked") && <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={() => setConfirmAction({
+                title: run.status === "blocked" ? "Resume after fixing the block?" : "Resume this discovery item?",
+                message: run.status === "blocked"
+                  ? `This runs a Google diagnostic first, then resumes ${run.name ?? "this discovery item"} only if Google and the remaining call cap are safe.`
+                  : `This will resume ${run.name ?? "this discovery item"} and can consume Google Places quota while workers process ${pendingUnits} open units.`,
                 actionLabel: "Resume this item",
                 action: handleResume,
-              })}>{busy === "resume" ? "Resuming..." : "Resume this discovery item"}</button>}
+              })}>{busy === "resume" ? "Resuming..." : run.status === "blocked" ? "Resume after fix" : "Resume this discovery item"}</button>}
+              {run.id && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handleDiagnostic}>{busy === "diagnostic" ? "Checking..." : "Run Google diagnostic"}</button>}
+              {waitingForWorker && <button type="button" className="btn-glass text-sm" disabled={busy !== null || !crawlWorker?.googlePlacesKeyConfigured} onClick={handleResumeRecommendedWorkers}>{busy === "workers" ? "Updating..." : "Enable recommended workers"}</button>}
               {canStop && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={() => setConfirmAction({
                 title: "Cancel this item's remaining units?",
-                message: `This will mark ${progress?.pending ?? 0} open units for ${run.name ?? "this discovery item"} as canceled. Completed leads and history stay saved, but queued units will not be processed unless recreated later.`,
+                message: `This will mark ${pendingUnits} open units for ${run.name ?? "this discovery item"} as canceled. Completed leads and history stay saved, but queued units will not be processed unless recreated later.`,
                 actionLabel: "Cancel remaining units",
                 action: handleStop,
               })}>{busy === "stop" ? "Canceling..." : "Cancel this item's remaining units"}</button>}
-              {(progress?.failed ?? failedUnits) > 0 && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handleRetry}>{busy === "retry" ? "Retrying..." : `Retry Failed (${progress?.failed ?? failedUnits})`}</button>}
+              {(terminalFailedUnits + retryWaitUnits) > 0 && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handleRetry}>{busy === "retry" ? "Retrying..." : `Retry retryable units (${terminalFailedUnits + retryWaitUnits})`}</button>}
               {canPromoteProbe && <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={() => setConfirmAction({
                 title: "Promote probe to lead harvest?",
                 message: `This creates a separate lead harvest using the same market, cell, and categories from ${run.name ?? "this probe"}. The original probe remains unchanged.`,
@@ -633,7 +706,7 @@ export function CoverageClient({
           </>
         ) : <EmptyPanel label="No discovery run exists yet. Open Revenue, choose markets/cells and categories, then start a run." />}
         {loadWarnings.length > 0 && (
-          <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#92400e" }}>
+          <div className="mt-4 rounded-xl border px-4 py-3 text-sm" style={getStatusToneStyle("warning")}>
             <p className="font-semibold">Some coverage panels are temporarily unavailable.</p>
             <p className="mt-1 text-xs">{loadWarnings.join("; ")}</p>
           </div>
@@ -649,7 +722,7 @@ export function CoverageClient({
           <Select label="Country" value={country} onChange={setCountry} options={["all", ...countries]} />
           <Select label="Market" value={marketId} onChange={setMarketId} options={["all", ...marketOptions.map((market) => market.marketId)]} labels={Object.fromEntries(markets.map((market) => [market.marketId, market.marketName]))} />
           <Select label="Cell type" value={cellType} onChange={setCellType} options={["all", ...cellTypes]} />
-          <Select label="Status" value={status} onChange={setStatus} options={["all", "open", "failed", "complete", "pending", "running", "done", "canceled"]} />
+          <Select label="Status" value={status} onChange={setStatus} options={["all", "open", "failed", "retry_wait", "complete", "pending", "running", "done", "canceled"]} />
           <Select label="Category" value={category} onChange={setCategory} options={["all", ...categories]} />
           <label className="flex flex-col gap-1">
             <span className="section-label">Search</span>
@@ -668,7 +741,7 @@ export function CoverageClient({
                 <h3 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>{market.marketName}</h3>
                 <p className="text-xs" style={{ color: "var(--text-tertiary)" }}>{market.countryLabel}{market.adminArea1 ? ` - ${market.adminArea1}` : ""}</p>
               </div>
-              <span className="rounded-lg px-2 py-1 text-xs" style={{ background: "rgba(255,255,255,0.48)", color: "var(--text-secondary)" }}>{market.discoveredCells}/{market.activeCells} cells</span>
+              <span className="rounded-lg px-2 py-1 text-xs" style={{ background: "var(--surface-card)", color: "var(--text-secondary)" }}>{market.discoveredCells}/{market.activeCells} cells</span>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
               <Metric label="Units" value={`${market.doneUnits}/${market.totalUnits}`} />
@@ -691,7 +764,7 @@ export function CoverageClient({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {failedUnits > 0 && <button type="button" className="btn-glass text-xs" onClick={handleShowErrors}>{showErrors ? "Hide Errors" : "Show Errors"}</button>}
+            {terminalFailedUnits > 0 && <button type="button" className="btn-glass text-xs" onClick={handleShowErrors}>{showErrors ? "Hide Errors" : "Show Errors"}</button>}
             {run?.id && doneUnits > 0 && <><input type="number" className="glass-input w-16 text-xs" value={refreshDays} min={1} onChange={(event) => setRefreshDays(Number(event.target.value))} aria-label="Days threshold" /><button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={handleRefreshStale}>{busy === "refresh" ? "Refreshing..." : "Refresh Stale"}</button></>}
           </div>
         </div>
@@ -702,7 +775,7 @@ export function CoverageClient({
           <div className="overflow-x-auto">
             <table className="glass-table min-w-[1180px]">
               <thead><tr><th>Market</th><th>Cell</th><th>Type</th><th>Area</th><th>Total</th><th>Done</th><th>Failed</th><th>Open</th><th>Leads</th><th>Last run</th></tr></thead>
-              <tbody>{visibleCells.map((cell) => <tr key={cell.cellId}><td>{cell.marketName}</td><td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{cell.cellLabel}</td><td>{cell.cellType.replace(/_/g, " ")}</td><td>{[cell.locality, cell.adminArea1, cell.countryCode].filter(Boolean).join(", ")}</td><td>{cell.totalUnits}</td><td>{cell.doneUnits}</td><td style={{ color: cell.failedUnits > 0 ? "#991b1b" : undefined }}>{cell.failedUnits}</td><td>{cell.openUnits}</td><td>{cell.activeLeads}</td><td>{formatDateTime(cell.lastRunAt)}</td></tr>)}</tbody>
+              <tbody>{visibleCells.map((cell) => <tr key={cell.cellId}><td>{cell.marketName}</td><td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{cell.cellLabel}</td><td>{cell.cellType.replace(/_/g, " ")}</td><td>{[cell.locality, cell.adminArea1, cell.countryCode].filter(Boolean).join(", ")}</td><td>{cell.totalUnits}</td><td>{cell.doneUnits}</td><td style={{ color: cell.failedUnits > 0 ? "var(--danger-text)" : undefined }}>{cell.failedUnits}</td><td>{cell.openUnits}</td><td>{cell.activeLeads}</td><td>{formatDateTime(cell.lastRunAt)}</td></tr>)}</tbody>
             </table>
           </div>
         )}
@@ -737,7 +810,7 @@ export function CoverageClient({
                     <div className="font-medium" style={{ color: "var(--text-primary)" }}>{candidate.name ?? "Unnamed business"}</div>
                     <div className="max-w-80 truncate text-xs" style={{ color: "var(--text-tertiary)" }}>{candidate.address ?? candidate.placeId}</div>
                   </td>
-                  <td>{candidate.websiteUri ? <a href={candidate.websiteUri} target="_blank" rel="noreferrer" className="underline underline-offset-2">Website</a> : <span style={{ color: "#991b1b" }}>No website</span>}</td>
+                  <td>{candidate.websiteUri ? <a href={candidate.websiteUri} target="_blank" rel="noreferrer" className="underline underline-offset-2">Website</a> : <span style={{ color: "var(--danger-text)" }}>No website</span>}</td>
                   <td>{candidate.phone ?? "Missing"}</td>
                   <td>{candidate.rating ? `${candidate.rating.toFixed(1)} (${candidate.userRatingCount ?? 0})` : "Unrated"}</td>
                   <td>{candidate.category ?? candidate.primaryType ?? candidate.categories[0] ?? "Unknown"}</td>
@@ -761,7 +834,25 @@ export function CoverageClient({
           <div className="overflow-x-auto">
             <table className="glass-table min-w-[980px]">
               <thead><tr><th>Status</th><th>Location</th><th>Country</th><th>Category</th><th>Attempts</th><th>Pages</th><th>Raw</th><th>New</th><th>Dupes</th><th>Leads</th><th>Last Activity</th><th>Notes</th></tr></thead>
-              <tbody>{filteredUnits.map((unit) => <tr key={unit.id}><td><StatusPill status={unit.status} /></td><td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{unit.query_location_label ?? unit.zip}</td><td>{unit.country_code ?? "US"}</td><td>{unit.category.replace(/_/g, " ")}</td><td>{unit.attempt_count}</td><td>{unit.pages_fetched}/{unit.max_pages}</td><td>{unit.raw_places_seen}</td><td>{unit.new_places_seen}</td><td>{unit.duplicate_places_seen}</td><td>{unit.discovered_count}</td><td>{formatDateTime(unit.started_at ?? unit.finished_at ?? unit.created_at)}</td><td className="max-w-72 truncate" title={unit.last_error ?? undefined}>{unit.last_error ?? (unit.budget_blocked_at ? "Previously paused" : unit.next_page_token ? "More pages queued" : "")}</td></tr>)}</tbody>
+              <tbody>{filteredUnits.map((unit) => {
+                const unitNote = formatUnitNote(unit);
+                return (
+                  <tr key={unit.id}>
+                    <td><StatusPill status={unit.status} /></td>
+                    <td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{unit.query_location_label ?? unit.zip}</td>
+                    <td>{unit.country_code ?? "US"}</td>
+                    <td>{unit.category.replace(/_/g, " ")}</td>
+                    <td>{unit.attempt_count}/{unit.max_attempts}</td>
+                    <td>{unit.pages_fetched}/{unit.max_pages}</td>
+                    <td>{unit.raw_places_seen}</td>
+                    <td>{unit.new_places_seen}</td>
+                    <td>{unit.duplicate_places_seen}</td>
+                    <td>{unit.discovered_count}</td>
+                    <td>{formatDateTime(unit.next_retry_at ?? unit.started_at ?? unit.finished_at ?? unit.created_at)}</td>
+                    <td className="max-w-72 truncate" title={unitNote}>{unitNote}</td>
+                  </tr>
+                );
+              })}</tbody>
             </table>
           </div>
         )}
@@ -771,44 +862,89 @@ export function CoverageClient({
       {(progressStatus === "error" || progressStatus === "timeout") && <section className="glass rounded-2xl p-6"><RetryPanel label="Run progress is temporarily unavailable." status={progressStatus} onRetry={() => loadProgressPanel(effectiveRunId)} /></section>}
       {geography && <section className="glass rounded-2xl p-6"><h3 className="section-label">Colorado compatibility</h3><p className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>{geography.zipCodesCompleted}/{geography.zipCodesSelected} selected Colorado ZIP-compatible cells completed. {geography.zipCodesNotSelected} active Colorado cells were not selected for this run.</p></section>}
       {confirmAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
-          <div className="w-full max-w-lg rounded-2xl p-6 shadow-2xl" style={{ background: "rgba(255,255,255,0.96)", border: "1px solid rgba(255,255,255,0.65)" }}>
-            <h3 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>{confirmAction.title}</h3>
-            <p className="mt-3 text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>{confirmAction.message}</p>
-            <div className="mt-6 flex flex-wrap justify-end gap-2">
-              <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={() => setConfirmAction(null)}>Keep item unchanged</button>
-              <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={async () => {
-                await confirmAction.action();
-                setConfirmAction(null);
-              }}>{confirmAction.actionLabel}</button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          open
+          title={confirmAction.title}
+          message={confirmAction.message}
+          confirmLabel={confirmAction.actionLabel}
+          cancelLabel="Keep item unchanged"
+          busy={busy !== null}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={async () => {
+            try {
+              await confirmAction.action();
+            } finally {
+              setConfirmAction(null);
+            }
+          }}
+        />
       )}
     </PageShell>
   );
 }
 
-function formatDiscoveryItemLabel(item: DiscoveryItem): string {
+function formatDiscoveryItemLabel(item: DiscoveryItemSummary): string {
   const units = item.totalUnits === 1 ? "1 unit" : `${item.totalUnits} units`;
   return `${item.name} - ${formatDateTime(item.createdAt)} - ${units} - ${formatLabel(item.status)}`;
 }
 
 function Select({ label, value, onChange, options, labels = {} }: { label: string; value: string; onChange: (value: string) => void; options: string[]; labels?: Record<string, string> }) {
-  return <label className="flex flex-col gap-1"><span className="section-label">{label}</span><select className="glass-select" value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{labels[option] ?? formatLabel(option)}</option>)}</select></label>;
+  return <label className="flex min-w-0 flex-col gap-1"><span className="section-label">{label}</span><select className="glass-select w-full min-w-0 max-w-full" value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{labels[option] ?? formatLabel(option)}</option>)}</select></label>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.45)" }}><p className="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>{label}</p><p className="mt-1 text-base font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p></div>;
+  return <div className="rounded-xl border px-3 py-2" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)" }}><p className="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>{label}</p><p className="mt-1 text-base font-semibold" style={{ color: "var(--text-primary)" }}>{value}</p></div>;
+}
+
+function OperationalPanel({
+  title,
+  message,
+  details = [],
+  tone,
+  actions,
+}: {
+  title: string;
+  message: string;
+  details?: Array<string | null>;
+  tone: "danger" | "warning" | "info";
+  actions?: ReactNode;
+}) {
+  const colors = operationalPanelColors(tone);
+  const visibleDetails = details.filter((detail): detail is string => Boolean(detail));
+  return (
+    <div className="mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: colors.background, border: `1px solid ${colors.border}`, color: colors.text }}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em]">{title}</p>
+          <p className="mt-1 font-medium" style={{ color: "var(--text-primary)" }}>{message}</p>
+        </div>
+        {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+      </div>
+      {visibleDetails.length > 0 && (
+        <ul className="mt-3 grid gap-1 text-xs leading-relaxed">
+          {visibleDetails.map((detail) => <li key={detail}>{detail}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function operationalPanelColors(tone: "danger" | "warning" | "info") {
+  const style = getStatusToneStyle(tone);
+  return {
+    background: String(style.background),
+    border: String(style.borderColor),
+    text: String(style.color),
+  };
 }
 
 function EmptyPanel({ label }: { label: string }) {
-  return <div className="rounded-xl p-5 text-sm" style={{ background: "rgba(255,255,255,0.35)", border: "1px solid rgba(255,255,255,0.4)", color: "var(--text-secondary)" }}>{label}</div>;
+  return <div className="rounded-xl border p-5 text-sm" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)", color: "var(--text-secondary)" }}>{label}</div>;
 }
 
 function RetryPanel({ label, status, onRetry }: { label: string; status: PanelStatus; onRetry: () => void }) {
   return (
-    <div className="rounded-xl p-5 text-sm" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.22)", color: "#92400e" }}>
+    <div className="rounded-xl border p-5 text-sm" style={getStatusToneStyle("warning")}>
       <p className="font-semibold">{label}</p>
       <p className="mt-1 text-xs">Diagnostic: {status === "timeout" ? "coverage_load_timeout" : "coverage_data_unavailable"}</p>
       <button type="button" className="btn-glass mt-3 text-xs" onClick={onRetry}>Retry this panel</button>
@@ -818,23 +954,26 @@ function RetryPanel({ label, status, onRetry }: { label: string; status: PanelSt
 
 function Alert({ text, tone }: { text: string; tone: "error" }) {
   void tone;
-  return <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", color: "#991b1b" }}>{text}</div>;
+  return <div className="rounded-xl border px-4 py-3 text-sm" role="alert" style={getStatusToneStyle("danger")}>{text}</div>;
 }
 
 function StatusPill({ status }: { status: string }) {
-  return <span className="rounded-full px-2.5 py-1 text-xs font-medium capitalize" style={{ background: statusColor(status).background, color: statusColor(status).color }}>{status.replace(/_/g, " ")}</span>;
+  return <span className="rounded-full border px-2.5 py-1 text-xs font-medium capitalize" style={getStatusToneStyle(statusTone(status))}>{status.replace(/_/g, " ")}</span>;
 }
 
-function statusColor(status: string) {
-  if (status === "done") return { background: "rgba(22,101,52,0.1)", color: "#166534" };
-  if (status === "failed") return { background: "rgba(239,68,68,0.1)", color: "#991b1b" };
-  if (status === "running") return { background: "rgba(37,99,235,0.1)", color: "#1d4ed8" };
-  if (status === "canceled") return { background: "rgba(180,83,9,0.1)", color: "#92400e" };
-  return { background: "rgba(100,116,139,0.12)", color: "#475569" };
+function statusTone(status: string): "success" | "danger" | "warning" | "info" | "muted" {
+  if (status === "done") return "success";
+  if (status === "failed" || status === "blocked") return "danger";
+  if (status === "retry_wait" || status === "canceled") return "warning";
+  if (status === "running" || status === "queued" || status === "pending") return "info";
+  return "muted";
 }
 
 function formatRunStatus(status: string | null): string {
-  return status ? formatLabel(status) : "No run";
+  if (!status) return "No run";
+  if (status === "retry_wait") return "Retrying later";
+  if (status === "done") return "Complete";
+  return formatLabel(status);
 }
 
 function formatLabel(value: string): string {
@@ -852,6 +991,23 @@ function formatCoverageLoadError(loadError: CoverageLoadError): string {
   if (loadError === "transient_db_error") return "transient_db_error";
   if (loadError === "coverage_load_timeout") return "coverage_load_timeout";
   return "coverage_data_unavailable";
+}
+
+function formatKeySource(source: "ui" | "env" | "none"): string {
+  if (source === "ui") return "Settings UI stored";
+  if (source === "env") return "Vercel environment";
+  return "not configured";
+}
+
+function formatUnitNote(unit: CrawlUnitPreview): string {
+  if (unit.status === "retry_wait") {
+    const retryLabel = unit.next_retry_at ? formatDateTime(unit.next_retry_at) : "the next scheduler pass";
+    return `Retry after ${retryLabel}${unit.last_error_code ? ` (${unit.last_error_code})` : ""}`;
+  }
+  if (unit.last_error) return unit.last_error_code ? `${unit.last_error_code}: ${unit.last_error}` : unit.last_error;
+  if (unit.budget_blocked_at) return `Previously paused at ${formatDateTime(unit.budget_blocked_at)}`;
+  if (unit.next_page_token) return "More pages queued";
+  return "";
 }
 
 function withCoverageClientTimeout<T>(promise: Promise<T>, timeoutMs = 11_000): Promise<T> {

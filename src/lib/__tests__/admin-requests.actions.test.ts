@@ -4,6 +4,10 @@ const authMocks = vi.hoisted(() => ({
   requirePermission: vi.fn(),
 }));
 
+const accessMocks = vi.hoisted(() => ({
+  canReadLeadForSession: vi.fn(),
+}));
+
 const queryMocks = vi.hoisted(() => ({
   ensureDbReady: vi.fn(),
   getLeadById: vi.fn(),
@@ -14,6 +18,7 @@ const queryMocks = vi.hoisted(() => ({
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requirePermission: authMocks.requirePermission }));
+vi.mock("@/lib/lead-access", () => ({ canReadLeadForSession: accessMocks.canReadLeadForSession }));
 vi.mock("@/lib/db/queries", () => queryMocks);
 
 import { createAdminRequestAction, updateAdminRequestStatusAction } from "@/lib/admin-requests/actions";
@@ -35,6 +40,7 @@ const baseRequest = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  accessMocks.canReadLeadForSession.mockResolvedValue(true);
   queryMocks.ensureDbReady.mockResolvedValue(undefined);
   queryMocks.createAuditLog.mockResolvedValue(undefined);
 });
@@ -57,6 +63,19 @@ describe("admin request server actions", () => {
     const result = await createAdminRequestAction("lead-1", { requestType: "quote_request" });
 
     expect(result).toEqual({ error: "Taken by One." });
+    expect(queryMocks.createAdminRequest).not.toHaveBeenCalled();
+  });
+
+  it("hides owned leads outside a researcher's territory", async () => {
+    const session = { userId: "user-1", email: "one@example.com", role: "researcher" };
+    authMocks.requirePermission.mockResolvedValue(session);
+    queryMocks.getLeadById.mockResolvedValue(baseLead);
+    accessMocks.canReadLeadForSession.mockResolvedValue(false);
+
+    const result = await createAdminRequestAction("lead-1", { requestType: "website_request" });
+
+    expect(result).toEqual({ error: "Lead not found." });
+    expect(accessMocks.canReadLeadForSession).toHaveBeenCalledWith(session, baseLead);
     expect(queryMocks.createAdminRequest).not.toHaveBeenCalled();
   });
 

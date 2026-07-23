@@ -7,7 +7,9 @@ import { z } from "zod";
 import { buildPasswordRecoveryUrl, buildWelcomeInviteUrl, resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
   createAppUserForAuthUser,
+  getAppUserByUserId,
   listAppUsers,
+  removeAppUser,
   updateAppUserRole,
   updateAppUserStatus,
   updateAppUserTeam,
@@ -106,9 +108,20 @@ export async function createUserAction(input: { email: string; displayName?: str
 }
 
 export async function updateUserRoleAction(userId: string, role: AppRole) {
-  await requirePermission("users:manage");
+  const session = await requirePermission("users:manage");
   await ensureDbReady();
   if (!isAppRole(role)) return { error: "Invalid role." };
+  const target = await getAppUserByUserId(userId);
+  if (!target) return { error: "User not found." };
+  if (target.user_id === session.userId && target.role === "admin" && role !== "admin") {
+    return { error: "You cannot demote your own admin account." };
+  }
+  if (target.role === "admin" && target.status === "active" && role !== "admin") {
+    const users = await listAppUsers();
+    if (countOtherActiveAdmins(users, target.user_id) === 0) {
+      return { error: "Cannot demote the last active admin." };
+    }
+  }
   await updateAppUserRole(userId, role);
   await createAuditLog("app_user_role_updated", "app_user", userId, { role });
   revalidatePath("/users");
@@ -116,13 +129,55 @@ export async function updateUserRoleAction(userId: string, role: AppRole) {
 }
 
 export async function updateUserStatusAction(userId: string, status: AppUserStatus) {
-  await requirePermission("users:manage");
+  const session = await requirePermission("users:manage");
   await ensureDbReady();
   if (status !== "active" && status !== "disabled") return { error: "Invalid status." };
+  const target = await getAppUserByUserId(userId);
+  if (!target) return { error: "User not found." };
+  if (target.user_id === session.userId && status === "disabled") {
+    return { error: "You cannot disable your own account." };
+  }
+  if (target.role === "admin" && target.status === "active" && status === "disabled") {
+    const users = await listAppUsers();
+    if (countOtherActiveAdmins(users, target.user_id) === 0) {
+      return { error: "Cannot disable the last active admin." };
+    }
+  }
   await updateAppUserStatus(userId, status);
   await createAuditLog("app_user_status_updated", "app_user", userId, { status });
   revalidatePath("/users");
   return { success: true };
+}
+
+export async function removeUserAction(userId: string) {
+  const session = await requirePermission("users:manage");
+  await ensureDbReady();
+  const target = await getAppUserByUserId(userId);
+  if (!target) return { error: "User not found." };
+  if (target.user_id === session.userId) return { error: "You cannot remove your own account." };
+
+  const users = await listAppUsers();
+  if (target.role === "admin" && countOtherActiveAdmins(users, target.user_id) === 0) {
+    return { error: "Cannot remove the last active admin." };
+  }
+
+  const supabase = createSupabaseAdminClient();
+  const { error } = await supabase.auth.admin.deleteUser(userId);
+  if (error && !/not found/i.test(error.message)) {
+    return { error: error.message };
+  }
+
+  await removeAppUser(userId);
+  await createAuditLog("app_user_removed", "app_user", userId, {
+    email: target.email,
+    role: target.role,
+  });
+  revalidatePath("/users");
+  revalidatePath("/team");
+  revalidatePath("/leads");
+  revalidatePath("/explore");
+  revalidatePath("/queue");
+  return { success: true, user: target };
 }
 
 export async function updateUserTeamAction(userId: string, input: { isTeamLead?: boolean; teamLeadUserId?: string | null; teamLabel?: string | null }) {
@@ -149,7 +204,12 @@ export async function updateUserMarketAccessAction(userId: string, input: { mark
   await ensureDbReady();
   const parsed = updateUserMarketsSchema.safeParse(input);
   if (!parsed.success) return { error: "Invalid territory selection." };
-  const access = await replaceUserMarketAccess(userId, parsed.data.marketIds, session.userId);
+  let access: Awaited<ReturnType<typeof replaceUserMarketAccess>>;
+  try {
+    access = await replaceUserMarketAccess(userId, parsed.data.marketIds, session.userId);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Unable to update territory access." };
+  }
   await createAuditLog("app_user_market_access_updated", "app_user", userId, {
     marketIds: parsed.data.marketIds,
   });
@@ -188,4 +248,10 @@ async function sendPasswordResetEmail(email: string): Promise<{ error: string | 
     redirectTo: buildPasswordRecoveryUrl("/reset-password", appUrl),
   });
   return { error: error?.message ?? null };
+}
+
+function countOtherActiveAdmins(users: Awaited<ReturnType<typeof listAppUsers>>, userId: string): number {
+  return users.filter((user) => (
+    user.user_id !== userId && user.role === "admin" && user.status === "active"
+  )).length;
 }

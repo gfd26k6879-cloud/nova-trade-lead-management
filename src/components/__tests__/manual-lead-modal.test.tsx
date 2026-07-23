@@ -20,5 +20,9 @@ describe("ManualLeadModal", () => {
     expect(html).toContain("Lead source");
     expect(html).toContain("Contact person");
     expect(html).toContain("Create lead");
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="true"');
+    expect(html).toMatch(/aria-labelledby="[^"]+"/);
+    expect(html).toMatch(/aria-describedby="[^"]+"/);
   });
 });

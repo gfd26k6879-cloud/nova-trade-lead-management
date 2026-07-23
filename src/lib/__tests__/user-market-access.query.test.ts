@@ -8,9 +8,10 @@ vi.mock("@/lib/db/index", () => ({
   getDb: () => testDb,
   generateId: () => crypto.randomUUID(),
   nowISO: () => new Date().toISOString(),
+  withDbTransaction: <T>(fn: () => Promise<T>) => fn(),
 }));
 
-import { listUserMarketAccess, listUserMarketAccessForUsers } from "@/lib/db/queries";
+import { listUserMarketAccess, listUserMarketAccessForUsers, replaceUserMarketAccess } from "@/lib/db/queries";
 
 beforeEach(() => {
   testDb = createTestDb();
@@ -43,5 +44,21 @@ describe("user market access queries", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ user_id: "user-2", market_id: "market-colorado" });
+  });
+
+  it("replaces market access atomically after validating requested markets", async () => {
+    const result = await replaceUserMarketAccess("user-1", ["market-toronto", "market-toronto"], "admin-1");
+
+    expect(result.map((access) => access.market_id)).toEqual(["market-toronto"]);
+    const persisted = await listUserMarketAccess("user-1");
+    expect(persisted.map((access) => access.market_id)).toEqual(["market-toronto"]);
+  });
+
+  it("preserves existing market access when a requested market is invalid", async () => {
+    await expect(replaceUserMarketAccess("user-1", ["missing-market"], "admin-1"))
+      .rejects.toThrow("Unknown market id: missing-market");
+
+    const persisted = await listUserMarketAccess("user-1");
+    expect(persisted.map((access) => access.market_id).sort()).toEqual(["market-colorado", "market-toronto"]);
   });
 });

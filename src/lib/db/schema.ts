@@ -6,6 +6,13 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "leads", column: "lat", type: "REAL" },
   { table: "leads", column: "lng", type: "REAL" },
   { table: "leads", column: "enrichment_status", type: "TEXT NOT NULL DEFAULT 'pending'" },
+  { table: "leads", column: "enrichment_attempt_count", type: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "leads", column: "enrichment_started_at", type: "TEXT" },
+  { table: "leads", column: "enrichment_finished_at", type: "TEXT" },
+  { table: "leads", column: "enrichment_next_retry_at", type: "TEXT" },
+  { table: "leads", column: "enrichment_last_error", type: "TEXT" },
+  { table: "leads", column: "enrichment_last_error_code", type: "TEXT" },
+  { table: "leads", column: "enrichment_max_attempts", type: "INTEGER NOT NULL DEFAULT 3" },
   { table: "leads", column: "enriched_at", type: "TEXT" },
   { table: "leads", column: "review_highlights", type: "TEXT" },
   { table: "leads", column: "editorial_summary", type: "TEXT" },
@@ -99,6 +106,12 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "settings", column: "google_auto_pagination_max_duplicate_rate", type: "REAL NOT NULL DEFAULT 0.6" },
   { table: "settings", column: "google_default_discovery_mode", type: "TEXT NOT NULL DEFAULT 'coverage_probe'" },
   { table: "settings", column: "google_default_pagination_policy", type: "TEXT NOT NULL DEFAULT 'auto_yield_based'" },
+  { table: "crawl_runs", column: "blocked_reason", type: "TEXT" },
+  { table: "crawl_runs", column: "blocked_at", type: "TEXT" },
+  { table: "crawl_runs", column: "blocked_error_code", type: "TEXT" },
+  { table: "crawl_units", column: "next_retry_at", type: "TEXT" },
+  { table: "crawl_units", column: "max_attempts", type: "INTEGER NOT NULL DEFAULT 3" },
+  { table: "crawl_units", column: "last_error_code", type: "TEXT" },
   { table: "leads", column: "ai_website_feedback_status", type: "TEXT" },
   { table: "leads", column: "ai_corrected_website_url", type: "TEXT" },
   { table: "leads", column: "ai_false_positive_reason", type: "TEXT" },
@@ -158,6 +171,15 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "crawl_units", column: "new_places_seen", type: "INTEGER NOT NULL DEFAULT 0" },
   { table: "crawl_units", column: "duplicate_places_seen", type: "INTEGER NOT NULL DEFAULT 0" },
   { table: "crawl_units", column: "budget_blocked_at", type: "TEXT" },
+  { table: "demos", column: "published_at", type: "TEXT" },
+  { table: "demos", column: "published_by_user_id", type: "TEXT" },
+  { table: "demos", column: "unpublished_at", type: "TEXT" },
+  { table: "demos", column: "unpublished_by_user_id", type: "TEXT" },
+  { table: "demos", column: "revoked_at", type: "TEXT" },
+  { table: "demos", column: "revoked_by_user_id", type: "TEXT" },
+  { table: "demos", column: "revoke_reason", type: "TEXT" },
+  { table: "demos", column: "view_count", type: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "demos", column: "last_viewed_at", type: "TEXT" },
 ];
 
 export const SCHEMA_SQL = `
@@ -205,7 +227,7 @@ CREATE TABLE IF NOT EXISTS location_cells (
 CREATE TABLE IF NOT EXISTS crawl_runs (
   id TEXT PRIMARY KEY,
   mode TEXT NOT NULL DEFAULT 'coverage' CHECK(mode IN ('coverage','manual','refresh')),
-  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','paused','done','error','canceled')),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','paused','blocked','done','error','canceled')),
   categories TEXT NOT NULL DEFAULT '[]',
   market_id TEXT,
   selection_json TEXT,
@@ -219,6 +241,9 @@ CREATE TABLE IF NOT EXISTS crawl_runs (
   error_count INTEGER NOT NULL DEFAULT 0,
   api_calls_used INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
+  blocked_reason TEXT,
+  blocked_at TEXT,
+  blocked_error_code TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -242,6 +267,9 @@ CREATE TABLE IF NOT EXISTS crawl_units (
   duplicate_places_seen INTEGER NOT NULL DEFAULT 0,
   budget_blocked_at TEXT,
   attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_retry_at TEXT,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  last_error_code TEXT,
   discovered_count INTEGER NOT NULL DEFAULT 0,
   started_at TEXT,
   finished_at TEXT,
@@ -356,7 +384,14 @@ CREATE TABLE IF NOT EXISTS leads (
   assigned_to_user_id TEXT,
   notes TEXT,
   reminder_date TEXT,
-  enrichment_status TEXT NOT NULL DEFAULT 'pending' CHECK(enrichment_status IN ('pending','enriched','skipped')),
+  enrichment_status TEXT NOT NULL DEFAULT 'pending' CHECK(enrichment_status IN ('pending','running','retry_wait','enriched','error','skipped')),
+  enrichment_attempt_count INTEGER NOT NULL DEFAULT 0,
+  enrichment_started_at TEXT,
+  enrichment_finished_at TEXT,
+  enrichment_next_retry_at TEXT,
+  enrichment_last_error TEXT,
+  enrichment_last_error_code TEXT,
+  enrichment_max_attempts INTEGER NOT NULL DEFAULT 3,
   enriched_at TEXT,
   review_highlights TEXT,
   editorial_summary TEXT,
@@ -418,6 +453,15 @@ CREATE TABLE IF NOT EXISTS demos (
   template_id TEXT DEFAULT 'default',
   config_json TEXT NOT NULL DEFAULT '{}',
   is_published INTEGER NOT NULL DEFAULT 0,
+  published_at TEXT,
+  published_by_user_id TEXT,
+  unpublished_at TEXT,
+  unpublished_by_user_id TEXT,
+  revoked_at TEXT,
+  revoked_by_user_id TEXT,
+  revoke_reason TEXT,
+  view_count INTEGER NOT NULL DEFAULT 0,
+  last_viewed_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -667,6 +711,7 @@ CREATE INDEX IF NOT EXISTS idx_leads_score ON leads(score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
 CREATE INDEX IF NOT EXISTS idx_leads_website_status ON leads(website_status);
 CREATE INDEX IF NOT EXISTS idx_leads_enrichment ON leads(enrichment_status, score DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_enrichment_lease ON leads(enrichment_status, enrichment_next_retry_at, score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_queue_candidates ON leads(website_status, status, score DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_workbench_active_candidates ON leads(assigned_to_user_id, website_status, qualification_status, status, quality_bucket, sales_priority_score DESC, lead_quality_score DESC, score DESC) WHERE archived_at IS NULL AND COALESCE(is_excluded, 0) = 0 AND score > 0;
 CREATE INDEX IF NOT EXISTS idx_leads_queue_timing ON leads(reminder_date, last_contacted_at);
@@ -698,6 +743,7 @@ CREATE INDEX IF NOT EXISTS idx_user_market_access_user ON user_market_access(use
 CREATE INDEX IF NOT EXISTS idx_user_market_access_market ON user_market_access(market_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_lead_notes_lead_created ON lead_notes(lead_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_crawl_units_status_zip ON crawl_units(status, zip);
+CREATE INDEX IF NOT EXISTS idx_crawl_units_retry_ready ON crawl_units(crawl_run_id, status, next_retry_at, created_at);
 CREATE INDEX IF NOT EXISTS idx_crawl_units_run ON crawl_units(crawl_run_id);
 CREATE INDEX IF NOT EXISTS idx_crawl_units_run_status ON crawl_units(crawl_run_id, status);
 CREATE INDEX IF NOT EXISTS idx_crawl_runs_status_created ON crawl_runs(status, created_at DESC);
@@ -738,6 +784,7 @@ CREATE INDEX IF NOT EXISTS idx_admin_requests_creator_created ON admin_requests(
 CREATE INDEX IF NOT EXISTS idx_admin_requests_assigned_created ON admin_requests(assigned_admin_user_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_requests_open_unique ON admin_requests(lead_id, request_type)
   WHERE status IN ('new','seen','in_progress','waiting_on_researcher');
+CREATE INDEX IF NOT EXISTS idx_demos_public_slug ON demos(slug, is_published, revoked_at);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_user_id, created_at DESC);
 
