@@ -116,6 +116,26 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 - Repair-round-2 requirement: close all remaining P1 behavior and evidence gaps in the same five-file ceiling, or return an explicit blocker with no commit. No partial evidence claim can advance to acceptance.
 - Repair-round-2 result: explicit blocker with a clean worktree at `dd8930b8361ba4df10edf0991cc0cf93f27644bc`, zero file/resource change, and no third commit. The remaining coupled migration/harness rewrite activates the binding plan's final-conductor repair exception after two failed bounded repair attempts. Final-conductor implementation does not waive independent domain and Quality review.
 
+## G-003 final-conductor review rounds
+
+- Final-conductor candidate 0fe3854370a99811558ce9a50a394520b2175195
+  passed independent Quality validation but was not accepted. Independent
+  domain/security review retained all locks for writer TOCTOU, incomplete
+  replay-definition/owner recognition, historical-actor authorization,
+  renderer type-gating, and redundant-index findings.
+- Repair candidate 717fa10fd2773f522a3a3fa4dc6815fa2fa0fc15
+  remains within the same authorized five-file aggregate scope. The three-file
+  delta adds writer-conflicting locks through commit, exact portable function
+  fingerprints and catalog metadata, historical-versus-active actor semantics,
+  nested renderer type gates, and redundant-index removal.
+- Producer evidence is G-003 PostgreSQL 16 2/2 with the expanded two-client
+  race and five catalog spoofs, G-002 2/2 at 43/41/2, focused 13/3, typecheck,
+  lint, diff check, and the preserved T029 recovery-key stop. This is evidence
+  only: both independent conductors are rereviewing the immutable repair.
+- Locks migration-sequence, migration-harness, and recovery-contract remain
+  held. No merge, acceptance, release-lock change, G-004 dispatch, or external
+  action may occur until both rereviews pass.
+
 ## Pilot acceptance receipt
 
 - Batch: `platform-tenancy-001`.
