@@ -53,10 +53,10 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 | `G-001` | Accepted | Ownership contract repaired, independently verified, and reaccepted through append-only event 205. |
 | `G-002` | Accepted | Independently reviewed repair merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; final local release gate passed. |
 | `G-003` | Accepted | Source `7b305e6` passed dual review and merged at `ba1b646`; final merged release gate passed with 2,202 tests, build, and Playwright 5/5. |
-| `G-004A` | Fresh dual rereview under three retained locks | Repair `3572d60` reports the real PG16 matrix, G002/G003 regressions, and T029 boundary passing inside four repair paths/six aggregate paths; no acceptance before independent reproduction. |
+| `G-004A` | Domain-conductor repair round 2 under three retained locks | Rereview live-proved nullable-tenant replay and column-ACL bypasses in `3572d60`; after two failed worker generations the binding-plan takeover is limited to those two defects and their PG16 regressions. |
 | `G-004B` | Preserved; blocked on G-004A/G-009/G-011 | Co-deliver immutable per-attempt job/run/lease/generation correlation and bounded non-content `worker_runs` hardening with G-013/G-014. |
 | `G-004` | Parent open | Accept only after independently accepted G-004A and G-004B. Every original success criterion and the two-tenant runtime proof remain required. |
-| `G-005` | Exact packet under independent preflight; implementation blocked on accepted `G-004A` | Seven files, 45/43/2, no split proposed; parent G-004 and G-022 runtime propagation remain unwaived phase-gate obligations. |
+| `G-005` | Dual-preflight packet accepted; implementation blocked on accepted `G-004A` | Seven files, 45/43/2, exact `google_places_legacy` source-card identity, no split; parent G-004 and G-022 runtime propagation remain unwaived phase-gate obligations. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
 | `UI-000` | Ready; capacity/approval-queued | Seven-artifact design packet is ready. Terra-medium is authorized, but implementation remains capacity-queued and explicit product/design/accessibility approval is still required before task acceptance. |
