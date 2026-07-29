@@ -67,6 +67,7 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 - G-002 now runs as the previously authorized bounded parent/domain-conductor takeover after the two approved worker-model failures recorded in ledger events 198 through 200. No unapproved worker model substitution is claimed.
 - The Stage 3 pilot is accepted. Platform produced one attributable two-commit G-002 batch, Quality required one bounded repair delta and then passed it independently, Discovery prepared the serialized G-003 through G-005 packets, and the final integration gate passed with no overlaps, stale baselines, unattributable files, invalid ledger events, or owned temporary-resource residue.
 - Stage 4's planned 12-worker level is not claimable in this runtime: only four total agent slots are exposed and the plan-approved Spark/Luna worker models are unavailable. No unapproved model is substituted. Dependency preparation and final-conductor work may continue, but implementation dispatch must remain inside the plan's model and capacity rules.
+- All five domain branches were fast-forwarded cleanly between batches to accepted integration baseline `ac9d9ebadb747c01e9b5019061cedbcbb213e4c4`; no domain branch contains an unmerged or unattributable delta.
 
 ## Pilot acceptance receipt
 
