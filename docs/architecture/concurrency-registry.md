@@ -2,7 +2,7 @@
 
 Date: 2026-07-29
 
-Status: **Stage 3 pilot accepted; Stage 4 active; G-003 repair delta required.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. On 2026-07-29 the user explicitly authorized `gpt-5.6-terra` with medium reasoning as the runtime-contingent implementation fallback when Spark/Luna are unavailable. G-003 producer commit `dd871b775ea0df95e3e7435c921ce13185f13e67` remains unaccepted after independent domain review found bounded P1/P2 contract gaps. Sol remains the sole final integration/acceptance authority, and the observed four-total-agent ceiling remains binding.
+Status: **Stage 3 pilot accepted; Stage 4 active; G-003 final repair and Q-002 repair active.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. On 2026-07-29 the user explicitly authorized `gpt-5.6-terra` with medium reasoning as the runtime-contingent implementation fallback when Spark/Luna are unavailable. G-003 candidate `717fa10fd2773f522a3a3fa4dc6815fa2fa0fc15` passed Quality but remains unaccepted after domain review found one exact replay spoof and one hostile-search-path classification gap. Q-002 candidate `a4953680cbd2781890b5fe022c2a71edc472f963` remains unaccepted after its independent reviewer found missing database and negative-path evidence. Sol remains the sole final integration/acceptance authority, and the observed four-total-agent ceiling remains binding.
 
 ## Final integration authority
 
@@ -20,9 +20,9 @@ The concurrent execution plan requires the final integration conductor to run `g
 |---|---|---|---|---|
 | Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Read-only G-006/G-008 recovery-boundary packet completed cleanly at `9afedb757bb3a3bb70b58d956cc3b0ece25d70ea`; G-006 waits for accepted G-003–G-005 keys, and G-008 then waits for G-006/G-007; no lock or change. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 commits `dd871b775ea0df95e3e7435c921ce13185f13e67` and `dd8930b8361ba4df10edf0991cc0cf93f27644bc` remain unaccepted. Terra repair round 2 stopped cleanly with zero changes because the remaining P1 work is a large harness/replay rewrite; the binding plan's two-failed-repair final-conductor exception is now active. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 repair candidate `7b305e69efc05d9ec0d032aeca3e8a763a28e4d2` is frozen for fresh domain and Quality review. Exact index/function privilege identity and search-path-independent FK classification are implemented; all three locks remain held pending both receipts. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
-| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Q-002 six-file fixture packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; second-workspace, look-alike, cleanup, Postgres, shared-factory, and E2E-selector gaps are bounded; ready when the migration-critical G-003 producer/review slots permit. |
+| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Q-002 candidate `a4953680cbd2781890b5fe022c2a71edc472f963` is unaccepted. Repair round 1 stopped cleanly with zero changes; a second Terra-medium worker is implementing the same six-file contract with an explicit test-local PostgreSQL adapter direction. |
 
 The non-OneDrive root is selected to avoid sync churn and lock contention. The authoritative repository remains in its existing OneDrive path.
 
@@ -52,11 +52,11 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 |---|---|---|
 | `G-001` | Accepted | Ownership contract repaired, independently verified, and reaccepted through append-only event 205. |
 | `G-002` | Accepted | Independently reviewed repair merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; final local release gate passed. |
-| `G-003` | Final-conductor repair active; locks retained | The initial producer result and first repair remained incomplete; the second bounded repair stopped with zero changes. Under the binding plan's existing repair exception, the final conductor may now implement the remaining coupled PostgreSQL migration/harness repair locally, followed by fresh independent review. |
+| `G-003` | Repair candidate `7b305e6` in fresh dual review; locks retained | Exact index/function privilege identity and catalog FK classification plus matching spoof/hostile-path tests are committed inside the accepted five-file aggregate scope. Both immutable successor reviews must pass before merge. |
 | `G-004` | Blocked on `G-003` | AI tenant derivation requires tenant-scoped leads; platform `worker_runs` stays global. |
 | `G-005` | Blocked on `G-004` | Serialized final Phase 2 structural migration producer. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
-| `Q-002` | Terra-medium implementation in progress | Disjoint six-file fixture packet dispatched at clean baseline `d4f4166c5eb4024b39d1a268c0657113d93b6e25` while two independent G-003 reviews occupy the migration lane; no locks or overlapping paths. |
+| `Q-002` | Terra-medium repair round 2 in progress | Repair round 1 stopped with zero changes at `a4953680`. A fresh bounded worker has explicit authority to build the missing adapter/harness inside the same six files; no locks and no G-003 overlap. |
 | `UI-000` | Ready; capacity/approval-queued | Seven-artifact design packet is ready. Terra-medium is authorized, but implementation remains capacity-queued and explicit product/design/accessibility approval is still required before task acceptance. |
 
 ## Capacity receipt
@@ -135,6 +135,34 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 - Locks migration-sequence, migration-harness, and recovery-contract remain
   held. No merge, acceptance, release-lock change, G-004 dispatch, or external
   action may occur until both rereviews pass.
+- The `717fa10` Quality rereview passed the full local release gate, but domain
+  rereview still found the partial admin index and overload-insensitive ACL
+  classifier spoofable plus FK deparsing sensitive to a hostile `search_path`.
+  Quality evidence is retained as evidence for that immutable commit only; it
+  cannot accept the repaired successor. Final repair round 3 is limited to
+  exact index/function privilege identity, catalog-based FK classification,
+  two matching spoof cases, and a true no-receipt replay under hostile search
+  path. Fresh domain and Quality reviews remain mandatory.
+
+## Q-002 Terra-medium repair receipt
+
+- Initial candidate `a4953680cbd2781890b5fe022c2a71edc472f963` changed five
+  authorized paths and added sibling workspaces, but its named PostgreSQL test
+  was only a static catalog assertion and left the database empty.
+- Independent review retained the card for missing deterministic cross-tenant
+  look-alike records, committed exact-ID cleanup, real PostgreSQL 16 seed and
+  cleanup twice, suspended and same-tenant sibling-workspace denials, and E2E
+  selectors derived from the shared browser-safe fixture catalog.
+- Terra repair round 1 may change only the original six-file ceiling, creates
+  no lock, and must return real disposable-loopback PostgreSQL 16 evidence plus
+  focused unit, authorization, type, lint, and diff checks. It cannot accept or
+  merge its own result.
+- Repair round 1 stopped cleanly at `a4953680` with no files, commit, or local
+  resource because the worker judged the missing database adapter and cleanup
+  flow too large for a narrow patch. Repair round 2 retains the same scope and
+  contract, but explicitly permits a test-local postgres.js adapter and minimal
+  disposable schema inside the authorized PostgreSQL test file. It still cannot
+  change product schema or accept its own result.
 
 ## Pilot acceptance receipt
 
