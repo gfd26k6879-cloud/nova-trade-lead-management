@@ -8,9 +8,10 @@ import {
   CANONICAL_TENANT_FIXTURE_CATALOG,
   CANONICAL_TENANT_FIXTURE_COUNTS,
   CANONICAL_TENANT_FIXTURE_IDS,
+  cleanupCanonicalTenantCoreFixtures,
   createCanonicalTenantFixtureTransactionCoordinator,
   normalizeDatabaseBoolean,
-  setupCanonicalTenantFixtures,
+  setupCanonicalTenantCoreFixtures,
   withCanonicalTenantFixtures,
 } from "@/test/tenants";
 
@@ -19,27 +20,33 @@ describe("canonical two-tenant fixtures", () => {
     const sqlite = createFixtureDb();
     const db = sqliteClient(sqlite);
     try {
-      const fixture = await setupCanonicalTenantFixtures({ transaction: fixtureTransaction(db) });
+      await withCanonicalTenantFixtures({ transaction: fixtureTransaction(db) }, async (fixture) => {
 
-      expect(fixture.tenants).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.tenants);
-      expect(fixture.workspaces).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.workspaces);
-      expect(fixture.memberships).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.memberships);
-      expect(fixture.roleBindings).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.currentRoleBindings);
-      expect(fixture.policies).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.policies);
-      expect(fixture.supportGrants).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.supportGrants);
-      expect(fixture.supportGrants.every((grant) => grant.permissions.length === 3 && grant.dataClasses.length === 3)).toBe(true);
+        expect(fixture.tenants).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.tenants);
+        expect(fixture.workspaces).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.workspaces);
+        expect(fixture.memberships).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.memberships);
+        expect(fixture.roleBindings).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.currentRoleBindings);
+        expect(fixture.policies).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.policies);
+        expect(fixture.supportGrants).toHaveLength(CANONICAL_TENANT_FIXTURE_COUNTS.supportGrants);
+        expect(fixture.supportGrants.every((grant) => grant.permissions.length === 3 && grant.dataClasses.length === 3)).toBe(true);
 
-      expect(Object.isFrozen(CANONICAL_TENANT_FIXTURE_CATALOG)).toBe(true);
-      expect(Object.isFrozen(CANONICAL_TENANT_FIXTURE_CATALOG.tenants)).toBe(true);
-      expect(CANONICAL_TENANT_FIXTURE_CATALOG.tenants[0].name).toBe(CANONICAL_TENANT_FIXTURE_CATALOG.tenants[1].name);
-      expect(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[0].slug).toBe(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[1].slug);
-      expect(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[0].name).toBe(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[1].name);
-      expect(CANONICAL_TENANT_FIXTURE_IDS.tenants.A).not.toBe(CANONICAL_TENANT_FIXTURE_IDS.tenants.B);
+        expect(Object.isFrozen(CANONICAL_TENANT_FIXTURE_CATALOG)).toBe(true);
+        expect(Object.isFrozen(CANONICAL_TENANT_FIXTURE_CATALOG.tenants)).toBe(true);
+        expect(CANONICAL_TENANT_FIXTURE_CATALOG.tenants[0].name).toBe(CANONICAL_TENANT_FIXTURE_CATALOG.tenants[1].name);
+        expect(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[0].slug).toBe(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[1].slug);
+        expect(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[0].name).toBe(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[1].name);
+        expect(CANONICAL_TENANT_FIXTURE_IDS.tenants.A).not.toBe(CANONICAL_TENANT_FIXTURE_IDS.tenants.B);
+        expect(CANONICAL_TENANT_FIXTURE_CATALOG.lookAlikeRecords).toEqual([
+          expect.objectContaining({ id: CANONICAL_TENANT_FIXTURE_IDS.lookAlikeRecords.tenantAWorkspace, tenantKey: "A", entity: "workspace" }),
+          expect.objectContaining({ id: CANONICAL_TENANT_FIXTURE_IDS.lookAlikeRecords.tenantBWorkspace, tenantKey: "B", entity: "workspace" }),
+        ]);
 
-      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM tenant_memberships WHERE status = 'active'").get()).toEqual({ count: 14 });
-      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM tenant_memberships WHERE status IN ('pending', 'suspended', 'disabled')").get()).toEqual({ count: 6 });
-      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM support_access_grant_permissions").get()).toEqual({ count: 6 });
-      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM support_access_grant_data_classes").get()).toEqual({ count: 6 });
+        expect(sqlite.prepare("SELECT COUNT(*) AS count FROM tenant_memberships WHERE status = 'active'").get()).toEqual({ count: 14 });
+        expect(sqlite.prepare("SELECT COUNT(*) AS count FROM tenant_memberships WHERE status IN ('pending', 'suspended', 'disabled')").get()).toEqual({ count: 6 });
+        expect(sqlite.prepare("SELECT COUNT(*) AS count FROM support_access_grant_permissions").get()).toEqual({ count: 6 });
+        expect(sqlite.prepare("SELECT COUNT(*) AS count FROM support_access_grant_data_classes").get()).toEqual({ count: 6 });
+      });
+      expect(canonicalCounts(sqlite)).toEqual(emptyCanonicalCounts());
     } finally {
       sqlite.close();
     }
@@ -49,20 +56,21 @@ describe("canonical two-tenant fixtures", () => {
     const sqlite = createFixtureDb();
     const db = sqliteClient(sqlite);
     try {
-      await setupCanonicalTenantFixtures({ transaction: fixtureTransaction(db) });
-      const sharedMemberships = sqlite.prepare(
-        "SELECT tenant_id, status FROM tenant_memberships WHERE auth_identity_id = ? ORDER BY tenant_id",
-      ).all(CANONICAL_TENANT_FIXTURE_IDS.sharedAuthIdentityId) as Array<{ tenant_id: string; status: string }>;
-      expect(sharedMemberships).toEqual([
-        { tenant_id: CANONICAL_TENANT_FIXTURE_IDS.tenants.A, status: "active" },
-        { tenant_id: CANONICAL_TENANT_FIXTURE_IDS.tenants.B, status: "active" },
-      ]);
-      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM tenant_role_bindings WHERE membership_id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.memberships.A.owner)).toEqual({ count: 1 });
-      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM tenant_role_bindings WHERE membership_id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.memberships.B.owner)).toEqual({ count: 1 });
-      for (const tenantId of Object.values(CANONICAL_TENANT_FIXTURE_IDS.tenants)) {
-        const roles = (sqlite.prepare("SELECT role FROM tenant_role_bindings WHERE tenant_id = ? AND revoked_at IS NULL ORDER BY role").all(tenantId) as Array<{ role: string }>).map(({ role }) => role);
-        expect(roles).toEqual(["admin", "analyst_read_only", "outreach_operator", "owner", "researcher", "reviewer", "strategist_manager"]);
-      }
+      await withCanonicalTenantFixtures({ transaction: fixtureTransaction(db) }, async () => {
+        const sharedMemberships = sqlite.prepare(
+          "SELECT tenant_id, status FROM tenant_memberships WHERE auth_identity_id = ? ORDER BY tenant_id",
+        ).all(CANONICAL_TENANT_FIXTURE_IDS.sharedAuthIdentityId) as Array<{ tenant_id: string; status: string }>;
+        expect(sharedMemberships).toEqual([
+          { tenant_id: CANONICAL_TENANT_FIXTURE_IDS.tenants.A, status: "active" },
+          { tenant_id: CANONICAL_TENANT_FIXTURE_IDS.tenants.B, status: "active" },
+        ]);
+        expect(sqlite.prepare("SELECT COUNT(*) AS count FROM tenant_role_bindings WHERE membership_id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.memberships.A.owner)).toEqual({ count: 1 });
+        expect(sqlite.prepare("SELECT COUNT(*) AS count FROM tenant_role_bindings WHERE membership_id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.memberships.B.owner)).toEqual({ count: 1 });
+        for (const tenantId of Object.values(CANONICAL_TENANT_FIXTURE_IDS.tenants)) {
+          const roles = (sqlite.prepare("SELECT role FROM tenant_role_bindings WHERE tenant_id = ? AND revoked_at IS NULL ORDER BY role").all(tenantId) as Array<{ role: string }>).map(({ role }) => role);
+          expect(roles).toEqual(["admin", "analyst_read_only", "outreach_operator", "owner", "researcher", "reviewer", "strategist_manager"]);
+        }
+      });
     } finally {
       sqlite.close();
     }
@@ -72,17 +80,18 @@ describe("canonical two-tenant fixtures", () => {
     const sqlite = createFixtureDb();
     const db = sqliteClient(sqlite);
     try {
-      await setupCanonicalTenantFixtures({ transaction: fixtureTransaction(db) });
-      const approved = sqlite.prepare("SELECT state, tenant_id, workspace_id, starts_at, expires_at, revoked_at FROM support_access_grants WHERE id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.supportGrants.approvedTenantA) as Record<string, unknown>;
-      expect(approved).toMatchObject({ state: "approved", tenant_id: CANONICAL_TENANT_FIXTURE_IDS.tenants.A, workspace_id: CANONICAL_TENANT_FIXTURE_IDS.workspaces.A, revoked_at: null });
-      expect((approved.starts_at as string) < CANONICAL_TENANT_FIXTURE_CATALOG.timeBoundaries.supportActiveAt).toBe(true);
-      expect((approved.expires_at as string) > CANONICAL_TENANT_FIXTURE_CATALOG.timeBoundaries.supportActiveAt).toBe(true);
-      expect(sqlite.prepare("SELECT state, revoked_at FROM support_access_grants WHERE id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.supportGrants.revokedTenantB)).toMatchObject({ state: "revoked", revoked_at: CANONICAL_TENANT_FIXTURE_CATALOG.timeBoundaries.supportRevokedAt });
+      await withCanonicalTenantFixtures({ transaction: fixtureTransaction(db) }, async () => {
+        const approved = sqlite.prepare("SELECT state, tenant_id, workspace_id, starts_at, expires_at, revoked_at FROM support_access_grants WHERE id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.supportGrants.approvedTenantA) as Record<string, unknown>;
+        expect(approved).toMatchObject({ state: "approved", tenant_id: CANONICAL_TENANT_FIXTURE_IDS.tenants.A, workspace_id: CANONICAL_TENANT_FIXTURE_IDS.workspaces.A, revoked_at: null });
+        expect((approved.starts_at as string) < CANONICAL_TENANT_FIXTURE_CATALOG.timeBoundaries.supportActiveAt).toBe(true);
+        expect((approved.expires_at as string) > CANONICAL_TENANT_FIXTURE_CATALOG.timeBoundaries.supportActiveAt).toBe(true);
+        expect(sqlite.prepare("SELECT state, revoked_at FROM support_access_grants WHERE id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.supportGrants.revokedTenantB)).toMatchObject({ state: "revoked", revoked_at: CANONICAL_TENANT_FIXTURE_CATALOG.timeBoundaries.supportRevokedAt });
 
-      expect(sqlite.prepare("SELECT ai_processing_enabled FROM tenant_policies WHERE tenant_id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.tenants.A)).toEqual({ ai_processing_enabled: 1 });
-      expect(sqlite.prepare("SELECT ai_processing_enabled FROM tenant_policies WHERE tenant_id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.tenants.B)).toEqual({ ai_processing_enabled: 0 });
-      expect(sqlite.prepare("SELECT id FROM workspaces WHERE tenant_id = ? AND id = ?").all(CANONICAL_TENANT_FIXTURE_IDS.tenants.A, CANONICAL_TENANT_FIXTURE_IDS.workspaces.B)).toEqual([]);
-      expect(sqlite.prepare("SELECT id FROM tenant_memberships WHERE tenant_id = ? AND id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.tenants.A, CANONICAL_TENANT_FIXTURE_IDS.memberships.B.owner)).toBeUndefined();
+        expect(sqlite.prepare("SELECT ai_processing_enabled FROM tenant_policies WHERE tenant_id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.tenants.A)).toEqual({ ai_processing_enabled: 1 });
+        expect(sqlite.prepare("SELECT ai_processing_enabled FROM tenant_policies WHERE tenant_id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.tenants.B)).toEqual({ ai_processing_enabled: 0 });
+        expect(sqlite.prepare("SELECT id FROM workspaces WHERE tenant_id = ? AND id = ?").all(CANONICAL_TENANT_FIXTURE_IDS.tenants.A, CANONICAL_TENANT_FIXTURE_IDS.workspaces.B)).toEqual([]);
+        expect(sqlite.prepare("SELECT id FROM tenant_memberships WHERE tenant_id = ? AND id = ?").get(CANONICAL_TENANT_FIXTURE_IDS.tenants.A, CANONICAL_TENANT_FIXTURE_IDS.memberships.B.owner)).toBeUndefined();
+      });
     } finally {
       sqlite.close();
     }
@@ -101,10 +110,32 @@ describe("canonical two-tenant fixtures", () => {
         expect(fixture.tenants).toHaveLength(2);
       });
       expect(canonicalCounts(sqlite)).toEqual(emptyCanonicalCounts());
-      await setupCanonicalTenantFixtures({ transaction: fixtureTransaction(db) });
+      await setupCanonicalTenantCoreFixtures({ transaction: fixtureTransaction(db) });
       const beforeDuplicate = canonicalCounts(sqlite);
-      await expect(setupCanonicalTenantFixtures({ transaction: fixtureTransaction(db) })).rejects.toThrow(/reserved rows/);
+      await expect(setupCanonicalTenantCoreFixtures({ transaction: fixtureTransaction(db) })).rejects.toThrow(/reserved rows/);
       expect(canonicalCounts(sqlite)).toEqual(beforeDuplicate);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("commits and idempotently cleans only canonical rows while preserving unrelated rows", async () => {
+    const sqlite = createFixtureDb();
+    const db = sqliteClient(sqlite);
+    try {
+      await db.prepare("INSERT INTO tenants (id, slug, name, status, locale, timezone, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
+        "80000000-0000-4000-8000-000000000099", "unrelated", "Unrelated", "active", "en-US", "UTC",
+        CANONICAL_TENANT_FIXTURE_CATALOG.timeBoundaries.fixtureCreatedAt, CANONICAL_TENANT_FIXTURE_CATALOG.timeBoundaries.fixtureCreatedAt,
+      );
+      const supportGuardsBefore = supportHistoryGuardDefinitions(sqlite);
+      expect(supportGuardsBefore).toHaveLength(12);
+      await setupCanonicalTenantCoreFixtures({ transaction: fixtureTransaction(db) });
+      expect(canonicalCounts(sqlite).supportGrants).toBe(0);
+      await cleanupCanonicalTenantCoreFixtures({ transaction: fixtureTransaction(db) });
+      await cleanupCanonicalTenantCoreFixtures({ transaction: fixtureTransaction(db) });
+      expect(canonicalCounts(sqlite)).toEqual({ ...emptyCanonicalCounts(), tenants: 1 });
+      expect(sqlite.prepare("SELECT id FROM tenants WHERE slug = 'unrelated'").get()).toEqual({ id: "80000000-0000-4000-8000-000000000099" });
+      expect(supportHistoryGuardDefinitions(sqlite)).toEqual(supportGuardsBefore);
     } finally {
       sqlite.close();
     }
@@ -124,7 +155,10 @@ describe("canonical two-tenant fixtures", () => {
     const base = sqliteClient(sqlite);
     const failing = failOnSupportDataClassChild(base);
     try {
-      await expect(setupCanonicalTenantFixtures({ transaction: fixtureTransaction(failing) })).rejects.toThrow(/synthetic support child failure/);
+      await expect(withCanonicalTenantFixtures(
+        { transaction: fixtureTransaction(failing) },
+        async () => undefined,
+      )).rejects.toThrow(/synthetic support child failure/);
       expect(canonicalCounts(sqlite)).toEqual(emptyCanonicalCounts());
     } finally {
       sqlite.close();
@@ -143,7 +177,7 @@ describe("canonical two-tenant fixtures", () => {
       repository: { get: () => { throw new Error("outer repository was touched"); } },
     }) as typeof coordinator;
     try {
-      await setupCanonicalTenantFixtures({ transaction: coordinatorWithPoisonedOuterObjects });
+      await setupCanonicalTenantCoreFixtures({ transaction: coordinatorWithPoisonedOuterObjects });
       expect(canonicalCounts(sqlite).tenants).toBe(2);
     } finally {
       sqlite.close();
@@ -155,12 +189,12 @@ describe("canonical two-tenant fixtures", () => {
     try {
       const db = sqliteClient(sqlite);
       const results = await Promise.allSettled([
-        setupCanonicalTenantFixtures({ transaction: fixtureTransaction(db) }),
-        setupCanonicalTenantFixtures({ transaction: fixtureTransaction(db) }),
+        setupCanonicalTenantCoreFixtures({ transaction: fixtureTransaction(db) }),
+        setupCanonicalTenantCoreFixtures({ transaction: fixtureTransaction(db) }),
       ]);
       expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
       expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
-      expect(canonicalCounts(sqlite)).toEqual({ tenants: 2, workspaces: 2, memberships: 20, roleBindings: 14, policies: 2, supportGrants: 2, supportPermissions: 6, supportDataClasses: 6 });
+      expect(canonicalCounts(sqlite)).toEqual({ tenants: 2, workspaces: 4, memberships: 20, roleBindings: 14, policies: 2, supportGrants: 0, supportPermissions: 0, supportDataClasses: 0 });
     } finally {
       sqlite.close();
     }
@@ -172,12 +206,12 @@ describe("canonical two-tenant fixtures", () => {
     try {
       const firstDb = sqliteClient(first);
       const secondDb = sqliteClient(second);
-      await setupCanonicalTenantFixtures({ transaction: fixtureTransaction(firstDb) });
-      await setupCanonicalTenantFixtures({ transaction: fixtureTransaction(secondDb) });
+      await setupCanonicalTenantCoreFixtures({ transaction: fixtureTransaction(firstDb) });
+      await setupCanonicalTenantCoreFixtures({ transaction: fixtureTransaction(secondDb) });
       expect(first.prepare("SELECT COUNT(*) AS count FROM tenants").get()).toEqual({ count: 2 });
       expect(second.prepare("SELECT COUNT(*) AS count FROM tenants").get()).toEqual({ count: 2 });
-      expect(first.prepare("SELECT COUNT(*) AS count FROM support_access_grants").get()).toEqual({ count: 2 });
-      expect(second.prepare("SELECT COUNT(*) AS count FROM support_access_grants").get()).toEqual({ count: 2 });
+      expect(first.prepare("SELECT COUNT(*) AS count FROM support_access_grants").get()).toEqual({ count: 0 });
+      expect(second.prepare("SELECT COUNT(*) AS count FROM support_access_grants").get()).toEqual({ count: 0 });
     } finally {
       first.close();
       second.close();
@@ -254,6 +288,16 @@ function canonicalCounts(sqlite: Database.Database): Record<string, number> {
 
 function emptyCanonicalCounts(): Record<string, number> {
   return { tenants: 0, workspaces: 0, memberships: 0, roleBindings: 0, policies: 0, supportGrants: 0, supportPermissions: 0, supportDataClasses: 0 };
+}
+
+function supportHistoryGuardDefinitions(sqlite: Database.Database): Array<{ name: string; sql: string }> {
+  return sqlite.prepare(
+    `SELECT name, sql
+     FROM sqlite_master
+     WHERE type = 'trigger'
+       AND name LIKE 'trg_novatrade_support_access_grant%'
+     ORDER BY name`,
+  ).all() as Array<{ name: string; sql: string }>;
 }
 
 function fixtureRepository(db: DbClient): TenantQueryRepository {

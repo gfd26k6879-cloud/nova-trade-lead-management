@@ -233,14 +233,14 @@ describe("tenant authorization contract", () => {
     });
   });
 
-  it("rejects unauthenticated, pending, and disabled session boundaries", async () => {
+  it("rejects unauthenticated, pending, suspended, and disabled session boundaries", async () => {
     await expect(requireTenantPermission(
       { tenantId: CANONICAL_TENANT_FIXTURE_IDS.tenants.A },
       "tenant:read",
       { sessionBoundary: async () => { throw new TenantSessionUnauthenticatedError(); } },
     )).rejects.toMatchObject({ status: 401, code: "AUTH_REQUIRED" });
 
-    for (const status of ["pending", "disabled"] as const) {
+    for (const status of ["pending", "suspended", "disabled"] as const) {
       expect(CANONICAL_TENANT_FIXTURE_CATALOG.memberships).toEqual(expect.arrayContaining([
         expect.objectContaining({ tenantKey: "A", status }),
       ]));
@@ -274,6 +274,8 @@ describe("tenant authorization contract", () => {
       .toThrowError(new TenantAuthorizationError(404, "RESOURCE_NOT_FOUND_OR_FORBIDDEN"));
     expect(() => assertTenantResourceOwnership(session, canonicalResource("A", "wrong-workspace", CANONICAL_TENANT_FIXTURE_IDS.workspaces.B), "workspace-required"))
       .toThrowError(new TenantAuthorizationError(403, "WORKSPACE_SCOPE_INVALID"));
+    expect(() => assertTenantResourceOwnership(session, canonicalResource("A", "sibling-workspace", CANONICAL_TENANT_FIXTURE_IDS.workspaces.A_SIBLING), "workspace-required"))
+      .toThrowError(new TenantAuthorizationError(403, "WORKSPACE_SCOPE_INVALID"));
 
     await expect(assertTenantPermission(session, "account:read", {
       action: "read_account",
@@ -285,6 +287,14 @@ describe("tenant authorization contract", () => {
     }), "account:edit", {
       action: "edit_account",
       resource: canonicalResource("A", "wrong-workspace", CANONICAL_TENANT_FIXTURE_IDS.workspaces.B),
+      scopeClass: "workspace-required",
+      policyEvaluator: (context) => ({ allowed: true, context }),
+    })).rejects.toMatchObject({ status: 403, code: "WORKSPACE_SCOPE_INVALID" });
+    await expect(assertTenantPermission(canonicalSession("A", "strategist_manager", {
+      workspaceId: CANONICAL_TENANT_FIXTURE_IDS.workspaces.A,
+    }), "account:edit", {
+      action: "edit_account_in_sibling_workspace",
+      resource: canonicalResource("A", "sibling-workspace", CANONICAL_TENANT_FIXTURE_IDS.workspaces.A_SIBLING),
       scopeClass: "workspace-required",
       policyEvaluator: (context) => ({ allowed: true, context }),
     })).rejects.toMatchObject({ status: 403, code: "WORKSPACE_SCOPE_INVALID" });
