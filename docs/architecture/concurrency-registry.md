@@ -56,7 +56,7 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 | `G-004A` | Fresh dual rereview under three retained locks | Repair `3572d60` reports the real PG16 matrix, G002/G003 regressions, and T029 boundary passing inside four repair paths/six aggregate paths; no acceptance before independent reproduction. |
 | `G-004B` | Preserved; blocked on G-004A/G-009/G-011 | Co-deliver immutable per-attempt job/run/lease/generation correlation and bounded non-content `worker_runs` hardening with G-013/G-014. |
 | `G-004` | Parent open | Accept only after independently accepted G-004A and G-004B. Every original success criterion and the two-tenant runtime proof remain required. |
-| `G-005` | Exact packet ready; implementation blocked on accepted `G-004A` | Seven files, 45/43/2, no split; parent G-004 and G-022 runtime propagation remain unwaived phase-gate obligations. |
+| `G-005` | Exact packet under independent preflight; implementation blocked on accepted `G-004A` | Seven files, 45/43/2, no split proposed; parent G-004 and G-022 runtime propagation remain unwaived phase-gate obligations. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
 | `UI-000` | Ready; capacity/approval-queued | Seven-artifact design packet is ready. Terra-medium is authorized, but implementation remains capacity-queued and explicit product/design/accessibility approval is still required before task acceptance. |
