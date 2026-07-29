@@ -21,8 +21,8 @@ The concurrent execution plan requires the final integration conductor to run `g
 | Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Read-only G-006/G-008 recovery-boundary packet completed cleanly at `9afedb757bb3a3bb70b58d956cc3b0ece25d70ea`; G-006 waits for accepted G-003–G-005 keys, and G-008 then waits for G-006/G-007; no lock or change. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 five-file launch packet independently accepted at clean baseline `ca6747659761c74875086933c9f0b03557a4d294`; Spark and Luna dispatches were both rejected before agent creation; implementation is capacity/authority-blocked with zero changes. |
-| Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | Refreshed clean to `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; read-only UI-000 route/design/state inventory is active; no application code, image generation, credit use, lock, or approval claim. |
-| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Refreshed clean to `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; read-only Q-002 deterministic fixture-contract packet is active; no lock or implementation worker. |
+| Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
+| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Q-002 six-file fixture packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; second-workspace, look-alike, cleanup, Postgres, shared-factory, and E2E-selector gaps are bounded; implementation remains capacity-blocked. |
 
 The non-OneDrive root is selected to avoid sync churn and lock contention. The authoritative repository remains in its existing OneDrive path.
 
@@ -56,6 +56,8 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 | `G-004` | Blocked on `G-003` | AI tenant derivation requires tenant-scoped leads; platform `worker_runs` stays global. |
 | `G-005` | Blocked on `G-004` | Serialized final Phase 2 structural migration producer. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
+| `Q-002` | Capacity/authority-blocked | Dependencies and six-file packet are ready; implementation requires an approved worker model. |
+| `UI-000` | Capacity/approval-blocked | Seven-artifact design packet is ready; implementation requires an approved worker model, then explicit product/design/accessibility approval before task acceptance. |
 
 ## Capacity receipt
 
@@ -72,6 +74,7 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 - Discovery and Quality independently accepted an exact five-file G-003 packet. The conventional three files expand only to reconcile the accepted G-002 and T029 full-migration harnesses with 43/41/2 and to stop the pre-G-002 fixture before G-002 and later migrations.
 - Both plan-approved G-003 worker dispatches were rejected before agent creation: `gpt-5.3-codex-spark` and `gpt-5.6-luna` are unknown to this runtime, which exposes only `gpt-5.6-sol` and `gpt-5.6-terra`. Zero repository/resource change resulted. The available models remain unauthorized for implementation, the initial-task conductor-takeover exception does not apply, and all three G-003 locks were released.
 - Platform's independent recovery-boundary preflight is complete. G-006 must consume the accepted exact keys from G-003–G-005 before SQLite/recovery parity is designed; G-008 then follows accepted G-006/G-007. The current 37-table recovery verifier passes, and the accepted T029 blocker remains preserved rather than patched around prematurely.
+- Q-002 and UI-000 independent packets are complete with zero changes. Q-002 bounds the missing reusable four-workspace fixture and disposable-Postgres cleanup contract. UI-000 bounds a complete local seven-artifact specification/wireframe/sign-off package without application code, generated imagery, external service, credit use, or premature approval claim.
 
 ## Pilot acceptance receipt
 
