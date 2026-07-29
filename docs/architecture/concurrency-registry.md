@@ -53,7 +53,7 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 | `G-001` | Accepted | Ownership contract repaired, independently verified, and reaccepted through append-only event 205. |
 | `G-002` | Accepted | Independently reviewed repair merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; final local release gate passed. |
 | `G-003` | Accepted | Source `7b305e6` passed dual review and merged at `ba1b646`; final merged release gate passed with 2,202 tests, build, and Playwright 5/5. |
-| `G-004A` | Repair delta required under three retained locks | Candidate `e56d884` stays inside the six-file ceiling and passes basic/full-chain checks, but its dedicated PostgreSQL 16 test lacks the mandatory receipt, orphan, cross-tenant, ACL, rollback, and hostile-path adversarial matrix. |
+| `G-004A` | Dual independent review under three retained locks | Candidate `e56d884` stays inside the six-file ceiling and passes basic/full-chain checks, but its admitted adversarial-test gap is being converted into an exact bounded repair delta before any acceptance. |
 | `G-004B` | Preserved; blocked on G-004A/G-009/G-011 | Co-deliver immutable per-attempt job/run/lease/generation correlation and bounded non-content `worker_runs` hardening with G-013/G-014. |
 | `G-004` | Parent open | Accept only after independently accepted G-004A and G-004B. Every original success criterion and the two-tenant runtime proof remain required. |
 | `G-005` | Read-only preflight active; implementation blocked on accepted `G-004A` | Preparing the exact serialized source/cache/observation/usage packet; parent G-004 remains a phase-gate obligation. |
