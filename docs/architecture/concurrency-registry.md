@@ -20,7 +20,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 |---|---|---|---|---|
 | Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Read-only G-006/G-008 recovery-boundary packet completed cleanly at `9afedb757bb3a3bb70b58d956cc3b0ece25d70ea`; G-006 waits for accepted G-003–G-005 keys, and G-008 then waits for G-006/G-007; no lock or change. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 five-file launch packet independently accepted at clean baseline `ca6747659761c74875086933c9f0b03557a4d294`; Terra-medium implementation is now authorized, with branch refresh, lock acquisition, and dispatch next. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 five-file launch packet independently accepted; branch refreshed cleanly to amendment baseline `bf373a0822215d12e2a1f651142a4773b3f5a28b`; exact locks acquired and Terra-medium dispatch authorized. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
 | Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Q-002 six-file fixture packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; second-workspace, look-alike, cleanup, Postgres, shared-factory, and E2E-selector gaps are bounded; ready when the migration-critical G-003 producer/review slots permit. |
 
@@ -31,15 +31,15 @@ The non-OneDrive root is selected to avoid sync churn and lock contention. The a
 | Lock | Holder | State | Release evidence |
 |---|---|---|---|
 | `integration-ledger` | Final integration conductor | Held | Released only when final integration authority ends. |
-| `migration-sequence` | None | Available; G-003 released after both approved worker models were rejected before agent creation | Reacquire only after an approved implementation worker is actually dispatchable. |
-| `migration-harness` | None | Available; G-003 released with zero changes | Reacquire with G-003 only for the G-002 pre-cutoff and 43/41/2 reconciliation. |
+| `migration-sequence` | `G-003` Terra-medium worker | Held at baseline `bf373a0822215d12e2a1f651142a4773b3f5a28b` | Release only on accepted receipt or zero-change dispatch failure. Stop on any sequencing or scope decision outside the accepted G-003 contract. |
+| `migration-harness` | `G-003` Terra-medium worker | Held for the G-002 pre-cutoff and 43/41/2 reconciliation only | Release only after focused harness evidence and independent review, or zero-change dispatch failure. |
 | `sqlite-schema` | None | Available | Accepted task receipt. |
 | `auth-session` | None | Available | Accepted task receipt. |
 | `permissions` | None | Available | Accepted task receipt. |
 | `database-adapter` | None | Available | Accepted task receipt. |
 | `package-config` | None | Available | Accepted task receipt. |
 | `protected-shell` | None | Available | Accepted task receipt. |
-| `recovery-contract` | None | Available; G-003 released with zero changes | Reacquire with G-003 only for the 43/41/2 inventory/log reconciliation; recovery semantics remain frozen. |
+| `recovery-contract` | `G-003` Terra-medium worker | Held only for the 43/41/2 inventory/log reconciliation; recovery semantics remain frozen | Release only after focused inventory/log evidence and independent review, or zero-change dispatch failure. |
 | `full-release-gate` | None | Available; merged G-002 gate passed | `npm run release:check` exited 0 at merge `cb329b4a6adaaa0c940f16b433198297e2712c7f`. |
 
 No domain lane may claim a lock implicitly. Every acquisition must name the task, exhaustive protected paths, integration baseline, expected release evidence, and stop conditions in the ledger.
@@ -52,7 +52,7 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 |---|---|---|
 | `G-001` | Accepted | Ownership contract repaired, independently verified, and reaccepted through append-only event 205. |
 | `G-002` | Accepted | Independently reviewed repair merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; final local release gate passed. |
-| `G-003` | Ready for Terra-medium dispatch | Five-file packet and acceptance matrix are accepted. Refresh the Discovery branch to the amended control baseline, then acquire its exact three locks and dispatch one Terra-medium worker. |
+| `G-003` | Dispatch authorized; locks held | Five-file packet and acceptance matrix are accepted. Discovery is clean at `bf373a0822215d12e2a1f651142a4773b3f5a28b`; one Terra-medium worker may implement only the exact packet below. |
 | `G-004` | Blocked on `G-003` | AI tenant derivation requires tenant-scoped leads; platform `worker_runs` stays global. |
 | `G-005` | Blocked on `G-004` | Serialized final Phase 2 structural migration producer. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
@@ -91,6 +91,14 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 - Terra may implement one bounded, already accepted card at a time. For migration work it must follow the accepted contract and named locks exactly and must stop for any sequencing, scope, security, or source-of-truth decision.
 - Terra cannot accept its own work or act as a domain/final acceptance authority. Independent review remains mandatory, and Sol remains the sole final integration and acceptance authority.
 - The observed runtime ceiling remains four total active agents. G-003 resumes first; G-004 and G-005 remain serialized behind it, while Q-002 and UI-000 stay queued for disjoint capacity.
+
+## G-003 Terra-medium dispatch receipt
+
+- Dispatch baseline: `bf373a0822215d12e2a1f651142a4773b3f5a28b` on clean branch `codex/nova-discovery-decisioning`.
+- Worker policy: one `gpt-5.6-terra` worker at medium reasoning; one primary card; no self-acceptance; stop for any contract, sequencing, security, or source-of-truth decision.
+- Exact write set: `supabase/migrations/202607290002_add_lead_crm_tenant_scope.sql`, `src/lib/__tests__/lead-crm-tenant-scope-postgres.test.ts`, `docs/validation/2026-07-29-g003-lead-crm-tenant-scope.md`, the pre-G-002 cutoff plus 43/41/2 expectations in `src/lib/__tests__/location-crawl-tenant-scope-postgres.test.ts`, and only the 43/41/2 inventory/log expectations in `src/lib/__tests__/data-transfer-contract.test.ts`.
+- Locks: `migration-sequence`, `migration-harness`, and `recovery-contract`. Recovery behavior remains frozen; the last two files cannot expand beyond the named reconciliation.
+- Required outcome: one attributable implementation commit plus focused PostgreSQL 16, hostile-search-path, transaction/idempotency, rollback/orphan, migration-count, typecheck, lint, and diff evidence. No push, deploy, provider call, customer data, or remote database.
 
 ## Pilot acceptance receipt
 
