@@ -6,7 +6,9 @@ Repository: `C:\Users\Masih\OneDrive\Documents\Nova Trade\nova-trade-lead-manage
 
 Source branch and revision: `main` at `8225df619a96a088f18ff7f574a36b157d55dd2f`
 
-Decision: **PASS for local baseline-commit preparation.** This receipt is not a `concurrency_baseline_accepted` event by itself. The resulting commit and exact activation state must be recorded in the append-only implementation ledger before any domain worktree is created.
+Implementation baseline commit: `3b1135c1c781a5a806a6053a01987a91b63e0bf3` on `codex/nova-multitenant-integration`.
+
+Decision: **PASS.** The reviewed transition manifest is now immutable in the local implementation baseline commit. The separate `concurrency_baseline_accepted` ledger event that binds this commit must itself be committed before any domain worktree is created.
 
 ## Preserved checkpoint
 

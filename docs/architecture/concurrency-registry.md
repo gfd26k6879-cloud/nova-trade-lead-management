@@ -2,7 +2,7 @@
 
 Date: 2026-07-29
 
-Status: **Stage 1 baseline preparation.** No domain branch, worktree, or conductor lane is active until the accepted integration commit is recorded in the canonical ledger.
+Status: **Stage 1 implementation baseline committed.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. No domain branch, worktree, or conductor lane is active until the control commit containing `concurrency_baseline_accepted` is created.
 
 ## Final integration authority
 
@@ -18,11 +18,11 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Not created; gated on accepted integration baseline. |
-| Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Not created; gated on accepted integration baseline. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Not created; gated on accepted integration baseline. |
-| Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | Not created; gated on accepted integration baseline. |
-| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Not created; gated on accepted integration baseline. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Ready for creation from the control commit containing baseline acceptance. |
+| Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Ready for creation from the control commit containing baseline acceptance. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Ready for creation from the control commit containing baseline acceptance. |
+| Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | Ready for creation from the control commit containing baseline acceptance. |
+| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Ready for creation from the control commit containing baseline acceptance. |
 
 The non-OneDrive root is selected to avoid sync churn and lock contention. The authoritative repository remains in its existing OneDrive path.
 
