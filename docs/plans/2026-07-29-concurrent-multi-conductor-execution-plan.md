@@ -130,7 +130,9 @@ If Codex can authorize a non-OneDrive workspace root, prefer `C:\Users\Masih\Doc
 - First choice when capacity exists: `gpt-5.3-codex-spark` with the highest available reasoning.
 - Fallback: `gpt-5.6-luna` with `high` reasoning.
 - Last approved fallback: `gpt-5.6-luna` with `medium` reasoning for bounded, low-risk tasks.
-- No other model family is authorized by this plan.
+- Runtime-contingent fallback approved by the user on 2026-07-29: `gpt-5.6-terra` with `medium` reasoning when Spark and Luna are unavailable. Terra receives one bounded card with an exact, already accepted write set and contract. It may execute an accepted migration packet under its named locks, but it may not change migration sequencing, source-of-truth, tenant/security policy, task scope, dependencies, acceptance requirements, or the execution model.
+- Terra cannot perform domain or final acceptance. A separate reviewer must inspect its result, and `gpt-5.6-sol` remains the sole final integration and acceptance authority.
+- No other model family or Terra reasoning level is authorized by this plan without another explicit amendment.
 - One worker receives exactly one primary task card.
 - A worker may not alter its task, dependencies, policy, or write set without conductor approval.
 
