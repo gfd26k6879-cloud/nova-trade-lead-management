@@ -20,9 +20,9 @@ The concurrent execution plan requires the final integration conductor to run `g
 |---|---|---|---|---|
 | Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Refreshed clean to `9afedb757bb3a3bb70b58d956cc3b0ece25d70ea`; read-only G-006/G-008 recovery-boundary preparation is active through `/root/baseline_ownership`; no lock or implementation worker. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Refreshed clean to `ca6747659761c74875086933c9f0b03557a4d294`; read-only G-003 launch-packet refresh is active through `/root/discovery_conductor`; no lock or implementation worker. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 five-file launch packet independently accepted at clean baseline `ca6747659761c74875086933c9f0b03557a4d294`; first approved-worker dispatch is pending runtime assignment. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Refreshed clean to `ca6747659761c74875086933c9f0b03557a4d294`; independent read-only G-003 acceptance-matrix and collision audit is active through `/root/baseline_validation`; no lock or implementation worker. |
+| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Independent G-003 acceptance matrix completed at clean baseline `ca6747659761c74875086933c9f0b03557a4d294`; five-file scope required; lane is available for eventual implementation review. |
 
 The non-OneDrive root is selected to avoid sync churn and lock contention. The authoritative repository remains in its existing OneDrive path.
 
@@ -31,14 +31,15 @@ The non-OneDrive root is selected to avoid sync churn and lock contention. The a
 | Lock | Holder | State | Release evidence |
 |---|---|---|---|
 | `integration-ledger` | Final integration conductor | Held | Released only when final integration authority ends. |
-| `migration-sequence` | None | Available; G-002 released after acceptance and merge validation | Next acquisition requires a G-003 dispatch event with its exact migration path and accepted `cb329b4a6adaaa0c940f16b433198297e2712c7f` integration baseline. |
+| `migration-sequence` | `G-003` | Held for exactly `supabase/migrations/202607290002_add_lead_crm_tenant_scope.sql` at baseline `ca6747659761c74875086933c9f0b03557a4d294` | Accepted/rejected G-003 receipt, final review, and zero owned-resource residue. |
+| `migration-harness` | `G-003` | Held only for the G-002 pre-cutoff and 43/41/2 reconciliation in `src/lib/__tests__/location-crawl-tenant-scope-postgres.test.ts` | Focused G-002 PG16 rerun plus exact-diff review. |
 | `sqlite-schema` | None | Available | Accepted task receipt. |
 | `auth-session` | None | Available | Accepted task receipt. |
 | `permissions` | None | Available | Accepted task receipt. |
 | `database-adapter` | None | Available | Accepted task receipt. |
 | `package-config` | None | Available | Accepted task receipt. |
 | `protected-shell` | None | Available | Accepted task receipt. |
-| `recovery-contract` | None | Available; G-002 released after the authorized migration-count-only reconciliation | T029 remains a deferred blocker for G-006/G-008 and is not a passing receipt. |
+| `recovery-contract` | `G-003` | Held only for the 43/41/2 inventory/log reconciliation in `src/lib/__tests__/data-transfer-contract.test.ts`; recovery semantics remain frozen | T029 reaches the accepted deferred G-006/G-008 blocker and is not represented as passing. |
 | `full-release-gate` | None | Available; merged G-002 gate passed | `npm run release:check` exited 0 at merge `cb329b4a6adaaa0c940f16b433198297e2712c7f`. |
 
 No domain lane may claim a lock implicitly. Every acquisition must name the task, exhaustive protected paths, integration baseline, expected release evidence, and stop conditions in the ledger.
@@ -68,7 +69,8 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 - The Stage 3 pilot is accepted. Platform produced one attributable two-commit G-002 batch, Quality required one bounded repair delta and then passed it independently, Discovery prepared the serialized G-003 through G-005 packets, and the final integration gate passed with no overlaps, stale baselines, unattributable files, invalid ledger events, or owned temporary-resource residue.
 - Stage 4's planned 12-worker level is not claimable in this runtime: only four total agent slots are exposed and the plan-approved Spark/Luna worker models are unavailable. No unapproved model is substituted. Dependency preparation and final-conductor work may continue, but implementation dispatch must remain inside the plan's model and capacity rules.
 - All five domain branches were fast-forwarded cleanly between batches to accepted integration baseline `ac9d9ebadb747c01e9b5019061cedbcbb213e4c4`; no domain branch contains an unmerged or unattributable delta.
-- Current Stage 4 preflight capacity is fully occupied: one final conductor plus three read-only domain conductors (Discovery G-003 packet, Quality G-003 acceptance matrix, Platform G-006/G-008 recovery boundary), zero implementation workers, and zero held shared locks.
+- Discovery and Quality independently accepted an exact five-file G-003 packet. The conventional three files expand only to reconcile the accepted G-002 and T029 full-migration harnesses with 43/41/2 and to stop the pre-G-002 fixture before G-002 and later migrations.
+- The first plan-approved G-003 worker dispatch requests `gpt-5.3-codex-spark` at the highest available reasoning. The three exact shared-surface locks are held while runtime assignment is attempted; no worker is claimed until the tool returns an agent identity.
 
 ## Pilot acceptance receipt
 
