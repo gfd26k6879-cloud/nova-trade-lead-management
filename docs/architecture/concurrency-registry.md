@@ -203,3 +203,24 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 - Final integration gate: TypeScript, ESLint, 37-table recovery schema verification, 124 passing test files with 2,201 passing tests, Next.js 16.2.6 production build, and 5/5 public read-only Playwright checks.
 - Known blocker: opt-in T029 recovery restore remains blocked at the accepted G-006/G-008 boundary; it is not represented as passing.
 - External boundary: local-only. Nothing was pushed, deployed, applied to a remote database, or exercised against customer data or paid providers.
+
+## G-004A final-conductor repair receipt
+
+- Two failed bounded worker generations activated the binding plan's
+  final-conductor exception. The repair remains inside the accepted six-file
+  aggregate ceiling and is sealed at source commit
+  `c0892a06325b33657e5b73813635fec6a4081012` over parent
+  `3572d60ee3643b9c042a5aaf1c4fafd0d3bc15ef`.
+- The three-file repair delta makes tenant-column nullability part of exact
+  replay identity and rejects non-owner column ACLs plus effective anonymous
+  or authenticated column privileges during activation and replay. Live
+  nullable-column and column-ACL spoofs are covered without residue.
+- Producer evidence is G-004A PostgreSQL 16 1/1, G-003 2/2, G-002 2/2,
+  typecheck, focused lint, and diff check. T029 remains truthfully stopped only
+  at the accepted `user_market_access` recovery-contract mismatch after 42
+  applied migrations and 2 named skips.
+- This is not acceptance. Fresh domain/security and independent Quality
+  rereviews own the immutable commit. The `migration-sequence`,
+  `migration-harness`, and `recovery-contract` locks remain held; G-005 stays
+  preflight-ready but cannot execute until both reviews pass, G-004A is merged
+  and accepted, and the locks are released.
