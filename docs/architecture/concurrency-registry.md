@@ -2,7 +2,7 @@
 
 Date: 2026-07-29
 
-Status: **Stage 1 repository topology active.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` records baseline acceptance and is the exact start revision for all five domain branches and worktrees. Runtime conductor lanes are still capacity- and tool-gated.
+Status: **Stage 3 pilot accepted; Stage 4 is capacity-gated.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. G-003 is the next dependency-ready migration card. Runtime scaling remains limited by the observed four-agent ceiling and unavailable approved worker models.
 
 ## Final integration authority
 
@@ -18,11 +18,11 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-002 commit `8c48db28653e2b287de6a94cc45d6c5439371d0e` is in bounded repair through `/root/baseline_ownership`; `migration-sequence` and a one-file `recovery-contract` expansion are held. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-002 commits `8c48db28653e2b287de6a94cc45d6c5439371d0e` and `4fa948ae3af6900227f2351ec359b6016d1af64a` accepted and merged locally at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; lane is between batches. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Pilot read-only G-003/G-004/G-005 preflight completed through `/root/discovery_conductor`; exact next migration packets prepared and correctly dependency-blocked; no lock or change. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Pilot read-only G-003/G-004/G-005 preflight completed through `/root/discovery_conductor`; G-003 is dependency-ready, while G-004 and G-005 remain serialized behind it; no lock or change. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Independent review of G-002 commit `8c48db28653e2b287de6a94cc45d6c5439371d0e` completed through `/root/baseline_validation`; four actionable findings; rework required. |
+| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Independent G-002 repair review passed: exact four-file scope, PostgreSQL 16 rehearsal 2/2, 42/40/2 inventory, clean worktree, and zero temporary-resource residue; lane is between batches. |
 
 The non-OneDrive root is selected to avoid sync churn and lock contention. The authoritative repository remains in its existing OneDrive path.
 
@@ -31,27 +31,27 @@ The non-OneDrive root is selected to avoid sync churn and lock contention. The a
 | Lock | Holder | State | Release evidence |
 |---|---|---|---|
 | `integration-ledger` | Final integration conductor | Held | Released only when final integration authority ends. |
-| `migration-sequence` | `G-002` final-conductor-authorized Platform takeover | Held for exactly `supabase/migrations/202607290001_add_location_crawl_tenant_scope.sql` | Accepted or blocked G-002 migration receipt plus final review. |
+| `migration-sequence` | None | Available; G-002 released after acceptance and merge validation | Next acquisition requires a G-003 dispatch event with its exact migration path and accepted `cb329b4a6adaaa0c940f16b433198297e2712c7f` integration baseline. |
 | `sqlite-schema` | None | Available | Accepted task receipt. |
 | `auth-session` | None | Available | Accepted task receipt. |
 | `permissions` | None | Available | Accepted task receipt. |
 | `database-adapter` | None | Available | Accepted task receipt. |
 | `package-config` | None | Available | Accepted task receipt. |
 | `protected-shell` | None | Available | Accepted task receipt. |
-| `recovery-contract` | `G-002` repair delta | Held only for `src/lib/__tests__/data-transfer-contract.test.ts` migration-count reconciliation and opt-in T-029 rerun | Repaired full-chain and recovery rehearsal receipt plus final review. |
-| `full-release-gate` | None | Available; latest local gate passed | Gate process exited and receipt recorded. |
+| `recovery-contract` | None | Available; G-002 released after the authorized migration-count-only reconciliation | T029 remains a deferred blocker for G-006/G-008 and is not a passing receipt. |
+| `full-release-gate` | None | Available; merged G-002 gate passed | `npm run release:check` exited 0 at merge `cb329b4a6adaaa0c940f16b433198297e2712c7f`. |
 
 No domain lane may claim a lock implicitly. Every acquisition must name the task, exhaustive protected paths, integration baseline, expected release evidence, and stop conditions in the ledger.
 
-The opt-in T-029 recovery rehearsal is currently expected to stop after the 42-discovered/40-portable migration replay because its legacy `user_market_access` key contract predates G-002 tenant-inclusive identity. This is recorded as blocked—not passing—and is deferred to the planned G-006 SQLite parity and G-008 reconciliation boundary after G-002 through G-005 are structurally accepted. G-002 may not weaken tenant identity or expand the recovery design around only the first of those four migrations.
+The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable migration replay because its legacy `user_market_access` key contract predates G-002 tenant-inclusive identity. This is recorded as blocked—not passing—and is deferred to the planned G-006 SQLite parity and G-008 reconciliation boundary after G-002 through G-005 are structurally accepted. G-002 did not weaken tenant identity or expand the recovery design around only the first of those four migrations.
 
 ## Ready-queue checkpoint
 
 | Task | Queue | Reason |
 |---|---|---|
 | `G-001` | Accepted | Ownership contract repaired, independently verified, and reaccepted through append-only event 205. |
-| `G-002` | Ready | Sole first migration producer under the corrected contract; requires the `migration-sequence` lock at dispatch. |
-| `G-003` | Blocked on `G-002` | Migration chain is explicit. |
+| `G-002` | Accepted | Independently reviewed repair merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; final local release gate passed. |
+| `G-003` | Ready | G-002 is accepted; it is the sole next migration producer and must claim `migration-sequence` against the current integration baseline. |
 | `G-004` | Blocked on `G-003` | AI tenant derivation requires tenant-scoped leads; platform `worker_runs` stays global. |
 | `G-005` | Blocked on `G-004` | Serialized final Phase 2 structural migration producer. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
@@ -65,4 +65,15 @@ The opt-in T-029 recovery rehearsal is currently expected to stop after the 42-d
 - Three separate `gpt-5.6-sol` extra-high read-only reviewers were used during Stage 1 for G-001, file ownership, and validation/resource audits. Their output was evidence only and final disposition remained with the root task.
 - The pilot preflight used two active domain conductors (Platform and Quality), no implementation worker, and no migration producer. The first Platform conductor was interrupted after two bounded no-output requests; a replacement takeover receipt and independent Quality receipt both approved the same three-file G-002 packet.
 - G-002 now runs as the previously authorized bounded parent/domain-conductor takeover after the two approved worker-model failures recorded in ledger events 198 through 200. No unapproved worker model substitution is claimed.
-- The Discovery preflight is complete. Platform remains the sole active producer while it repairs the independently rejected G-002 batch; Quality is inactive until the repair commit is ready for a fresh review.
+- The Stage 3 pilot is accepted. Platform produced one attributable two-commit G-002 batch, Quality required one bounded repair delta and then passed it independently, Discovery prepared the serialized G-003 through G-005 packets, and the final integration gate passed with no overlaps, stale baselines, unattributable files, invalid ledger events, or owned temporary-resource residue.
+- Stage 4's planned 12-worker level is not claimable in this runtime: only four total agent slots are exposed and the plan-approved Spark/Luna worker models are unavailable. No unapproved model is substituted. Dependency preparation and final-conductor work may continue, but implementation dispatch must remain inside the plan's model and capacity rules.
+
+## Pilot acceptance receipt
+
+- Batch: `platform-tenancy-001`.
+- Domain task commits: `8c48db28653e2b287de6a94cc45d6c5439371d0e`, `4fa948ae3af6900227f2351ec359b6016d1af64a`.
+- Integration merge: `cb329b4a6adaaa0c940f16b433198297e2712c7f` using a non-fast-forward merge.
+- Independent PostgreSQL 16 review: 2/2 passed with 42 migrations discovered, 40 applied, and only the two documented cron migrations skipped through portable shims.
+- Final integration gate: TypeScript, ESLint, 37-table recovery schema verification, 124 passing test files with 2,201 passing tests, Next.js 16.2.6 production build, and 5/5 public read-only Playwright checks.
+- Known blocker: opt-in T029 recovery restore remains blocked at the accepted G-006/G-008 boundary; it is not represented as passing.
+- External boundary: local-only. Nothing was pushed, deployed, applied to a remote database, or exercised against customer data or paid providers.
