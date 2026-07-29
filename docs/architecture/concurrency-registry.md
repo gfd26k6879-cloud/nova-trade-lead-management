@@ -2,7 +2,7 @@
 
 Date: 2026-07-29
 
-Status: **Stage 3 pilot accepted; Stage 4 active; G-003, G-004A, G-005, and Q-002 accepted; parent G-006 split open with G-006R ready for bounded execution; G-004B preserved for G-013/G-014.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. G-003 passed fresh domain/security and Quality review, merged at `ba1b646974e1bf91234f37567ca8b4a9a6342171`, and passed the final merged integration gate. G-004A passed fresh dual review, merged at `8383fa70a2bac8de71413ae135918bbaedf907b4`, and passed the final merged release gate; parent G-004 remains open for preserved runtime G-004B. G-005 passed repaired fresh dual review, merged at `d2d6e7f4d84c8ed94f15f9c2988b786f765f75b6`, and passed the final merged release gate. Q-002 remains accepted at `f95681062200d13be71f85797c38f6dfa28edcbb`. G-006 preflight proved that archive identity must be versioned before SQLite physical keys can change, so Sol preserved the full card as serialized children G-006R, G-006A, and G-006B. Platform remains clean at accepted integration baseline `9dfd4f5f9119edc86692e9689e1d51f3e655377a`; only `recovery-contract` is acquired for G-006R. Sol remains the sole final integration/acceptance authority, and the observed four-total-agent ceiling remains binding.
+Status: **Stage 3 pilot accepted; Stage 4 active; G-003, G-004A, G-005, and Q-002 accepted; parent G-006 split open with G-006R immutable source under dual review; G-004B preserved for G-013/G-014.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. G-003 passed fresh domain/security and Quality review, merged at `ba1b646974e1bf91234f37567ca8b4a9a6342171`, and passed the final merged integration gate. G-004A passed fresh dual review, merged at `8383fa70a2bac8de71413ae135918bbaedf907b4`, and passed the final merged release gate; parent G-004 remains open for preserved runtime G-004B. G-005 passed repaired fresh dual review, merged at `d2d6e7f4d84c8ed94f15f9c2988b786f765f75b6`, and passed the final merged release gate. Q-002 remains accepted at `f95681062200d13be71f85797c38f6dfa28edcbb`. G-006 preflight proved that archive identity must be versioned before SQLite physical keys can change, so Sol preserved the full card as serialized children G-006R, G-006A, and G-006B. G-006R source `9087af7d73b7174a3683b771b877bf40eb0fd1ab` is exactly one seven-path commit over accepted baseline and is frozen for fresh domain and Quality review; `recovery-contract` remains held. Sol remains the sole final integration/acceptance authority, and the observed four-total-agent ceiling remains binding.
 
 ## Final integration authority
 
@@ -18,7 +18,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Clean at accepted integration baseline `9dfd4f5f9119edc86692e9689e1d51f3e655377a`; parent G-006 is preserved as G-006R then G-006A then G-006B, with the bounded G-006R recovery-identity packet next. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Clean immutable G-006R source `9087af7d73b7174a3683b771b877bf40eb0fd1ab`, exactly one seven-path commit over accepted baseline `9dfd4f5f9119edc86692e9689e1d51f3e655377a`, is under fresh dual review. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-004A source `c0892a06325b33657e5b73813635fec6a4081012` is accepted through integration `8383fa70a2bac8de71413ae135918bbaedf907b4`; runtime G-004B remains preserved and blocked for co-delivery with G-013/G-014. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
@@ -58,7 +58,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 | `G-004` | Parent open | Accept only after independently accepted G-004A and G-004B. Every original success criterion and the two-tenant runtime proof remain required. |
 | `G-005` | Accepted | Source `28005a3` passed repaired dual review, merged at `d2d6e7f`, and passed the full merged release gate. Runtime propagation and T029 reconciliation remain later cards. |
 | `G-006` | Parent split open | Preserve every success criterion through serialized G-006R recovery identity, G-006A fresh schema/coordinator, and G-006B receipt-bound destructive finalization. Accept only after all three independently pass. |
-| `G-006R` | Ready for bounded Terra-medium execution | Version T029 archive identity independently of physical database primary keys before SQLite key changes; owns only the seven accepted recovery paths and `recovery-contract`. |
+| `G-006R` | Immutable source under dual review | Source `9087af7` contains exactly the accepted seven paths and passed producer gates; merge, acceptance, and lock release wait for fresh domain/Quality review and final merged release evidence. |
 | `G-006A` | Blocked on accepted G-006R | Add final fresh SQLite shapes plus a fail-closed, versioned upgrade coordinator; acquire `sqlite-schema` and `recovery-contract` only after G-006R. |
 | `G-006B` | Blocked on accepted G-006A | Consume exactly one verified T028 SQLite receipt and verified backup to atomically finalize 17 non-audit tables with interruption/replay proof. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
@@ -358,3 +358,20 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   schema, application/runtime, G-004B worker envelope, generalized G-008
   reconciler, provider/customer systems, and remote/production state are out of
   scope. Terra-medium cannot self-review or accept this packet.
+
+## G-006R producer and review receipt
+
+- Producer source `9087af7d73b7174a3683b771b877bf40eb0fd1ab` is
+  exactly one commit over baseline `9dfd4f5f9119edc86692e9689e1d51f3e655377a`,
+  changes exactly the seven authorized paths, and leaves the Platform worktree
+  clean. The producer did not review or accept its work.
+- Producer evidence: focused Vitest 13 passed with one explicit opt-in skip;
+  fresh disposable PostgreSQL 16 rehearsal 14/14 with 45 discovered, 43
+  applied, and two named scheduler skips; the 37-table recovery verifier,
+  typecheck, full lint, four script syntax checks, and diff check passed.
+  Task-owned PostgreSQL resources were removed.
+- Fresh domain and independent Quality reviews must reproduce both schema-3
+  frozen behavior and schema-4 logical identity behavior, inspect exact target
+  uniqueness including `NULLS NOT DISTINCT`, audit the seven-path ceiling, and
+  confirm G-006A/B, G-007/G-008, runtime, G-004B, and external boundaries remain
+  untouched. `recovery-contract` remains held during review.
