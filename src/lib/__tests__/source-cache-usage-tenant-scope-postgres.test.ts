@@ -61,7 +61,9 @@ async function resetTo(client: PgClient, stopBefore?: string): Promise<{ discove
     DO $$ BEGIN
       IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF;
       IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+      IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='g005_inherited') THEN CREATE ROLE g005_inherited NOLOGIN; END IF;
     END $$;
+    GRANT g005_inherited TO authenticated;
     GRANT ALL ON SCHEMA public TO postgres;
     GRANT USAGE ON SCHEMA public TO anon,authenticated;
     CREATE TABLE public.worker_runs(
@@ -215,6 +217,14 @@ async function expectMigrationRejectedWithoutInstall(client: PgClient, pattern: 
   expect(row.function_count).toBe(0);
 }
 
+async function expectReplayRejected(client: PgClient, pattern: RegExp): Promise<void> {
+  let failure: unknown;
+  try { await client.unsafe(migrationSql); } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(Error);
+  expect((failure as Error).message).toMatch(pattern);
+  await client.unsafe("ROLLBACK");
+}
+
 describe("G-005 source cache and usage tenant scope", () => {
   it.skipIf(process.env.G005_RUN_DISPOSABLE_PG_TESTS !== "1")(
     "executes the receipt, replay, catalog, content, tenant, concurrency, and hostile-path matrix on disposable PostgreSQL 16",
@@ -239,9 +249,14 @@ describe("G-005 source cache and usage tenant scope", () => {
         const full = await resetTo(client);
         expect(full).toEqual({ discovered: 45, applied: 43, skipped: 2 });
         await client.unsafe(migrationSql);
-        const [catalog] = await client.unsafe<Array<{ source_columns: number; primary_keys: number; source_checks: number; tenant_indexes: number; global_indexes: number; triggers: number; rls_tables: number; policies: number }>>(`
+        const [catalog] = await client.unsafe<Array<{ source_columns: number; tenant_columns: number; primary_keys: number; source_checks: number; tenant_indexes: number; global_indexes: number; triggers: number; rls_tables: number; policies: number }>>(`
           SELECT
             (SELECT count(*)::integer FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('place_cache','places_master','place_observations','api_usage_events') AND column_name='source_card_id' AND is_nullable='NO' AND column_default='''google_places_legacy''::text') source_columns,
+            (SELECT count(*)::integer FROM pg_catalog.pg_attribute a WHERE (a.attrelid,a.attname) IN (
+              ('public.place_cache'::regclass,'tenant_id'),('public.places_master'::regclass,'tenant_id'),
+              ('public.place_observations'::regclass,'tenant_id'),('public.api_usage_events'::regclass,'tenant_id'))
+              AND NOT a.attisdropped AND a.atttypid='uuid'::regtype AND a.atttypmod=-1 AND a.attnotnull
+              AND NOT a.atthasdef AND a.attidentity='' AND a.attgenerated='' AND a.attstorage='p' AND a.attcompression='' AND a.attcollation=0) tenant_columns,
             (SELECT count(*)::integer FROM pg_catalog.pg_constraint WHERE conname IN ('place_cache_pkey','places_master_pkey','place_observations_pkey','api_usage_events_pkey') AND contype='p') primary_keys,
             (SELECT count(*)::integer FROM pg_catalog.pg_constraint WHERE conname IN ('place_cache_source_card_id_chk','places_master_source_card_id_chk','place_observations_source_card_id_chk','api_usage_events_source_card_id_chk') AND contype='c' AND convalidated) source_checks,
             (SELECT count(*)::integer FROM pg_catalog.pg_index x JOIN pg_catalog.pg_class c ON c.oid=x.indrelid JOIN pg_catalog.pg_attribute a ON a.attrelid=x.indrelid AND a.attnum=(x.indkey::smallint[])[0] WHERE c.relname IN ('place_cache','places_master','place_observations','api_usage_events') AND a.attname='tenant_id') tenant_indexes,
@@ -250,12 +265,13 @@ describe("G-005 source cache and usage tenant scope", () => {
             (SELECT count(*)::integer FROM pg_catalog.pg_class WHERE oid IN ('public.place_cache'::regclass,'public.places_master'::regclass,'public.place_observations'::regclass,'public.api_usage_events'::regclass) AND relrowsecurity) rls_tables,
             (SELECT count(*)::integer FROM pg_catalog.pg_policy WHERE polrelid IN ('public.place_cache'::regclass,'public.places_master'::regclass,'public.place_observations'::regclass,'public.api_usage_events'::regclass)) policies
         `);
-        expect(catalog).toMatchObject({ source_columns: 4, primary_keys: 4, source_checks: 4, global_indexes: 0, triggers: 4, rls_tables: 4, policies: 0 });
+        expect(catalog).toMatchObject({ source_columns: 4, tenant_columns: 4, primary_keys: 4, source_checks: 4, global_indexes: 0, triggers: 4, rls_tables: 4, policies: 0 });
         expect(catalog.tenant_indexes).toBeGreaterThanOrEqual(4);
         for (const role of ["anon", "authenticated"]) {
           for (const table of sourceTables) {
             expect((await client.unsafe("SELECT has_table_privilege($1,$2,'SELECT,INSERT,UPDATE,DELETE') allowed", [role, `public.${table}`]))[0].allowed).toBe(false);
           }
+          expect((await client.unsafe("SELECT has_function_privilege($1,'public.novatrade_source_payload_is_safe(jsonb)','EXECUTE') allowed", [role]))[0].allowed).toBe(false);
           expect((await client.unsafe("SELECT has_function_privilege($1,'public.novatrade_source_scope_guard()','EXECUTE') allowed", [role]))[0].allowed).toBe(false);
         }
 
@@ -263,6 +279,20 @@ describe("G-005 source cache and usage tenant scope", () => {
         await client.unsafe(migrationSql);
         await client.unsafe(migrationSql);
         expect((await client.unsafe("SELECT count(*)::integer count FROM public.api_usage_events WHERE id='usage-parentless-legacy'"))[0].count).toBe(1);
+        const placeOnlyObservations = await client.unsafe(`
+          INSERT INTO public.place_observations(id,place_id,endpoint,sku,raw_json)
+            VALUES ('observation-place-only-omitted','place-shared','details','places-details','{}')
+            RETURNING tenant_id::text,source_card_id
+        `);
+        expect(placeOnlyObservations).toEqual([{ tenant_id: tenantA, source_card_id: "google_places_legacy" }]);
+        const explicitNullObservations = await client.unsafe(`
+          INSERT INTO public.place_observations(id,tenant_id,place_id,endpoint,sku,raw_json)
+            VALUES ('observation-place-only-null',NULL,'place-shared','details','places-details','{}')
+            RETURNING tenant_id::text,source_card_id
+        `);
+        expect(explicitNullObservations).toEqual([{ tenant_id: tenantA, source_card_id: "google_places_legacy" }]);
+        await expectRejected(client.unsafe("INSERT INTO public.place_cache(place_id,raw_json) VALUES ('place-without-tenant','{}')"), /G005_TENANT_REQUIRED|null value/);
+        expect((await client.unsafe("SELECT count(*)::integer count FROM public.place_cache WHERE place_id='place-without-tenant'"))[0].count).toBe(0);
 
         await addTenantB(client);
         await client.unsafe(`INSERT INTO public.places_master(tenant_id,place_id,name) VALUES ('${tenantB}','place-shared','Tenant B Place'); INSERT INTO public.place_cache(tenant_id,place_id,raw_json) VALUES ('${tenantB}','place-shared','{"tenant":"b"}')`);
@@ -270,6 +300,8 @@ describe("G-005 source cache and usage tenant scope", () => {
         expect(identities).toHaveLength(2);
         expect(identities.map((row) => row.source_card_id)).toEqual(["google_places_legacy", "google_places_legacy"]);
         expect(identities[0].raw_json).not.toEqual(identities[1].raw_json);
+        await expectRejected(client.unsafe("INSERT INTO public.place_observations(id,place_id,endpoint,sku,raw_json) VALUES ('observation-place-ambiguous','place-shared','details','places-details','{}')"), /G005_PLACE_PARENT_REQUIRED/);
+        expect((await client.unsafe("SELECT count(*)::integer count FROM public.place_observations WHERE id='observation-place-ambiguous'"))[0].count).toBe(0);
 
         await client.unsafe(`
           INSERT INTO public.crawl_runs(id,tenant_id,workspace_id,market_id) VALUES ('run-a','${tenantA}','${workspaceA}','market-colorado'),('run-b','${tenantB}','${workspaceB}','market-colorado');
@@ -324,6 +356,90 @@ describe("G-005 source cache and usage tenant scope", () => {
         expect((partialFailure as Error).message).toMatch(/G005_PARTIAL_OR_SPOOFED_CATALOG/);
         await client.unsafe("ROLLBACK");
         expect((await client.unsafe("SELECT count(*)::integer count FROM information_schema.columns WHERE table_schema='public' AND table_name='place_cache' AND column_name='source_card_id'"))[0].count).toBe(1);
+
+        // Activation rejects tenant-column drift before installing any G-005
+        // object, and the failed transaction does not repair the spoof.
+        await prepareUpgrade(client);
+        await client.unsafe(`ALTER TABLE public.place_cache ALTER COLUMN tenant_id SET DEFAULT '${tenantA}'::uuid`);
+        await expectMigrationRejectedWithoutInstall(client, /G005_PARTIAL_OR_SPOOFED_CATALOG/);
+        expect((await client.unsafe("SELECT atthasdef FROM pg_catalog.pg_attribute WHERE attrelid='public.place_cache'::regclass AND attname='tenant_id'"))[0].atthasdef).toBe(true);
+        expect((await client.unsafe("SELECT count(*)::integer count FROM public.place_cache"))[0].count).toBe(1);
+
+        for (const [column, value] of [["attidentity", "a"], ["attgenerated", "s"]] as const) {
+          await prepareUpgrade(client);
+          const beforeCount = Number((await client.unsafe("SELECT count(*)::integer count FROM public.place_cache"))[0].count);
+          await client.unsafe(`UPDATE pg_catalog.pg_attribute SET ${column}=$1 WHERE attrelid='public.place_cache'::regclass AND attname='tenant_id'`, [value]);
+          await expectMigrationRejectedWithoutInstall(client, /G005_PARTIAL_OR_SPOOFED_CATALOG/);
+          expect((await client.unsafe(`SELECT ${column} value FROM pg_catalog.pg_attribute WHERE attrelid='public.place_cache'::regclass AND attname='tenant_id'`))[0].value).toBe(value);
+          expect((await client.unsafe("SELECT count(*)::integer count FROM public.place_cache"))[0].count).toBe(beforeCount);
+        }
+
+        // Preactivation column ACLs fail closed, including effective access
+        // inherited by authenticated through a separate role.
+        await prepareUpgrade(client);
+        await client.unsafe("GRANT SELECT(place_id) ON public.place_cache TO g005_inherited");
+        expect((await client.unsafe("SELECT has_column_privilege('authenticated','public.place_cache','place_id','SELECT') allowed"))[0].allowed).toBe(true);
+        await expectMigrationRejectedWithoutInstall(client, /G005_BASE_RLS_OR_ACL_INVALID/);
+        expect((await client.unsafe("SELECT has_column_privilege('authenticated','public.place_cache','place_id','SELECT') allowed"))[0].allowed).toBe(true);
+
+        // Every target tenant column participates in the exact replay shape.
+        // A default is never accepted as an implicit tenant source.
+        for (const table of sourceTables) {
+          await prepareUpgrade(client);
+          await client.unsafe(migrationSql);
+          const beforeCount = Number((await client.unsafe(`SELECT count(*)::integer count FROM public.${table}`))[0].count);
+          await client.unsafe(`ALTER TABLE public.${table} ALTER COLUMN tenant_id SET DEFAULT '${tenantA}'::uuid`);
+          await expectReplayRejected(client, /G005_PARTIAL_OR_SPOOFED_CATALOG/);
+          const [shape] = await client.unsafe<Array<{ has_default: boolean; row_count: number }>>(`
+            SELECT
+              (SELECT atthasdef FROM pg_catalog.pg_attribute WHERE attrelid='public.${table}'::regclass AND attname='tenant_id') has_default,
+              (SELECT count(*)::integer FROM public.${table}) row_count
+          `);
+          expect(shape).toEqual({ has_default: true, row_count: beforeCount });
+        }
+
+        // Disposable-catalog adversaries cover identity/generated flags that
+        // PostgreSQL cannot legally attach to a UUID through ordinary DDL.
+        for (const [column, value] of [["attidentity", "a"], ["attgenerated", "s"]] as const) {
+          await prepareUpgrade(client);
+          await client.unsafe(migrationSql);
+          const beforeCount = Number((await client.unsafe("SELECT count(*)::integer count FROM public.place_cache"))[0].count);
+          await client.unsafe(`UPDATE pg_catalog.pg_attribute SET ${column}=$1 WHERE attrelid='public.place_cache'::regclass AND attname='tenant_id'`, [value]);
+          await expectReplayRejected(client, /G005_PARTIAL_OR_SPOOFED_CATALOG/);
+          expect((await client.unsafe(`SELECT ${column} value FROM pg_catalog.pg_attribute WHERE attrelid='public.place_cache'::regclass AND attname='tenant_id'`))[0].value).toBe(value);
+          expect((await client.unsafe("SELECT count(*)::integer count FROM public.place_cache"))[0].count).toBe(beforeCount);
+        }
+
+        // Post-install direct and inherited column grants are catalog drift;
+        // replay rejects and leaves the pre-existing grant untouched.
+        for (const grant of [
+          { grantee: "PUBLIC", table: "api_usage_events", column: "id" },
+          { grantee: "g005_inherited", table: "place_cache", column: "place_id" },
+        ]) {
+          await prepareUpgrade(client);
+          await client.unsafe(migrationSql);
+          await client.unsafe(`GRANT SELECT(${grant.column}) ON public.${grant.table} TO ${grant.grantee}`);
+          await expectReplayRejected(client, /G005_PARTIAL_OR_SPOOFED_CATALOG/);
+          expect((await client.unsafe("SELECT has_column_privilege('authenticated',$1,$2,'SELECT') allowed", [`public.${grant.table}`, grant.column]))[0].allowed).toBe(true);
+        }
+
+        // Same-name executable overloads for both helpers invalidate the
+        // complete public function set and survive the rejected replay.
+        for (const functionName of ["novatrade_source_payload_is_safe", "novatrade_source_scope_guard"] as const) {
+          await prepareUpgrade(client);
+          await client.unsafe(migrationSql);
+          await client.unsafe(`CREATE FUNCTION public.${functionName}(spoof text) RETURNS boolean LANGUAGE sql AS 'SELECT true'; GRANT EXECUTE ON FUNCTION public.${functionName}(text) TO authenticated`);
+          await expectReplayRejected(client, /G005_PARTIAL_OR_SPOOFED_CATALOG/);
+          expect((await client.unsafe("SELECT pg_catalog.to_regprocedure($1) IS NOT NULL present", [`public.${functionName}(text)`]))[0].present).toBe(true);
+          expect((await client.unsafe("SELECT has_function_privilege('authenticated',$1,'EXECUTE') allowed", [`public.${functionName}(text)`]))[0].allowed).toBe(true);
+        }
+
+        await prepareUpgrade(client);
+        await client.unsafe(migrationSql);
+        await client.unsafe(migrationSql);
+        for (const signature of ["public.novatrade_source_payload_is_safe(jsonb)", "public.novatrade_source_scope_guard()"]) {
+          expect((await client.unsafe("SELECT has_function_privilege('authenticated',$1,'EXECUTE') allowed", [signature]))[0].allowed).toBe(false);
+        }
 
         await prepareUpgrade(client);
         await client.unsafe("CREATE SCHEMA g005_shadow; CREATE TABLE g005_shadow.place_cache(sentinel text); CREATE TABLE g005_shadow.places_master(sentinel text); CREATE TABLE g005_shadow.place_observations(sentinel text); CREATE TABLE g005_shadow.api_usage_events(sentinel text); SET search_path=g005_shadow,public");

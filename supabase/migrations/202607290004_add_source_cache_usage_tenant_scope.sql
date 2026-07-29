@@ -54,7 +54,10 @@ BEGIN
          ('public.places_master'::pg_catalog.regclass,'source_card_id'),
          ('public.place_observations'::pg_catalog.regclass,'source_card_id'),
          ('public.api_usage_events'::pg_catalog.regclass,'source_card_id')) AND NOT a.attisdropped)
-      AND (SELECT count(*)=4 AND pg_catalog.bool_and(a.atttypid='uuid'::pg_catalog.regtype AND a.attnotnull)
+      AND (SELECT count(*)=4 AND pg_catalog.bool_and(
+          a.atttypid='uuid'::pg_catalog.regtype AND a.atttypmod=-1 AND a.attnotnull
+          AND a.attidentity='' AND a.attgenerated='' AND NOT a.atthasdef
+          AND a.attstorage='p' AND a.attcompression='' AND a.attcollation=0)
        FROM pg_catalog.pg_attribute a WHERE (a.attrelid,a.attname) IN (
          ('public.place_cache'::pg_catalog.regclass,'tenant_id'),('public.places_master'::pg_catalog.regclass,'tenant_id'),
          ('public.place_observations'::pg_catalog.regclass,'tenant_id'),('public.api_usage_events'::pg_catalog.regclass,'tenant_id'))
@@ -124,19 +127,26 @@ BEGIN
       AND (SELECT count(*)=4 AND pg_catalog.bool_and(c.relowner=(SELECT relowner FROM pg_catalog.pg_class WHERE oid='public.place_cache'::pg_catalog.regclass))
         FROM pg_catalog.pg_class c WHERE c.oid IN ('public.place_cache'::pg_catalog.regclass,'public.places_master'::pg_catalog.regclass,
           'public.place_observations'::pg_catalog.regclass,'public.api_usage_events'::pg_catalog.regclass))
+      AND (SELECT count(*)=2 FROM pg_catalog.pg_proc p
+        WHERE p.pronamespace='public'::pg_catalog.regnamespace
+          AND p.proname IN ('novatrade_source_payload_is_safe','novatrade_source_scope_guard'))
       AND (SELECT count(*)=2 FROM pg_catalog.pg_proc p WHERE p.oid IN (
         'public.novatrade_source_payload_is_safe(jsonb)'::pg_catalog.regprocedure,
         'public.novatrade_source_scope_guard()'::pg_catalog.regprocedure)
         AND p.proconfig=ARRAY['search_path=pg_catalog, public']::text[]
         AND NOT p.prosecdef AND NOT p.proisstrict AND NOT p.proleakproof AND p.proparallel='u' AND p.prokind='f')
       AND (SELECT l.lanname='sql' AND p.prorettype='boolean'::pg_catalog.regtype AND NOT p.proretset
-          AND p.provolatile='i' AND p.pronargs=1 AND p.proargnames=ARRAY['value']::text[]
+          AND p.provolatile='i' AND p.pronargs=1 AND p.pronargdefaults=0 AND p.provariadic=0
+          AND p.proargnames=ARRAY['value']::text[] AND p.proargmodes IS NULL AND p.proallargtypes IS NULL
+          AND pg_catalog.pg_get_function_identity_arguments(p.oid)='value jsonb'
           AND p.proowner=(SELECT relowner FROM pg_catalog.pg_class WHERE oid='public.place_cache'::pg_catalog.regclass)
           AND pg_catalog.obj_description(p.oid,'pg_proc')='novatrade:g005:prohibited-source-content:v1'
         FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang
         WHERE p.oid='public.novatrade_source_payload_is_safe(jsonb)'::pg_catalog.regprocedure)
       AND (SELECT l.lanname='plpgsql' AND p.prorettype='trigger'::pg_catalog.regtype AND NOT p.proretset
-          AND p.provolatile='v' AND p.pronargs=0
+          AND p.provolatile='v' AND p.pronargs=0 AND p.pronargdefaults=0 AND p.provariadic=0
+          AND p.proargnames IS NULL AND p.proargmodes IS NULL AND p.proallargtypes IS NULL
+          AND pg_catalog.pg_get_function_identity_arguments(p.oid)=''
           AND p.proowner=(SELECT relowner FROM pg_catalog.pg_class WHERE oid='public.place_cache'::pg_catalog.regclass)
           AND pg_catalog.obj_description(p.oid,'pg_proc')='novatrade:g005:tenant-source-scope:v1; live runtime propagation remains G020/G021/G022.'
         FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang
@@ -146,7 +156,7 @@ BEGIN
           'a8bbd0f6a21e36b8b3496297750a84f0b29aecdd9ded85e26d15c8aed1fe7cd0'
       AND (SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.replace(p.prosrc,pg_catalog.chr(13)||pg_catalog.chr(10),pg_catalog.chr(10)),'UTF8')),'hex')
            FROM pg_catalog.pg_proc p WHERE p.oid='public.novatrade_source_scope_guard()'::pg_catalog.regprocedure)=
-          '3122a2f0d62a07362dfc98917b557a2b4bc957f2f9b878579de24a6358afa0aa'
+          'afca65acabbb4871e6c8d7b6125fbdb6e895e46d79e2c05a5563c8794d0fa524'
       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_proc p
         CROSS JOIN LATERAL pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) acl
         WHERE p.oid IN ('public.novatrade_source_payload_is_safe(jsonb)'::pg_catalog.regprocedure,
@@ -192,6 +202,19 @@ BEGIN
           AND c.oid IN ('public.place_cache'::pg_catalog.regclass,'public.places_master'::pg_catalog.regclass,
             'public.place_observations'::pg_catalog.regclass,'public.api_usage_events'::pg_catalog.regclass)
           AND pg_catalog.has_table_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'))
+      AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a
+        JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
+        CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) acl
+        WHERE c.oid IN ('public.place_cache'::pg_catalog.regclass,'public.places_master'::pg_catalog.regclass,
+          'public.place_observations'::pg_catalog.regclass,'public.api_usage_events'::pg_catalog.regclass)
+          AND a.attnum>0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
+          AND acl.grantee<>c.relowner AND acl.privilege_type IN ('SELECT','INSERT','UPDATE','REFERENCES'))
+      AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles r CROSS JOIN pg_catalog.pg_class c
+        JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
+        WHERE r.rolname IN ('anon','authenticated')
+          AND c.oid IN ('public.place_cache'::pg_catalog.regclass,'public.places_master'::pg_catalog.regclass,
+            'public.place_observations'::pg_catalog.regclass,'public.api_usage_events'::pg_catalog.regclass)
+          AND pg_catalog.has_column_privilege(r.oid,c.oid,a.attnum,'SELECT,INSERT,UPDATE,REFERENCES'))
       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_index x
         JOIN pg_catalog.pg_class c ON c.oid=x.indrelid
         JOIN pg_catalog.pg_attribute a ON a.attrelid=x.indrelid AND a.attnum=(x.indkey::smallint[])[0]
@@ -217,14 +240,22 @@ BEGIN
         'public.place_observations'::pg_catalog.regclass,'public.api_usage_events'::pg_catalog.regclass))
     OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.relnamespace='public'::pg_catalog.regnamespace
       AND c.relname LIKE 'idx_%tenant_source%')
+    OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a WHERE (a.attrelid,a.attname) IN (
+      ('public.place_cache'::pg_catalog.regclass,'tenant_id'),('public.places_master'::pg_catalog.regclass,'tenant_id'),
+      ('public.place_observations'::pg_catalog.regclass,'tenant_id'),('public.api_usage_events'::pg_catalog.regclass,'tenant_id'))
+      AND NOT a.attisdropped AND (
+        a.atttypid<>'uuid'::pg_catalog.regtype OR a.atttypmod<>-1
+        OR a.attidentity<>'' OR a.attgenerated<>'' OR a.atthasdef
+        OR a.attstorage<>'p' OR a.attcompression<>'' OR a.attcollation<>0))
   INTO partial_catalog;
   IF partial_catalog THEN
     RAISE EXCEPTION USING ERRCODE='P0001', MESSAGE='G005_PARTIAL_OR_SPOOFED_CATALOG';
   END IF;
 
   IF NOT (SELECT count(*)=4 AND pg_catalog.bool_and(
-      a.atttypid='uuid'::pg_catalog.regtype AND NOT a.attnotnull AND NOT a.atthasdef
-      AND a.attidentity='' AND a.attgenerated='')
+      a.atttypid='uuid'::pg_catalog.regtype AND a.atttypmod=-1
+      AND NOT a.attnotnull AND NOT a.atthasdef AND a.attidentity='' AND a.attgenerated=''
+      AND a.attstorage='p' AND a.attcompression='' AND a.attcollation=0)
     FROM pg_catalog.pg_attribute a WHERE (a.attrelid,a.attname) IN (
       ('public.place_cache'::pg_catalog.regclass,'tenant_id'),('public.places_master'::pg_catalog.regclass,'tenant_id'),
       ('public.place_observations'::pg_catalog.regclass,'tenant_id'),('public.api_usage_events'::pg_catalog.regclass,'tenant_id'))
@@ -259,7 +290,13 @@ BEGIN
       WHERE c.oid IN ('public.place_cache'::pg_catalog.regclass,'public.places_master'::pg_catalog.regclass,
         'public.place_observations'::pg_catalog.regclass,'public.api_usage_events'::pg_catalog.regclass)
         AND a.attnum>0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
-        AND acl.grantee<>c.relowner AND acl.privilege_type IN ('SELECT','INSERT','UPDATE','REFERENCES')) THEN
+        AND acl.grantee<>c.relowner AND acl.privilege_type IN ('SELECT','INSERT','UPDATE','REFERENCES'))
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_roles r CROSS JOIN pg_catalog.pg_class c
+      JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
+      WHERE r.rolname IN ('anon','authenticated') AND c.oid IN (
+        'public.place_cache'::pg_catalog.regclass,'public.places_master'::pg_catalog.regclass,
+        'public.place_observations'::pg_catalog.regclass,'public.api_usage_events'::pg_catalog.regclass)
+        AND pg_catalog.has_column_privilege(r.oid,c.oid,a.attnum,'SELECT,INSERT,UPDATE,REFERENCES')) THEN
     RAISE EXCEPTION USING ERRCODE='P0001', MESSAGE='G005_BASE_RLS_OR_ACL_INVALID';
   END IF;
 
@@ -486,9 +523,12 @@ BEGIN
     END IF;
     authority_tenant:=coalesce(authority_tenant,NEW.tenant_id);
     IF authority_tenant IS NULL THEN
-      SELECT min(p.tenant_id) INTO authority_tenant FROM public.places_master p
-       WHERE p.source_card_id=NEW.source_card_id AND p.place_id=NEW.place_id
-       HAVING count(*)=1;
+      SELECT p.tenant_id INTO authority_tenant
+      FROM public.places_master p
+      WHERE p.source_card_id=NEW.source_card_id AND p.place_id=NEW.place_id
+        AND (SELECT count(*) FROM public.places_master candidate
+          WHERE candidate.source_card_id=NEW.source_card_id AND candidate.place_id=NEW.place_id)=1
+      FOR KEY SHARE;
     END IF;
     IF authority_tenant IS NULL OR NOT EXISTS (SELECT 1 FROM public.places_master p
       WHERE (p.tenant_id,p.source_card_id,p.place_id)=(authority_tenant,NEW.source_card_id,NEW.place_id) FOR KEY SHARE) THEN
