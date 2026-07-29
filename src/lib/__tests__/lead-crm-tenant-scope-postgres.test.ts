@@ -21,9 +21,12 @@ const workspaceA = "10000000-0000-4000-8000-000000000301";
 const workspaceB = "10000000-0000-4000-8000-000000000302";
 const ownerA = "20000000-0000-4000-8000-000000000301";
 const ownerB = "20000000-0000-4000-8000-000000000302";
+const suspendedActor = "20000000-0000-4000-8000-000000000303";
 const membershipA = "30000000-0000-4000-8000-000000000301";
 const membershipB = "30000000-0000-4000-8000-000000000302";
+const suspendedMembership = "30000000-0000-4000-8000-000000000303";
 const bindingA = "40000000-0000-4000-8000-000000000301";
+const suspendedBinding = "40000000-0000-4000-8000-000000000303";
 const policyA = "50000000-0000-4000-8000-000000000301";
 const policyHash = "c".repeat(64);
 const targetTables = ["leads", "lead_notes", "outreach_events", "admin_requests", "demos"] as const;
@@ -127,6 +130,18 @@ async function postgresManifest(client: PgClient): Promise<CompatibilityBackfill
       membershipStatus: "active",
       roleBindingId: bindingA,
       marketAccessIds: [],
+    }, {
+      legacyUserId: "legacy-disabled",
+      authIdentityId: suspendedActor,
+      expectedEmail: "disabled@synthetic.invalid",
+      expectedLegacyRole: "researcher",
+      expectedStatus: "disabled",
+      membershipId: suspendedMembership,
+      workspaceId: workspaceA,
+      membershipRole: "researcher",
+      membershipStatus: "suspended",
+      roleBindingId: suspendedBinding,
+      marketAccessIds: [],
     }],
     legacyTables,
   };
@@ -134,19 +149,21 @@ async function postgresManifest(client: PgClient): Promise<CompatibilityBackfill
 
 async function seedLegacyGraph(client: PgClient): Promise<void> {
   await client.unsafe(`
-    INSERT INTO auth.users(id) VALUES ('${ownerA}');
+    INSERT INTO auth.users(id) VALUES ('${ownerA}'),('${suspendedActor}');
     INSERT INTO public.app_users(id,user_id,email,role,status)
-      VALUES ('legacy-owner','${ownerA}','owner@synthetic.invalid','admin','active');
+      VALUES
+        ('legacy-owner','${ownerA}','owner@synthetic.invalid','admin','active'),
+        ('legacy-disabled','${suspendedActor}','disabled@synthetic.invalid','researcher','disabled');
     INSERT INTO public.leads(id,place_id,name,address,phone,maps_uri,rating,review_count,selling_niche,assigned_to_user_id)
       VALUES ('legacy-lead','legacy-place','Legacy Business','1 Synthetic Way','555-0100','https://maps.invalid/legacy',4.5,12,'synthetic','${ownerA}');
     INSERT INTO public.lead_notes(id,lead_id,author_user_id,body)
-      VALUES ('legacy-note','legacy-lead','${ownerA}','synthetic note');
+      VALUES ('legacy-note','legacy-lead','${suspendedActor}','synthetic note');
     INSERT INTO public.outreach_events(id,lead_id,channel,actor_user_id,note)
       VALUES ('legacy-outreach','legacy-lead','email','${ownerA}','synthetic event');
     INSERT INTO public.admin_requests(id,lead_id,created_by_user_id,assigned_admin_user_id,request_type,status)
-      VALUES ('legacy-request','legacy-lead','${ownerA}','${ownerA}','quote_request','new');
+      VALUES ('legacy-request','legacy-lead','${suspendedActor}','${ownerA}','quote_request','new');
     INSERT INTO public.demos(id,lead_id,slug,config_json,is_published,published_by_user_id)
-      VALUES ('legacy-demo','legacy-lead','legacy-public','{"headline":"Legacy","secret":"hidden"}'::jsonb,1,'${ownerA}');
+      VALUES ('legacy-demo','legacy-lead','legacy-public','{"headline":"Legacy","secret":"hidden"}'::jsonb,1,'${suspendedActor}');
   `);
 }
 
@@ -173,6 +190,18 @@ async function prepareUpgrade(client: PgClient): Promise<void> {
   await seedLegacyGraph(client);
   await runT028(client);
   await client.unsafe(g002Sql);
+}
+
+async function seedPostInstallGraph(client: PgClient): Promise<void> {
+  await client.unsafe(`
+    INSERT INTO auth.users(id) VALUES ('${ownerA}');
+    INSERT INTO public.tenants(id,slug,name,status) VALUES ('${tenantA}','post-install-a','Post-install A','active');
+    INSERT INTO public.workspaces(id,tenant_id,slug,name,status) VALUES ('${workspaceA}','${tenantA}','post-install-workspace','Post-install Workspace','active');
+    INSERT INTO public.tenant_memberships(id,tenant_id,auth_identity_id,workspace_id,status)
+      VALUES ('${membershipA}','${tenantA}','${ownerA}','${workspaceA}','active');
+    INSERT INTO public.leads(id,tenant_id,place_id,name,assigned_to_user_id)
+      VALUES ('post-install-lead','${tenantA}','post-install-place','Post-install Business','${ownerA}');
+  `);
 }
 
 async function targetSnapshot(client: PgClient): Promise<Record<string, unknown>> {
@@ -215,7 +244,7 @@ async function targetCatalogSnapshot(client: PgClient): Promise<Record<string, u
     functions: await client.unsafe(`
       SELECT p.proname,pg_catalog.pg_get_function_identity_arguments(p.oid) arguments,
         pg_catalog.pg_get_functiondef(p.oid) definition,p.proconfig,p.prosecdef,p.proacl,
-        pg_catalog.obj_description(p.oid,'pg_proc') comment
+        pg_catalog.pg_get_userbyid(p.proowner) owner,pg_catalog.obj_description(p.oid,'pg_proc') comment
         FROM pg_catalog.pg_proc p
        WHERE p.pronamespace='public'::regnamespace
          AND p.proname IN ('novatrade_assert_lead_actor','novatrade_inherit_lead_child_scope','novatrade_lead_scope_guard','novatrade_published_demo_public')
@@ -230,9 +259,16 @@ async function targetCatalogSnapshot(client: PgClient): Promise<Record<string, u
   };
 }
 
-async function expectMigrationRejected(client: PgClient, pattern: RegExp): Promise<void> {
+async function expectMigrationRejected(client: PgClient, pattern: RegExp, label?: string): Promise<void> {
   const catalogBefore = await targetCatalogSnapshot(client);
-  await expect(client.unsafe(g003Sql)).rejects.toThrow(pattern);
+  let migrationError: unknown;
+  try {
+    await client.unsafe(g003Sql);
+  } catch (error) {
+    migrationError = error;
+  }
+  expect(migrationError, label).toBeInstanceOf(Error);
+  expect((migrationError as Error).message, label).toMatch(pattern);
   await client.unsafe("ROLLBACK");
   expect(await targetCatalogSnapshot(client)).toEqual(catalogBefore);
 }
@@ -246,16 +282,34 @@ async function assertCatalog(client: PgClient): Promise<void> {
   expect(nullability).toHaveLength(5);
   expect(nullability.every((row) => row.is_nullable === "NO")).toBe(true);
   expect((await client.unsafe("SELECT count(*)::integer count FROM information_schema.columns WHERE table_schema='public' AND table_name='leads' AND column_name='workspace_id'"))[0].count).toBe(0);
-  const constraints = await client.unsafe<Array<{ conname: string; definition: string }>>(`
-    SELECT conname,pg_catalog.pg_get_constraintdef(oid) definition FROM pg_catalog.pg_constraint
+  const constraints = await client.unsafe<Array<{ conname: string; convalidated: boolean; definition: string }>>(`
+    SELECT conname,convalidated,pg_catalog.pg_get_constraintdef(oid) definition FROM pg_catalog.pg_constraint
      WHERE conname IN ('leads_tenant_id_id_unique','leads_tenant_place_id_unique','lead_notes_tenant_lead_fkey','outreach_events_tenant_lead_fkey','admin_requests_tenant_lead_fkey','demos_tenant_lead_fkey','lead_notes_tenant_workspace_fkey','outreach_events_tenant_workspace_fkey','admin_requests_tenant_workspace_fkey','demos_tenant_workspace_fkey')
      ORDER BY conname
   `);
   expect(constraints).toHaveLength(10);
+  expect(constraints.every((row) => row.convalidated)).toBe(true);
   expect(constraints.filter((row) => row.conname.endsWith("_tenant_lead_fkey")).every((row) => row.definition.includes("FOREIGN KEY (tenant_id, lead_id)"))).toBe(true);
   expect(constraints.filter((row) => row.conname.endsWith("_tenant_workspace_fkey")).every((row) => row.definition.includes("FOREIGN KEY (tenant_id, workspace_id)"))).toBe(true);
-  const functions = await client.unsafe<Array<{ proname: string; proconfig: string[]; prosecdef: boolean; anon_execute: boolean; authenticated_execute: boolean }>>(`
-    SELECT p.proname,p.proconfig,p.prosecdef,
+  expect((await client.unsafe("SELECT pg_catalog.to_regclass('public.idx_leads_tenant_place_id') IS NULL absent"))[0].absent).toBe(true);
+  expect((await client.unsafe(`
+    SELECT pg_catalog.pg_get_expr(x.indpred,x.indrelid) predicate
+      FROM pg_catalog.pg_index x WHERE x.indexrelid='public.admin_requests_tenant_lead_open_unique'::regclass
+  `))[0].predicate).toBe("(status = ANY (ARRAY['new'::text, 'seen'::text, 'in_progress'::text, 'waiting_on_researcher'::text]))");
+  expect((await client.unsafe(`
+    SELECT count(*)::integer count FROM pg_catalog.pg_trigger t
+     WHERE (t.tgrelid,t.tgname) IN (
+       ('public.leads'::regclass,'trg_novatrade_lead_scope_guard'),
+       ('public.lead_notes'::regclass,'trg_novatrade_lead_notes_scope'),
+       ('public.outreach_events'::regclass,'trg_novatrade_outreach_events_scope'),
+       ('public.admin_requests'::regclass,'trg_novatrade_admin_requests_scope'),
+       ('public.demos'::regclass,'trg_novatrade_demos_scope')
+     ) AND t.tgtype=23 AND t.tgenabled='O' AND NOT t.tgisinternal
+  `))[0].count).toBe(5);
+  const functions = await client.unsafe<Array<{ proname: string; owner: string; table_owner: string; proconfig: string[]; prosecdef: boolean; anon_execute: boolean; authenticated_execute: boolean }>>(`
+    SELECT p.proname,pg_catalog.pg_get_userbyid(p.proowner) owner,
+      pg_catalog.pg_get_userbyid((SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid='public.leads'::regclass)) table_owner,
+      p.proconfig,p.prosecdef,
       pg_catalog.has_function_privilege('anon',p.oid,'EXECUTE') anon_execute,
       pg_catalog.has_function_privilege('authenticated',p.oid,'EXECUTE') authenticated_execute
       FROM pg_catalog.pg_proc p
@@ -263,7 +317,10 @@ async function assertCatalog(client: PgClient): Promise<void> {
      ORDER BY p.proname
   `);
   expect(functions).toHaveLength(4);
-  for (const fn of functions) expect(fn.proconfig).toContain("search_path=pg_catalog, public");
+  for (const fn of functions) {
+    expect(fn.proconfig).toEqual(["search_path=pg_catalog, public"]);
+    expect(fn.owner).toBe(fn.table_owner);
+  }
   expect(functions.find((fn) => fn.proname === "novatrade_published_demo_public")).toMatchObject({ prosecdef: true, anon_execute: true, authenticated_execute: false });
   for (const fn of functions.filter((row) => row.proname !== "novatrade_published_demo_public")) {
     expect(fn).toMatchObject({ prosecdef: false, anon_execute: false, authenticated_execute: false });
@@ -292,12 +349,15 @@ describe("G-003 lead CRM tenant scope", () => {
       "G003_LEAD_CHILD_SCOPE_IMMUTABLE", "G003_LEAD_TENANT_IMMUTABLE", "G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED",
     ]) expect(g003Sql).toContain(code);
     expect(g003Sql).toContain("UNIQUE(tenant_id,place_id)");
+    expect(g003Sql).toContain("IN SHARE ROW EXCLUSIVE MODE");
+    expect(g003Sql).toContain("G003_WRITER_LOCKS_ACQUIRED");
     expect(g003Sql).toContain("FOREIGN KEY (tenant_id,lead_id) REFERENCES public.leads(tenant_id,id)");
     expect(g003Sql).toContain("admin_requests_tenant_lead_open_unique");
     expect(g003Sql).toContain("SET search_path = pg_catalog, public");
     expect(g003Sql).toContain("JOIN public.leads l ON (l.tenant_id,l.id)=(d.tenant_id,d.lead_id)");
     for (const key of ["headline", "subheadline", "services", "trustSignals", "primaryCta", "secondaryCta", "websiteGap"]) expect(g003Sql).toContain(`'${key}'`);
     expect(g003Sql).toContain("REVOKE ALL ON TABLE public.leads,public.lead_notes,public.outreach_events,public.admin_requests,public.demos");
+    expect(g003Sql).not.toContain("CREATE INDEX idx_leads_tenant_place_id");
     expect(g003Sql).not.toMatch(/(?:pg_catalog\.)?digest\s*\(|CREATE\s+EXTENSION/i);
   });
 
@@ -340,6 +400,61 @@ describe("G-003 lead CRM tenant scope", () => {
         `);
         await expectMigrationRejected(client, /G003_MATCHING_T028_RECEIPT_REQUIRED/);
 
+        for (const mutation of ["function_body", "function_owner", "trigger_shape", "index_predicate", "unvalidated_fk"] as const) {
+          await resetDatabase(client, true);
+          await seedPostInstallGraph(client);
+          if (mutation === "function_body") {
+            await client.unsafe(`
+              CREATE OR REPLACE FUNCTION public.novatrade_lead_scope_guard() RETURNS trigger
+              LANGUAGE plpgsql SET search_path=pg_catalog,public AS $$ BEGIN RETURN NEW; END $$;
+            `);
+            expect((await client.unsafe(`
+              SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+                pg_catalog.replace(p.prosrc,pg_catalog.chr(13)||pg_catalog.chr(10),pg_catalog.chr(10)),'UTF8')),'hex') hash
+                FROM pg_catalog.pg_proc p WHERE p.oid='public.novatrade_lead_scope_guard()'::regprocedure
+            `))[0].hash).not.toBe("b1e8a0dfad0eea52cde6ae77a5090f16410173a356c66ed9c536964bdc12f96d");
+          }
+          if (mutation === "function_owner") {
+            await client.unsafe(`
+              DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='g003_untrusted_owner') THEN
+                CREATE ROLE g003_untrusted_owner NOLOGIN;
+              END IF; END $$;
+              ALTER FUNCTION public.novatrade_published_demo_public(text) OWNER TO g003_untrusted_owner;
+            `);
+          }
+          if (mutation === "trigger_shape") {
+            await client.unsafe(`
+              DROP TRIGGER trg_novatrade_lead_scope_guard ON public.leads;
+              CREATE TRIGGER trg_novatrade_lead_scope_guard AFTER INSERT OR UPDATE ON public.leads
+                FOR EACH ROW EXECUTE FUNCTION public.novatrade_lead_scope_guard();
+            `);
+          }
+          if (mutation === "index_predicate") {
+            await client.unsafe(`
+              DROP INDEX public.admin_requests_tenant_lead_open_unique;
+              CREATE UNIQUE INDEX admin_requests_tenant_lead_open_unique
+                ON public.admin_requests(tenant_id,lead_id,request_type) WHERE status='new';
+            `);
+          }
+          if (mutation === "unvalidated_fk") {
+            await client.unsafe(`
+              ALTER TABLE public.lead_notes DROP CONSTRAINT lead_notes_tenant_lead_fkey;
+              ALTER TABLE public.lead_notes ADD CONSTRAINT lead_notes_tenant_lead_fkey
+                FOREIGN KEY (tenant_id,lead_id) REFERENCES public.leads(tenant_id,id)
+                ON UPDATE RESTRICT ON DELETE CASCADE NOT VALID;
+            `);
+          }
+          expect((await client.unsafe("SELECT count(*)::integer count FROM public.compatibility_backfill_receipts"))[0].count, mutation).toBe(0);
+          expect((await client.unsafe("SELECT count(*)::integer count FROM public.leads"))[0].count, mutation).toBe(1);
+          await expectMigrationRejected(client, /G003_MATCHING_T028_RECEIPT_REQUIRED/, mutation);
+        }
+
+        await resetDatabase(client, true);
+        await seedPostInstallGraph(client);
+        const postInstallReplayBefore = await targetSnapshot(client);
+        await client.unsafe(g003Sql);
+        expect(await targetSnapshot(client)).toEqual(postInstallReplayBefore);
+
         for (const mutation of ["missing", "count", "checksum", "duplicate"] as const) {
           await prepareUpgrade(client);
           await client.unsafe("ALTER TABLE public.compatibility_backfill_receipts DISABLE TRIGGER trg_novatrade_compatibility_backfill_receipt_guard; ALTER TABLE public.compatibility_backfill_receipts DROP CONSTRAINT compatibility_backfill_receipts_receipt_binding_chk");
@@ -372,6 +487,18 @@ describe("G-003 lead CRM tenant scope", () => {
           UPDATE public.leads SET tenant_id='${tenantB}';
         `);
         await expectMigrationRejected(client, /G003_T028_RECEIPT_SCOPE_DRIFT/);
+
+        await prepareUpgrade(client);
+        await addTenantB(client);
+        await client.unsafe(`
+          ALTER TABLE public.compatibility_backfill_receipts
+            DISABLE TRIGGER trg_novatrade_compatibility_backfill_receipt_guard;
+          ALTER TABLE public.compatibility_backfill_receipts
+            DROP CONSTRAINT compatibility_backfill_receipts_receipt_binding_chk;
+          UPDATE public.outreach_events SET actor_user_id='${ownerB}';
+        `);
+        await alignReceiptChecksumsToCurrentTargets(client);
+        await expectMigrationRejected(client, /G003_EXISTING_ACTOR_SCOPE_INVALID/);
 
         for (const table of ["lead_notes", "outreach_events", "admin_requests", "demos"] as const) {
           await prepareUpgrade(client);
@@ -419,17 +546,51 @@ describe("G-003 lead CRM tenant scope", () => {
 
         await addTenantB(client);
         await client.unsafe(`INSERT INTO public.leads(id,tenant_id,place_id,name) VALUES ('tenant-b-lead','${tenantB}','legacy-place','Tenant B Business')`);
+        await client.unsafe("UPDATE public.admin_requests SET status='seen' WHERE id='legacy-request'");
         await expect(client.unsafe(`INSERT INTO public.leads(id,tenant_id,place_id,name) VALUES ('tenant-a-duplicate','${tenantA}','legacy-place','Duplicate')`)).rejects.toThrow(/leads_tenant_place_id_unique/);
         await expect(client.unsafe(`UPDATE public.leads SET assigned_to_user_id='${ownerB}' WHERE id='legacy-lead'`)).rejects.toThrow(/G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED/);
+        await expect(client.unsafe(`UPDATE public.leads SET assigned_to_user_id='${suspendedActor}' WHERE id='legacy-lead'`)).rejects.toThrow(/G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED/);
         await expect(client.unsafe(`UPDATE public.leads SET archived_by_user_id='${ownerB}' WHERE id='legacy-lead'`)).rejects.toThrow(/G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED/);
         await expect(client.unsafe(`UPDATE public.leads SET quality_checked_by_user_id='${ownerB}' WHERE id='legacy-lead'`)).rejects.toThrow(/G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED/);
         await expect(client.unsafe(`INSERT INTO public.lead_notes(id,lead_id,tenant_id,workspace_id,author_user_id,body) VALUES ('bad-note','legacy-lead','${tenantA}','${workspaceA}','${ownerB}','bad')`)).rejects.toThrow(/G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED/);
         await expect(client.unsafe(`INSERT INTO public.outreach_events(id,lead_id,tenant_id,workspace_id,actor_user_id,channel) VALUES ('bad-outreach','legacy-lead','${tenantA}','${workspaceA}','${ownerB}','email')`)).rejects.toThrow(/G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED/);
+        await expect(client.unsafe(`UPDATE public.outreach_events SET actor_user_id='${suspendedActor}' WHERE id='legacy-outreach'`)).rejects.toThrow(/G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED/);
         await expect(client.unsafe(`INSERT INTO public.admin_requests(id,lead_id,tenant_id,workspace_id,created_by_user_id,assigned_admin_user_id,request_type) VALUES ('bad-request','legacy-lead','${tenantA}','${workspaceA}','${ownerA}','${ownerB}','quote_request')`)).rejects.toThrow(/G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED/);
         await expect(client.unsafe(`INSERT INTO public.demos(id,lead_id,tenant_id,workspace_id,slug,published_by_user_id) VALUES ('bad-demo','legacy-lead','${tenantA}','${workspaceA}','bad-demo','${ownerB}')`)).rejects.toThrow(/G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED/);
         await expect(client.unsafe(`INSERT INTO public.outreach_events(id,lead_id,tenant_id,workspace_id,channel) VALUES ('cross-workspace','legacy-lead','${tenantA}','${workspaceB}','email')`)).rejects.toThrow(/tenant_workspace_fkey/);
         await expect(client.unsafe(`UPDATE public.lead_notes SET lead_id='tenant-b-lead' WHERE id='legacy-note'`)).rejects.toThrow(/G003_LEAD_CHILD_SCOPE_IMMUTABLE/);
         await expect(client.unsafe(`INSERT INTO public.demos(id,lead_id,tenant_id,slug) VALUES ('duplicate-slug','tenant-b-lead','${tenantB}','legacy-public')`)).rejects.toThrow(/demos_slug_key/);
+
+        const migrationClient = postgres(url, { max: 1, onnotice: () => undefined });
+        const writerClient = postgres(url, { max: 1, onnotice: () => undefined });
+        let instrumentedReplay: Promise<unknown> | undefined;
+        try {
+          const migrationPid = (await migrationClient.unsafe<Array<{ pid: number }>>("SELECT pg_catalog.pg_backend_pid() pid"))[0].pid;
+          const lockProbeSql = g003Sql.replace(
+            "-- G003_WRITER_LOCKS_ACQUIRED",
+            "-- G003_WRITER_LOCKS_ACQUIRED\nSELECT pg_catalog.pg_sleep(2);",
+          );
+          expect(lockProbeSql).not.toBe(g003Sql);
+          instrumentedReplay = Promise.resolve(migrationClient.unsafe(lockProbeSql));
+          let lockedTargets = 0;
+          for (let attempt = 0; attempt < 50 && lockedTargets !== 5; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            lockedTargets = Number((await client.unsafe(`
+              SELECT count(*)::integer count FROM pg_catalog.pg_locks
+               WHERE pid=${migrationPid} AND granted AND mode='ShareRowExclusiveLock'
+                 AND relation IN ('public.leads'::regclass,'public.lead_notes'::regclass,'public.outreach_events'::regclass,'public.admin_requests'::regclass,'public.demos'::regclass)
+            `))[0].count);
+          }
+          expect(lockedTargets).toBe(5);
+          await writerClient.unsafe("SET lock_timeout='250ms'");
+          await expect(writerClient.unsafe(`INSERT INTO public.leads(id,tenant_id,place_id,name) VALUES ('racing-lead','${tenantA}','racing-place','Racing Writer')`)).rejects.toThrow(/lock timeout/);
+          await instrumentedReplay;
+        } finally {
+          await instrumentedReplay?.catch(() => undefined);
+          await writerClient.unsafe("RESET lock_timeout").catch(() => undefined);
+          await migrationClient.end({ timeout: 5 });
+          await writerClient.end({ timeout: 5 });
+        }
 
         await client.unsafe(`UPDATE public.demos SET config_json='{"headline":"Safe","services":["One"],"trustSignals":["Verified"],"secret":"hidden"}'::jsonb,is_published=1,revoked_at=NULL WHERE id='legacy-demo'`);
         await client.unsafe("SET ROLE anon");
@@ -439,8 +600,15 @@ describe("G-003 lead CRM tenant scope", () => {
         await expect(client.unsafe("SELECT * FROM public.leads")).rejects.toThrow(/permission denied/);
         await expect(client.unsafe("INSERT INTO public.leads(id,tenant_id,place_id) VALUES ('anon-write',$$00000000-0000-4000-8000-000000000301$$,'anon')")).rejects.toThrow(/permission denied/);
         await client.unsafe("RESET ROLE");
-        await client.unsafe(`UPDATE public.demos SET config_json='{"services":["safe",{"unsafe":true}]}'::jsonb WHERE id='legacy-demo'`);
-        expect((await client.unsafe("SELECT config_json FROM public.novatrade_published_demo_public('legacy-public')"))[0].config_json).toEqual({});
+        expect((await client.unsafe(`SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.replace(p.prosrc,pg_catalog.chr(13)||pg_catalog.chr(10),pg_catalog.chr(10)),'UTF8')),'hex') hash FROM pg_catalog.pg_proc p WHERE p.oid='public.novatrade_published_demo_public(text)'::regprocedure`))[0].hash).toBe("806aabf2f0a019b6728978e5ace7e5b3d6f29ecd019689a2eabfc98457b21c83");
+        for (const key of ["services", "trustSignals"] as const) {
+          for (const value of ["scalar", { unsafe: true }, null, ["safe", { unsafe: true }], ["safe", "verified"]]) {
+            await client.unsafe("UPDATE public.demos SET config_json=$1::jsonb WHERE id='legacy-demo'", [{ [key]: value }]);
+            const expected = Array.isArray(value) && value.every((item) => typeof item === "string") ? { [key]: value } : {};
+            expect((await client.unsafe("SELECT config_json FROM public.demos WHERE id='legacy-demo'"))[0].config_json).toEqual({ [key]: value });
+            expect((await client.unsafe("SELECT config_json FROM public.novatrade_published_demo_public('legacy-public')"))[0].config_json).toEqual(expected);
+          }
+        }
         await client.unsafe("UPDATE public.demos SET revoked_at=now() WHERE id='legacy-demo'");
         await client.unsafe("SET ROLE anon");
         expect(await client.unsafe("SELECT * FROM public.novatrade_published_demo_public('legacy-public')")).toEqual([]);

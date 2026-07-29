@@ -7,6 +7,19 @@ SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '120s';
 SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('novatrade:g003:lead-crm-tenant-scope'));
 
+-- Receipt, membership, and target-row validation must observe one stable
+-- snapshot. These writer-conflicting locks are held until the final COMMIT.
+LOCK TABLE
+  public.compatibility_backfill_receipts,
+  public.tenant_memberships,
+  public.leads,
+  public.lead_notes,
+  public.outreach_events,
+  public.admin_requests,
+  public.demos
+IN SHARE ROW EXCLUSIVE MODE;
+-- G003_WRITER_LOCKS_ACQUIRED
+
 DO $g003_preflight$
 DECLARE
   table_name text;
@@ -29,7 +42,6 @@ BEGIN
      OR pg_catalog.to_regprocedure('public.novatrade_inherit_lead_child_scope()') IS NULL
      OR pg_catalog.to_regprocedure('public.novatrade_lead_scope_guard()') IS NULL
      OR pg_catalog.to_regprocedure('public.novatrade_published_demo_public(text)') IS NULL
-     OR pg_catalog.to_regclass('public.idx_leads_tenant_place_id') IS NULL
      OR pg_catalog.to_regclass('public.idx_lead_notes_tenant_lead_created') IS NULL
      OR pg_catalog.to_regclass('public.idx_outreach_events_tenant_lead_created') IS NULL
      OR pg_catalog.to_regclass('public.idx_admin_requests_tenant_lead_created') IS NULL
@@ -63,6 +75,7 @@ BEGIN
        WHERE c.conrelid = 'public.leads'::regclass
          AND c.conname = 'leads_tenant_id_id_unique'
          AND c.contype = 'u'
+         AND c.convalidated
          AND pg_catalog.pg_get_constraintdef(c.oid) = 'UNIQUE (tenant_id, id)'
     )
     AND EXISTS (
@@ -70,6 +83,7 @@ BEGIN
        WHERE c.conrelid = 'public.leads'::regclass
          AND c.conname = 'leads_tenant_place_id_unique'
          AND c.contype = 'u'
+         AND c.convalidated
          AND pg_catalog.pg_get_constraintdef(c.oid) = 'UNIQUE (tenant_id, place_id)'
     )
     AND NOT EXISTS (
@@ -87,6 +101,7 @@ BEGIN
             ('public.demos'::regclass,'demos_tenant_lead_fkey')
           )
             AND c.contype = 'f'
+            AND c.convalidated
             AND c.confrelid = 'public.leads'::regclass
             AND pg_catalog.pg_get_constraintdef(c.oid) LIKE 'FOREIGN KEY (tenant_id, lead_id) REFERENCES leads(tenant_id, id) ON UPDATE RESTRICT ON DELETE CASCADE%')
     AND (SELECT count(*) = 4
@@ -98,19 +113,20 @@ BEGIN
             ('public.demos'::regclass,'demos_tenant_workspace_fkey')
           )
             AND c.contype = 'f'
+            AND c.convalidated
             AND c.confrelid = 'public.workspaces'::regclass
             AND pg_catalog.pg_get_constraintdef(c.oid) LIKE 'FOREIGN KEY (tenant_id, workspace_id) REFERENCES workspaces(tenant_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT%')
     AND EXISTS (
       SELECT 1 FROM pg_catalog.pg_constraint c
        WHERE c.conrelid='public.demos'::regclass AND c.contype='u'
+         AND c.convalidated
          AND c.conkey=ARRAY[(SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid='public.demos'::regclass AND a.attname='slug')]
     )
-    AND (SELECT count(*) = 6
+    AND (SELECT count(*) = 5
            FROM pg_catalog.pg_class i
            JOIN pg_catalog.pg_index x ON x.indexrelid=i.oid
           WHERE i.relnamespace='public'::regnamespace
             AND i.relname IN (
-              'idx_leads_tenant_place_id',
               'idx_lead_notes_tenant_lead_created',
               'idx_outreach_events_tenant_lead_created',
               'idx_admin_requests_tenant_lead_created',
@@ -118,12 +134,14 @@ BEGIN
               'admin_requests_tenant_lead_open_unique'
             )
             AND x.indisvalid AND x.indisready)
-    AND pg_catalog.pg_get_indexdef('public.idx_leads_tenant_place_id'::regclass) LIKE '% ON public.leads USING btree (tenant_id, place_id)'
-    AND pg_catalog.pg_get_indexdef('public.idx_lead_notes_tenant_lead_created'::regclass) LIKE '% ON public.lead_notes USING btree (tenant_id, lead_id, created_at DESC)'
-    AND pg_catalog.pg_get_indexdef('public.idx_outreach_events_tenant_lead_created'::regclass) LIKE '% ON public.outreach_events USING btree (tenant_id, lead_id, created_at DESC)'
-    AND pg_catalog.pg_get_indexdef('public.idx_admin_requests_tenant_lead_created'::regclass) LIKE '% ON public.admin_requests USING btree (tenant_id, lead_id, created_at DESC)'
-    AND pg_catalog.pg_get_indexdef('public.idx_demos_tenant_lead'::regclass) LIKE '% ON public.demos USING btree (tenant_id, lead_id)'
-    AND pg_catalog.pg_get_indexdef('public.admin_requests_tenant_lead_open_unique'::regclass) LIKE '%UNIQUE INDEX admin_requests_tenant_lead_open_unique ON public.admin_requests USING btree (tenant_id, lead_id, request_type) WHERE (status = ANY (ARRAY[%'
+    AND pg_catalog.pg_get_indexdef('public.idx_lead_notes_tenant_lead_created'::regclass) = 'CREATE INDEX idx_lead_notes_tenant_lead_created ON public.lead_notes USING btree (tenant_id, lead_id, created_at DESC)'
+    AND pg_catalog.pg_get_indexdef('public.idx_outreach_events_tenant_lead_created'::regclass) = 'CREATE INDEX idx_outreach_events_tenant_lead_created ON public.outreach_events USING btree (tenant_id, lead_id, created_at DESC)'
+    AND pg_catalog.pg_get_indexdef('public.idx_admin_requests_tenant_lead_created'::regclass) = 'CREATE INDEX idx_admin_requests_tenant_lead_created ON public.admin_requests USING btree (tenant_id, lead_id, created_at DESC)'
+    AND pg_catalog.pg_get_indexdef('public.idx_demos_tenant_lead'::regclass) = 'CREATE INDEX idx_demos_tenant_lead ON public.demos USING btree (tenant_id, lead_id)'
+    AND (SELECT x.indisunique AND x.indisvalid AND x.indisready
+           AND pg_catalog.pg_get_expr(x.indpred,x.indrelid) = '(status = ANY (ARRAY[''new''::text, ''seen''::text, ''in_progress''::text, ''waiting_on_researcher''::text]))'
+           FROM pg_catalog.pg_index x
+          WHERE x.indexrelid='public.admin_requests_tenant_lead_open_unique'::regclass)
     AND (SELECT count(*) = 5
            FROM pg_catalog.pg_trigger t
           WHERE (t.tgrelid,t.tgname,t.tgfoid) IN (
@@ -132,7 +150,22 @@ BEGIN
             ('public.outreach_events'::regclass,'trg_novatrade_outreach_events_scope','public.novatrade_inherit_lead_child_scope()'::regprocedure),
             ('public.admin_requests'::regclass,'trg_novatrade_admin_requests_scope','public.novatrade_inherit_lead_child_scope()'::regprocedure),
             ('public.demos'::regclass,'trg_novatrade_demos_scope','public.novatrade_inherit_lead_child_scope()'::regprocedure)
-          ) AND NOT t.tgisinternal AND t.tgenabled <> 'D')
+          )
+            AND NOT t.tgisinternal
+            AND t.tgenabled='O'
+            AND t.tgtype=23
+            AND t.tgnargs=0
+            AND t.tgqual IS NULL
+            AND t.tgoldtable IS NULL
+            AND t.tgnewtable IS NULL
+            AND (
+              t.tgrelid<>'public.leads'::regclass
+              OR (SELECT pg_catalog.array_agg(a.attname::text ORDER BY u.ordinality)
+                    FROM pg_catalog.unnest(t.tgattr::smallint[]) WITH ORDINALITY u(attnum,ordinality)
+                    JOIN pg_catalog.pg_attribute a ON a.attrelid=t.tgrelid AND a.attnum=u.attnum)
+                 = ARRAY['tenant_id','assigned_to_user_id','archived_by_user_id','quality_checked_by_user_id']
+            )
+            AND (t.tgrelid='public.leads'::regclass OR pg_catalog.cardinality(t.tgattr::smallint[])=0))
     AND (SELECT count(*) = 4
            FROM pg_catalog.pg_proc p
           WHERE p.oid IN (
@@ -141,11 +174,41 @@ BEGIN
             'public.novatrade_lead_scope_guard()'::regprocedure,
             'public.novatrade_published_demo_public(text)'::regprocedure
           )
-            AND p.proconfig @> ARRAY['search_path=pg_catalog, public'])
-    AND NOT (SELECT p.prosecdef FROM pg_catalog.pg_proc p WHERE p.oid='public.novatrade_assert_lead_actor(uuid,uuid,text,boolean)'::regprocedure)
-    AND NOT (SELECT p.prosecdef FROM pg_catalog.pg_proc p WHERE p.oid='public.novatrade_inherit_lead_child_scope()'::regprocedure)
-    AND NOT (SELECT p.prosecdef FROM pg_catalog.pg_proc p WHERE p.oid='public.novatrade_lead_scope_guard()'::regprocedure)
-    AND (SELECT p.prosecdef FROM pg_catalog.pg_proc p WHERE p.oid='public.novatrade_published_demo_public(text)'::regprocedure)
+            AND p.proowner=(SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid='public.leads'::regclass)
+            AND p.proconfig=ARRAY['search_path=pg_catalog, public']::text[]
+            AND p.prokind='f'
+            AND NOT p.proisstrict
+            AND NOT p.proleakproof
+            AND p.proparallel='u')
+    AND (SELECT l.lanname='plpgsql' AND p.prorettype='void'::regtype AND NOT p.proretset
+                AND p.provolatile='v' AND NOT p.prosecdef
+           FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+          WHERE p.oid='public.novatrade_assert_lead_actor(uuid,uuid,text,boolean)'::regprocedure)
+    AND (SELECT l.lanname='plpgsql' AND p.prorettype='trigger'::regtype AND NOT p.proretset
+                AND p.provolatile='v' AND NOT p.prosecdef
+           FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+          WHERE p.oid='public.novatrade_inherit_lead_child_scope()'::regprocedure)
+    AND (SELECT l.lanname='plpgsql' AND p.prorettype='trigger'::regtype AND NOT p.proretset
+                AND p.provolatile='v' AND NOT p.prosecdef
+           FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+          WHERE p.oid='public.novatrade_lead_scope_guard()'::regprocedure)
+    AND (SELECT l.lanname='sql' AND p.prorettype='record'::regtype AND p.proretset
+                AND p.provolatile='s' AND p.prosecdef
+                AND pg_catalog.pg_get_function_result(p.oid)='TABLE(slug text, template_id text, config_json jsonb, name text, address text, phone text, maps_uri text, rating double precision, review_count integer, selling_niche text)'
+           FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+          WHERE p.oid='public.novatrade_published_demo_public(text)'::regprocedure)
+    AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.replace(
+          (SELECT p.prosrc FROM pg_catalog.pg_proc p WHERE p.oid='public.novatrade_assert_lead_actor(uuid,uuid,text,boolean)'::regprocedure),
+          pg_catalog.chr(13)||pg_catalog.chr(10),pg_catalog.chr(10)),'UTF8')),'hex')='e905e45b5608e69f48f349281deed79eb80f156ef57b42b5dedd97282a8539e6'
+    AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.replace(
+          (SELECT p.prosrc FROM pg_catalog.pg_proc p WHERE p.oid='public.novatrade_inherit_lead_child_scope()'::regprocedure),
+          pg_catalog.chr(13)||pg_catalog.chr(10),pg_catalog.chr(10)),'UTF8')),'hex')='b32596ecbea0604c4d243bf957ff355d80afae1d21edb8841016b54f8cc13f78'
+    AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.replace(
+          (SELECT p.prosrc FROM pg_catalog.pg_proc p WHERE p.oid='public.novatrade_lead_scope_guard()'::regprocedure),
+          pg_catalog.chr(13)||pg_catalog.chr(10),pg_catalog.chr(10)),'UTF8')),'hex')='b1e8a0dfad0eea52cde6ae77a5090f16410173a356c66ed9c536964bdc12f96d'
+    AND pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.replace(
+          (SELECT p.prosrc FROM pg_catalog.pg_proc p WHERE p.oid='public.novatrade_published_demo_public(text)'::regprocedure),
+          pg_catalog.chr(13)||pg_catalog.chr(10),pg_catalog.chr(10)),'UTF8')),'hex')='806aabf2f0a019b6728978e5ace7e5b3d6f29ecd019689a2eabfc98457b21c83'
     AND pg_catalog.obj_description('public.novatrade_published_demo_public(text)'::regprocedure,'pg_proc') = 'novatrade:g003:published-demo-public:v1'
     AND (SELECT count(*) = 5 FROM pg_catalog.pg_class c
           WHERE c.oid IN ('public.leads'::regclass,'public.lead_notes'::regclass,'public.outreach_events'::regclass,'public.admin_requests'::regclass,'public.demos'::regclass)
@@ -257,39 +320,35 @@ BEGIN
     CROSS JOIN LATERAL (VALUES (l.assigned_to_user_id::text),(l.archived_by_user_id::text),(l.quality_checked_by_user_id::text)) actor(id)
     WHERE actor.id IS NOT NULL AND NOT EXISTS (
       SELECT 1 FROM public.tenant_memberships m
-       WHERE m.tenant_id=l.tenant_id AND m.auth_identity_id::text=actor.id AND m.status='active'
+       WHERE m.tenant_id=l.tenant_id AND m.auth_identity_id::text=actor.id
     )
   ) OR EXISTS (
     SELECT 1 FROM public.lead_notes c
     CROSS JOIN LATERAL (VALUES (c.author_user_id::text)) actor(id)
     WHERE actor.id IS NOT NULL AND NOT EXISTS (
       SELECT 1 FROM public.tenant_memberships m
-       WHERE m.tenant_id=c.tenant_id AND m.auth_identity_id::text=actor.id AND m.status='active'
-         AND (m.workspace_id IS NULL OR m.workspace_id IS NOT DISTINCT FROM c.workspace_id)
+       WHERE m.tenant_id=c.tenant_id AND m.auth_identity_id::text=actor.id
     )
   ) OR EXISTS (
     SELECT 1 FROM public.outreach_events c
     CROSS JOIN LATERAL (VALUES (c.actor_user_id::text)) actor(id)
     WHERE actor.id IS NOT NULL AND NOT EXISTS (
       SELECT 1 FROM public.tenant_memberships m
-       WHERE m.tenant_id=c.tenant_id AND m.auth_identity_id::text=actor.id AND m.status='active'
-         AND (m.workspace_id IS NULL OR m.workspace_id IS NOT DISTINCT FROM c.workspace_id)
+       WHERE m.tenant_id=c.tenant_id AND m.auth_identity_id::text=actor.id
     )
   ) OR EXISTS (
     SELECT 1 FROM public.admin_requests c
     CROSS JOIN LATERAL (VALUES (c.created_by_user_id::text),(c.assigned_admin_user_id::text)) actor(id)
     WHERE actor.id IS NOT NULL AND NOT EXISTS (
       SELECT 1 FROM public.tenant_memberships m
-       WHERE m.tenant_id=c.tenant_id AND m.auth_identity_id::text=actor.id AND m.status='active'
-         AND (m.workspace_id IS NULL OR m.workspace_id IS NOT DISTINCT FROM c.workspace_id)
+       WHERE m.tenant_id=c.tenant_id AND m.auth_identity_id::text=actor.id
     )
   ) OR EXISTS (
     SELECT 1 FROM public.demos c
     CROSS JOIN LATERAL (VALUES (c.published_by_user_id::text),(c.unpublished_by_user_id::text),(c.revoked_by_user_id::text)) actor(id)
     WHERE actor.id IS NOT NULL AND NOT EXISTS (
       SELECT 1 FROM public.tenant_memberships m
-       WHERE m.tenant_id=c.tenant_id AND m.auth_identity_id::text=actor.id AND m.status='active'
-         AND (m.workspace_id IS NULL OR m.workspace_id IS NOT DISTINCT FROM c.workspace_id)
+       WHERE m.tenant_id=c.tenant_id AND m.auth_identity_id::text=actor.id
     )
   ) THEN
     RAISE EXCEPTION USING ERRCODE='P0001', MESSAGE='G003_EXISTING_ACTOR_SCOPE_INVALID';
@@ -380,16 +439,45 @@ BEGIN
   END IF;
   NEW.tenant_id:=parent_tenant;
   IF TG_TABLE_NAME='lead_notes' THEN
-    PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.author_user_id::text,true);
+    IF TG_OP='INSERT' THEN
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.author_user_id::text,true);
+    ELSIF NEW.author_user_id IS DISTINCT FROM OLD.author_user_id THEN
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.author_user_id::text,true);
+    END IF;
   ELSIF TG_TABLE_NAME='outreach_events' THEN
-    PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.actor_user_id::text,true);
+    IF TG_OP='INSERT' THEN
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.actor_user_id::text,true);
+    ELSIF NEW.actor_user_id IS DISTINCT FROM OLD.actor_user_id THEN
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.actor_user_id::text,true);
+    END IF;
   ELSIF TG_TABLE_NAME='admin_requests' THEN
-    PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.created_by_user_id::text,true);
-    PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.assigned_admin_user_id::text,true);
+    IF TG_OP='INSERT' THEN
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.created_by_user_id::text,true);
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.assigned_admin_user_id::text,true);
+    ELSE
+      IF NEW.created_by_user_id IS DISTINCT FROM OLD.created_by_user_id THEN
+        PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.created_by_user_id::text,true);
+      END IF;
+      IF NEW.assigned_admin_user_id IS DISTINCT FROM OLD.assigned_admin_user_id THEN
+        PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.assigned_admin_user_id::text,true);
+      END IF;
+    END IF;
   ELSIF TG_TABLE_NAME='demos' THEN
-    PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.published_by_user_id::text,true);
-    PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.unpublished_by_user_id::text,true);
-    PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.revoked_by_user_id::text,true);
+    IF TG_OP='INSERT' THEN
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.published_by_user_id::text,true);
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.unpublished_by_user_id::text,true);
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.revoked_by_user_id::text,true);
+    ELSE
+      IF NEW.published_by_user_id IS DISTINCT FROM OLD.published_by_user_id THEN
+        PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.published_by_user_id::text,true);
+      END IF;
+      IF NEW.unpublished_by_user_id IS DISTINCT FROM OLD.unpublished_by_user_id THEN
+        PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.unpublished_by_user_id::text,true);
+      END IF;
+      IF NEW.revoked_by_user_id IS DISTINCT FROM OLD.revoked_by_user_id THEN
+        PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.revoked_by_user_id::text,true);
+      END IF;
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -404,12 +492,37 @@ BEGIN
   IF TG_OP='UPDATE' AND NEW.tenant_id IS DISTINCT FROM OLD.tenant_id THEN
     RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='G003_LEAD_TENANT_IMMUTABLE';
   END IF;
-  PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.assigned_to_user_id::text,false);
-  PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.archived_by_user_id::text,false);
-  PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.quality_checked_by_user_id::text,false);
+  IF TG_OP='INSERT' THEN
+    PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.assigned_to_user_id::text,false);
+    PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.archived_by_user_id::text,false);
+    PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.quality_checked_by_user_id::text,false);
+  ELSE
+    IF NEW.assigned_to_user_id IS DISTINCT FROM OLD.assigned_to_user_id THEN
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.assigned_to_user_id::text,false);
+    END IF;
+    IF NEW.archived_by_user_id IS DISTINCT FROM OLD.archived_by_user_id THEN
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.archived_by_user_id::text,false);
+    END IF;
+    IF NEW.quality_checked_by_user_id IS DISTINCT FROM OLD.quality_checked_by_user_id THEN
+      PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.quality_checked_by_user_id::text,false);
+    END IF;
+  END IF;
   RETURN NEW;
 END;
 $f$;
+
+DO $g003_private_function_owners$
+DECLARE target_owner text;
+BEGIN
+  SELECT r.rolname INTO STRICT target_owner
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_roles r ON r.oid=c.relowner
+   WHERE c.oid='public.leads'::regclass;
+  EXECUTE pg_catalog.format('ALTER FUNCTION public.novatrade_assert_lead_actor(uuid,uuid,text,boolean) OWNER TO %I',target_owner);
+  EXECUTE pg_catalog.format('ALTER FUNCTION public.novatrade_inherit_lead_child_scope() OWNER TO %I',target_owner);
+  EXECUTE pg_catalog.format('ALTER FUNCTION public.novatrade_lead_scope_guard() OWNER TO %I',target_owner);
+END;
+$g003_private_function_owners$;
 
 REVOKE ALL ON FUNCTION public.novatrade_assert_lead_actor(uuid,uuid,text,boolean) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.novatrade_inherit_lead_child_scope() FROM PUBLIC;
@@ -455,7 +568,6 @@ DROP INDEX IF EXISTS public.idx_admin_requests_tenant_lead_created;
 DROP INDEX IF EXISTS public.idx_demos_tenant_lead;
 DROP INDEX IF EXISTS public.idx_admin_requests_open_unique;
 DROP INDEX IF EXISTS public.admin_requests_tenant_lead_open_unique;
-CREATE INDEX idx_leads_tenant_place_id ON public.leads(tenant_id,place_id);
 CREATE INDEX idx_lead_notes_tenant_lead_created ON public.lead_notes(tenant_id,lead_id,created_at DESC);
 CREATE INDEX idx_outreach_events_tenant_lead_created ON public.outreach_events(tenant_id,lead_id,created_at DESC);
 CREATE INDEX idx_admin_requests_tenant_lead_created ON public.admin_requests(tenant_id,lead_id,created_at DESC);
@@ -480,8 +592,12 @@ AS $f$
     pg_catalog.jsonb_strip_nulls(pg_catalog.jsonb_build_object(
       'headline',CASE WHEN pg_catalog.jsonb_typeof(d.config_json->'headline') IN ('string','null') THEN d.config_json->'headline' END,
       'subheadline',CASE WHEN pg_catalog.jsonb_typeof(d.config_json->'subheadline') IN ('string','null') THEN d.config_json->'subheadline' END,
-      'services',CASE WHEN pg_catalog.jsonb_typeof(d.config_json->'services')='array' AND NOT EXISTS(SELECT 1 FROM pg_catalog.jsonb_array_elements(d.config_json->'services') x WHERE pg_catalog.jsonb_typeof(x)<>'string') THEN d.config_json->'services' END,
-      'trustSignals',CASE WHEN pg_catalog.jsonb_typeof(d.config_json->'trustSignals')='array' AND NOT EXISTS(SELECT 1 FROM pg_catalog.jsonb_array_elements(d.config_json->'trustSignals') x WHERE pg_catalog.jsonb_typeof(x)<>'string') THEN d.config_json->'trustSignals' END,
+      'services',CASE WHEN pg_catalog.jsonb_typeof(d.config_json->'services')='array' THEN
+        CASE WHEN NOT EXISTS(SELECT 1 FROM pg_catalog.jsonb_array_elements(d.config_json->'services') AS item(value) WHERE pg_catalog.jsonb_typeof(value)<>'string') THEN d.config_json->'services' END
+      END,
+      'trustSignals',CASE WHEN pg_catalog.jsonb_typeof(d.config_json->'trustSignals')='array' THEN
+        CASE WHEN NOT EXISTS(SELECT 1 FROM pg_catalog.jsonb_array_elements(d.config_json->'trustSignals') AS item(value) WHERE pg_catalog.jsonb_typeof(value)<>'string') THEN d.config_json->'trustSignals' END
+      END,
       'primaryCta',CASE WHEN pg_catalog.jsonb_typeof(d.config_json->'primaryCta') IN ('string','null') THEN d.config_json->'primaryCta' END,
       'secondaryCta',CASE WHEN pg_catalog.jsonb_typeof(d.config_json->'secondaryCta') IN ('string','null') THEN d.config_json->'secondaryCta' END,
       'websiteGap',CASE WHEN pg_catalog.jsonb_typeof(d.config_json->'websiteGap') IN ('string','null') THEN d.config_json->'websiteGap' END
@@ -491,6 +607,16 @@ AS $f$
   JOIN public.leads l ON (l.tenant_id,l.id)=(d.tenant_id,d.lead_id)
   WHERE d.slug=p_slug AND d.is_published=1 AND d.revoked_at IS NULL
 $f$;
+DO $g003_public_function_owner$
+DECLARE target_owner text;
+BEGIN
+  SELECT r.rolname INTO STRICT target_owner
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_roles r ON r.oid=c.relowner
+   WHERE c.oid='public.leads'::regclass;
+  EXECUTE pg_catalog.format('ALTER FUNCTION public.novatrade_published_demo_public(text) OWNER TO %I',target_owner);
+END;
+$g003_public_function_owner$;
 COMMENT ON FUNCTION public.novatrade_published_demo_public(text) IS 'novatrade:g003:published-demo-public:v1';
 REVOKE ALL ON FUNCTION public.novatrade_published_demo_public(text) FROM PUBLIC;
 DO $g003_public_function_roles$
