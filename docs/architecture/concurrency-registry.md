@@ -243,3 +243,26 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
   released for serialized G-005 execution after its domain branch refresh.
   All validation was local; nothing was pushed, deployed, or applied to a
   remote database or production system.
+
+## G-005 Terra-medium dispatch receipt
+
+- Baseline: accepted G-004A integration
+  `634ffe99ea9d35877429e57b38301138f18b6c2c` on clean branch
+  `codex/nova-platform-tenancy`.
+- Worker policy: one `gpt-5.6-terra` worker at medium reasoning, one bounded
+  preaccepted card, no self-acceptance, and stop for sequencing, source-policy,
+  recovery, runtime-writer, security, or scope decisions.
+- Exact seven-file ceiling: migration
+  `202607290004_add_source_cache_usage_tenant_scope.sql`, its dedicated
+  PostgreSQL test and validation receipt, plus count/log-only reconciliation in
+  the G-002, G-003, accepted G-004A, and T029 harnesses.
+- Contract: tenant-wide `place_cache`, `places_master`,
+  `place_observations`, and `api_usage_events`; exact source card
+  `google_places_legacy`; tenant/source/place identity; no shared raw provider
+  observations; nested review and credential rejection; receipt, rollback,
+  hostile-path, RLS, ACL, concurrency, and two-tenant PostgreSQL 16 proof at
+  `45 discovered / 43 applied / 2 named scheduler skips`.
+- `migration-sequence`, `migration-harness`, and `recovery-contract` are
+  reacquired. Application/runtime propagation remains G-020/G-021/G-022,
+  T029 recovery behavior remains frozen at its accepted blocker, and no
+  external action is authorized.
