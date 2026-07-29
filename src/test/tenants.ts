@@ -147,6 +147,13 @@ const AUDIT_EVENT_IDS = {
   revokedTenantB: "70000000-0000-4000-8000-000000000002",
 } as const;
 
+// These are deliberately workspace records, not a new fixture-only table: workspaces are
+// already tenant-owned and therefore exercise the same selector shape in every test lane.
+const LOOK_ALIKE_RECORD_IDS = {
+  tenantAWorkspace: WORKSPACE_IDS.A,
+  tenantBWorkspace: WORKSPACE_IDS.B,
+} as const;
+
 const FIXTURE_LABEL = "shared-synthetic-external-resource";
 const SHARED_WORKSPACE_LABEL = "Shared Synthetic Workspace";
 const SHARED_TENANT_LABEL = "Shared Synthetic Tenant";
@@ -175,6 +182,10 @@ export const CANONICAL_TENANT_FIXTURE_CATALOG = deepFreeze({
     { key: "B", id: WORKSPACE_IDS.B, tenantKey: "B", tenantId: TENANT_IDS.B, slug: "shared-workspace", name: SHARED_WORKSPACE_LABEL, expectedState: "active", overlappingExternalResourceLabel: FIXTURE_LABEL },
     { key: "A_SIBLING", id: WORKSPACE_IDS.A_SIBLING, tenantKey: "A", tenantId: TENANT_IDS.A, slug: "shared-workspace-sibling", name: SHARED_WORKSPACE_LABEL, expectedState: "active", overlappingExternalResourceLabel: FIXTURE_LABEL },
     { key: "B_SIBLING", id: WORKSPACE_IDS.B_SIBLING, tenantKey: "B", tenantId: TENANT_IDS.B, slug: "shared-workspace-sibling", name: SHARED_WORKSPACE_LABEL, expectedState: "active", overlappingExternalResourceLabel: FIXTURE_LABEL },
+  ],
+  lookAlikeRecords: [
+    { id: LOOK_ALIKE_RECORD_IDS.tenantAWorkspace, tenantKey: "A", tenantId: TENANT_IDS.A, entity: "workspace", selector: "shared-workspace", expectedState: "tenant_a_only", overlappingExternalResourceLabel: FIXTURE_LABEL },
+    { id: LOOK_ALIKE_RECORD_IDS.tenantBWorkspace, tenantKey: "B", tenantId: TENANT_IDS.B, entity: "workspace", selector: "shared-workspace", expectedState: "tenant_b_only", overlappingExternalResourceLabel: FIXTURE_LABEL },
   ],
   identities: [
     { id: SUPPORT_ACTOR_ID, tenantKey: "platform", relationship: "support_actor_only", expectedState: "platform_support", overlappingExternalResourceLabel: FIXTURE_LABEL },
@@ -213,6 +224,7 @@ export const CANONICAL_TENANT_FIXTURE_IDS = deepFreeze({
   policies: POLICY_IDS,
   supportGrants: SUPPORT_GRANT_IDS,
   auditEvents: AUDIT_EVENT_IDS,
+  lookAlikeRecords: LOOK_ALIKE_RECORD_IDS,
 } as const);
 
 export const CANONICAL_TENANT_FIXTURE_ROLE_COUNT = LAUNCH_ROLES.length;
@@ -364,6 +376,28 @@ export async function withCanonicalTenantFixtures<T>(
     if (error !== rollback) throw error;
   }
   return result;
+}
+
+/**
+ * Deletes only the fixed fixture IDs, in FK-safe order. It is intentionally
+ * idempotent: missing fixture rows are not an error and unrelated rows cannot
+ * match a reserved ID predicate.
+ */
+export async function cleanupCanonicalTenantFixtures({ transaction }: CanonicalTenantFixtureSetupOptions): Promise<void> {
+  await transaction.withTransaction(async ({ db }) => {
+    const remove = async (table: string, column: string, ids: readonly string[]) => {
+      const placeholders = ids.map(() => "?").join(", ");
+      await db.prepare(`DELETE FROM ${table} WHERE ${column} IN (${placeholders})`).run(...ids);
+    };
+    await remove("support_access_grant_permissions", "grant_id", Object.values(SUPPORT_GRANT_IDS));
+    await remove("support_access_grant_data_classes", "grant_id", Object.values(SUPPORT_GRANT_IDS));
+    await remove("support_access_grants", "id", Object.values(SUPPORT_GRANT_IDS));
+    await remove("tenant_role_bindings", "id", Object.values(ROLE_BINDING_IDS).flatMap(Object.values));
+    await remove("tenant_memberships", "id", Object.values(MEMBERSHIP_IDS).flatMap(Object.values));
+    await remove("tenant_policies", "id", Object.values(POLICY_IDS));
+    await remove("workspaces", "id", Object.values(WORKSPACE_IDS));
+    await remove("tenants", "id", Object.values(TENANT_IDS));
+  });
 }
 
 export async function assertCanonicalTenantFixtureIsolation(scope: CanonicalTenantFixtureTransactionScope): Promise<void> {

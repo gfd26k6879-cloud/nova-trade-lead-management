@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { CANONICAL_TENANT_FIXTURE_CATALOG } from "../src/test/tenants";
 
 import { assertE2EAuth, assertMutationSafety, hasE2EAuth } from "../scripts/e2e-safety.mjs";
 
@@ -7,7 +8,17 @@ export const EMAIL = process.env.E2E_SUPABASE_EMAIL ?? process.env.NOSITE_BOOTST
 export const PASSWORD = process.env.E2E_SUPABASE_PASSWORD ?? "";
 export const STORAGE_STATE = process.env.E2E_STORAGE_STATE?.trim() ?? "";
 export const HAS_E2E_AUTH = hasE2EAuth();
-export const TENANT_FIXTURE_SELECTORS = Object.freeze({ tenantA: "synthetic-tenant-a", tenantB: "synthetic-tenant-b", workspaceA: "shared-workspace", siblingWorkspace: "shared-workspace-sibling" });
+const fixtureTenant = (key: "A" | "B") => CANONICAL_TENANT_FIXTURE_CATALOG.tenants.find((tenant) => tenant.key === key)!;
+const fixtureWorkspace = (key: "A" | "A_SIBLING") => CANONICAL_TENANT_FIXTURE_CATALOG.workspaces.find((workspace) => workspace.key === key)!;
+
+export const TENANT_FIXTURE_SELECTORS = Object.freeze({
+  tenantA: fixtureTenant("A").slug,
+  tenantB: fixtureTenant("B").slug,
+  workspaceA: fixtureWorkspace("A").slug,
+  siblingWorkspace: fixtureWorkspace("A_SIBLING").slug,
+  tenantALookAlikeRecordId: CANONICAL_TENANT_FIXTURE_CATALOG.lookAlikeRecords[0].id,
+  tenantBLookAlikeRecordId: CANONICAL_TENANT_FIXTURE_CATALOG.lookAlikeRecords[1].id,
+});
 
 export function requireE2EAuth(): void {
   assertE2EAuth();

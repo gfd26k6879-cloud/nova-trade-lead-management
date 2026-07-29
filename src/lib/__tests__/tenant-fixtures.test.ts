@@ -8,6 +8,7 @@ import {
   CANONICAL_TENANT_FIXTURE_CATALOG,
   CANONICAL_TENANT_FIXTURE_COUNTS,
   CANONICAL_TENANT_FIXTURE_IDS,
+  cleanupCanonicalTenantFixtures,
   createCanonicalTenantFixtureTransactionCoordinator,
   normalizeDatabaseBoolean,
   setupCanonicalTenantFixtures,
@@ -35,6 +36,10 @@ describe("canonical two-tenant fixtures", () => {
       expect(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[0].slug).toBe(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[1].slug);
       expect(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[0].name).toBe(CANONICAL_TENANT_FIXTURE_CATALOG.workspaces[1].name);
       expect(CANONICAL_TENANT_FIXTURE_IDS.tenants.A).not.toBe(CANONICAL_TENANT_FIXTURE_IDS.tenants.B);
+      expect(CANONICAL_TENANT_FIXTURE_CATALOG.lookAlikeRecords).toEqual([
+        expect.objectContaining({ id: CANONICAL_TENANT_FIXTURE_IDS.lookAlikeRecords.tenantAWorkspace, tenantKey: "A", entity: "workspace" }),
+        expect.objectContaining({ id: CANONICAL_TENANT_FIXTURE_IDS.lookAlikeRecords.tenantBWorkspace, tenantKey: "B", entity: "workspace" }),
+      ]);
 
       expect(sqlite.prepare("SELECT COUNT(*) AS count FROM tenant_memberships WHERE status = 'active'").get()).toEqual({ count: 14 });
       expect(sqlite.prepare("SELECT COUNT(*) AS count FROM tenant_memberships WHERE status IN ('pending', 'suspended', 'disabled')").get()).toEqual({ count: 6 });
@@ -105,6 +110,28 @@ describe("canonical two-tenant fixtures", () => {
       const beforeDuplicate = canonicalCounts(sqlite);
       await expect(setupCanonicalTenantFixtures({ transaction: fixtureTransaction(db) })).rejects.toThrow(/reserved rows/);
       expect(canonicalCounts(sqlite)).toEqual(beforeDuplicate);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("commits and idempotently cleans only canonical rows while preserving unrelated rows", async () => {
+    const sqlite = createFixtureDb();
+    const db = sqliteClient(sqlite);
+    try {
+      await db.prepare("INSERT INTO tenants (id, slug, name, status, locale, timezone, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
+        "80000000-0000-4000-8000-000000000099", "unrelated", "Unrelated", "active", "en-US", "UTC",
+        CANONICAL_TENANT_FIXTURE_CATALOG.timeBoundaries.fixtureCreatedAt, CANONICAL_TENANT_FIXTURE_CATALOG.timeBoundaries.fixtureCreatedAt,
+      );
+      await setupCanonicalTenantFixtures({ transaction: fixtureTransaction(db) });
+      // The production-shaped SQLite schema intentionally makes approved grant
+      // scope history immutable. This fixture-only committed-cleanup rehearsal
+      // removes just those guards; rollback remains the normal full-schema path.
+      sqlite.exec("DROP TRIGGER trg_novatrade_support_access_grant_permissions_no_delete; DROP TRIGGER trg_novatrade_support_access_grant_data_classes_no_delete;");
+      await cleanupCanonicalTenantFixtures({ transaction: fixtureTransaction(db) });
+      await cleanupCanonicalTenantFixtures({ transaction: fixtureTransaction(db) });
+      expect(canonicalCounts(sqlite)).toEqual({ ...emptyCanonicalCounts(), tenants: 1 });
+      expect(sqlite.prepare("SELECT id FROM tenants WHERE slug = 'unrelated'").get()).toEqual({ id: "80000000-0000-4000-8000-000000000099" });
     } finally {
       sqlite.close();
     }
