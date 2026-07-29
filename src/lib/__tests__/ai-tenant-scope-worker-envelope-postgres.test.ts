@@ -194,6 +194,7 @@ async function catalogSnapshot(client: PgClient): Promise<Record<string, unknown
   return {
     rows: Object.fromEntries(await Promise.all(aiTables.map(async (table) => [table, await client.unsafe(`SELECT to_jsonb(t) row FROM public.${table} t ORDER BY id`)]))),
     columns: await client.unsafe(`SELECT table_name,column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name=ANY($1) AND column_name IN ('tenant_id','workspace_id') ORDER BY 1,2`, [aiTables]),
+    columnAcls: await client.unsafe(`SELECT a.attrelid::regclass::text table_name,a.attname,a.attacl FROM pg_catalog.pg_attribute a WHERE a.attrelid=ANY($1::regclass[]) AND a.attnum>0 AND NOT a.attisdropped ORDER BY 1,2`, [aiTables.map((table) => `public.${table}`)]),
     constraints: await client.unsafe(`SELECT conrelid::regclass::text table_name,conname,pg_catalog.pg_get_constraintdef(oid) definition,convalidated,condeferrable,condeferred FROM pg_catalog.pg_constraint WHERE conrelid=ANY($1::regclass[]) ORDER BY 1,2`, [aiTables.map((table) => `public.${table}`)]),
     indexes: await client.unsafe(`SELECT indexname,indexdef FROM pg_catalog.pg_indexes WHERE schemaname='public' AND tablename=ANY($1) ORDER BY 1`, [aiTables]),
     triggers: await client.unsafe(`SELECT tgrelid::regclass::text table_name,tgname,pg_catalog.pg_get_triggerdef(oid) definition,tgenabled FROM pg_catalog.pg_trigger WHERE NOT tgisinternal AND tgrelid=ANY($1::regclass[]) ORDER BY 1,2`, [aiTables.map((table) => `public.${table}`)]),
@@ -311,7 +312,7 @@ describe("G-004A AI tenant scope and worker envelope", () => {
         expect((await client.unsafe("SELECT tenant_id,lead_id FROM public.ai_usage_events WHERE id='usage-lead-b'"))[0]).toEqual({ tenant_id: tenantB, lead_id: null });
 
         // Definition-aware spoof matrix rolls back without repairing anything.
-        for (const spoof of ["function_body", "function_acl", "overload", "trigger", "index", "constraint"] as const) {
+        for (const spoof of ["function_body", "function_acl", "overload", "trigger", "index", "constraint", "nullable_tenant", "column_acl"] as const) {
           await resetTo(client);
           if (spoof === "function_body") await client.unsafe("CREATE OR REPLACE FUNCTION public.novatrade_ai_scope_guard() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public AS $$ BEGIN RETURN NEW; END $$");
           if (spoof === "function_acl") await client.unsafe("GRANT EXECUTE ON FUNCTION public.novatrade_ai_scope_guard() TO g004a_inherited; GRANT g004a_inherited TO authenticated");
@@ -319,8 +320,15 @@ describe("G-004A AI tenant scope and worker envelope", () => {
           if (spoof === "trigger") await client.unsafe("DROP TRIGGER trg_novatrade_ai_usage_events_scope ON public.ai_usage_events; CREATE TRIGGER trg_novatrade_ai_usage_events_scope AFTER INSERT ON public.ai_usage_events FOR EACH ROW EXECUTE FUNCTION public.novatrade_ai_scope_guard()");
           if (spoof === "index") await client.unsafe("DROP INDEX public.idx_ai_usage_tenant_created; CREATE INDEX idx_ai_usage_tenant_created ON public.ai_usage_events(created_at,tenant_id)");
           if (spoof === "constraint") await client.unsafe("ALTER TABLE public.ai_feedback_events DROP CONSTRAINT ai_feedback_events_tenant_artifact_fkey; ALTER TABLE public.ai_feedback_events ADD CONSTRAINT ai_feedback_events_tenant_artifact_fkey FOREIGN KEY(tenant_id,artifact_id) REFERENCES public.lead_ai_artifacts(tenant_id,id) ON DELETE SET NULL (artifact_id) NOT VALID");
+          if (spoof === "nullable_tenant") await client.unsafe("ALTER TABLE public.ai_usage_events ALTER COLUMN tenant_id DROP NOT NULL");
+          if (spoof === "column_acl") await client.unsafe("GRANT SELECT(id) ON public.ai_usage_events TO authenticated");
           await expectMigrationRejectedWithoutResidue(client, /G004A_PARTIAL_OR_SPOOFED_CATALOG/);
         }
+
+        // Pre-install column ACLs are not silently cleared during activation.
+        await prepareUpgrade(client);
+        await client.unsafe("GRANT SELECT(id) ON public.ai_usage_events TO authenticated");
+        await expectMigrationRejectedWithoutResidue(client, /G004A_BASE_RLS_OR_ACL_INVALID/);
 
         // Receipt rejection matrix, each from the same real pre-G-004A upgrade.
         for (const mutation of ["missing", "count", "checksum", "status", "algorithm", "tenant", "workspace", "duplicate", "partial"] as const) {

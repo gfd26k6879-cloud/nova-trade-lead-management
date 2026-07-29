@@ -25,6 +25,8 @@ result: 1/1 passed
 
 The executed matrix covers fresh `44 discovered / 42 applied / 2 named scheduler skips`, real nonempty T-028 -> G-002 -> G-003 -> G-004A upgrade, receipt removal and exact replay with post-install rows, hostile search path and shadow objects, receipt tampering/duplication/partial data/scope drift, existing orphan/reference/workspace/attribution failures, rollback snapshots, cross-tenant and omitted-tenant writes, nullable workspace, inactive attribution semantics, feedback/usage immutability, column-list deletion behavior, exact catalog/RLS/ACL identity, function/index/trigger/constraint spoofing, inherited effective privileges, two-client writer serialization, equivalent inputs across two tenants, and an unchanged worker envelope.
 
+The final-conductor repair closes the two findings from the second independent review generation. Exact replay now requires every `tenant_id` to remain `NOT NULL`, while every `workspace_id` remains nullable. Both activation and replay reject non-owner column ACLs and effective `anon` or `authenticated` column privileges; the harness proves nullable-tenant and `GRANT SELECT(id)` spoofs fail without residue and that pre-install column ACLs are not silently cleared.
+
 Regression commands:
 
 ```text

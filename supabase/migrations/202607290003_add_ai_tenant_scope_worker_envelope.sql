@@ -55,7 +55,10 @@ BEGIN
           a.atttypid='uuid'::pg_catalog.regtype AND a.atttypmod=-1
           AND a.attidentity='' AND a.attgenerated=''
           AND a.atthasdef=false
-          AND (a.attname='tenant_id' OR NOT a.attnotnull)
+          AND (
+            (a.attname='tenant_id' AND a.attnotnull)
+            OR (a.attname='workspace_id' AND NOT a.attnotnull)
+          )
         )
          FROM pg_catalog.pg_attribute a
         WHERE (a.attrelid,a.attname) IN (
@@ -199,6 +202,17 @@ BEGIN
         WHERE r.rolname IN ('anon','authenticated')
           AND c.oid IN ('public.ai_lead_verifications'::pg_catalog.regclass,'public.lead_ai_artifacts'::pg_catalog.regclass,'public.ai_feedback_events'::pg_catalog.regclass,'public.ai_usage_events'::pg_catalog.regclass)
           AND pg_catalog.has_table_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'))
+      AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a
+        JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
+        CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) acl
+        WHERE c.oid IN ('public.ai_lead_verifications'::pg_catalog.regclass,'public.lead_ai_artifacts'::pg_catalog.regclass,'public.ai_feedback_events'::pg_catalog.regclass,'public.ai_usage_events'::pg_catalog.regclass)
+          AND a.attnum>0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
+          AND acl.grantee<>c.relowner AND acl.privilege_type IN ('SELECT','INSERT','UPDATE','REFERENCES'))
+      AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles r CROSS JOIN pg_catalog.pg_class c
+        JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
+        WHERE r.rolname IN ('anon','authenticated')
+          AND c.oid IN ('public.ai_lead_verifications'::pg_catalog.regclass,'public.lead_ai_artifacts'::pg_catalog.regclass,'public.ai_feedback_events'::pg_catalog.regclass,'public.ai_usage_events'::pg_catalog.regclass)
+          AND pg_catalog.has_column_privilege(r.oid,c.oid,a.attnum,'SELECT,INSERT,UPDATE,REFERENCES'))
     INTO replay_complete;
   END IF;
 
@@ -272,7 +286,21 @@ BEGIN
       WHERE r.rolname IN ('anon','authenticated') AND c.oid IN (
         'public.ai_lead_verifications'::pg_catalog.regclass,'public.lead_ai_artifacts'::pg_catalog.regclass,
         'public.ai_feedback_events'::pg_catalog.regclass,'public.ai_usage_events'::pg_catalog.regclass)
-        AND pg_catalog.has_table_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) THEN
+        AND pg_catalog.has_table_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'))
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a
+      JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
+      CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) acl
+      WHERE c.oid IN (
+        'public.ai_lead_verifications'::pg_catalog.regclass,'public.lead_ai_artifacts'::pg_catalog.regclass,
+        'public.ai_feedback_events'::pg_catalog.regclass,'public.ai_usage_events'::pg_catalog.regclass)
+        AND a.attnum>0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
+        AND acl.grantee<>c.relowner AND acl.privilege_type IN ('SELECT','INSERT','UPDATE','REFERENCES'))
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_roles r CROSS JOIN pg_catalog.pg_class c
+      JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
+      WHERE r.rolname IN ('anon','authenticated') AND c.oid IN (
+        'public.ai_lead_verifications'::pg_catalog.regclass,'public.lead_ai_artifacts'::pg_catalog.regclass,
+        'public.ai_feedback_events'::pg_catalog.regclass,'public.ai_usage_events'::pg_catalog.regclass)
+        AND pg_catalog.has_column_privilege(r.oid,c.oid,a.attnum,'SELECT,INSERT,UPDATE,REFERENCES')) THEN
     RAISE EXCEPTION USING ERRCODE='P0001', MESSAGE='G004A_BASE_RLS_OR_ACL_INVALID';
   END IF;
 
