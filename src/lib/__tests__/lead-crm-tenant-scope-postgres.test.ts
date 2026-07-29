@@ -33,7 +33,7 @@ const targetTables = ["leads", "lead_notes", "outreach_events", "admin_requests"
 
 type PgClient = ReturnType<typeof postgres>;
 
-async function resetDatabase(client: PgClient, fullChain: boolean): Promise<{ discovered: number; applied: number; skipped: number }> {
+async function resetDatabase(client: PgClient, fullChain: boolean, g003Boundary = false): Promise<{ discovered: number; applied: number; skipped: number }> {
   await client.unsafe(`
     RESET ROLE;
     RESET search_path;
@@ -62,6 +62,7 @@ async function resetDatabase(client: PgClient, fullChain: boolean): Promise<{ di
   for (const file of files) {
     if (skipped.has(file)) continue;
     if (!fullChain && file >= G002_MIGRATION) break;
+    if (g003Boundary && file > G003_MIGRATION) break;
     await client.unsafe(readFileSync(join("supabase", "migrations", file), "utf8"));
     applied += 1;
     if (file === "202605110001_full_schema.sql") {
@@ -373,7 +374,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 43, applied: 41, skipped: 2 });
+        expect(full).toEqual({ discovered: 44, applied: 42, skipped: 2 });
         await assertCatalog(client);
 
         await resetDatabase(client, false);
@@ -401,7 +402,9 @@ describe("G-003 lead CRM tenant scope", () => {
         await expectMigrationRejected(client, /G003_MATCHING_T028_RECEIPT_REQUIRED/);
 
         for (const mutation of ["function_body", "function_owner", "trigger_shape", "index_predicate", "index_definition", "function_acl_overload", "unvalidated_fk"] as const) {
-          await resetDatabase(client, true);
+          // G-003 replay is tested at its own migration boundary.  G-004A
+          // legitimately depends on G-003's compound lead key.
+          await resetDatabase(client, true, true);
           await seedPostInstallGraph(client);
           if (mutation === "function_body") {
             await client.unsafe(`
@@ -466,7 +469,8 @@ describe("G-003 lead CRM tenant scope", () => {
           await expectMigrationRejected(client, /G003_MATCHING_T028_RECEIPT_REQUIRED/, mutation);
         }
 
-        await resetDatabase(client, true);
+        // Do not replay an upstream migration after its downstream FK consumer.
+        await resetDatabase(client, true, true);
         await seedPostInstallGraph(client);
         const postInstallReplayBefore = await targetSnapshot(client);
         await client.unsafe(`
