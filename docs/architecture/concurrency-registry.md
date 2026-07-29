@@ -20,7 +20,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 |---|---|---|---|---|
 | Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Read-only G-006/G-008 recovery-boundary packet completed cleanly at `9afedb757bb3a3bb70b58d956cc3b0ece25d70ea`; G-006 waits for accepted G-003–G-005 keys, and G-008 then waits for G-006/G-007; no lock or change. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 producer commit `dd871b775ea0df95e3e7435c921ce13185f13e67` is attributable and exact-scope but unaccepted; independent review requires a bounded repair delta in the same five files. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 commits `dd871b775ea0df95e3e7435c921ce13185f13e67` and `dd8930b8361ba4df10edf0991cc0cf93f27644bc` remain unaccepted. Terra repair round 2 stopped cleanly with zero changes because the remaining P1 work is a large harness/replay rewrite; the binding plan's two-failed-repair final-conductor exception is now active. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
 | Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Q-002 six-file fixture packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; second-workspace, look-alike, cleanup, Postgres, shared-factory, and E2E-selector gaps are bounded; ready when the migration-critical G-003 producer/review slots permit. |
 
@@ -52,7 +52,7 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 |---|---|---|
 | `G-001` | Accepted | Ownership contract repaired, independently verified, and reaccepted through append-only event 205. |
 | `G-002` | Accepted | Independently reviewed repair merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; final local release gate passed. |
-| `G-003` | Rework round 1; locks retained | Commit `dd871b775ea0df95e3e7435c921ce13185f13e67` changed only the accepted five files, but independent review found receipt-bypass, missing upgrade/rollback evidence, actor-isolation, anonymous-projection, open-admin-index, pre-G-002-cutoff, and coverage gaps. Same-worker repair only; no scope expansion. |
+| `G-003` | Final-conductor repair active; locks retained | The initial producer result and first repair remained incomplete; the second bounded repair stopped with zero changes. Under the binding plan's existing repair exception, the final conductor may now implement the remaining coupled PostgreSQL migration/harness repair locally, followed by fresh independent review. |
 | `G-004` | Blocked on `G-003` | AI tenant derivation requires tenant-scoped leads; platform `worker_runs` stays global. |
 | `G-005` | Blocked on `G-004` | Serialized final Phase 2 structural migration producer. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
@@ -107,6 +107,14 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 - P1 rework: exhaustive definition-aware replay catalog so partial/wrong named objects cannot bypass the exact T028 receipt; real nonempty upgrade, receipt drift/duplication, orphan/rollback, and hostile-search-path application evidence; complete actor isolation or removal of selectively incomplete actor policy; an explicitly grounded, nested-shape-bounded public demo DTO tested under actual anonymous/default-deny privileges.
 - P2 rework: tenant-inclusive open-admin-request uniqueness; pre-G-002 harness must stop before G-002 and every later migration; full catalog/workspace/global-slug/RLS/privilege/inheritance/replay invariant tests.
 - Disposition: `repair_delta_required`. Locks remain held. The same Terra-medium producer may amend only the existing five files, must correct the validation receipt to match observed evidence, and must return one bounded repair commit for new independent review.
+
+## G-003 repair round 2
+
+- Repair 1 commit: `dd8930b8361ba4df10edf0991cc0cf93f27644bc`, one attributable commit over `dd871b775ea0df95e3e7435c921ce13185f13e67`, four authorized files, clean producer worktree.
+- Corrected: pre-G-002 mode no longer applies G-003 or later migrations; open admin uniqueness is tenant-inclusive; the safe public DTO is grounded in fields read by the current public renderer; actor fields are enumerated independently rather than coalesced.
+- Still unaccepted: replay detection remains insufficiently definition-aware; lead actor checks do not fire on insert or actor-only update; existing actor scope is not preflighted; the committed test still lacks the mandatory nonempty legacy T028-to-G002-to-G003 receipt/rollback/orphan/hostile-path matrix and actual anonymous/default-deny proof.
+- Repair-round-2 requirement: close all remaining P1 behavior and evidence gaps in the same five-file ceiling, or return an explicit blocker with no commit. No partial evidence claim can advance to acceptance.
+- Repair-round-2 result: explicit blocker with a clean worktree at `dd8930b8361ba4df10edf0991cc0cf93f27644bc`, zero file/resource change, and no third commit. The remaining coupled migration/harness rewrite activates the binding plan's final-conductor repair exception after two failed bounded repair attempts. Final-conductor implementation does not waive independent domain and Quality review.
 
 ## Pilot acceptance receipt
 
