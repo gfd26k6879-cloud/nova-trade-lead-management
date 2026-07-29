@@ -18,7 +18,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-002 commits `8c48db28653e2b287de6a94cc45d6c5439371d0e` and `4fa948ae3af6900227f2351ec359b6016d1af64a` accepted and merged locally at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; lane is between batches. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Refreshed clean to `9afedb757bb3a3bb70b58d956cc3b0ece25d70ea`; read-only G-006/G-008 recovery-boundary preparation is active through `/root/baseline_ownership`; no lock or implementation worker. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Refreshed clean to `ca6747659761c74875086933c9f0b03557a4d294`; read-only G-003 launch-packet refresh is active through `/root/discovery_conductor`; no lock or implementation worker. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
@@ -68,6 +68,7 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 - The Stage 3 pilot is accepted. Platform produced one attributable two-commit G-002 batch, Quality required one bounded repair delta and then passed it independently, Discovery prepared the serialized G-003 through G-005 packets, and the final integration gate passed with no overlaps, stale baselines, unattributable files, invalid ledger events, or owned temporary-resource residue.
 - Stage 4's planned 12-worker level is not claimable in this runtime: only four total agent slots are exposed and the plan-approved Spark/Luna worker models are unavailable. No unapproved model is substituted. Dependency preparation and final-conductor work may continue, but implementation dispatch must remain inside the plan's model and capacity rules.
 - All five domain branches were fast-forwarded cleanly between batches to accepted integration baseline `ac9d9ebadb747c01e9b5019061cedbcbb213e4c4`; no domain branch contains an unmerged or unattributable delta.
+- Current Stage 4 preflight capacity is fully occupied: one final conductor plus three read-only domain conductors (Discovery G-003 packet, Quality G-003 acceptance matrix, Platform G-006/G-008 recovery boundary), zero implementation workers, and zero held shared locks.
 
 ## Pilot acceptance receipt
 
