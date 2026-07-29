@@ -20,9 +20,9 @@ The concurrent execution plan requires the final integration conductor to run `g
 |---|---|---|---|---|
 | Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Read-only G-006/G-008 recovery-boundary packet completed cleanly at `9afedb757bb3a3bb70b58d956cc3b0ece25d70ea`; G-006 waits for accepted G-003–G-005 keys, and G-008 then waits for G-006/G-007; no lock or change. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Dual G-004 preflight agreed on the missing runtime correlation/non-content contract. The accepted ownership map is reconciled as structural `G-004A` now and preserved runtime `G-004B` with G-013/G-014; the six-file G-004A packet is ready to refresh and dispatch under three locks. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Refreshed cleanly to `7289b0d848cafc2cf4f6a6e2e084edada2ee258c`; one Terra-medium worker is implementing the exact six-file structural `G-004A` packet under three locks. Runtime `G-004B` remains preserved for G-013/G-014. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
-| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Q-002 candidate `6dbc7879e9669e5b934211ff1d3c73ffc302bd31` is under bounded domain-conductor repair round 3: real-schema cleanup-safe core, rollback-only immutable history, no guard bypass, and exact PostgreSQL 16. |
+| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Q-002 repair-round-3 candidate `a6f05e7bf84a71c1b48b353c4c75b811a2d87aff` is clean and under fresh independent rereview; it remains unaccepted. |
 
 The non-OneDrive root is selected to avoid sync churn and lock contention. The authoritative repository remains in its existing OneDrive path.
 
@@ -53,12 +53,12 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 | `G-001` | Accepted | Ownership contract repaired, independently verified, and reaccepted through append-only event 205. |
 | `G-002` | Accepted | Independently reviewed repair merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; final local release gate passed. |
 | `G-003` | Accepted | Source `7b305e6` passed dual review and merged at `ba1b646`; final merged release gate passed with 2,202 tests, build, and Playwright 5/5. |
-| `G-004A` | Ready under three locks | Exact six-file structural tenant-scope packet accepted. Terra-medium may implement after Discovery refresh; it must not invent runtime correlation or claim the current worker envelope is non-content. |
+| `G-004A` | Terra-medium implementation in progress under three locks | Exact six-file structural tenant-scope packet at baseline `7289b0d`; it must not invent runtime correlation or claim the current worker envelope is non-content. |
 | `G-004B` | Preserved; blocked on G-004A/G-009/G-011 | Co-deliver immutable per-attempt job/run/lease/generation correlation and bounded non-content `worker_runs` hardening with G-013/G-014. |
 | `G-004` | Parent open | Accept only after independently accepted G-004A and G-004B. Every original success criterion and the two-tenant runtime proof remain required. |
 | `G-005` | Blocked on accepted `G-004A` structural milestone | Serialized final Phase 2 structural migration producer; parent G-004 remains a phase-gate obligation. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
-| `Q-002` | Domain-conductor repair round 3 in progress | Same six-file ceiling. Preserve correct selector/auth work; close only real-schema cleanup, actual migration/adapter evidence, exact PG16, and receipt truthfulness. |
+| `Q-002` | Independent rereview in progress | Round-3 candidate `a6f05e7` reports all prior blockers closed inside the same six-file ceiling; no acceptance before fresh reproduction. |
 | `UI-000` | Ready; capacity/approval-queued | Seven-artifact design packet is ready. Terra-medium is authorized, but implementation remains capacity-queued and explicit product/design/accessibility approval is still required before task acceptance. |
 
 ## Capacity receipt
