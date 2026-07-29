@@ -2,7 +2,7 @@
 
 Date: 2026-07-29
 
-Status: **Stage 3 pilot accepted; Stage 4 active; G-003 accepted; G-004 ready; Q-002 domain-conductor repair authorized.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. G-003 passed fresh domain/security and Quality review, merged at `ba1b646974e1bf91234f37567ca8b4a9a6342171`, and passed the final merged integration gate. Q-002 candidate `6dbc7879e9669e5b934211ff1d3c73ffc302bd31` closed selector and authorization gaps but failed real-schema cleanup/harness review; after two failed worker repair generations the binding plan permits the Quality domain conductor to implement the bounded repair. Sol remains the sole final integration/acceptance authority, and the observed four-total-agent ceiling remains binding.
+Status: **Stage 3 pilot accepted; Stage 4 active; G-003 accepted; G-004A ready under locks; G-004B preserved for G-013/G-014; Q-002 domain-conductor repair active.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. G-003 passed fresh domain/security and Quality review, merged at `ba1b646974e1bf91234f37567ca8b4a9a6342171`, and passed the final merged integration gate. Dual G-004 preflight proved that the runtime lacks durable job/run/lease correlation and currently stores tenant content in `worker_runs`; the final conductor therefore applied the accepted ownership map by splitting structural `G-004A` from runtime `G-004B` without closing the parent card or dropping any success criterion. Q-002 candidate `6dbc7879e9669e5b934211ff1d3c73ffc302bd31` remains under the bounded Quality conductor repair. Sol remains the sole final integration/acceptance authority, and the observed four-total-agent ceiling remains binding.
 
 ## Final integration authority
 
@@ -20,7 +20,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 |---|---|---|---|---|
 | Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Read-only G-006/G-008 recovery-boundary packet completed cleanly at `9afedb757bb3a3bb70b58d956cc3b0ece25d70ea`; G-006 waits for accepted G-003–G-005 keys, and G-008 then waits for G-006/G-007; no lock or change. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Refreshed cleanly to accepted control baseline `7eebc39fd91d76f32634776a77811c6b24a4569d`. Independent domain/security and packet reviewers are finalizing G-004's exact write set and worker-envelope source truth before any lock or implementation dispatch. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Dual G-004 preflight agreed on the missing runtime correlation/non-content contract. The accepted ownership map is reconciled as structural `G-004A` now and preserved runtime `G-004B` with G-013/G-014; the six-file G-004A packet is ready to refresh and dispatch under three locks. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
 | Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Q-002 candidate `6dbc7879e9669e5b934211ff1d3c73ffc302bd31` is under bounded domain-conductor repair round 3: real-schema cleanup-safe core, rollback-only immutable history, no guard bypass, and exact PostgreSQL 16. |
 
@@ -31,15 +31,15 @@ The non-OneDrive root is selected to avoid sync churn and lock contention. The a
 | Lock | Holder | State | Release evidence |
 |---|---|---|---|
 | `integration-ledger` | Final integration conductor | Held | Released only when final integration authority ends. |
-| `migration-sequence` | Released after accepted `G-003` merge `ba1b646` | Available for serialized `G-004` acquisition | Reacquire only with the exact accepted G-004 packet; stop on sequencing or scope expansion. |
-| `migration-harness` | Released after accepted `G-003` merge `ba1b646` | Available for serialized `G-004` if its packet requires it | Preserve the accepted 43/41/2 chain and T029 boundary. |
+| `migration-sequence` | `G-004A` / Discovery | Held for the exact serialized six-file packet | Release on accepted integration, rejection, or source-truth blocker; stop on sequencing or scope expansion. |
+| `migration-harness` | `G-004A` / Discovery | Held for only the 44/42/2 reconciliation | Preserve the accepted T029 boundary and do not change recovery semantics. |
 | `sqlite-schema` | None | Available | Accepted task receipt. |
 | `auth-session` | None | Available | Accepted task receipt. |
 | `permissions` | None | Available | Accepted task receipt. |
 | `database-adapter` | None | Available | Accepted task receipt. |
 | `package-config` | None | Available | Accepted task receipt. |
 | `protected-shell` | None | Available | Accepted task receipt. |
-| `recovery-contract` | Released after accepted `G-003` merge `ba1b646` | Recovery semantics remain frozen | Reacquire only for a preaccepted bounded reconciliation; T029 remains blocked at its accepted key boundary. |
+| `recovery-contract` | `G-004A` / Discovery | Held only for the named full-chain count assertions; semantics frozen | T029 remains blocked at its accepted `user_market_access` key boundary. |
 | `full-release-gate` | None | Available; merged G-002 gate passed | `npm run release:check` exited 0 at merge `cb329b4a6adaaa0c940f16b433198297e2712c7f`. |
 
 No domain lane may claim a lock implicitly. Every acquisition must name the task, exhaustive protected paths, integration baseline, expected release evidence, and stop conditions in the ledger.
@@ -53,8 +53,10 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 | `G-001` | Accepted | Ownership contract repaired, independently verified, and reaccepted through append-only event 205. |
 | `G-002` | Accepted | Independently reviewed repair merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; final local release gate passed. |
 | `G-003` | Accepted | Source `7b305e6` passed dual review and merged at `ba1b646`; final merged release gate passed with 2,202 tests, build, and Playwright 5/5. |
-| `G-004` | Dual read-only preflight in progress | G-003 dependency is accepted and Discovery is refreshed. No lock or worker starts until both reviewers agree on exact AI parent derivation and the platform-global non-authoritative worker envelope. |
-| `G-005` | Blocked on `G-004` | Serialized final Phase 2 structural migration producer. |
+| `G-004A` | Ready under three locks | Exact six-file structural tenant-scope packet accepted. Terra-medium may implement after Discovery refresh; it must not invent runtime correlation or claim the current worker envelope is non-content. |
+| `G-004B` | Preserved; blocked on G-004A/G-009/G-011 | Co-deliver immutable per-attempt job/run/lease/generation correlation and bounded non-content `worker_runs` hardening with G-013/G-014. |
+| `G-004` | Parent open | Accept only after independently accepted G-004A and G-004B. Every original success criterion and the two-tenant runtime proof remain required. |
+| `G-005` | Blocked on accepted `G-004A` structural milestone | Serialized final Phase 2 structural migration producer; parent G-004 remains a phase-gate obligation. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Domain-conductor repair round 3 in progress | Same six-file ceiling. Preserve correct selector/auth work; close only real-schema cleanup, actual migration/adapter evidence, exact PG16, and receipt truthfulness. |
 | `UI-000` | Ready; capacity/approval-queued | Seven-artifact design packet is ready. Terra-medium is authorized, but implementation remains capacity-queued and explicit product/design/accessibility approval is still required before task acceptance. |
