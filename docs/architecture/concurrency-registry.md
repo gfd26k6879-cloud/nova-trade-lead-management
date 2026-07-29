@@ -18,11 +18,11 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Pilot preflight active through `/root/g001_review` at `1c9647d76c35dbac991b07eb962de5a54135bce2`; read-only G-002 packet design, no lock held. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-002 bounded conductor takeover active through `/root/baseline_ownership` at `1c9647d76c35dbac991b07eb962de5a54135bce2`; exact three-file packet; `migration-sequence` held. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Pilot preflight active through `/root/baseline_validation` at `1c9647d76c35dbac991b07eb962de5a54135bce2`; read-only independent G-002 acceptance-gate design, no lock held. |
+| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Independent G-002 preflight completed through `/root/baseline_validation`; clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; reserved for post-implementation verification. |
 
 The non-OneDrive root is selected to avoid sync churn and lock contention. The authoritative repository remains in its existing OneDrive path.
 
@@ -31,7 +31,7 @@ The non-OneDrive root is selected to avoid sync churn and lock contention. The a
 | Lock | Holder | State | Release evidence |
 |---|---|---|---|
 | `integration-ledger` | Final integration conductor | Held | Released only when final integration authority ends. |
-| `migration-sequence` | None | Available; first eligible owner is `G-002` after pilot dispatch | Accepted or blocked migration receipt plus final review. |
+| `migration-sequence` | `G-002` final-conductor-authorized Platform takeover | Held for exactly `supabase/migrations/202607290001_add_location_crawl_tenant_scope.sql` | Accepted or blocked G-002 migration receipt plus final review. |
 | `sqlite-schema` | None | Available | Accepted task receipt. |
 | `auth-session` | None | Available | Accepted task receipt. |
 | `permissions` | None | Available | Accepted task receipt. |
@@ -61,4 +61,5 @@ No domain lane may claim a lock implicitly. Every acquisition must name the task
 - The plan's target remains pilot maximum 4 workers, then 12, 16, and hard maximum 20 after its gates.
 - No unavailable concurrency or model is claimed. The pilot must use only available in-policy capacity and may run fewer workers; capacity does not weaken task evidence or completion criteria.
 - Three separate `gpt-5.6-sol` extra-high read-only reviewers were used during Stage 1 for G-001, file ownership, and validation/resource audits. Their output was evidence only and final disposition remained with the root task.
-- The initial pilot currently has two active domain conductors (Platform and Quality), no implementation worker, and no migration producer. This preserves the runtime ceiling and the plan's stricter pilot-conductor limit while the final conductor reconciles the producer and verifier packets.
+- The pilot preflight used two active domain conductors (Platform and Quality), no implementation worker, and no migration producer. The first Platform conductor was interrupted after two bounded no-output requests; a replacement takeover receipt and independent Quality receipt both approved the same three-file G-002 packet.
+- G-002 now runs as the previously authorized bounded parent/domain-conductor takeover after the two approved worker-model failures recorded in ledger events 198 through 200. No unapproved worker model substitution is claimed.
