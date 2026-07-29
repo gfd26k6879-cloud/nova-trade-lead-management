@@ -70,7 +70,7 @@ async function resetDatabase(client: PgClient, includeG002 = false): Promise<{ d
     .sort();
   let applied = 0;
   for (const file of migrations) {
-    if (SKIPPED_PORTABLE_MIGRATIONS.has(file) || (!includeG002 && file === G002_MIGRATION)) continue;
+    if (SKIPPED_PORTABLE_MIGRATIONS.has(file) || (!includeG002 && file >= G002_MIGRATION)) continue;
     await client.unsafe(readFileSync(join("supabase", "migrations", file), "utf8"));
     applied += 1;
     if (file === "202605110001_full_schema.sql") {

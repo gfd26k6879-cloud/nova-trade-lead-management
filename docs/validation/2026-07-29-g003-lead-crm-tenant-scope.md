@@ -19,9 +19,9 @@ actors. Preflight rejects orphaned or cross-tenant children and all failures
 roll back transactionally.
 
 The public database entry point is exact-slug only and returns a published,
-unrevoked projection of `slug`, `template_id`, and the explicit safe config
-keys `title`, `hero`, `primaryCta`, and `accentColor`; it excludes tenant,
-lead, internal config, and revocation data. Base-table access is revoked from
+unrevoked projection of `slug`, `template_id`, the bounded renderer config
+keys, and the listed public lead business fields; it excludes tenant, lead,
+internal config, and revocation data. Base-table access is revoked from
 public runtime roles. Trigger functions use `pg_catalog, public` search-path
 hardening and direct function access is revoked.
 

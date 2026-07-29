@@ -23,6 +23,10 @@ BEGIN
           WHERE (a.attrelid,a.attname) IN (('public.lead_notes'::regclass,'workspace_id'),('public.outreach_events'::regclass,'workspace_id'),('public.admin_requests'::regclass,'workspace_id'),('public.demos'::regclass,'workspace_id')) AND NOT a.attisdropped)
      AND pg_catalog.to_regclass('public.idx_leads_tenant_place_id') IS NOT NULL
      AND pg_catalog.to_regprocedure('public.novatrade_inherit_lead_child_scope()') IS NOT NULL
+     AND pg_catalog.to_regprocedure('public.novatrade_lead_scope_immutable()') IS NOT NULL
+     AND (SELECT count(*)=6 FROM pg_catalog.pg_constraint c WHERE c.conname IN ('leads_tenant_id_id_unique','leads_tenant_place_id_unique','lead_notes_tenant_lead_fkey','outreach_events_tenant_lead_fkey','admin_requests_tenant_lead_fkey','demos_tenant_lead_fkey') AND pg_catalog.pg_get_constraintdef(c.oid) <> '')
+     AND pg_catalog.to_regclass('public.admin_requests_tenant_lead_open_unique') IS NOT NULL
+     AND (SELECT count(*)=5 FROM pg_catalog.pg_trigger t WHERE t.tgname IN ('trg_novatrade_lead_scope_immutable','trg_novatrade_lead_notes_scope','trg_novatrade_outreach_events_scope','trg_novatrade_admin_requests_scope','trg_novatrade_demos_scope') AND t.tgenabled <> 'D')
   INTO replay_complete;
   IF NOT replay_complete AND ((SELECT count(*) FROM public.leads)+(SELECT count(*) FROM public.lead_notes)+(SELECT count(*) FROM public.outreach_events)+(SELECT count(*) FROM public.admin_requests)+(SELECT count(*) FROM public.demos)) > 0 THEN
     IF EXISTS (SELECT 1 FROM public.leads WHERE tenant_id IS NULL)
@@ -55,6 +59,8 @@ BEGIN
   FOR r IN SELECT conname FROM pg_catalog.pg_constraint WHERE conrelid='public.leads'::regclass AND contype='u' AND conkey=ARRAY[(SELECT attnum FROM pg_catalog.pg_attribute WHERE attrelid='public.leads'::regclass AND attname='place_id')] LOOP EXECUTE pg_catalog.format('ALTER TABLE public.leads DROP CONSTRAINT %I',r.conname); END LOOP;
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid='public.leads'::regclass AND conname='leads_tenant_id_id_unique') THEN ALTER TABLE public.leads ADD CONSTRAINT leads_tenant_id_id_unique UNIQUE(tenant_id,id); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid='public.leads'::regclass AND conname='leads_tenant_place_id_unique') THEN ALTER TABLE public.leads ADD CONSTRAINT leads_tenant_place_id_unique UNIQUE(tenant_id,place_id); END IF;
+  DROP INDEX IF EXISTS public.idx_admin_requests_open_unique;
+  CREATE UNIQUE INDEX IF NOT EXISTS admin_requests_tenant_lead_open_unique ON public.admin_requests(tenant_id,lead_id,request_type) WHERE status IN ('new','seen','in_progress','waiting_on_researcher');
   FOREACH child_table IN ARRAY ARRAY['lead_notes','outreach_events','admin_requests','demos'] LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid=pg_catalog.to_regclass('public.'||child_table) AND conname=child_table||'_tenant_lead_fkey') THEN EXECUTE pg_catalog.format('ALTER TABLE public.%I ADD CONSTRAINT %I FOREIGN KEY (tenant_id,lead_id) REFERENCES public.leads(tenant_id,id) ON UPDATE RESTRICT ON DELETE CASCADE',child_table,child_table||'_tenant_lead_fkey'); END IF;
   END LOOP;
@@ -70,17 +76,23 @@ BEGIN
   IF NEW.tenant_id IS NOT NULL AND NEW.tenant_id IS DISTINCT FROM parent_tenant THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='G003_LEAD_CHILD_TENANT_MISMATCH'; END IF;
   IF TG_OP='UPDATE' AND (NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.lead_id IS DISTINCT FROM OLD.lead_id OR NEW.workspace_id IS DISTINCT FROM OLD.workspace_id) THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='G003_LEAD_CHILD_SCOPE_IMMUTABLE'; END IF;
   NEW.tenant_id:=parent_tenant;
-  IF TG_TABLE_NAME='lead_notes' THEN actor:=NEW.author_user_id; ELSIF TG_TABLE_NAME='admin_requests' THEN actor:=COALESCE(NEW.created_by_user_id,NEW.assigned_admin_user_id); END IF;
-  IF actor IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.tenant_memberships m WHERE m.tenant_id=NEW.tenant_id AND m.auth_identity_id=actor AND m.status='active' AND (m.workspace_id IS NULL OR m.workspace_id IS NOT DISTINCT FROM NEW.workspace_id)) THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED'; END IF;
+  IF TG_TABLE_NAME='lead_notes' THEN PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.author_user_id,true); END IF;
+  IF TG_TABLE_NAME='outreach_events' THEN PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.actor_user_id,true); END IF;
+  IF TG_TABLE_NAME='admin_requests' THEN PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.created_by_user_id,true); PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.assigned_admin_user_id,true); END IF;
+  IF TG_TABLE_NAME='demos' THEN PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.published_by_user_id::uuid,true); PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.unpublished_by_user_id::uuid,true); PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NEW.workspace_id,NEW.revoked_by_user_id::uuid,true); END IF;
   RETURN NEW;
 END;
 $f$;
 CREATE OR REPLACE FUNCTION public.novatrade_lead_scope_immutable()
 RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $f$
-BEGIN IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='G003_LEAD_TENANT_IMMUTABLE'; END IF; RETURN NEW; END;
+BEGIN IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='G003_LEAD_TENANT_IMMUTABLE'; END IF; PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.assigned_to_user_id,true); PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.archived_by_user_id::uuid,true); PERFORM public.novatrade_assert_lead_actor(NEW.tenant_id,NULL,NEW.quality_checked_by_user_id::uuid,true); RETURN NEW; END;
+$f$;
+CREATE OR REPLACE FUNCTION public.novatrade_assert_lead_actor(p_tenant uuid,p_workspace uuid,p_actor uuid,p_child boolean) RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, public AS $f$
+BEGIN IF p_actor IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.tenant_memberships m WHERE m.tenant_id=p_tenant AND m.auth_identity_id=p_actor AND m.status='active' AND (NOT p_child OR m.workspace_id IS NULL OR m.workspace_id IS NOT DISTINCT FROM p_workspace)) THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='G003_ACTIVE_SAME_TENANT_ACTOR_REQUIRED'; END IF; END;
 $f$;
 REVOKE ALL ON FUNCTION public.novatrade_inherit_lead_child_scope() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.novatrade_lead_scope_immutable() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.novatrade_assert_lead_actor(uuid,uuid,uuid,boolean) FROM PUBLIC, anon, authenticated;
 DROP TRIGGER IF EXISTS trg_novatrade_lead_scope_immutable ON public.leads;
 CREATE TRIGGER trg_novatrade_lead_scope_immutable BEFORE UPDATE OF tenant_id ON public.leads FOR EACH ROW EXECUTE FUNCTION public.novatrade_lead_scope_immutable();
 DO $g003_triggers$ DECLARE table_name text; BEGIN
@@ -101,9 +113,9 @@ ALTER TABLE public.admin_requests ALTER COLUMN tenant_id SET NOT NULL;
 ALTER TABLE public.demos ALTER COLUMN tenant_id SET NOT NULL;
 
 CREATE OR REPLACE FUNCTION public.novatrade_published_demo_public(p_slug text)
-RETURNS TABLE(slug text, template_id text, config_json jsonb)
+RETURNS TABLE(slug text, template_id text, config_json jsonb, name text, address text, phone text, maps_uri text, rating double precision, review_count integer, selling_niche text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $f$
-  SELECT d.slug,d.template_id,pg_catalog.jsonb_strip_nulls(pg_catalog.jsonb_build_object('title',d.config_json->'title','hero',d.config_json->'hero','primaryCta',d.config_json->'primaryCta','accentColor',d.config_json->'accentColor')) FROM public.demos d WHERE d.slug=p_slug AND d.is_published=1 AND d.revoked_at IS NULL
+  SELECT d.slug,d.template_id,pg_catalog.jsonb_strip_nulls(pg_catalog.jsonb_build_object('headline',CASE WHEN jsonb_typeof(d.config_json->'headline') IN ('string','null') THEN d.config_json->'headline' END,'subheadline',CASE WHEN jsonb_typeof(d.config_json->'subheadline') IN ('string','null') THEN d.config_json->'subheadline' END,'services',CASE WHEN jsonb_typeof(d.config_json->'services')='array' AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(d.config_json->'services') x WHERE jsonb_typeof(x)<>'string') THEN d.config_json->'services' END,'trustSignals',CASE WHEN jsonb_typeof(d.config_json->'trustSignals')='array' AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(d.config_json->'trustSignals') x WHERE jsonb_typeof(x)<>'string') THEN d.config_json->'trustSignals' END,'primaryCta',CASE WHEN jsonb_typeof(d.config_json->'primaryCta') IN ('string','null') THEN d.config_json->'primaryCta' END,'secondaryCta',CASE WHEN jsonb_typeof(d.config_json->'secondaryCta') IN ('string','null') THEN d.config_json->'secondaryCta' END,'websiteGap',CASE WHEN jsonb_typeof(d.config_json->'websiteGap') IN ('string','null') THEN d.config_json->'websiteGap' END)),l.name,l.address,l.phone,l.maps_uri,l.rating,l.review_count,l.selling_niche FROM public.demos d JOIN public.leads l ON (l.tenant_id,l.id)=(d.tenant_id,d.lead_id) WHERE d.slug=p_slug AND d.is_published=1 AND d.revoked_at IS NULL
 $f$;
 REVOKE ALL ON FUNCTION public.novatrade_published_demo_public(text) FROM PUBLIC;
 DO $g003_public_fn$ BEGIN IF EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='anon') THEN GRANT EXECUTE ON FUNCTION public.novatrade_published_demo_public(text) TO anon; END IF; END $g003_public_fn$;

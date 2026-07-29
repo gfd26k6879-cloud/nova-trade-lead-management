@@ -15,7 +15,8 @@ describe("G-003 lead CRM tenant scope", () => {
     expect(migrationSql).toContain("UNIQUE(tenant_id,place_id)");
     expect(migrationSql).toContain("FOREIGN KEY (tenant_id,lead_id) REFERENCES public.leads(tenant_id,id)");
     expect(migrationSql).toContain("SET search_path = pg_catalog, public");
-    expect(migrationSql).toContain("d.slug=p_slug AND d.is_published=1 AND d.revoked_at IS NULL");
+    expect(migrationSql).toContain("JOIN public.leads l ON (l.tenant_id,l.id)=(d.tenant_id,d.lead_id)");
+    expect(migrationSql).toContain("'headline'");
     expect(migrationSql).toContain("REVOKE ALL ON TABLE public.leads,public.lead_notes,public.outreach_events,public.admin_requests,public.demos");
   });
 
@@ -38,8 +39,8 @@ describe("G-003 lead CRM tenant scope", () => {
       await sql.unsafe("INSERT INTO public.outreach_events(id,lead_id,tenant_id,channel) VALUES ('event-a','lead-a',$1,'email')", [tenantA]);
       await expect(sql.unsafe("INSERT INTO public.outreach_events(id,lead_id,tenant_id,channel) VALUES ('event-b','lead-a',$1,'email')", [tenantB])).rejects.toThrow(/G003_LEAD_CHILD_TENANT_MISMATCH/);
       await expect(sql.unsafe("UPDATE public.leads SET tenant_id=$1 WHERE id='lead-a'", [tenantB])).rejects.toThrow(/G003_LEAD_TENANT_IMMUTABLE/);
-      await sql.unsafe("INSERT INTO public.demos(id,lead_id,tenant_id,slug,config_json,is_published) VALUES ('demo-a','lead-a',$1,'public-a','{\"title\":\"safe\",\"secret\":\"no\"}',1),('demo-b','lead-b',$2,'private-b','{}',0)", [tenantA,tenantB]);
-      expect(await sql.unsafe("SELECT * FROM public.novatrade_published_demo_public('public-a')")).toEqual([{ slug:"public-a", template_id:"default", config_json:{ title:"safe" } }]);
+      await sql.unsafe("INSERT INTO public.demos(id,lead_id,tenant_id,slug,config_json,is_published) VALUES ('demo-a','lead-a',$1,'public-a','{\"headline\":\"safe\",\"secret\":\"no\"}',1),('demo-b','lead-b',$2,'private-b','{}',0)", [tenantA,tenantB]);
+      expect(await sql.unsafe("SELECT * FROM public.novatrade_published_demo_public('public-a')")).toEqual([expect.objectContaining({ slug:"public-a", template_id:"default", config_json:{ headline:"safe" }, name:"A" })]);
       expect(await sql.unsafe("SELECT * FROM public.novatrade_published_demo_public('private-b')")).toEqual([]);
       await sql.unsafe("UPDATE public.demos SET revoked_at=now() WHERE id='demo-a'");
       expect(await sql.unsafe("SELECT * FROM public.novatrade_published_demo_public('public-a')")).toEqual([]);
