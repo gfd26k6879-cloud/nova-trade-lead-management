@@ -7,6 +7,7 @@ export const EMAIL = process.env.E2E_SUPABASE_EMAIL ?? process.env.NOSITE_BOOTST
 export const PASSWORD = process.env.E2E_SUPABASE_PASSWORD ?? "";
 export const STORAGE_STATE = process.env.E2E_STORAGE_STATE?.trim() ?? "";
 export const HAS_E2E_AUTH = hasE2EAuth();
+export const TENANT_FIXTURE_SELECTORS = Object.freeze({ tenantA: "synthetic-tenant-a", tenantB: "synthetic-tenant-b", workspaceA: "shared-workspace", siblingWorkspace: "shared-workspace-sibling" });
 
 export function requireE2EAuth(): void {
   assertE2EAuth();

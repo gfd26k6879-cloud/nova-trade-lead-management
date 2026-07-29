@@ -160,7 +160,7 @@ describe("canonical two-tenant fixtures", () => {
       ]);
       expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
       expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
-      expect(canonicalCounts(sqlite)).toEqual({ tenants: 2, workspaces: 2, memberships: 20, roleBindings: 14, policies: 2, supportGrants: 2, supportPermissions: 6, supportDataClasses: 6 });
+      expect(canonicalCounts(sqlite)).toEqual({ tenants: 2, workspaces: 4, memberships: 20, roleBindings: 14, policies: 2, supportGrants: 2, supportPermissions: 6, supportDataClasses: 6 });
     } finally {
       sqlite.close();
     }

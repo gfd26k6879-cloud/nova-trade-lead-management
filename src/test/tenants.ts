@@ -47,6 +47,8 @@ const TENANT_IDS = {
 const WORKSPACE_IDS = {
   A: "20000000-0000-4000-8000-000000000001",
   B: "20000000-0000-4000-8000-000000000002",
+  A_SIBLING: "20000000-0000-4000-8000-000000000003",
+  B_SIBLING: "20000000-0000-4000-8000-000000000004",
 } as const;
 
 const SUPPORT_ACTOR_ID = "90000000-0000-4000-8000-000000000001";
@@ -171,6 +173,8 @@ export const CANONICAL_TENANT_FIXTURE_CATALOG = deepFreeze({
   workspaces: [
     { key: "A", id: WORKSPACE_IDS.A, tenantKey: "A", tenantId: TENANT_IDS.A, slug: "shared-workspace", name: SHARED_WORKSPACE_LABEL, expectedState: "active", overlappingExternalResourceLabel: FIXTURE_LABEL },
     { key: "B", id: WORKSPACE_IDS.B, tenantKey: "B", tenantId: TENANT_IDS.B, slug: "shared-workspace", name: SHARED_WORKSPACE_LABEL, expectedState: "active", overlappingExternalResourceLabel: FIXTURE_LABEL },
+    { key: "A_SIBLING", id: WORKSPACE_IDS.A_SIBLING, tenantKey: "A", tenantId: TENANT_IDS.A, slug: "shared-workspace-sibling", name: SHARED_WORKSPACE_LABEL, expectedState: "active", overlappingExternalResourceLabel: FIXTURE_LABEL },
+    { key: "B_SIBLING", id: WORKSPACE_IDS.B_SIBLING, tenantKey: "B", tenantId: TENANT_IDS.B, slug: "shared-workspace-sibling", name: SHARED_WORKSPACE_LABEL, expectedState: "active", overlappingExternalResourceLabel: FIXTURE_LABEL },
   ],
   identities: [
     { id: SUPPORT_ACTOR_ID, tenantKey: "platform", relationship: "support_actor_only", expectedState: "platform_support", overlappingExternalResourceLabel: FIXTURE_LABEL },
@@ -214,7 +218,7 @@ export const CANONICAL_TENANT_FIXTURE_IDS = deepFreeze({
 export const CANONICAL_TENANT_FIXTURE_ROLE_COUNT = LAUNCH_ROLES.length;
 export const CANONICAL_TENANT_FIXTURE_COUNTS = deepFreeze({
   tenants: 2,
-  workspaces: 2,
+  workspaces: 4,
   identities: 18,
   activeMemberships: 14,
   inactiveMemberships: 6,
@@ -281,8 +285,8 @@ export async function setupCanonicalTenantFixtures({ transaction }: CanonicalTen
     }
 
     for (const tenantKey of ["A", "B"] as const) {
-      workspaces.push(await transactionRepository.createWorkspace(TENANT_IDS[tenantKey], {
-        id: WORKSPACE_IDS[tenantKey], slug: "shared-workspace", name: SHARED_WORKSPACE_LABEL,
+      for (const [id, slug] of [[WORKSPACE_IDS[tenantKey], "shared-workspace"], [WORKSPACE_IDS[`${tenantKey}_SIBLING` as "A_SIBLING" | "B_SIBLING"], "shared-workspace-sibling"]] as const) workspaces.push(await transactionRepository.createWorkspace(TENANT_IDS[tenantKey], {
+        id, slug, name: SHARED_WORKSPACE_LABEL,
         status: "active", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
       }));
     }
