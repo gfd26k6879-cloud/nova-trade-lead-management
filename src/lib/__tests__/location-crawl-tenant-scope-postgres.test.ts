@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
 import { describe, expect, it } from "vitest";
@@ -25,36 +25,17 @@ const BINDING_A = "40000000-0000-4000-8000-000000000101";
 const POLICY_A = "50000000-0000-4000-8000-000000000101";
 const POLICY_HASH = "b".repeat(64);
 
-const MIGRATION_PATH = join("supabase", "migrations", "202607290001_add_location_crawl_tenant_scope.sql");
+const G002_MIGRATION = "202607290001_add_location_crawl_tenant_scope.sql";
+const MIGRATION_PATH = join("supabase", "migrations", G002_MIGRATION);
 const migrationSql = readFileSync(MIGRATION_PATH, "utf8");
-const POSTGRES_DEPENDENCIES = [
-  "202605110001_full_schema.sql",
-  "202605120002_supabase_auth_roles.sql",
-  "20260515123000_researcher_workbench_outreach.sql",
-  "20260602061959_add_lead_archive_fields.sql",
-  "20260520114232_admin_fulfillment_queue.sql",
-  "20260602193000_international_markets_and_territories.sql",
-  "20260603110615_discovery_items.sql",
-  "20260611010000_agile_discovery_blocked_retry.sql",
-  "202606160001_launch_readiness_reliability.sql",
-  "202607120001_reconcile_researcher_ai_feedback_schema.sql",
-] as const;
-const POSTGRES_T028_MIGRATIONS = [
-  "202607270001_add_tenants_table.sql",
-  "202607270002_add_workspaces_table.sql",
-  "202607270003_add_tenant_memberships.sql",
-  "202607270004_add_tenant_policies.sql",
-  "202607270005_add_support_access_grants.sql",
-  "202607270006_add_tenant_export_jobs.sql",
-  "202607270007_add_tenant_audit_context.sql",
-  "202607270008_add_tenant_deletion_jobs.sql",
-  "202607270009_add_tenant_foundation_rls.sql",
-  "202607270010_add_compatibility_tenant_backfill.sql",
-] as const;
+const SKIPPED_PORTABLE_MIGRATIONS = new Set([
+  "20260514161714_supabase_ai_verification_cron.sql",
+  "20260514163203_scheduler_v2_sales_ready_pipeline.sql",
+]);
 
 type PgClient = ReturnType<typeof postgres>;
 
-async function resetDatabase(client: PgClient): Promise<void> {
+async function resetDatabase(client: PgClient, includeG002 = false): Promise<{ discovered: number; applied: number; skipped: number }> {
   await client.unsafe(`
     RESET search_path;
     DROP SCHEMA IF EXISTS g002_shadow CASCADE;
@@ -71,10 +52,45 @@ async function resetDatabase(client: PgClient): Promise<void> {
     $$;
     GRANT ALL ON SCHEMA public TO postgres;
     GRANT USAGE ON SCHEMA public TO anon, authenticated;
+    CREATE TABLE public.worker_runs (
+      id text PRIMARY KEY,
+      worker_name text NOT NULL,
+      status text NOT NULL DEFAULT 'running',
+      trigger_source text NOT NULL DEFAULT 'unknown',
+      http_status integer,
+      result_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      error text,
+      started_at timestamptz NOT NULL DEFAULT now(),
+      completed_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
   `);
-  for (const file of [...POSTGRES_DEPENDENCIES, ...POSTGRES_T028_MIGRATIONS]) {
+  const migrations = readdirSync(join("supabase", "migrations"))
+    .filter((file) => file.endsWith(".sql"))
+    .sort();
+  let applied = 0;
+  for (const file of migrations) {
+    if (SKIPPED_PORTABLE_MIGRATIONS.has(file) || (!includeG002 && file === G002_MIGRATION)) continue;
     await client.unsafe(readFileSync(join("supabase", "migrations", file), "utf8"));
+    applied += 1;
+    if (file === "202605110001_full_schema.sql") {
+      await client.unsafe(`
+        ALTER TABLE public.settings
+          ADD COLUMN IF NOT EXISTS scheduler_ai_verification_enabled integer NOT NULL DEFAULT 1,
+          ADD COLUMN IF NOT EXISTS scheduler_crawl_enabled integer NOT NULL DEFAULT 1,
+          ADD COLUMN IF NOT EXISTS scheduler_enrichment_enabled integer NOT NULL DEFAULT 1,
+          ADD COLUMN IF NOT EXISTS scheduler_artifact_enabled integer NOT NULL DEFAULT 1,
+          ADD COLUMN IF NOT EXISTS scheduler_score_recompute_enabled integer NOT NULL DEFAULT 1;
+        ALTER TABLE public.leads
+          ADD COLUMN IF NOT EXISTS ai_website_feedback_status text,
+          ADD COLUMN IF NOT EXISTS ai_corrected_website_url text,
+          ADD COLUMN IF NOT EXISTS ai_false_positive_reason text,
+          ADD COLUMN IF NOT EXISTS ai_reviewer_notes text,
+          ADD COLUMN IF NOT EXISTS ai_feedback_at timestamptz;
+      `);
+    }
   }
+  return { discovered: migrations.length, applied, skipped: SKIPPED_PORTABLE_MIGRATIONS.size };
 }
 
 async function postgresManifest(client: PgClient): Promise<CompatibilityBackfillManifest> {
@@ -176,11 +192,17 @@ describe("G-002 location and crawl tenant scope", () => {
       expect(migrationSql).not.toMatch(new RegExp(`ALTER\\s+TABLE\\s+public\\.${table}[^;]*ADD\\s+COLUMN[^;]*tenant_id`, "i"));
     }
     expect(migrationSql).toContain("G002_UNRECONCILED_T028_SCOPE");
+    expect(migrationSql).toContain("G002_T028_RECEIPT_SCOPE_DRIFT");
+    expect(migrationSql).toContain("replay_catalog_complete");
     expect(migrationSql).toContain("compatibility_backfill_receipts");
     expect(migrationSql).toContain("UNIQUE NULLS NOT DISTINCT (tenant_id, workspace_id, user_id, market_id)");
     expect(migrationSql).toContain("FOREIGN KEY (tenant_id, crawl_run_id) REFERENCES public.crawl_runs (tenant_id, id)");
     expect(migrationSql).toContain("SET search_path = pg_catalog, public");
     expect(migrationSql).toContain("REVOKE ALL ON TABLE public.user_market_access, public.crawl_runs, public.crawl_units");
+    expect(migrationSql).toContain("G002_CRAWL_RUN_SCOPE_IMMUTABLE");
+    expect(migrationSql).toContain("cell.cell_type = 'zip'");
+    expect(migrationSql).toContain("cell.cell_type <> 'zip'");
+    expect(migrationSql).not.toContain("'cell-us-co-' || unit.zip");
     expect(migrationSql).toContain("WHERE status IN ('pending', 'retry_wait')");
     expect(migrationSql).not.toMatch(/(?:pg_catalog\.)?digest\s*\(|CREATE\s+EXTENSION/i);
   });
@@ -199,9 +221,16 @@ describe("G-002 location and crawl tenant scope", () => {
         const version = await client.unsafe<Array<{ server_version_num: string }>>("SELECT current_setting('server_version_num') AS server_version_num");
         expect(version[0].server_version_num.startsWith("16")).toBe(true);
 
-        await resetDatabase(client);
+        const fullChain = await resetDatabase(client, true);
+        expect(fullChain).toEqual({ discovered: 42, applied: 40, skipped: 2 });
+        await client.unsafe(`
+          INSERT INTO public.tenants (id, slug, name, status)
+            VALUES ('${TENANT_A}', 'replay-tenant', 'Replay Tenant', 'active');
+          INSERT INTO public.crawl_runs (id, tenant_id, market_id, categories)
+            VALUES ('replay-run', '${TENANT_A}', 'market-colorado', '[]'::jsonb);
+        `);
         await client.unsafe(migrationSql);
-        await client.unsafe(migrationSql);
+        expect((await client.unsafe("SELECT count(*)::integer AS count FROM public.crawl_runs WHERE id = 'replay-run'"))[0].count).toBe(1);
         const platformTenantColumns = await client.unsafe<Array<{ count: number }>>(`
           SELECT count(*)::integer AS count
           FROM information_schema.columns
@@ -224,7 +253,62 @@ describe("G-002 location and crawl tenant scope", () => {
         expect(rejectedState[0]).toMatchObject({ location_mode: null, tenant_not_null: false });
         expect((await client.unsafe("SELECT to_jsonb(unit) - 'tenant_id' - 'workspace_id' AS row FROM public.crawl_units AS unit WHERE id = 'legacy-unit'"))[0].row).toEqual(beforeRejected[0].row);
 
+        await client.unsafe(`
+          INSERT INTO public.tenants (id, slug, name, status)
+            VALUES ('${TENANT_A}', 'manual-scope', 'Manual Scope', 'active');
+          INSERT INTO public.workspaces (id, tenant_id, slug, name, status)
+            VALUES ('${WORKSPACE_A}', '${TENANT_A}', 'manual-workspace', 'Manual Workspace', 'active');
+          INSERT INTO public.tenant_memberships (id, tenant_id, auth_identity_id, workspace_id, status)
+            VALUES ('${MEMBERSHIP_A}', '${TENANT_A}', '${OWNER_A}', '${WORKSPACE_A}', 'active');
+          UPDATE public.user_market_access SET tenant_id = '${TENANT_A}', workspace_id = '${WORKSPACE_A}';
+          UPDATE public.crawl_runs SET tenant_id = '${TENANT_A}', workspace_id = '${WORKSPACE_A}';
+          UPDATE public.crawl_units SET tenant_id = '${TENANT_A}', workspace_id = '${WORKSPACE_A}';
+          ALTER TABLE public.user_market_access ALTER COLUMN tenant_id SET NOT NULL;
+          ALTER TABLE public.crawl_runs ALTER COLUMN tenant_id SET NOT NULL;
+          ALTER TABLE public.crawl_units ALTER COLUMN tenant_id SET NOT NULL;
+        `);
+        await expectRejected(client.unsafe(migrationSql), /G002_MATCHING_T028_RECEIPT_REQUIRED/);
+        await client.unsafe("ROLLBACK");
+
+        await resetDatabase(client);
+        await seedLegacyRows(client);
+        await client.unsafe("INSERT INTO public.zip_codes (zip, city, state) VALUES ('80203', 'Denver', 'CO'); UPDATE public.crawl_units SET zip = '80203' WHERE id = 'legacy-unit'");
         await runT028(client);
+        await expectRejected(client.unsafe(migrationSql), /G002_AMBIGUOUS_OR_INVALID_LOCATION_MODE/);
+        await client.unsafe("ROLLBACK");
+        expect((await client.unsafe("SELECT count(*)::integer AS count FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'crawl_units' AND column_name = 'location_mode'"))[0].count).toBe(0);
+
+        await resetDatabase(client);
+        await seedLegacyRows(client);
+        await client.unsafe("UPDATE public.crawl_units SET location_cell_id = NULL WHERE id = 'legacy-unit'");
+        await runT028(client);
+        await expectRejected(client.unsafe(migrationSql), /G002_AMBIGUOUS_OR_INVALID_LOCATION_MODE/);
+        await client.unsafe("ROLLBACK");
+        expect((await client.unsafe("SELECT count(*)::integer AS count FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'crawl_units' AND column_name = 'location_mode'"))[0].count).toBe(0);
+
+        await resetDatabase(client);
+        await seedLegacyRows(client);
+        await runT028(client);
+        await client.unsafe(`
+          INSERT INTO auth.users (id) VALUES ('${OWNER_B}'), ('${SUSPENDED_B}');
+          INSERT INTO public.tenants (id, slug, name, status) VALUES ('${TENANT_B}', 'tenant-b', 'Tenant B', 'active');
+          INSERT INTO public.workspaces (id, tenant_id, slug, name, status) VALUES
+            ('${WORKSPACE_B}', '${TENANT_B}', 'workspace-b', 'Workspace B', 'active'),
+            ('${WORKSPACE_B_ALT}', '${TENANT_B}', 'workspace-b-alt', 'Workspace B Alt', 'active');
+          INSERT INTO public.tenant_memberships (id, tenant_id, auth_identity_id, workspace_id, status) VALUES
+            ('${MEMBERSHIP_B}', '${TENANT_B}', '${OWNER_B}', '${WORKSPACE_B}', 'active'),
+            ('${SUSPENDED_MEMBERSHIP_B}', '${TENANT_B}', '${SUSPENDED_B}', '${WORKSPACE_B}', 'suspended');
+          UPDATE public.user_market_access SET tenant_id = '${TENANT_B}', workspace_id = '${WORKSPACE_B}';
+          UPDATE public.crawl_runs SET tenant_id = '${TENANT_B}', workspace_id = '${WORKSPACE_B}';
+          UPDATE public.crawl_units SET tenant_id = '${TENANT_B}', workspace_id = '${WORKSPACE_B}';
+        `);
+        await expectRejected(client.unsafe(migrationSql), /G002_T028_RECEIPT_SCOPE_DRIFT/);
+        await client.unsafe(`
+          ROLLBACK;
+          UPDATE public.user_market_access SET tenant_id = '${TENANT_A}', workspace_id = '${WORKSPACE_A}';
+          UPDATE public.crawl_runs SET tenant_id = '${TENANT_A}', workspace_id = '${WORKSPACE_A}';
+          UPDATE public.crawl_units SET tenant_id = '${TENANT_A}', workspace_id = '${WORKSPACE_A}';
+        `);
         await client.unsafe("UPDATE public.location_markets SET status = 'paused' WHERE id = 'market-a'");
         await expectRejected(client.unsafe(migrationSql), /G002_ACTIVE_MARKET_ACCESS_REQUIRED/);
         await client.unsafe("ROLLBACK; UPDATE public.location_markets SET status = 'active' WHERE id = 'market-a'");
@@ -282,35 +366,51 @@ describe("G-002 location and crawl tenant scope", () => {
           expect((await client.unsafe("SELECT has_table_privilege($1, 'public.user_market_access', 'SELECT') AS allowed", [role]))[0].allowed).toBe(false);
         }
 
-        await client.unsafe(`
-          INSERT INTO auth.users (id) VALUES ('${OWNER_B}'), ('${SUSPENDED_B}');
-          INSERT INTO public.tenants (id, slug, name, status) VALUES ('${TENANT_B}', 'tenant-b', 'Tenant B', 'active');
-          INSERT INTO public.workspaces (id, tenant_id, slug, name, status) VALUES
-            ('${WORKSPACE_B}', '${TENANT_B}', 'workspace-b', 'Workspace B', 'active'),
-            ('${WORKSPACE_B_ALT}', '${TENANT_B}', 'workspace-b-alt', 'Workspace B Alt', 'active');
-          INSERT INTO public.tenant_memberships (id, tenant_id, auth_identity_id, workspace_id, status) VALUES
-            ('${MEMBERSHIP_B}', '${TENANT_B}', '${OWNER_B}', '${WORKSPACE_B}', 'active'),
-            ('${SUSPENDED_MEMBERSHIP_B}', '${TENANT_B}', '${SUSPENDED_B}', '${WORKSPACE_B}', 'suspended');
-          INSERT INTO public.user_market_access (tenant_id, workspace_id, user_id, market_id, created_by_user_id)
-            VALUES ('${TENANT_B}', '${WORKSPACE_B}', '${OWNER_B}', 'market-a', '${OWNER_B}');
-        `);
+        await client.unsafe("INSERT INTO public.user_market_access (tenant_id, workspace_id, user_id, market_id, created_by_user_id) VALUES ($1, $2, $3, 'market-a', $3)", [TENANT_B, WORKSPACE_B, OWNER_B]);
         expect((await client.unsafe("SELECT count(*)::integer AS count FROM public.user_market_access WHERE market_id = 'market-a'"))[0].count).toBe(2);
         await expectRejected(client.unsafe("INSERT INTO public.user_market_access (tenant_id, workspace_id, user_id, market_id) VALUES ($1, $2, $3, 'market-a')", [TENANT_B, WORKSPACE_B, OWNER_A]), /G002_ACTIVE_MEMBERSHIP_REQUIRED/);
         await expectRejected(client.unsafe("INSERT INTO public.user_market_access (tenant_id, workspace_id, user_id, market_id) VALUES ($1, $2, $3, 'market-a')", [TENANT_B, WORKSPACE_B_ALT, OWNER_B]), /G002_ACTIVE_MEMBERSHIP_REQUIRED/);
         await expectRejected(client.unsafe("INSERT INTO public.user_market_access (tenant_id, workspace_id, user_id, market_id) VALUES ($1, $2, $3, 'market-a')", [TENANT_B, WORKSPACE_B, SUSPENDED_B]), /G002_ACTIVE_MEMBERSHIP_REQUIRED/);
+        await client.unsafe("UPDATE public.location_markets SET status = 'paused' WHERE id = 'market-a'");
+        await expectRejected(client.unsafe("UPDATE public.user_market_access SET created_at = created_at WHERE tenant_id = $1 AND user_id = $2", [TENANT_B, OWNER_B]), /G002_ACTIVE_PLATFORM_MARKET_REQUIRED/);
+        await client.unsafe("UPDATE public.location_markets SET status = 'active' WHERE id = 'market-a'");
 
         await expectRejected(client.unsafe("INSERT INTO public.crawl_runs (id, tenant_id, workspace_id, market_id, categories) VALUES ('cross-tenant-run', $1, $2, 'market-a', '[]'::jsonb)", [TENANT_B, WORKSPACE_A]), /crawl_runs_tenant_workspace_fkey/);
+        await client.unsafe("INSERT INTO public.crawl_runs (id, tenant_id, workspace_id, market_id, categories) VALUES ('empty-run', $1, $2, 'market-a', '[]'::jsonb)", [TENANT_B, WORKSPACE_B]);
+        await expectRejected(client.unsafe("UPDATE public.crawl_runs SET tenant_id = $1 WHERE id = 'empty-run'", [TENANT_A]), /G002_CRAWL_RUN_SCOPE_IMMUTABLE/);
+        await expectRejected(client.unsafe("UPDATE public.crawl_runs SET workspace_id = $1 WHERE id = 'empty-run'", [WORKSPACE_B_ALT]), /G002_CRAWL_RUN_SCOPE_IMMUTABLE/);
+        await expectRejected(client.unsafe("UPDATE public.crawl_runs SET market_id = 'market-london-gb' WHERE id = 'empty-run'"), /G002_CRAWL_RUN_SCOPE_IMMUTABLE/);
         await client.unsafe("INSERT INTO public.crawl_runs (id, tenant_id, workspace_id, market_id, categories) VALUES ('run-b', $1, $2, 'market-a', '[]'::jsonb)", [TENANT_B, WORKSPACE_B]);
         await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, zip, category, location_mode) VALUES ('wrong-tenant', 'run-b', $1, $2, 'market-a', '80202', 'industrial', 'legacy_zip')", [TENANT_A, WORKSPACE_B]), /G002_CRAWL_UNIT_TENANT_MISMATCH/);
         await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, zip, category, location_mode) VALUES ('wrong-workspace', 'run-b', $1, $2, 'market-a', '80202', 'industrial', 'legacy_zip')", [TENANT_B, WORKSPACE_A]), /G002_CRAWL_UNIT_WORKSPACE_MISMATCH/);
         await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, zip, category, location_mode) VALUES ('wrong-market', 'run-b', $1, $2, 'market-london-gb', 'SW1A', 'industrial', 'generalized')", [TENANT_B, WORKSPACE_B]), /G002_CRAWL_UNIT_MARKET_MISMATCH/);
-        await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('wrong-cell', 'run-b', $1, $2, 'market-a', 'cell-gb-london-sw1a', 'SW1A', 'industrial', 'platform_cell')", [TENANT_B, WORKSPACE_B]), /G002_CRAWL_UNIT_CELL_MARKET_MISMATCH/);
-        await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, zip, category, location_mode) VALUES ('missing-zip', 'run-b', $1, $2, 'market-a', '99999', 'industrial', 'legacy_zip')", [TENANT_B, WORKSPACE_B]), /G002_LEGACY_ZIP_REFERENCE_REQUIRED/);
+        await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('wrong-cell', 'run-b', $1, $2, 'market-a', 'cell-gb-london-sw1a', 'SW1A', 'industrial', 'platform_cell')", [TENANT_B, WORKSPACE_B]), /G002_ACTIVE_NON_ZIP_PLATFORM_CELL_REQUIRED/);
+        await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, zip, category, location_mode) VALUES ('missing-zip', 'run-b', $1, $2, 'market-a', '99999', 'industrial', 'legacy_zip')", [TENANT_B, WORKSPACE_B]), /G002_LEGACY_ZIP_LOCATION_REQUIRED/);
+        await client.unsafe("INSERT INTO public.zip_codes (zip, city, state) VALUES ('80203', 'Denver', 'CO') ON CONFLICT DO NOTHING");
+        await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('zip-token-mismatch', 'run-b', $1, $2, 'market-a', 'cell-us-co-80202', '80203', 'industrial', 'legacy_zip')", [TENANT_B, WORKSPACE_B]), /G002_LEGACY_ZIP_LOCATION_REQUIRED/);
+        await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('zip-cell-as-platform', 'run-b', $1, $2, 'market-a', 'cell-us-co-80202', '80202', 'industrial', 'platform_cell')", [TENANT_B, WORKSPACE_B]), /G002_ACTIVE_NON_ZIP_PLATFORM_CELL_REQUIRED/);
+        await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('cell-as-generalized', 'run-b', $1, $2, 'market-a', 'cell-us-co-80202', 'NW9 6AA', 'industrial', 'generalized')", [TENANT_B, WORKSPACE_B]), /G002_GENERALIZED_LOCATION_MUST_NOT_USE_ZIP_RELATIONSHIPS/);
+        await client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, zip, category, location_mode) VALUES ('explicit-generalized-zip-token', 'run-b', $1, $2, 'market-a', '80202', 'industrial', 'generalized')", [TENANT_B, WORKSPACE_B]);
+        expect((await client.unsafe("SELECT location_mode, location_cell_id FROM public.crawl_units WHERE id = 'explicit-generalized-zip-token'"))[0]).toEqual({ location_mode: "generalized", location_cell_id: null });
         await client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('valid-zip', 'run-b', $1, $2, 'market-a', 'cell-us-co-80202', '80202', 'industrial', 'legacy_zip')", [TENANT_B, WORKSPACE_B]);
-        await expectRejected(client.unsafe("UPDATE public.crawl_runs SET tenant_id = $1 WHERE id = 'run-b'", [TENANT_A]), /G002_CRAWL_RUN_SCOPE_IMMUTABLE_WITH_UNITS/);
+        await client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('workspace-omitted', 'run-b', 'market-a', 'cell-us-co-80202', '80202', 'industrial', 'legacy_zip')");
+        await client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('workspace-null', 'run-b', $1, NULL, 'market-a', 'cell-us-co-80202', '80202', 'industrial', 'legacy_zip')", [TENANT_B]);
+        expect((await client.unsafe("SELECT tenant_id::text, workspace_id::text FROM public.crawl_units WHERE id IN ('workspace-omitted', 'workspace-null') ORDER BY id"))).toEqual([
+          { tenant_id: TENANT_B, workspace_id: WORKSPACE_B },
+          { tenant_id: TENANT_B, workspace_id: WORKSPACE_B },
+        ]);
+        await expectRejected(client.unsafe("UPDATE public.crawl_runs SET tenant_id = $1 WHERE id = 'run-b'", [TENANT_A]), /G002_CRAWL_RUN_SCOPE_IMMUTABLE/);
+
+        await client.unsafe("INSERT INTO public.crawl_runs (id, tenant_id, workspace_id, market_id, categories) VALUES ('run-null-workspace', $1, NULL, 'market-a', '[]'::jsonb)", [TENANT_B]);
+        await client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('null-parent-inherited', 'run-null-workspace', 'market-a', 'cell-us-co-80202', '80202', 'industrial', 'legacy_zip')");
+        expect((await client.unsafe("SELECT tenant_id::text, workspace_id::text FROM public.crawl_units WHERE id = 'null-parent-inherited'"))[0]).toEqual({ tenant_id: TENANT_B, workspace_id: null });
+        await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('null-parent-supplied', 'run-null-workspace', $1, $2, 'market-a', 'cell-us-co-80202', '80202', 'industrial', 'legacy_zip')", [TENANT_B, WORKSPACE_B]), /G002_CRAWL_UNIT_WORKSPACE_MISMATCH/);
 
         await client.unsafe("INSERT INTO public.crawl_runs (id, tenant_id, workspace_id, market_id, categories) VALUES ('run-generalized', $1, $2, 'market-london-gb', '[]'::jsonb)", [TENANT_B, WORKSPACE_B]);
         await client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, zip, category, location_mode) VALUES ('generalized-unit', 'run-generalized', $1, $2, 'market-london-gb', 'NW9 6AA', 'industrial', 'generalized')", [TENANT_B, WORKSPACE_B]);
+        await client.unsafe("UPDATE public.location_cells SET is_active = 0 WHERE id = 'cell-gb-london-sw1a'");
+        await expectRejected(client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('inactive-cell-unit', 'run-generalized', $1, $2, 'market-london-gb', 'cell-gb-london-sw1a', 'SW1A', 'industrial', 'platform_cell')", [TENANT_B, WORKSPACE_B]), /G002_ACTIVE_NON_ZIP_PLATFORM_CELL_REQUIRED/);
+        await client.unsafe("UPDATE public.location_cells SET is_active = 1 WHERE id = 'cell-gb-london-sw1a'");
         await client.unsafe("INSERT INTO public.crawl_units (id, crawl_run_id, tenant_id, workspace_id, market_id, location_cell_id, zip, category, location_mode) VALUES ('platform-cell-unit', 'run-generalized', $1, $2, 'market-london-gb', 'cell-gb-london-sw1a', 'SW1A', 'industrial', 'platform_cell')", [TENANT_B, WORKSPACE_B]);
         expect((await client.unsafe("SELECT location_mode FROM public.crawl_units WHERE id = 'generalized-unit'"))[0].location_mode).toBe("generalized");
         expect((await client.unsafe("SELECT count(*)::integer AS count FROM public.zip_codes WHERE zip IN ('NW9 6AA', 'SW1A')"))[0].count).toBe(0);
