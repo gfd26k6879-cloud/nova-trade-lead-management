@@ -2,7 +2,7 @@
 
 Date: 2026-07-29
 
-Status: **Stage 3 pilot accepted; Stage 4 resumed under the user-approved Terra-medium fallback.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. On 2026-07-29 the user explicitly authorized `gpt-5.6-terra` with medium reasoning as the runtime-contingent implementation fallback when Spark/Luna are unavailable. Sol remains the sole final integration/acceptance authority, and the observed four-total-agent ceiling remains binding.
+Status: **Stage 3 pilot accepted; Stage 4 active; G-003 repair delta required.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. On 2026-07-29 the user explicitly authorized `gpt-5.6-terra` with medium reasoning as the runtime-contingent implementation fallback when Spark/Luna are unavailable. G-003 producer commit `dd871b775ea0df95e3e7435c921ce13185f13e67` remains unaccepted after independent domain review found bounded P1/P2 contract gaps. Sol remains the sole final integration/acceptance authority, and the observed four-total-agent ceiling remains binding.
 
 ## Final integration authority
 
@@ -20,7 +20,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 |---|---|---|---|---|
 | Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Read-only G-006/G-008 recovery-boundary packet completed cleanly at `9afedb757bb3a3bb70b58d956cc3b0ece25d70ea`; G-006 waits for accepted G-003–G-005 keys, and G-008 then waits for G-006/G-007; no lock or change. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 five-file launch packet independently accepted; branch refreshed cleanly to amendment baseline `bf373a0822215d12e2a1f651142a4773b3f5a28b`; exact locks acquired and Terra-medium dispatch authorized. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 producer commit `dd871b775ea0df95e3e7435c921ce13185f13e67` is attributable and exact-scope but unaccepted; independent review requires a bounded repair delta in the same five files. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
 | Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Q-002 six-file fixture packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; second-workspace, look-alike, cleanup, Postgres, shared-factory, and E2E-selector gaps are bounded; ready when the migration-critical G-003 producer/review slots permit. |
 
@@ -52,7 +52,7 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 |---|---|---|
 | `G-001` | Accepted | Ownership contract repaired, independently verified, and reaccepted through append-only event 205. |
 | `G-002` | Accepted | Independently reviewed repair merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; final local release gate passed. |
-| `G-003` | Dispatch authorized; locks held | Five-file packet and acceptance matrix are accepted. Discovery is clean at `bf373a0822215d12e2a1f651142a4773b3f5a28b`; one Terra-medium worker may implement only the exact packet below. |
+| `G-003` | Rework round 1; locks retained | Commit `dd871b775ea0df95e3e7435c921ce13185f13e67` changed only the accepted five files, but independent review found receipt-bypass, missing upgrade/rollback evidence, actor-isolation, anonymous-projection, open-admin-index, pre-G-002-cutoff, and coverage gaps. Same-worker repair only; no scope expansion. |
 | `G-004` | Blocked on `G-003` | AI tenant derivation requires tenant-scoped leads; platform `worker_runs` stays global. |
 | `G-005` | Blocked on `G-004` | Serialized final Phase 2 structural migration producer. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
@@ -99,6 +99,14 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 - Exact write set: `supabase/migrations/202607290002_add_lead_crm_tenant_scope.sql`, `src/lib/__tests__/lead-crm-tenant-scope-postgres.test.ts`, `docs/validation/2026-07-29-g003-lead-crm-tenant-scope.md`, the pre-G-002 cutoff plus 43/41/2 expectations in `src/lib/__tests__/location-crawl-tenant-scope-postgres.test.ts`, and only the 43/41/2 inventory/log expectations in `src/lib/__tests__/data-transfer-contract.test.ts`.
 - Locks: `migration-sequence`, `migration-harness`, and `recovery-contract`. Recovery behavior remains frozen; the last two files cannot expand beyond the named reconciliation.
 - Required outcome: one attributable implementation commit plus focused PostgreSQL 16, hostile-search-path, transaction/idempotency, rollback/orphan, migration-count, typecheck, lint, and diff evidence. No push, deploy, provider call, customer data, or remote database.
+
+## G-003 review round 1
+
+- Producer commit: `dd871b775ea0df95e3e7435c921ce13185f13e67`, exactly one attributable commit over `bf373a0822215d12e2a1f651142a4773b3f5a28b`, with exactly the five authorized paths and a clean producer worktree.
+- Correct portions: tenant/place and compound parent keys, parent-derived child tenant, bounded 43/41/2 inventory edits, preserved T029 recovery boundary, and no G-004/G-005/SQLite/recovery implementation expansion.
+- P1 rework: exhaustive definition-aware replay catalog so partial/wrong named objects cannot bypass the exact T028 receipt; real nonempty upgrade, receipt drift/duplication, orphan/rollback, and hostile-search-path application evidence; complete actor isolation or removal of selectively incomplete actor policy; an explicitly grounded, nested-shape-bounded public demo DTO tested under actual anonymous/default-deny privileges.
+- P2 rework: tenant-inclusive open-admin-request uniqueness; pre-G-002 harness must stop before G-002 and every later migration; full catalog/workspace/global-slug/RLS/privilege/inheritance/replay invariant tests.
+- Disposition: `repair_delta_required`. Locks remain held. The same Terra-medium producer may amend only the existing five files, must correct the validation receipt to match observed evidence, and must return one bounded repair commit for new independent review.
 
 ## Pilot acceptance receipt
 
