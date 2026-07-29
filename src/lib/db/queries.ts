@@ -20,6 +20,7 @@ import {
 } from "@/lib/lead-quality";
 import { decryptSecret, encryptSecret } from "@/lib/secret-crypto";
 import { getAuditActor } from "@/lib/audit-context";
+import { getTenantContext, requireTenantContext, type TenantContext } from "@/lib/tenancy/context";
 import { resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
   SCHEDULER_WORKER_METADATA,
@@ -7985,31 +7986,250 @@ export async function getRunLastError(runId: string): Promise<string | null>{
 
 // ─── Audit Logs ───
 
+export type AuditScopeKind = "tenant" | "platform" | "legacy_unscoped";
+export type AuditActorLayer = "member" | "support" | "worker" | "agent" | "system";
+export type TenantAuditActorLayer = "member";
+export type PlatformAuditActorLayer = Exclude<AuditActorLayer, TenantAuditActorLayer>;
+
+export interface LegacyAuditLogOptions {
+  actor?: { userId?: string | null; email?: string | null; role?: AppRole | null } | null;
+  /** Compatibility-only selector-shaped values are never authority. */
+  tenantId?: unknown;
+  workspaceId?: unknown;
+  correlationId?: unknown;
+  actorLaunchRole?: unknown;
+  actorLayer?: unknown;
+}
+
+export interface PlatformAuditLogOptions {
+  scope: "platform";
+  actor: {
+    authIdentityId?: string | null;
+    layer: PlatformAuditActorLayer;
+    legacyRole?: AppRole | null;
+  };
+  /** Optional because D-001 makes correlation mandatory for tenant actions, not platform-global events. */
+  correlationId?: string | null;
+}
+
+export class AuditInputError extends Error {
+  constructor() {
+    super("The audit input is invalid");
+    this.name = "AuditInputError";
+  }
+}
+
+const AUDIT_ACTION_PATTERN = /^[a-z][a-z0-9_.:-]{0,127}$/;
+const AUDIT_ENTITY_TYPE_PATTERN = /^[a-z][a-z0-9_.:-]{0,63}$/;
+const AUDIT_ENTITY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const AUDIT_CORRELATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const AUDIT_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const AUDIT_ACTOR_LAYERS = new Set<AuditActorLayer>(["member", "support", "worker", "agent", "system"]);
+
+function assertAuditText(value: string | undefined, pattern: RegExp, nullable: boolean): void {
+  if (value === undefined || value === null) {
+    if (nullable) return;
+    throw new AuditInputError();
+  }
+  if (!pattern.test(value)) throw new AuditInputError();
+}
+
+function assertTenantContextShape(context: TenantContext): void {
+  if (
+    !AUDIT_UUID_PATTERN.test(context.tenantId) ||
+    (context.workspaceId !== null && !AUDIT_UUID_PATTERN.test(context.workspaceId)) ||
+    !AUDIT_UUID_PATTERN.test(context.membershipId) ||
+    !AUDIT_UUID_PATTERN.test(context.roleBindingId) ||
+    !AUDIT_UUID_PATTERN.test(context.actorAuthIdentityId) ||
+    !AUDIT_CORRELATION_PATTERN.test(context.correlationId)
+  ) {
+    throw new AuditInputError();
+  }
+}
+
+function assertSafeAuditMetadataValue(value: unknown, depth: number, seen: Set<object>): void {
+  if (depth > 5) throw new AuditInputError();
+  if (value === null || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new AuditInputError();
+    return;
+  }
+  if (typeof value === "string") {
+    if (value.length > 512 || /[\u0000-\u001f\u007f]/.test(value)) throw new AuditInputError();
+    return;
+  }
+  if (typeof value !== "object" || seen.has(value)) throw new AuditInputError();
+  seen.add(value);
+  if (Array.isArray(value)) {
+    if (value.length > 64) throw new AuditInputError();
+    for (const item of value) assertSafeAuditMetadataValue(item, depth + 1, seen);
+  } else {
+    const entries = Object.entries(value);
+    if (entries.length > 64) throw new AuditInputError();
+    for (const [key, item] of entries) {
+      if (!/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(key)) {
+        throw new AuditInputError();
+      }
+      assertSafeAuditMetadataValue(item, depth + 1, seen);
+    }
+  }
+  seen.delete(value);
+}
+
+function serializeTenantAuditMetadata(metadata: Record<string, unknown> | undefined): string {
+  const value = metadata ?? {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new AuditInputError();
+  assertSafeAuditMetadataValue(value, 0, new Set());
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized !== "string" || serialized.length > 16_384) throw new AuditInputError();
+    return serialized;
+  } catch {
+    throw new AuditInputError();
+  }
+}
+
+function assertAuditArguments(action: string, entityType: string | undefined, entityId: string | undefined): void {
+  assertAuditText(action, AUDIT_ACTION_PATTERN, false);
+  assertAuditText(entityType, AUDIT_ENTITY_TYPE_PATTERN, true);
+  assertAuditText(entityId, AUDIT_ENTITY_ID_PATTERN, true);
+}
+
+async function insertAuditLog(row: {
+  action: string;
+  entityType?: string;
+  entityId?: string;
+  metadata: string;
+  createdAt: string;
+  scopeKind: AuditScopeKind;
+  tenantId?: string | null;
+  workspaceId?: string | null;
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  actorRole?: AppRole | null;
+  correlationId?: string | null;
+  actorAuthIdentityId?: string | null;
+  actorMembershipId?: string | null;
+  actorLaunchRole?: TenantContext["role"] | null;
+  actorRoleBindingId?: string | null;
+  actorLayer?: AuditActorLayer | null;
+}): Promise<void> {
+  const db = await getDb();
+  await db.prepare(
+    `INSERT INTO audit_logs (
+      id, action, entity_type, entity_id, actor_user_id, actor_email, actor_role, metadata, created_at,
+      scope_kind, tenant_id, workspace_id, correlation_id, actor_auth_identity_id, actor_membership_id,
+      actor_launch_role, actor_role_binding_id, actor_layer
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    generateId(),
+    row.action,
+    row.entityType ?? null,
+    row.entityId ?? null,
+    row.actorUserId ?? null,
+    row.actorEmail ?? null,
+    row.actorRole ?? null,
+    row.metadata,
+    row.createdAt,
+    row.scopeKind,
+    row.tenantId ?? null,
+    row.workspaceId ?? null,
+    row.correlationId ?? null,
+    row.actorAuthIdentityId ?? null,
+    row.actorMembershipId ?? null,
+    row.actorLaunchRole ?? null,
+    row.actorRoleBindingId ?? null,
+    row.actorLayer ?? null,
+  );
+}
+
+export async function createTenantAuditLog(
+  action: string,
+  entityType?: string,
+  entityId?: string,
+  metadata?: Record<string, unknown>,
+): Promise<void> {
+  const context = requireTenantContext();
+  assertTenantContextShape(context);
+  assertAuditArguments(action, entityType, entityId);
+  await insertAuditLog({
+    action,
+    entityType,
+    entityId,
+    metadata: serializeTenantAuditMetadata(metadata),
+    createdAt: nowISO(),
+    scopeKind: "tenant",
+    tenantId: context.tenantId,
+    workspaceId: context.workspaceId,
+    actorUserId: context.actorAuthIdentityId,
+    actorEmail: null,
+    actorRole: null,
+    correlationId: context.correlationId,
+    actorAuthIdentityId: context.actorAuthIdentityId,
+    actorMembershipId: context.membershipId,
+    actorLaunchRole: context.role,
+    actorRoleBindingId: context.roleBindingId,
+    actorLayer: "member",
+  });
+}
+
+export async function createPlatformAuditLog(
+  action: string,
+  entityType: string | undefined,
+  entityId: string | undefined,
+  metadata: Record<string, unknown> | undefined,
+  options: PlatformAuditLogOptions,
+): Promise<void> {
+  if (!options || options.scope !== "platform" || !options.actor || !AUDIT_ACTOR_LAYERS.has(options.actor.layer)) {
+    throw new AuditInputError();
+  }
+  if (options.correlationId !== undefined && options.correlationId !== null) {
+    assertAuditText(options.correlationId, AUDIT_CORRELATION_PATTERN, false);
+  }
+  if (options.actor.authIdentityId !== undefined && options.actor.authIdentityId !== null && !AUDIT_UUID_PATTERN.test(options.actor.authIdentityId)) {
+    throw new AuditInputError();
+  }
+  assertAuditArguments(action, entityType, entityId);
+  await insertAuditLog({
+    action,
+    entityType,
+    entityId,
+    metadata: serializeTenantAuditMetadata(metadata),
+    createdAt: nowISO(),
+    scopeKind: "platform",
+    correlationId: options.correlationId ?? null,
+    actorAuthIdentityId: options.actor.authIdentityId ?? null,
+    actorLayer: options.actor.layer,
+    actorRole: options.actor.legacyRole ?? null,
+  });
+}
+
 export async function createAuditLog(
   action: string,
   entityType?: string,
   entityId?: string,
   metadata?: Record<string, unknown>,
-  options: { actor?: { userId?: string | null; email?: string | null; role?: AppRole | null } | null } = {},
+  options: LegacyAuditLogOptions = {},
 ): Promise<void>{
-  const db = await getDb();
+  const context = getTenantContext();
+  if (context) {
+    await createTenantAuditLog(action, entityType, entityId, metadata);
+    return;
+  }
+
   const contextActor = getAuditActor();
   const actor = options.actor === undefined ? contextActor : options.actor;
-  await db.prepare(
-    `INSERT INTO audit_logs (
-      id, action, entity_type, entity_id, actor_user_id, actor_email, actor_role, metadata, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    generateId(),
+  await insertAuditLog({
     action,
-    entityType ?? null,
-    entityId ?? null,
-    actor?.userId ?? null,
-    actor?.email ?? null,
-    actor?.role ?? null,
-    JSON.stringify(metadata ?? {}),
-    nowISO(),
-  );
+    entityType,
+    entityId,
+    metadata: JSON.stringify(metadata ?? {}),
+    createdAt: nowISO(),
+    scopeKind: "legacy_unscoped",
+    actorUserId: actor?.userId ?? null,
+    actorEmail: actor?.email ?? null,
+    actorRole: actor?.role ?? null,
+  });
 }
 
 // ─── Bulk Lead Operations ───

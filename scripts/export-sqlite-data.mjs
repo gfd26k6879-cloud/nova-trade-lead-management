@@ -8,6 +8,7 @@ import {
   DATA_EXPORT_SANITIZED_COLUMNS,
   DATA_EXPORT_SCHEMA_VERSION,
   TABLE_CONTRACTS,
+  TENANT_INTEGRITY_CONTRACT_VERSION,
   parseCliArgs,
   quoteIdent,
   sanitizeRawGoogleReviewJson,
@@ -30,6 +31,10 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir }) {
   const manifest = {
     format: DATA_EXPORT_FORMAT,
     schemaVersion: DATA_EXPORT_SCHEMA_VERSION,
+    integrityContract: {
+      version: TENANT_INTEGRITY_CONTRACT_VERSION,
+      rules: ["foundation-parent-closure", "composite-tenant-relationships", "legacy-scope-mappings", "compatibility-receipt-bindings", "immutable-state-facts"],
+    },
     exportedAt: new Date().toISOString(),
     source: { kind: "sqlite", file: path.basename(dbPath) },
     tableOrder: TABLE_CONTRACTS.map(({ name }) => name),
@@ -49,6 +54,9 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir }) {
     for (const contract of TABLE_CONTRACTS) {
       const schema = db.prepare(`PRAGMA table_info(${quoteIdent(contract.name)})`).all();
       if (schema.length === 0) {
+        if (contract.dynamicSource) {
+          throw new Error(`${contract.name}: T-028 SQLite preparation is required; run prepareSqliteCompatibilityBackfill before exporting`);
+        }
         throw new Error(`${contract.name}: expected application table is missing from SQLite`);
       }
 
@@ -68,6 +76,10 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir }) {
         }
       }
       const columns = sourceColumns.filter((column) => !excluded.has(column));
+      const rawCredentialColumns = columns.filter((column) => /(?:^|_)(?:password|secret|credential|access_token|refresh_token|api_key)(?:_|$)/i.test(column));
+      if (rawCredentialColumns.length > 0) {
+        throw new Error(`${contract.name}: raw credential columns require an explicit exclusion: ${rawCredentialColumns.join(", ")}`);
+      }
       const sourceRows = db.prepare(
         `SELECT ${columns.map(quoteIdent).join(", ")} FROM ${quoteIdent(contract.name)}`,
       ).all();

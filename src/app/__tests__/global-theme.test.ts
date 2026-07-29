@@ -16,7 +16,7 @@ describe("global theme tokens", () => {
   it("bootstraps the theme on the root document before render", () => {
     const layout = readFileSync(join(process.cwd(), "src/app/layout.tsx"), "utf8");
 
-    expect(layout).toContain('window.localStorage.getItem("nosite-theme")');
+    expect(layout).toContain('window.localStorage.getItem("nova-trade-theme")');
     expect(layout).toContain("prefers-color-scheme: dark");
     expect(layout).toContain("document.documentElement.dataset.theme = theme");
     expect(layout).toContain('classList.toggle("dark", theme === "dark")');
@@ -29,7 +29,7 @@ describe("global theme tokens", () => {
     const themeToggle = readFileSync(join(process.cwd(), "src/components/theme-toggle.tsx"), "utf8");
 
     expect(navHeader).toContain("ThemeToggle");
-    expect(themeToggle).toContain('const STORAGE_KEY = "nosite-theme"');
+    expect(themeToggle).toContain('const STORAGE_KEY = "nova-trade-theme"');
     expect(themeToggle).toContain("document.documentElement.dataset.theme = theme");
     expect(themeToggle).toContain('classList.toggle("dark", theme === "dark")');
     expect(themeToggle).toContain("window.localStorage.setItem(STORAGE_KEY, theme)");

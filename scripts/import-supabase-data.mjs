@@ -6,32 +6,40 @@ import postgres from "postgres";
 import {
   TABLE_CONTRACTS,
   TABLE_NAMES,
+  RESTORE_TRIGGER_PLAN,
+  authReferenceColumns,
+  historicalRowsRequireRestore,
   parseCliArgs,
   quoteIdent,
+  targetColumn,
+  targetColumns,
+  validateTenantIntegrity,
   validateDataExportDirectory,
 } from "./data-transfer-contract.mjs";
 
-const AUTH_REFERENCE_COLUMNS = new Map([
-  ["app_users", ["user_id", "created_by", "team_lead_user_id"]],
-  ["leads", ["assigned_to_user_id"]],
-  ["lead_notes", ["author_user_id"]],
-  ["outreach_events", ["actor_user_id"]],
-  ["admin_requests", ["created_by_user_id", "assigned_admin_user_id"]],
-  ["ai_lead_verifications", ["requested_by_user_id"]],
-  ["ai_usage_events", ["actor_user_id"]],
-  ["lead_ai_artifacts", ["requested_by_user_id"]],
-  ["ai_feedback_events", ["actor_user_id"]],
-  ["audit_logs", ["actor_user_id"]],
-]);
+const PRESERVED_REFERENCE_TABLES = new Set(["location_markets", "location_cells"]);
+const PUBLIC_SCHEMA = "public";
 
-export async function importSupabaseData({ dir: inputDir, databaseUrl }) {
+function publicIdent(name) {
+  return `${quoteIdent(PUBLIC_SCHEMA)}.${quoteIdent(name)}`;
+}
+
+export async function importSupabaseData({ dir: inputDir, databaseUrl, restoreHistorical = false }) {
   const validated = validateDataExportDirectory(inputDir);
+  const historicalTables = historicalRowsRequireRestore(validated);
+  if (historicalTables.length > 0 && !restoreHistorical) {
+    throw new Error(`Historical/stateful rows require --restore-historical: ${historicalTables.join(", ")}`);
+  }
   if (!databaseUrl?.trim()) {
     throw new Error("DATABASE_URL is required. Use the Supabase transaction pooler connection string.");
   }
 
+  const database = new URL(databaseUrl);
+  const localRehearsal = ["localhost", "127.0.0.1", "::1"].includes(database.hostname)
+    && database.pathname === "/t029_tenant_foundation_rehearsal";
+
   const sql = postgres(databaseUrl, {
-    ssl: "require",
+    ssl: localRehearsal ? false : "require",
     prepare: false,
     max: 1,
     idle_timeout: 20,
@@ -43,14 +51,44 @@ export async function importSupabaseData({ dir: inputDir, databaseUrl }) {
     validateTargetSchema(targetSchema, validated);
     await validateAuthReferences(sql, validated);
 
-    await sql.begin(async (transaction) => {
-      for (const contract of TABLE_CONTRACTS) {
-        const table = validated.tables.get(contract.name);
-        if (!table) throw new Error(`Validated export is missing ${contract.name}`);
-        if (table.rows.length === 0) continue;
-        await importTable(transaction, contract, table.columns, table.rows);
+    try {
+      await sql.begin(async (transaction) => {
+        const disabledTriggers = [];
+        const nonemptyTables = validated.manifest.tableOrder.filter((table) => validated.tables.get(table)?.rows.length > 0);
+        await assertRestorePrivileges(transaction, nonemptyTables, historicalTables);
+        if (historicalTables.length > 0) {
+          await disableRestoreTriggers(transaction, historicalTables, disabledTriggers);
+        }
+        for (const contract of TABLE_CONTRACTS) {
+          const table = validated.tables.get(contract.name);
+          if (!table) throw new Error(`Validated export is missing ${contract.name}`);
+          if (table.rows.length === 0) continue;
+          await importTable(transaction, contract, table.columns, table.rows, targetSchema);
+        }
+        await verifyImportedRows(transaction, validated, targetSchema);
+        const targetTables = await loadTargetRows(transaction, validated, targetSchema);
+        validateTenantIntegrity(targetTables);
+        // Flush deferred anchor-FK events while every constraint trigger is still
+        // enabled. PostgreSQL rejects ALTER TABLE ENABLE TRIGGER when this
+        // transaction has pending trigger events.
+        await transaction.unsafe("SET CONSTRAINTS ALL IMMEDIATE");
+        await enableRestoreTriggers(transaction, disabledTriggers);
+        if (historicalTables.length > 0) await assertRestoreTriggersEnabled(transaction);
+        // Identity restart is deliberately the last mutation before commit.
+        // ALTER SEQUENCE is transactional here, so any later commit failure
+        // rolls it back with the imported rows and trigger state.
+        await advanceIdentitySequences(transaction, validated);
+      });
+    } catch (error) {
+      // PostgreSQL rollback restores trigger state. ALTER TABLE cannot safely run in an aborted transaction.
+      try {
+        await assertRestoreTriggersEnabled(sql);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "restore transaction failed and trigger cleanup verification also failed", { cause: error });
       }
-    });
+      throw error;
+    }
+    await assertRestoreTriggersEnabled(sql);
 
     return validated.manifest;
   } finally {
@@ -71,28 +109,36 @@ export function validateTargetSchema(targetSchema, validated) {
       throw new Error(`${contract.name}: target primary key does not match the recovery contract`);
     }
     for (const column of [...exported.columns, ...contract.excludedColumns]) {
-      if (!target.columns.has(column)) {
-        throw new Error(`${contract.name}: target column ${column} is missing; reconcile and apply migrations before importing`);
+      const targetName = targetColumn(contract, column);
+      if (!target.columns.has(targetName)) {
+        throw new Error(`${contract.name}: target column ${targetName} is missing; reconcile and apply migrations before importing`);
       }
     }
     for (const column of contract.jsonbColumns) {
-      if (target.columns.get(column) !== "jsonb") {
+      const targetName = targetColumn(contract, column);
+      if (targetDataType(target.columns.get(targetName)) !== "jsonb") {
         throw new Error(`${contract.name}.${column}: expected target type jsonb`);
       }
     }
   }
 }
 
-export function normalizeValue(contract, column, value) {
+export function normalizeValue(contract, column, value, targetType) {
   if (!contract.jsonbColumns.includes(column) || value === null || value === undefined) {
+    if (targetDataType(targetType) === "boolean") {
+      if (value === true || value === 1) return true;
+      if (value === false || value === 0) return false;
+      throw new Error(`${contract.name}.${column}: boolean source value must be SQLite 0/1 or boolean`);
+    }
+    if (targetDataType(targetType)?.match(/timestamp|date|time/)) return normalizeTimestamp(value);
     return value;
   }
-  if (typeof value !== "string") return JSON.stringify(value);
+  if (typeof value !== "string") return value;
 
   const trimmed = value.trim();
   if (!trimmed) return null;
   try {
-    return JSON.stringify(JSON.parse(trimmed));
+    return JSON.parse(trimmed);
   } catch {
     throw new Error(`${contract.name}.${column}: source value is not valid JSON`);
   }
@@ -101,7 +147,7 @@ export function normalizeValue(contract, column, value) {
 async function loadTargetSchema(sql) {
   const tablePlaceholders = TABLE_NAMES.map((_, index) => `$${index + 1}`).join(", ");
   const columnRows = await sql.unsafe(
-    `SELECT table_name, column_name, data_type, ordinal_position
+    `SELECT table_name, column_name, data_type, udt_name, ordinal_position
        FROM information_schema.columns
       WHERE table_schema = 'public'
         AND table_name IN (${tablePlaceholders})
@@ -125,7 +171,7 @@ async function loadTargetSchema(sql) {
   const result = new Map();
   for (const row of columnRows) {
     const table = result.get(row.table_name) ?? { columns: new Map(), primaryKey: [] };
-    table.columns.set(String(row.column_name), String(row.data_type));
+    table.columns.set(String(row.column_name), { dataType: String(row.data_type), udtName: String(row.udt_name) });
     result.set(String(row.table_name), table);
   }
   for (const row of primaryKeyRows) {
@@ -135,9 +181,9 @@ async function loadTargetSchema(sql) {
   return result;
 }
 
-async function validateAuthReferences(sql, validated) {
+export async function validateAuthReferences(sql, validated) {
   const referencedIds = new Set();
-  for (const [tableName, columns] of AUTH_REFERENCE_COLUMNS) {
+  for (const [tableName, columns] of authReferenceColumns()) {
     const table = validated.tables.get(tableName);
     if (!table) continue;
     for (const row of table.rows) {
@@ -156,15 +202,17 @@ async function validateAuthReferences(sql, validated) {
     ids,
   );
   const present = new Set(rows.map(({ id }) => String(id)));
-  const missing = ids.filter((id) => !present.has(id));
+    const missing = ids.filter((id) => !present.has(id));
   if (missing.length > 0) {
-    const preview = missing.slice(0, 5).join(", ");
-    const suffix = missing.length > 5 ? ` and ${missing.length - 5} more` : "";
-    throw new Error(`Supabase Auth must be restored first; ${missing.length} referenced user ID(s) are missing (${preview}${suffix})`);
+    throw new Error(`Supabase Auth must be restored first; ${missing.length} referenced user ID(s) are missing`);
   }
 }
 
-async function importTable(sql, contract, columns, rows) {
+function targetDataType(value) {
+  return typeof value === "string" ? value : value?.dataType;
+}
+
+async function importTable(sql, contract, columns, rows, targetSchema) {
   const batchSize = 200;
   for (let offset = 0; offset < rows.length; offset += batchSize) {
     const batch = rows.slice(offset, offset + batchSize);
@@ -177,25 +225,214 @@ async function importTable(sql, contract, columns, rows) {
       for (const column of columns) {
         const isJsonb = contract.jsonbColumns.includes(column);
         placeholders.push(`$${valueIndex++}${isJsonb ? "::jsonb" : ""}`);
-        values.push(normalizeValue(contract, column, row[column]));
+        const target = targetSchema.get(contract.name);
+        values.push(normalizeValue(contract, column, row[column], target?.columns.get(targetColumn(contract, column))));
       }
       tuples.push(`(${placeholders.join(", ")})`);
     }
 
-    const updateColumns = columns.filter((column) => !contract.primaryKey.includes(column));
+    const destinationColumns = targetColumns(contract, columns);
+    const destinationPrimaryKey = targetColumns(contract, contract.primaryKey);
+    const updateColumns = destinationColumns.filter((column) => !destinationPrimaryKey.includes(column));
     const updateSql = updateColumns.length > 0
       ? `DO UPDATE SET ${updateColumns.map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`).join(", ")}`
       : "DO NOTHING";
     const query = `
-      INSERT INTO ${quoteIdent(contract.name)} (${columns.map(quoteIdent).join(", ")})
+      INSERT INTO ${publicIdent(contract.name)} (${destinationColumns.map(quoteIdent).join(", ")})${contract.name === "tenant_deletion_checkpoint_events" ? " OVERRIDING SYSTEM VALUE" : ""}
       VALUES ${tuples.join(", ")}
-      ON CONFLICT (${contract.primaryKey.map(quoteIdent).join(", ")}) ${updateSql}
+      ON CONFLICT (${destinationPrimaryKey.map(quoteIdent).join(", ")}) ${updateSql}
     `;
     const result = await sql.unsafe(query, values);
     if (Number.isInteger(result.count) && result.count !== batch.length) {
       throw new Error(`${contract.name}: expected ${batch.length} imported rows, received ${result.count}`);
     }
   }
+}
+
+async function advanceIdentitySequences(sql, validated) {
+  const table = validated.tables.get("tenant_deletion_checkpoint_events");
+  if (!table || table.rows.length === 0) return;
+  const maxId = Math.max(...table.rows.map((row) => Number(row.id)));
+  if (!Number.isSafeInteger(maxId) || maxId < 1) throw new Error("tenant_deletion_checkpoint_events: restored identity values are invalid");
+  await sql.unsafe(`ALTER SEQUENCE ${publicIdent("tenant_deletion_checkpoint_events_id_seq")} RESTART WITH ${maxId + 1}`);
+  const sequence = await sql.unsafe(`SELECT last_value, is_called FROM ${publicIdent("tenant_deletion_checkpoint_events_id_seq")}`);
+  if (sequence.length !== 1 || Number(sequence[0].last_value) !== maxId + 1 || sequence[0].is_called !== false) {
+    throw new Error("tenant_deletion_checkpoint_events: identity sequence restart was not transactional and exact");
+  }
+}
+
+async function assertRestorePrivileges(sql, nonemptyTables, historicalTables) {
+  if (nonemptyTables.length === 0) return;
+  const placeholders = nonemptyTables.map((_, index) => `$${index + 1}`).join(", ");
+  const rows = await sql.unsafe(
+    `SELECT current_user, r.rolsuper, r.rolbypassrls, c.relname, c.relforcerowsecurity, owner.rolname AS owner_name
+       FROM pg_catalog.pg_class c
+       JOIN pg_catalog.pg_roles owner ON owner.oid = c.relowner
+       CROSS JOIN pg_catalog.pg_roles r
+      WHERE c.relnamespace = 'public'::regnamespace
+        AND c.relname IN (${placeholders})
+        AND r.rolname = current_user`,
+    nonemptyTables,
+  );
+  if (rows.length !== nonemptyTables.length) throw new Error("restore preflight: nonempty target table security metadata is incomplete");
+  const current = rows[0];
+  if (rows.some((row) => row.relforcerowsecurity) && !current.rolsuper && !current.rolbypassrls) {
+    throw new Error("restore preflight: nonempty FORCE ROW LEVEL SECURITY table requires an effective BYPASSRLS or superuser transaction");
+  }
+  if (historicalTables.length > 0 && !current.rolsuper && rows.filter((row) => historicalTables.includes(row.relname)).some((row) => row.owner_name !== row.current_user)) {
+    throw new Error("restore mode: historical restore requires a privileged table-owner transaction");
+  }
+  if (historicalTables.includes("compatibility_backfill_receipts") && !current.rolsuper && !current.rolbypassrls) {
+    throw new Error("restore mode: compatibility receipt restore requires an effective BYPASSRLS or superuser transaction");
+  }
+}
+
+async function disableRestoreTriggers(sql, tableNames, disabled) {
+  for (const tableName of tableNames) {
+    const triggerNames = RESTORE_TRIGGER_PLAN[tableName] ?? [];
+    const placeholders = triggerNames.map((_, index) => `$${index + 1}`).join(", ");
+    const rows = await sql.unsafe(
+      `SELECT t.tgname, t.tgenabled
+         FROM pg_catalog.pg_trigger t
+         JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+        WHERE c.relnamespace = 'public'::regnamespace
+          AND c.relname = $${triggerNames.length + 1}
+          AND NOT t.tgisinternal
+          AND t.tgname IN (${placeholders})`,
+      [...triggerNames, tableName],
+    );
+    if (rows.length !== triggerNames.length) throw new Error(`restore mode ${tableName}: exact guard trigger contract is incomplete`);
+    for (const triggerName of triggerNames) {
+      const row = rows.find((candidate) => candidate.tgname === triggerName);
+      if (!row || row.tgenabled !== "O") throw new Error(`restore mode ${tableName}: guard trigger is not enabled before restore`);
+      await sql.unsafe(`ALTER TABLE ${publicIdent(tableName)} DISABLE TRIGGER ${quoteIdent(triggerName)}`);
+      disabled.push({ tableName, triggerName });
+    }
+  }
+}
+
+async function enableRestoreTriggers(sql, disabledTriggers) {
+  for (const { tableName, triggerName } of [...disabledTriggers].reverse()) {
+    await sql.unsafe(`ALTER TABLE ${publicIdent(tableName)} ENABLE TRIGGER ${quoteIdent(triggerName)}`);
+  }
+}
+
+async function assertRestoreTriggersEnabled(sql) {
+  const entries = Object.entries(RESTORE_TRIGGER_PLAN);
+  for (const [tableName, triggerNames] of entries) {
+    const placeholders = triggerNames.map((_, index) => `$${index + 1}`).join(", ");
+    const rows = await sql.unsafe(
+      `SELECT t.tgname, t.tgenabled
+         FROM pg_catalog.pg_trigger t
+         JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+        WHERE c.relnamespace = 'public'::regnamespace AND c.relname = $${triggerNames.length + 1}
+          AND t.tgname IN (${placeholders})`,
+      [...triggerNames, tableName],
+    );
+    if (rows.length !== triggerNames.length || rows.some((row) => row.tgenabled !== "O")) {
+      throw new Error(`restore trigger cleanup failed for ${tableName}`);
+    }
+  }
+}
+
+async function verifyImportedRows(sql, validated, targetSchema) {
+  for (const contract of TABLE_CONTRACTS) {
+    const table = validated.tables.get(contract.name);
+    const countRows = await sql.unsafe(`SELECT count(*)::integer AS count FROM ${publicIdent(contract.name)}`);
+    const targetCount = Number(countRows[0].count);
+    if (PRESERVED_REFERENCE_TABLES.has(contract.name)
+      ? targetCount < table.rows.length
+      : targetCount !== table.rows.length) {
+      throw new Error(`${contract.name}: post-import row count does not match archive count`);
+    }
+    if (table.rows.length === 0) continue;
+    const targetRows = await loadTargetRows(sql, validated, targetSchema, contract.name);
+    const columnTypes = targetRows.get(contract.name).columnTypes;
+    const archiveDigest = digestRows(contract, table.rows, columnTypes);
+    const targetRowsForComparison = PRESERVED_REFERENCE_TABLES.has(contract.name)
+      ? targetRows.get(contract.name).rows.filter((row) => table.rows.some((archiveRow) => contract.primaryKey.every((column) => String(row[column]) === String(archiveRow[column]))))
+      : targetRows.get(contract.name).rows;
+    const targetDigest = digestRows(contract, targetRowsForComparison, columnTypes);
+    if (archiveDigest !== targetDigest) {
+      const mismatchColumn = findSingleRowDigestMismatch(contract, table.rows, targetRowsForComparison, targetRows.get(contract.name).columnTypes);
+      throw new Error(`${contract.name}: post-import checksum mismatch${mismatchColumn ? ` (${mismatchColumn})` : ""}`);
+    }
+  }
+}
+
+function findSingleRowDigestMismatch(contract, archiveRows, targetRows, columnTypes) {
+  if (archiveRows.length !== 1 || targetRows.length !== 1) return null;
+  for (const column of Object.keys(archiveRows[0]).sort()) {
+    const archiveDigest = digestRows(contract, [{ [column]: archiveRows[0][column] }]);
+    const targetDigest = digestRows(contract, [{ [column]: targetRows[0][column] }], new Map([[column, columnTypes.get(column)]]));
+    if (archiveDigest !== targetDigest) return column;
+  }
+  return null;
+}
+
+async function loadTargetRows(sql, validated, targetSchema, onlyTable) {
+  const result = new Map();
+  for (const contract of TABLE_CONTRACTS) {
+    if (onlyTable && contract.name !== onlyTable) continue;
+    const table = validated.tables.get(contract.name);
+    const columns = table.columns;
+    const selected = columns.map((column) => `${quoteIdent(targetColumn(contract, column))} AS ${quoteIdent(column)}`).join(", ");
+    const order = contract.primaryKey.map((column) => quoteIdent(targetColumn(contract, column))).join(", ");
+    const rows = await sql.unsafe(`SELECT ${selected} FROM ${publicIdent(contract.name)} ORDER BY ${order}`);
+    const columnTypes = new Map(columns.map((column) => [column, targetSchema.get(contract.name).columns.get(targetColumn(contract, column))]));
+    result.set(contract.name, { rows, columnTypes });
+  }
+  return result;
+}
+
+export function digestRows(contract, rows, columnTypes = new Map()) {
+  const normalized = rows.map((row) => {
+    const normalizedRow = {};
+    for (const column of Object.keys(row).sort()) {
+      const type = columnTypes.get(column);
+      normalizedRow[column] = normalizeComparedValue(contract, column, row[column], type);
+    }
+    return stableCanonicalize(normalizedRow);
+  }).sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+  return normalized.join("|");
+}
+
+function normalizeComparedValue(contract, column, value, targetType) {
+  if (value === null || value === undefined) return null;
+  if (contract.jsonbColumns.includes(column)) {
+    if (typeof value === "string") {
+      try { return stableCanonicalize(JSON.parse(value)); } catch { return value; }
+    }
+    return stableCanonicalize(value);
+  }
+  const dataType = targetDataType(targetType);
+  if (dataType === "boolean") return value === true || value === 1 ? 1 : 0;
+  if (dataType && /timestamp|date|time/.test(dataType)) {
+    const date = parseTimestamp(value);
+    if (Number.isFinite(date.getTime())) return date.toISOString();
+  }
+  if (dataType && /integer|numeric|double precision|real|bigint/.test(dataType) && typeof value === "string" && /^-?\d+(?:\.\d+)?$/.test(value)) return Number(value);
+  return value;
+}
+
+function normalizeTimestamp(value) {
+  const date = parseTimestamp(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : value;
+}
+
+function parseTimestamp(value) {
+  if (value instanceof Date) return value;
+  const text = String(value);
+  const utcText = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(text)
+    ? text
+    : `${text.replace(" ", "T")}Z`;
+  return new Date(utcText);
+}
+
+function stableCanonicalize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableCanonicalize).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, entry]) => `${JSON.stringify(key)}:${stableCanonicalize(entry)}`).join(",")}}`;
+  return JSON.stringify(value);
 }
 
 function sameStringArray(left, right) {
@@ -213,7 +450,7 @@ async function main() {
   }
 
   console.log(`Importing export from ${validated.manifest.exportedAt}`);
-  const manifest = await importSupabaseData({ dir, databaseUrl: process.env.DATABASE_URL });
+  const manifest = await importSupabaseData({ dir, databaseUrl: process.env.DATABASE_URL, restoreHistorical: args.get("restore-historical") === true });
   for (const table of manifest.tableOrder) {
     console.log(`${table}: ${manifest.tables[table].rows} rows`);
   }

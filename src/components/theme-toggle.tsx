@@ -4,8 +4,8 @@ import { useSyncExternalStore } from "react";
 
 type ThemeName = "light" | "dark";
 
-const STORAGE_KEY = "nosite-theme";
-const THEME_CHANGE_EVENT = "nosite-theme-change";
+const STORAGE_KEY = "nova-trade-theme";
+const THEME_CHANGE_EVENT = "nova-trade-theme-change";
 
 export function ThemeToggle({ className = "" }: { className?: string }) {
   const theme = useSyncExternalStore(subscribeTheme, readCurrentTheme, getServerThemeSnapshot);

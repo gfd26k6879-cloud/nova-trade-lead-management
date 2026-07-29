@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   TABLE_CONTRACTS,
   TABLE_NAMES,
+  DYNAMIC_SOURCE_TABLES,
   parseCliArgs,
   quoteIdent,
   validateDataExportDirectory,
@@ -39,7 +40,7 @@ if (typeof dirArg === "string") {
 function verifyTrackedTableCoverage() {
   const sqliteSchema = fs.readFileSync(path.join(repoRoot, "src/lib/db/schema.ts"), "utf8");
   const sqliteTables = extractCreatedTables(sqliteSchema);
-  assertExactTableSet(sqliteTables, "src/lib/db/schema.ts");
+  assertExactTableSet(sqliteTables, "src/lib/db/schema.ts", new Set(DYNAMIC_SOURCE_TABLES));
 
   const migrationsDir = path.join(repoRoot, "supabase/migrations");
   const migrationSql = fs.readdirSync(migrationsDir)
@@ -57,7 +58,10 @@ function verifySqliteDatabase(inputPath) {
   try {
     for (const contract of TABLE_CONTRACTS) {
       const schema = db.prepare(`PRAGMA table_info(${quoteIdent(contract.name)})`).all();
-      if (schema.length === 0) throw new Error(`${contract.name}: missing from SQLite database`);
+      if (schema.length === 0) {
+        if (contract.dynamicSource) throw new Error(`${contract.name}: T-028 SQLite preparation is required; receipt table is not prepared`);
+        throw new Error(`${contract.name}: missing from SQLite database`);
+      }
       const primaryKey = schema
         .filter(({ pk }) => Number(pk) > 0)
         .sort((left, right) => Number(left.pk) - Number(right.pk))
@@ -77,13 +81,13 @@ function verifySqliteDatabase(inputPath) {
 
 function extractCreatedTables(sql) {
   const tables = new Set();
-  const pattern = /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(?:public\.)?([a-z_][a-z0-9_]*)/gi;
+  const pattern = /CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?:public\.)?([a-z_][a-z0-9_]*)/gi;
   for (const match of sql.matchAll(pattern)) tables.add(match[1]);
   return tables;
 }
 
-function assertExactTableSet(actual, label) {
-  const missing = TABLE_NAMES.filter((table) => !actual.has(table));
+function assertExactTableSet(actual, label, allowedMissing = new Set()) {
+  const missing = TABLE_NAMES.filter((table) => !actual.has(table) && !allowedMissing.has(table));
   const unexpected = [...actual].filter((table) => !TABLE_NAMES.includes(table));
   if (missing.length > 0 || unexpected.length > 0) {
     throw new Error(`${label}: recovery table set mismatch; missing [${missing.join(", ")}], unexpected [${unexpected.join(", ")}]`);
