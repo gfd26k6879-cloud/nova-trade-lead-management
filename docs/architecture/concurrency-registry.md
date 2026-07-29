@@ -2,7 +2,7 @@
 
 Date: 2026-07-29
 
-Status: **Stage 3 pilot accepted; Stage 4 active; G-003 final repair and Q-002 repair active.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. On 2026-07-29 the user explicitly authorized `gpt-5.6-terra` with medium reasoning as the runtime-contingent implementation fallback when Spark/Luna are unavailable. G-003 candidate `717fa10fd2773f522a3a3fa4dc6815fa2fa0fc15` passed Quality but remains unaccepted after domain review found one exact replay spoof and one hostile-search-path classification gap. Q-002 candidate `a4953680cbd2781890b5fe022c2a71edc472f963` remains unaccepted after its independent reviewer found missing database and negative-path evidence. Sol remains the sole final integration/acceptance authority, and the observed four-total-agent ceiling remains binding.
+Status: **Stage 3 pilot accepted; Stage 4 active; G-003 accepted; G-004 ready; Q-002 domain-conductor repair authorized.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. G-003 passed fresh domain/security and Quality review, merged at `ba1b646974e1bf91234f37567ca8b4a9a6342171`, and passed the final merged integration gate. Q-002 candidate `6dbc7879e9669e5b934211ff1d3c73ffc302bd31` closed selector and authorization gaps but failed real-schema cleanup/harness review; after two failed worker repair generations the binding plan permits the Quality domain conductor to implement the bounded repair. Sol remains the sole final integration/acceptance authority, and the observed four-total-agent ceiling remains binding.
 
 ## Final integration authority
 
@@ -20,9 +20,9 @@ The concurrent execution plan requires the final integration conductor to run `g
 |---|---|---|---|---|
 | Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Read-only G-006/G-008 recovery-boundary packet completed cleanly at `9afedb757bb3a3bb70b58d956cc3b0ece25d70ea`; G-006 waits for accepted G-003–G-005 keys, and G-008 then waits for G-006/G-007; no lock or change. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 repair candidate `7b305e69efc05d9ec0d032aeca3e8a763a28e4d2` is frozen for fresh domain and Quality review. Exact index/function privilege identity and search-path-independent FK classification are implemented; all three locks remain held pending both receipts. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-003 source `7b305e69efc05d9ec0d032aeca3e8a763a28e4d2` is accepted in integration merge `ba1b646974e1bf91234f37567ca8b4a9a6342171`; final release gate passed. Branch refresh to the accepted control baseline precedes serialized G-004 dispatch. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
-| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Q-002 candidate `a4953680cbd2781890b5fe022c2a71edc472f963` is unaccepted. Repair round 1 stopped cleanly with zero changes; a second Terra-medium worker is implementing the same six-file contract with an explicit test-local PostgreSQL adapter direction. |
+| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Q-002 candidate `6dbc7879e9669e5b934211ff1d3c73ffc302bd31` is unaccepted: committed cleanup bypassed real immutable support-history guards and the PG gate used a reduced replacement schema. Domain-conductor repair round 3 is authorized inside the same six files. |
 
 The non-OneDrive root is selected to avoid sync churn and lock contention. The authoritative repository remains in its existing OneDrive path.
 
@@ -31,15 +31,15 @@ The non-OneDrive root is selected to avoid sync churn and lock contention. The a
 | Lock | Holder | State | Release evidence |
 |---|---|---|---|
 | `integration-ledger` | Final integration conductor | Held | Released only when final integration authority ends. |
-| `migration-sequence` | `G-003` Terra-medium worker | Held at baseline `bf373a0822215d12e2a1f651142a4773b3f5a28b` | Release only on accepted receipt or zero-change dispatch failure. Stop on any sequencing or scope decision outside the accepted G-003 contract. |
-| `migration-harness` | `G-003` Terra-medium worker | Held for the G-002 pre-cutoff and 43/41/2 reconciliation only | Release only after focused harness evidence and independent review, or zero-change dispatch failure. |
+| `migration-sequence` | Released after accepted `G-003` merge `ba1b646` | Available for serialized `G-004` acquisition | Reacquire only with the exact accepted G-004 packet; stop on sequencing or scope expansion. |
+| `migration-harness` | Released after accepted `G-003` merge `ba1b646` | Available for serialized `G-004` if its packet requires it | Preserve the accepted 43/41/2 chain and T029 boundary. |
 | `sqlite-schema` | None | Available | Accepted task receipt. |
 | `auth-session` | None | Available | Accepted task receipt. |
 | `permissions` | None | Available | Accepted task receipt. |
 | `database-adapter` | None | Available | Accepted task receipt. |
 | `package-config` | None | Available | Accepted task receipt. |
 | `protected-shell` | None | Available | Accepted task receipt. |
-| `recovery-contract` | `G-003` Terra-medium worker | Held only for the 43/41/2 inventory/log reconciliation; recovery semantics remain frozen | Release only after focused inventory/log evidence and independent review, or zero-change dispatch failure. |
+| `recovery-contract` | Released after accepted `G-003` merge `ba1b646` | Recovery semantics remain frozen | Reacquire only for a preaccepted bounded reconciliation; T029 remains blocked at its accepted key boundary. |
 | `full-release-gate` | None | Available; merged G-002 gate passed | `npm run release:check` exited 0 at merge `cb329b4a6adaaa0c940f16b433198297e2712c7f`. |
 
 No domain lane may claim a lock implicitly. Every acquisition must name the task, exhaustive protected paths, integration baseline, expected release evidence, and stop conditions in the ledger.
@@ -52,11 +52,11 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 |---|---|---|
 | `G-001` | Accepted | Ownership contract repaired, independently verified, and reaccepted through append-only event 205. |
 | `G-002` | Accepted | Independently reviewed repair merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`; final local release gate passed. |
-| `G-003` | Repair candidate `7b305e6` in fresh dual review; locks retained | Exact index/function privilege identity and catalog FK classification plus matching spoof/hostile-path tests are committed inside the accepted five-file aggregate scope. Both immutable successor reviews must pass before merge. |
-| `G-004` | Blocked on `G-003` | AI tenant derivation requires tenant-scoped leads; platform `worker_runs` stays global. |
+| `G-003` | Accepted | Source `7b305e6` passed dual review and merged at `ba1b646`; final merged release gate passed with 2,202 tests, build, and Playwright 5/5. |
+| `G-004` | Ready for serialized dispatch | G-003 dependency is accepted. AI tenant derivation packet must preserve platform-global `worker_runs` and reacquire only its exact locks. |
 | `G-005` | Blocked on `G-004` | Serialized final Phase 2 structural migration producer. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
-| `Q-002` | Terra-medium repair round 2 in progress | Repair round 1 stopped with zero changes at `a4953680`. A fresh bounded worker has explicit authority to build the missing adapter/harness inside the same six files; no locks and no G-003 overlap. |
+| `Q-002` | Domain-conductor repair round 3 authorized | Two failed worker repair generations activate the plan's bounded domain-conductor takeover. Preserve correct selector/auth work; close only real-schema cleanup, actual migration/adapter evidence, exact PG16, and receipt truthfulness. |
 | `UI-000` | Ready; capacity/approval-queued | Seven-artifact design packet is ready. Terra-medium is authorized, but implementation remains capacity-queued and explicit product/design/accessibility approval is still required before task acceptance. |
 
 ## Capacity receipt
@@ -163,6 +163,34 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
   contract, but explicitly permits a test-local postgres.js adapter and minimal
   disposable schema inside the authorized PostgreSQL test file. It still cannot
   change product schema or accept its own result.
+- Repair round 2 candidate `6dbc7879e9669e5b934211ff1d3c73ffc302bd31`
+  closed the look-alike selector, authorization-negative, and shared E2E
+  findings. It remains unaccepted because cleanup deletes immutable support
+  history only after the SQLite test drops real guards, while the PostgreSQL
+  test substitutes a reduced eight-table schema and replacement repository.
+- Two failed worker repair generations activate the binding plan's bounded
+  domain-conductor takeover. Repair round 3 must keep the correct work, never
+  drop or bypass immutable history guards, separate rollback-only history from
+  committed cleanup-safe fixtures if necessary, validate against the tracked
+  PostgreSQL schema/migration and adapter contract, require PostgreSQL 16
+  exactly, and return to a separate independent reviewer.
+
+## G-003 acceptance receipt
+
+- Accepted source: `7b305e69efc05d9ec0d032aeca3e8a763a28e4d2`;
+  integration merge: `ba1b646974e1bf91234f37567ca8b4a9a6342171`.
+- Independent domain/security review closed every index, ACL, FK, replay,
+  search-path, lock, actor, JSON, and recovery-boundary finding with no P1/P2
+  remainder. Independent Quality reproduced PostgreSQL 16 G-003 2/2, G-002
+  2/2 at 43/41/2, and only the accepted T029 recovery-key stop.
+- The merged integration `npm run release:check` passed TypeScript, ESLint, the
+  37-table recovery verifier, 125 Vitest files with 2,202 passing tests, the
+  Next.js 16.2.6 production build, and 5/5 public read-only Playwright checks.
+- `migration-sequence`, `migration-harness`, and `recovery-contract` are
+  released. G-004 is ready only after the Discovery branch is refreshed to the
+  accepted control baseline and its exact serialized packet is reacquired.
+- All activity was local and disposable. Nothing was pushed, deployed, sent to
+  a remote database, or exercised against customer data or paid providers.
 
 ## Pilot acceptance receipt
 
