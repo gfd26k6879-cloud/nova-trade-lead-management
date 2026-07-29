@@ -2,7 +2,7 @@
 
 Date: 2026-07-29
 
-Status: **Stage 1 implementation baseline committed.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. No domain branch, worktree, or conductor lane is active until the control commit containing `concurrency_baseline_accepted` is created.
+Status: **Stage 1 repository topology active.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` records baseline acceptance and is the exact start revision for all five domain branches and worktrees. Runtime conductor lanes are still capacity- and tool-gated.
 
 ## Final integration authority
 
@@ -18,11 +18,11 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Ready for creation from the control commit containing baseline acceptance. |
-| Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Ready for creation from the control commit containing baseline acceptance. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Ready for creation from the control commit containing baseline acceptance. |
-| Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | Ready for creation from the control commit containing baseline acceptance. |
-| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Ready for creation from the control commit containing baseline acceptance. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
+| Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
+| Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
+| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 
 The non-OneDrive root is selected to avoid sync churn and lock contention. The authoritative repository remains in its existing OneDrive path.
 
@@ -47,8 +47,8 @@ No domain lane may claim a lock implicitly. Every acquisition must name the task
 
 | Task | Queue | Reason |
 |---|---|---|
-| `G-001` | Final review | Ownership contract repaired; requires append-only reacceptance after repair verification. |
-| `G-002` | Blocked until `G-001` reacceptance, then ready | Sole first migration producer under the corrected contract. |
+| `G-001` | Accepted | Ownership contract repaired, independently verified, and reaccepted through append-only event 205. |
+| `G-002` | Ready | Sole first migration producer under the corrected contract; requires the `migration-sequence` lock at dispatch. |
 | `G-003` | Blocked on `G-002` | Migration chain is explicit. |
 | `G-004` | Blocked on `G-003` | AI tenant derivation requires tenant-scoped leads; platform `worker_runs` stays global. |
 | `G-005` | Blocked on `G-004` | Serialized final Phase 2 structural migration producer. |

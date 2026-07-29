@@ -8,7 +8,9 @@ Source branch and revision: `main` at `8225df619a96a088f18ff7f574a36b157d55dd2f`
 
 Implementation baseline commit: `3b1135c1c781a5a806a6053a01987a91b63e0bf3` on `codex/nova-multitenant-integration`.
 
-Decision: **PASS.** The reviewed transition manifest is now immutable in the local implementation baseline commit. The separate `concurrency_baseline_accepted` ledger event that binds this commit must itself be committed before any domain worktree is created.
+Control baseline commit: `1c9647d76c35dbac991b07eb962de5a54135bce2` on `codex/nova-multitenant-integration`.
+
+Decision: **PASS.** The reviewed transition manifest is immutable in the implementation baseline, and the append-only `concurrency_baseline_accepted` event is immutable in the control baseline. All five domain branches and worktrees were created clean from the control baseline.
 
 ## Preserved checkpoint
 
@@ -77,11 +79,11 @@ The skipped Vitest file is the opt-in disposable-Postgres RLS suite. This turn d
 
 ## Baseline commit gate
 
-Before committing, the final conductor must:
+Completed by the final conductor:
 
 1. Verify the exact staged names contain only the owned transition manifest and these control artifacts.
 2. Run `git diff --cached --check` and inspect the staged diff/stat.
 3. Confirm the ledger is valid JSONL and contains the current authority and G-001 reconciliation events.
 4. Confirm no active Nova Trade validation process remains.
 5. Create the local integration branch and the single reviewed transition-baseline commit.
-6. Append the resulting commit identity through a later `concurrency_baseline_accepted` event, commit that control event, and create all domain branches/worktrees from the resulting integration commit.
+6. Appended the resulting commit identity through `concurrency_baseline_accepted`, committed that control event, and created all five domain branches/worktrees from `1c9647d76c35dbac991b07eb962de5a54135bce2`.
