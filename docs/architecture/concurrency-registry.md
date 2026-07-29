@@ -56,7 +56,7 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
 | `G-004` | Blocked on `G-003` | AI tenant derivation requires tenant-scoped leads; platform `worker_runs` stays global. |
 | `G-005` | Blocked on `G-004` | Serialized final Phase 2 structural migration producer. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
-| `Q-002` | Ready; capacity-queued | Dependencies and six-file packet are ready. Terra-medium is authorized, but G-003's serialized migration producer and independent review take priority within the four-agent ceiling. |
+| `Q-002` | Terra-medium implementation in progress | Disjoint six-file fixture packet dispatched at clean baseline `d4f4166c5eb4024b39d1a268c0657113d93b6e25` while two independent G-003 reviews occupy the migration lane; no locks or overlapping paths. |
 | `UI-000` | Ready; capacity/approval-queued | Seven-artifact design packet is ready. Terra-medium is authorized, but implementation remains capacity-queued and explicit product/design/accessibility approval is still required before task acceptance. |
 
 ## Capacity receipt
