@@ -70,7 +70,7 @@ async function resetDatabase(client: PgClient, includeG002 = false): Promise<{ d
     .sort();
   let applied = 0;
   for (const file of migrations) {
-    if (SKIPPED_PORTABLE_MIGRATIONS.has(file) || (!includeG002 && file === G002_MIGRATION)) continue;
+    if (SKIPPED_PORTABLE_MIGRATIONS.has(file) || (!includeG002 && file >= G002_MIGRATION)) continue;
     await client.unsafe(readFileSync(join("supabase", "migrations", file), "utf8"));
     applied += 1;
     if (file === "202605110001_full_schema.sql") {
@@ -222,7 +222,7 @@ describe("G-002 location and crawl tenant scope", () => {
         expect(version[0].server_version_num.startsWith("16")).toBe(true);
 
         const fullChain = await resetDatabase(client, true);
-        expect(fullChain).toEqual({ discovered: 42, applied: 40, skipped: 2 });
+        expect(fullChain).toEqual({ discovered: 43, applied: 41, skipped: 2 });
         await client.unsafe(`
           INSERT INTO public.tenants (id, slug, name, status)
             VALUES ('${TENANT_A}', 'replay-tenant', 'Replay Tenant', 'active');
