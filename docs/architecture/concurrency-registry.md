@@ -224,3 +224,22 @@ The opt-in T-029 recovery rehearsal stops after the 42-discovered/40-portable mi
   `migration-harness`, and `recovery-contract` locks remain held; G-005 stays
   preflight-ready but cannot execute until both reviews pass, G-004A is merged
   and accepted, and the locks are released.
+
+## G-004A structural milestone acceptance receipt
+
+- Accepted source: `c0892a06325b33657e5b73813635fec6a4081012`;
+  integration merge: `8383fa70a2bac8de71413ae135918bbaedf907b4`.
+- Independent domain/security review reproduced the full PostgreSQL 16 G-004A,
+  G-003, G-002, and accepted T029 boundary. Independent Quality reproduced the
+  exact G-004A matrix and both final spoof repairs; its interrupted downstream
+  wrapper is recorded separately and is not represented as evidence.
+- The merged `npm run release:check` passed TypeScript, ESLint, the 37-table
+  recovery verifier, Vitest, the Next.js 16.2.6 production build, and public
+  read-only Playwright smoke in 186.3 seconds.
+- G-004A is accepted only as the structural AI tenant-scope milestone. Parent
+  G-004 remains open: G-004B still owns immutable worker correlation and the
+  `worker_runs.result_json` content boundary required before G-013/G-014.
+- `migration-sequence`, `migration-harness`, and `recovery-contract` are
+  released for serialized G-005 execution after its domain branch refresh.
+  All validation was local; nothing was pushed, deployed, or applied to a
+  remote database or production system.
