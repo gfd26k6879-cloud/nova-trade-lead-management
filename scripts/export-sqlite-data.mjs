@@ -7,21 +7,24 @@ import {
   DATA_EXPORT_FORMAT,
   DATA_EXPORT_SANITIZED_COLUMNS,
   DATA_EXPORT_SCHEMA_VERSION,
-  TABLE_CONTRACTS,
+  LEGACY_DATA_EXPORT_SCHEMA_VERSION,
   TENANT_INTEGRITY_CONTRACT_VERSION,
+  encodeRowIdentity,
   parseCliArgs,
   quoteIdent,
   sanitizeRawGoogleReviewJson,
   sha256,
+  tableContractsForSchemaVersion,
 } from "./data-transfer-contract.mjs";
 
-export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir }) {
+export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir, schemaVersion = DATA_EXPORT_SCHEMA_VERSION }) {
   if (process.env.MIGRATE_ENCRYPTED_KEYS === "1") {
     throw new Error("MIGRATE_ENCRYPTED_KEYS is no longer supported. API and browser keys are always excluded from data exports.");
   }
 
   const dbPath = path.resolve(inputDbPath);
   const outDir = path.resolve(inputOutDir);
+  const contracts = tableContractsForSchemaVersion(schemaVersion);
   if (!fs.existsSync(dbPath)) {
     throw new Error(`SQLite DB not found: ${dbPath}`);
   }
@@ -30,16 +33,16 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir }) {
   const db = new Database(dbPath, { readonly: true, fileMustExist: true });
   const manifest = {
     format: DATA_EXPORT_FORMAT,
-    schemaVersion: DATA_EXPORT_SCHEMA_VERSION,
+    schemaVersion,
     integrityContract: {
       version: TENANT_INTEGRITY_CONTRACT_VERSION,
       rules: ["foundation-parent-closure", "composite-tenant-relationships", "legacy-scope-mappings", "compatibility-receipt-bindings", "immutable-state-facts"],
     },
     exportedAt: new Date().toISOString(),
     source: { kind: "sqlite", file: path.basename(dbPath) },
-    tableOrder: TABLE_CONTRACTS.map(({ name }) => name),
+    tableOrder: contracts.map(({ name }) => name),
     excludedColumns: Object.fromEntries(
-      TABLE_CONTRACTS
+      contracts
         .filter(({ excludedColumns }) => excludedColumns.length > 0)
         .map(({ name, excludedColumns }) => [name, [...excludedColumns]]),
     ),
@@ -51,7 +54,7 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir }) {
 
   try {
     db.exec("BEGIN");
-    for (const contract of TABLE_CONTRACTS) {
+    for (const contract of contracts) {
       const schema = db.prepare(`PRAGMA table_info(${quoteIdent(contract.name)})`).all();
       if (schema.length === 0) {
         if (contract.dynamicSource) {
@@ -64,9 +67,11 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir }) {
         .filter(({ pk }) => Number(pk) > 0)
         .sort((left, right) => Number(left.pk) - Number(right.pk))
         .map(({ name }) => String(name));
-      if (!sameStringArray(actualPrimaryKey, contract.primaryKey)) {
+      const legacySchema3 = schemaVersion === LEGACY_DATA_EXPORT_SCHEMA_VERSION;
+      if (legacySchema3 && !sameStringArray(actualPrimaryKey, contract.physicalPrimaryKey)) {
         throw new Error(`${contract.name}: SQLite primary key does not match the recovery contract`);
       }
+      const uniqueKeys = legacySchema3 ? [] : loadSqliteUniqueKeys(db, contract.name);
 
       const excluded = new Set(contract.excludedColumns);
       const sourceColumns = schema.map(({ name }) => String(name));
@@ -76,6 +81,16 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir }) {
         }
       }
       const columns = sourceColumns.filter((column) => !excluded.has(column));
+      for (const identityColumn of contract.rowIdentity) {
+        if (!columns.includes(identityColumn)) {
+          throw new Error(`${contract.name}: schema-${schemaVersion} row identity column ${identityColumn} is missing from SQLite`);
+        }
+      }
+      if (!legacySchema3
+        && !sameStringArray(actualPrimaryKey, contract.rowIdentity)
+        && !uniqueKeys.some((key) => sameStringArray(key.columns, contract.rowIdentity))) {
+        throw new Error(`${contract.name}: schema-${schemaVersion} row identity requires an exact SQLite primary or unique key`);
+      }
       const rawCredentialColumns = columns.filter((column) => /(?:^|_)(?:password|secret|credential|access_token|refresh_token|api_key)(?:_|$)/i.test(column));
       if (rawCredentialColumns.length > 0) {
         throw new Error(`${contract.name}: raw credential columns require an explicit exclusion: ${rawCredentialColumns.join(", ")}`);
@@ -84,16 +99,32 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir }) {
         `SELECT ${columns.map(quoteIdent).join(", ")} FROM ${quoteIdent(contract.name)}`,
       ).all();
       const rows = sourceRows.map((row, rowIndex) => sanitizeExportRow(contract.name, row, rowIndex));
+      const identities = new Set();
+      for (const [rowIndex, row] of rows.entries()) {
+        const identity = encodeRowIdentity(contract, row, `${contract.name}[${rowIndex}]`);
+        if (identities.has(identity)) throw new Error(`${contract.name}: duplicate row identity at row ${rowIndex}`);
+        identities.add(identity);
+      }
 
       const fileName = `${contract.name}.json`;
       const filePath = path.join(outDir, fileName);
       const payload = `${JSON.stringify(rows, null, 2)}\n`;
       writeAtomic(filePath, payload);
-      manifest.tables[contract.name] = {
+      manifest.tables[contract.name] = legacySchema3 ? {
         file: fileName,
         rows: rows.length,
         columns,
-        primaryKey: [...contract.primaryKey],
+        primaryKey: [...actualPrimaryKey],
+        bytes: Buffer.byteLength(payload),
+        sha256: sha256(payload),
+      } : {
+        file: fileName,
+        rows: rows.length,
+        columns,
+        physicalPrimaryKey: [...actualPrimaryKey],
+        uniqueKeys,
+        rowIdentity: [...contract.rowIdentity],
+        nullableIdentityColumns: [...contract.nullableIdentityColumns],
         bytes: Buffer.byteLength(payload),
         sha256: sha256(payload),
       };
@@ -108,6 +139,20 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir }) {
   } finally {
     db.close();
   }
+}
+
+function loadSqliteUniqueKeys(db, tableName) {
+  return db.prepare(`PRAGMA index_list(${quoteIdent(tableName)})`).all()
+    .filter((index) => Number(index.unique) === 1 && Number(index.partial) === 0 && String(index.origin) !== "pk")
+    .map((index) => {
+      const columns = db.prepare(`PRAGMA index_xinfo(${quoteIdent(String(index.name))})`).all()
+        .filter((column) => Number(column.key) === 1)
+        .sort((left, right) => Number(left.seqno) - Number(right.seqno));
+      if (columns.length === 0 || columns.some((column) => Number(column.cid) < 0 || typeof column.name !== "string")) return null;
+      return { name: String(index.name), columns: columns.map((column) => String(column.name)), nullsNotDistinct: false };
+    })
+    .filter(Boolean)
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
 }
 
 function sanitizeExportRow(tableName, row, rowIndex) {
@@ -132,11 +177,14 @@ function main() {
   const args = parseCliArgs(process.argv.slice(2));
   const dbPath = String(args.get("db") ?? "nosite-leads.db");
   const outDir = String(args.get("out") ?? "data-export");
-  const manifest = exportSqliteData({ dbPath, outDir });
+  const rawSchemaVersion = args.get("schema-version") ?? DATA_EXPORT_SCHEMA_VERSION;
+  const schemaVersion = Number(rawSchemaVersion);
+  if (!Number.isInteger(schemaVersion)) throw new Error("--schema-version must be 3 or 4");
+  const manifest = exportSqliteData({ dbPath, outDir, schemaVersion });
 
-  console.log(`Exported ${TABLE_CONTRACTS.length} tables to ${path.resolve(outDir)}`);
+  console.log(`Exported schema ${schemaVersion} (${manifest.tableOrder.length} tables) to ${path.resolve(outDir)}`);
   console.log("Encrypted API/browser settings columns were excluded.");
-  for (const { name } of TABLE_CONTRACTS) {
+  for (const name of manifest.tableOrder) {
     console.log(`${name}: ${manifest.tables[name].rows}`);
   }
 }

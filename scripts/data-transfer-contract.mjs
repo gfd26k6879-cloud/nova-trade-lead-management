@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 export const DATA_EXPORT_FORMAT = "nosite-data-export";
-export const DATA_EXPORT_SCHEMA_VERSION = 3;
+export const LEGACY_DATA_EXPORT_SCHEMA_VERSION = 3;
+export const DATA_EXPORT_SCHEMA_VERSION = 4;
 export const TENANT_INTEGRITY_CONTRACT_VERSION = 1;
 export const DYNAMIC_SOURCE_TABLES = Object.freeze(["compatibility_backfill_receipts"]);
 export const SQLITE_COMPATIBILITY_SOURCE_ENGINE = "sqlite";
@@ -15,7 +16,7 @@ export const DATA_EXPORT_SANITIZED_COLUMNS = Object.freeze({
   place_observations: Object.freeze(["raw_json:strip_google_reviews"]),
 });
 
-const definitions = [
+const schema3Definitions = [
   { name: "zip_codes", primaryKey: ["zip"] },
   { name: "location_markets", primaryKey: ["id"] },
   { name: "location_cells", primaryKey: ["id"] },
@@ -66,17 +67,46 @@ const definitions = [
   { name: "audit_logs", primaryKey: ["id"], jsonbColumns: ["metadata"] },
 ];
 
-export const TABLE_CONTRACTS = Object.freeze(definitions.map((definition) => Object.freeze({
-  name: definition.name,
-  primaryKey: Object.freeze([...(definition.primaryKey ?? [])]),
-  jsonbColumns: Object.freeze([...(definition.jsonbColumns ?? [])]),
-  excludedColumns: Object.freeze([...(definition.excludedColumns ?? [])]),
-  dynamicSource: definition.dynamicSource === true,
-  targetColumnMap: Object.freeze({ ...(definition.targetColumnMap ?? {}) }),
-})));
+const schema4RowIdentities = new Map([
+  ["user_market_access", ["tenant_id", "workspace_id", "user_id", "market_id"]],
+  ["place_cache", ["tenant_id", "source_card_id", "place_id"]],
+  ["places_master", ["tenant_id", "source_card_id", "place_id"]],
+  ["place_observations", ["tenant_id", "source_card_id", "id"]],
+  ["api_usage_events", ["tenant_id", "source_card_id", "id"]],
+]);
+
+function buildContracts(schemaVersion) {
+  return Object.freeze(schema3Definitions.map((definition) => Object.freeze({
+    name: definition.name,
+    rowIdentity: Object.freeze([
+      ...(schemaVersion === DATA_EXPORT_SCHEMA_VERSION
+        ? schema4RowIdentities.get(definition.name) ?? definition.primaryKey
+        : definition.primaryKey),
+    ]),
+    nullableIdentityColumns: Object.freeze(
+      schemaVersion === DATA_EXPORT_SCHEMA_VERSION && definition.name === "user_market_access"
+        ? ["workspace_id"]
+        : [],
+    ),
+    physicalPrimaryKey: Object.freeze([...(definition.primaryKey ?? [])]),
+    jsonbColumns: Object.freeze([...(definition.jsonbColumns ?? [])]),
+    excludedColumns: Object.freeze([...(definition.excludedColumns ?? [])]),
+    dynamicSource: definition.dynamicSource === true,
+    targetColumnMap: Object.freeze({ ...(definition.targetColumnMap ?? {}) }),
+  })));
+}
+
+export const LEGACY_SCHEMA_3_TABLE_CONTRACTS = buildContracts(LEGACY_DATA_EXPORT_SCHEMA_VERSION);
+export const TABLE_CONTRACTS = buildContracts(DATA_EXPORT_SCHEMA_VERSION);
 
 export const TABLE_NAMES = Object.freeze(TABLE_CONTRACTS.map(({ name }) => name));
 export const TABLE_CONTRACT_BY_NAME = new Map(TABLE_CONTRACTS.map((contract) => [contract.name, contract]));
+
+export function tableContractsForSchemaVersion(schemaVersion) {
+  if (schemaVersion === LEGACY_DATA_EXPORT_SCHEMA_VERSION) return LEGACY_SCHEMA_3_TABLE_CONTRACTS;
+  if (schemaVersion === DATA_EXPORT_SCHEMA_VERSION) return TABLE_CONTRACTS;
+  throw new Error(`Unsupported export schema version: ${String(schemaVersion ?? "missing")}`);
+}
 
 const LEGACY_SCOPED_TABLES = new Set([
   "settings", "user_market_access", "leads", "place_cache", "places_master", "place_observations",
@@ -481,9 +511,7 @@ export function validateDataExportDirectory(inputDir) {
   if (manifest.format !== DATA_EXPORT_FORMAT) {
     throw new Error(`Unsupported export format: ${String(manifest.format ?? "missing")}`);
   }
-  if (manifest.schemaVersion !== DATA_EXPORT_SCHEMA_VERSION) {
-    throw new Error(`Unsupported export schema version: ${String(manifest.schemaVersion ?? "missing")}`);
-  }
+  const contracts = tableContractsForSchemaVersion(manifest.schemaVersion);
   assertRecord(manifest.integrityContract, "Export manifest integrityContract must be an object");
   assertExactKeys(manifest.integrityContract, ["version", "rules"], "Export manifest integrityContract");
   if (manifest.integrityContract.version !== TENANT_INTEGRITY_CONTRACT_VERSION) throw new Error("Unsupported tenant integrity contract version");
@@ -510,7 +538,7 @@ export function validateDataExportDirectory(inputDir) {
   assertExactKeys(manifest.tables, TABLE_NAMES, "Export manifest tables");
 
   const expectedExclusions = Object.fromEntries(
-    TABLE_CONTRACTS
+    contracts
       .filter(({ excludedColumns }) => excludedColumns.length > 0)
       .map(({ name, excludedColumns }) => [name, [...excludedColumns]]),
   );
@@ -526,14 +554,14 @@ export function validateDataExportDirectory(inputDir) {
   }
 
   const tables = new Map();
-  for (const contract of TABLE_CONTRACTS) {
+  for (const contract of contracts) {
     const tableInfo = manifest.tables[contract.name];
     assertRecord(tableInfo, `Manifest entry for ${contract.name} must be an object`);
-    assertExactKeys(
-      tableInfo,
-      ["file", "rows", "columns", "primaryKey", "bytes", "sha256"],
-      `Manifest entry for ${contract.name}`,
-    );
+    const legacySchema3 = manifest.schemaVersion === LEGACY_DATA_EXPORT_SCHEMA_VERSION;
+    assertExactKeys(tableInfo, legacySchema3
+      ? ["file", "rows", "columns", "primaryKey", "bytes", "sha256"]
+      : ["file", "rows", "columns", "physicalPrimaryKey", "uniqueKeys", "rowIdentity", "nullableIdentityColumns", "bytes", "sha256"],
+    `Manifest entry for ${contract.name}`);
 
     const expectedFile = `${contract.name}.json`;
     if (tableInfo.file !== expectedFile) {
@@ -541,10 +569,27 @@ export function validateDataExportDirectory(inputDir) {
     }
     assertStringArray(tableInfo.columns, `${contract.name}: columns`);
     assertUnique(tableInfo.columns, `${contract.name}: columns`);
-    assertStringArrayEqual(tableInfo.primaryKey, contract.primaryKey, `${contract.name}: primaryKey`);
-    for (const column of contract.primaryKey) {
+    const physicalPrimaryKey = legacySchema3 ? tableInfo.primaryKey : tableInfo.physicalPrimaryKey;
+    assertStringArray(physicalPrimaryKey, `${contract.name}: physical primary key`);
+    assertUnique(physicalPrimaryKey, `${contract.name}: physical primary key`);
+    if (legacySchema3) {
+      assertStringArrayEqual(physicalPrimaryKey, contract.physicalPrimaryKey, `${contract.name}: primaryKey`);
+    } else {
+      assertStringArrayEqual(tableInfo.rowIdentity, contract.rowIdentity, `${contract.name}: rowIdentity`);
+      assertStringArrayEqual(tableInfo.nullableIdentityColumns, contract.nullableIdentityColumns, `${contract.name}: nullableIdentityColumns`);
+      assertUniqueKeyMetadata(tableInfo.uniqueKeys, tableInfo.columns, contract.name);
+      if (!keyMetadataSupportsIdentity(physicalPrimaryKey, tableInfo.uniqueKeys, contract)) {
+        throw new Error(`${contract.name}: rowIdentity is not backed by an exact physical primary or unique key`);
+      }
+    }
+    for (const column of physicalPrimaryKey) {
       if (!tableInfo.columns.includes(column)) {
-        throw new Error(`${contract.name}: primary key column ${column} is absent from the export`);
+        throw new Error(`${contract.name}: physical primary key column ${column} is absent from the export`);
+      }
+    }
+    for (const column of contract.rowIdentity) {
+      if (!tableInfo.columns.includes(column)) {
+        throw new Error(`${contract.name}: row identity column ${column} is absent from the export`);
       }
     }
     for (const column of contract.excludedColumns) {
@@ -584,7 +629,8 @@ export function validateDataExportDirectory(inputDir) {
       throw new Error(`${contract.name}: row count mismatch (manifest ${tableInfo.rows}, file ${rows.length})`);
     }
 
-    const seenPrimaryKeys = new Set();
+    const seenPhysicalPrimaryKeys = new Set();
+    const seenRowIdentities = new Set();
     for (const [rowIndex, row] of rows.entries()) {
       assertRecord(row, `${contract.name}[${rowIndex}] must be a JSON object`);
       assertExactKeys(row, tableInfo.columns, `${contract.name}[${rowIndex}]`);
@@ -604,18 +650,24 @@ export function validateDataExportDirectory(inputDir) {
           throw new Error(`${contract.name}[${rowIndex}].raw_json: raw Google reviews must be redacted`);
         }
       }
-      const primaryKey = contract.primaryKey.map((column) => {
+      const encodedIdentity = encodeRowIdentity(contract, row, `${contract.name}[${rowIndex}]`);
+      if (seenRowIdentities.has(encodedIdentity)) {
+        throw new Error(`${contract.name}: duplicate row identity at row ${rowIndex}`);
+      }
+      seenRowIdentities.add(encodedIdentity);
+
+      const primaryKey = physicalPrimaryKey.map((column) => {
         const value = row[column];
         if (value === null || value === undefined || value === "") {
-          throw new Error(`${contract.name}[${rowIndex}]: primary key column ${column} is empty`);
+          throw new Error(`${contract.name}[${rowIndex}]: physical primary key column ${column} is empty`);
         }
         return value;
       });
       const encodedPrimaryKey = JSON.stringify(primaryKey);
-      if (seenPrimaryKeys.has(encodedPrimaryKey)) {
-        throw new Error(`${contract.name}: duplicate primary key at row ${rowIndex}`);
+      if (seenPhysicalPrimaryKeys.has(encodedPrimaryKey)) {
+        throw new Error(`${contract.name}: duplicate physical primary key at row ${rowIndex}`);
       }
-      seenPrimaryKeys.add(encodedPrimaryKey);
+      seenPhysicalPrimaryKeys.add(encodedPrimaryKey);
     }
 
     tables.set(contract.name, {
@@ -628,7 +680,62 @@ export function validateDataExportDirectory(inputDir) {
 
   validateTenantIntegrity(tables);
 
-  return { dir, manifest, tables };
+  return { dir, manifest, contracts, tables };
+}
+
+export function encodeRowIdentity(contract, row, label = contract.name) {
+  const nullableColumns = new Set(contract.nullableIdentityColumns);
+  return JSON.stringify(contract.rowIdentity.map((column) => {
+    if (!Object.hasOwn(row, column) || row[column] === undefined || row[column] === "") {
+      throw new Error(`${label}: row identity column ${column} is missing or empty`);
+    }
+    if (row[column] === null) {
+      if (!nullableColumns.has(column)) {
+        throw new Error(`${label}: row identity column ${column} is null`);
+      }
+      return ["null"];
+    }
+    return [typeof row[column], stableCanonicalize(row[column])];
+  }));
+}
+
+function stableCanonicalize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableCanonicalize).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableCanonicalize(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function assertUniqueKeyMetadata(value, columns, tableName) {
+  if (!Array.isArray(value)) throw new Error(`${tableName}: uniqueKeys must be an array`);
+  const seen = new Set();
+  for (const [index, key] of value.entries()) {
+    assertRecord(key, `${tableName}: uniqueKeys[${index}] must be an object`);
+    assertExactKeys(key, ["name", "columns", "nullsNotDistinct"], `${tableName}: uniqueKeys[${index}]`);
+    if (typeof key.name !== "string" || key.name.length === 0) {
+      throw new Error(`${tableName}: uniqueKeys[${index}].name must be a non-empty string`);
+    }
+    assertStringArray(key.columns, `${tableName}: uniqueKeys[${index}].columns`);
+    assertUnique(key.columns, `${tableName}: uniqueKeys[${index}].columns`);
+    if (key.columns.some((column) => !columns.includes(column))) {
+      throw new Error(`${tableName}: uniqueKeys[${index}] references a missing column`);
+    }
+    if (typeof key.nullsNotDistinct !== "boolean") {
+      throw new Error(`${tableName}: uniqueKeys[${index}].nullsNotDistinct must be boolean`);
+    }
+    const encoded = JSON.stringify(key.name);
+    if (seen.has(encoded)) throw new Error(`${tableName}: uniqueKeys contains duplicate metadata`);
+    seen.add(encoded);
+  }
+}
+
+function keyMetadataSupportsIdentity(physicalPrimaryKey, uniqueKeys, contract) {
+  if (contract.nullableIdentityColumns.length === 0 && sameStringArray(physicalPrimaryKey, contract.rowIdentity)) return true;
+  return uniqueKeys.some((key) => sameStringArray(key.columns, contract.rowIdentity));
 }
 
 function parseJsonFile(filePath, label) {
@@ -653,9 +760,13 @@ function assertStringArray(value, label) {
 
 function assertStringArrayEqual(actual, expected, label) {
   assertStringArray(actual, label);
-  if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
+  if (!sameStringArray(actual, expected)) {
     throw new Error(`${label} does not match the recovery contract`);
   }
+}
+
+function sameStringArray(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function assertExactKeys(value, expectedKeys, label) {
