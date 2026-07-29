@@ -43,6 +43,8 @@ The non-OneDrive root is selected to avoid sync churn and lock contention. The a
 
 No domain lane may claim a lock implicitly. Every acquisition must name the task, exhaustive protected paths, integration baseline, expected release evidence, and stop conditions in the ledger.
 
+The opt-in T-029 recovery rehearsal is currently expected to stop after the 42-discovered/40-portable migration replay because its legacy `user_market_access` key contract predates G-002 tenant-inclusive identity. This is recorded as blocked—not passing—and is deferred to the planned G-006 SQLite parity and G-008 reconciliation boundary after G-002 through G-005 are structurally accepted. G-002 may not weaken tenant identity or expand the recovery design around only the first of those four migrations.
+
 ## Ready-queue checkpoint
 
 | Task | Queue | Reason |
