@@ -18,11 +18,11 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-002 bounded conductor takeover active through `/root/baseline_ownership` at `1c9647d76c35dbac991b07eb962de5a54135bce2`; exact three-file packet; `migration-sequence` held. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-002 commit `8c48db28653e2b287de6a94cc45d6c5439371d0e` is in bounded repair through `/root/baseline_ownership`; `migration-sequence` and a one-file `recovery-contract` expansion are held. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Pilot read-only G-003/G-004/G-005 preflight active through `/root/discovery_conductor` at `1c9647d76c35dbac991b07eb962de5a54135bce2`; no lock held and no implementation authorized. |
+| Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | Pilot read-only G-003/G-004/G-005 preflight completed through `/root/discovery_conductor`; exact next migration packets prepared and correctly dependency-blocked; no lock or change. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
-| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Independent G-002 preflight completed through `/root/baseline_validation`; clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; reserved for post-implementation verification. |
+| Quality, Compatibility, and Release | `Nova Trade - Quality Compatibility Release` | `codex/nova-quality-release` | `C:\Users\Masih\Documents\NovaTradeWorktrees\quality-release` | Independent review of G-002 commit `8c48db28653e2b287de6a94cc45d6c5439371d0e` completed through `/root/baseline_validation`; four actionable findings; rework required. |
 
 The non-OneDrive root is selected to avoid sync churn and lock contention. The authoritative repository remains in its existing OneDrive path.
 
@@ -38,7 +38,7 @@ The non-OneDrive root is selected to avoid sync churn and lock contention. The a
 | `database-adapter` | None | Available | Accepted task receipt. |
 | `package-config` | None | Available | Accepted task receipt. |
 | `protected-shell` | None | Available | Accepted task receipt. |
-| `recovery-contract` | None | Available | Accepted task receipt. |
+| `recovery-contract` | `G-002` repair delta | Held only for `src/lib/__tests__/data-transfer-contract.test.ts` migration-count reconciliation and opt-in T-029 rerun | Repaired full-chain and recovery rehearsal receipt plus final review. |
 | `full-release-gate` | None | Available; latest local gate passed | Gate process exited and receipt recorded. |
 
 No domain lane may claim a lock implicitly. Every acquisition must name the task, exhaustive protected paths, integration baseline, expected release evidence, and stop conditions in the ledger.
@@ -63,4 +63,4 @@ No domain lane may claim a lock implicitly. Every acquisition must name the task
 - Three separate `gpt-5.6-sol` extra-high read-only reviewers were used during Stage 1 for G-001, file ownership, and validation/resource audits. Their output was evidence only and final disposition remained with the root task.
 - The pilot preflight used two active domain conductors (Platform and Quality), no implementation worker, and no migration producer. The first Platform conductor was interrupted after two bounded no-output requests; a replacement takeover receipt and independent Quality receipt both approved the same three-file G-002 packet.
 - G-002 now runs as the previously authorized bounded parent/domain-conductor takeover after the two approved worker-model failures recorded in ledger events 198 through 200. No unapproved worker model substitution is claimed.
-- Two domain conductors are currently active: Platform is the sole migration producer for G-002 and Discovery is read-only against G-003 through G-005. Quality's preflight is complete and remains independent for the next verification turn.
+- The Discovery preflight is complete. Platform remains the sole active producer while it repairs the independently rejected G-002 batch; Quality is inactive until the repair commit is ready for a fresh review.
