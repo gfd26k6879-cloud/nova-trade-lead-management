@@ -36,22 +36,27 @@ hardening and direct function access is revoked.
 - The focused packet passed 13 tests with the three opt-in PostgreSQL cases
   skipped: `npx vitest run src/lib/__tests__/lead-crm-tenant-scope-postgres.test.ts src/lib/__tests__/location-crawl-tenant-scope-postgres.test.ts src/lib/__tests__/data-transfer-contract.test.ts`.
 - G-003 passed 2/2 on disposable PostgreSQL 16 container
-  `g003-root-repair2-final-019fae23`, database
-  `g003_lead_crm_rehearsal_root_repair2_final`, using the locally pinned image
+  `g003-root-repair3-019fae23`, database
+  `g003_lead_crm_rehearsal_root_repair3_final`, using the locally pinned image
   `postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777`.
   The database case exercised the 43 discovered / 41 applied / two named-skip
   fresh chain; a real nonempty T-028 to G-002 to G-003 upgrade; absent,
   mismatched, and duplicate receipts; receipt scope drift; transactional
-  rollback for all four child orphan paths; hostile search-path objects;
-  five near-complete replay-catalog spoofs; a post-install no-receipt replay;
+  rollback for all four child orphan paths; hostile search-path objects and a
+  true post-install no-receipt replay under that path; seven near-complete
+  replay-catalog spoofs, including wrong index keys and an ACL-bearing function
+  overload while the exact target is ungranted; a post-install replay;
   an actual two-client writer race held behind all five table locks;
   tenant/workspace/slug/actor isolation; suspended historical attribution; and
   actual `SET ROLE anon` projection, base-table denial, scalar/object/JSON-null/
   mixed/valid renderer config, revoked, and missing-slug behavior. Replay
-  checks include validated FKs, exact index predicates, trigger shape, function
-  metadata/owner, and CRLF/LF-normalized function-body fingerprints.
-- The G-002 regression passed 2/2 in independent disposable container
-  `g002-root-after-g003-r2-019fae23` against the updated 43/41/2 chain.
+  checks include search-path-independent FK column/action metadata, exact index
+  relation/keys/access method/definition/predicate, exact-OID effective runtime
+  privileges, direct PUBLIC ACL denial, trigger shape, function metadata/owner,
+  and CRLF/LF-normalized function-body fingerprints.
+- The G-002 regression passed 2/2 in database
+  `g002_location_crawl_rehearsal_after_g003_repair3` in the same disposable
+  PostgreSQL 16 container against the updated 43/41/2 chain.
 - T-029 replayed the same 43/41/2 chain in disposable container
   `t029-root-after-g003-r3-019fae23`, then stopped at the accepted recovery boundary:
   `user_market_access: target primary key does not match the recovery contract`.

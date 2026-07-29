@@ -100,10 +100,19 @@ BEGIN
             ('public.admin_requests'::regclass,'admin_requests_tenant_lead_fkey'),
             ('public.demos'::regclass,'demos_tenant_lead_fkey')
           )
-            AND c.contype = 'f'
-            AND c.convalidated
-            AND c.confrelid = 'public.leads'::regclass
-            AND pg_catalog.pg_get_constraintdef(c.oid) LIKE 'FOREIGN KEY (tenant_id, lead_id) REFERENCES leads(tenant_id, id) ON UPDATE RESTRICT ON DELETE CASCADE%')
+             AND c.contype = 'f'
+             AND c.convalidated
+             AND c.confrelid = 'public.leads'::regclass
+             AND c.conkey = ARRAY[
+               (SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid=c.conrelid AND a.attname='tenant_id'),
+               (SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid=c.conrelid AND a.attname='lead_id')
+             ]::smallint[]
+             AND c.confkey = ARRAY[
+               (SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid='public.leads'::regclass AND a.attname='tenant_id'),
+               (SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid='public.leads'::regclass AND a.attname='id')
+             ]::smallint[]
+             AND c.confmatchtype='s' AND c.confupdtype='r' AND c.confdeltype='c'
+             AND NOT c.condeferrable AND NOT c.condeferred)
     AND (SELECT count(*) = 4
            FROM pg_catalog.pg_constraint c
           WHERE (c.conrelid,c.conname) IN (
@@ -112,10 +121,19 @@ BEGIN
             ('public.admin_requests'::regclass,'admin_requests_tenant_workspace_fkey'),
             ('public.demos'::regclass,'demos_tenant_workspace_fkey')
           )
-            AND c.contype = 'f'
-            AND c.convalidated
-            AND c.confrelid = 'public.workspaces'::regclass
-            AND pg_catalog.pg_get_constraintdef(c.oid) LIKE 'FOREIGN KEY (tenant_id, workspace_id) REFERENCES workspaces(tenant_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT%')
+             AND c.contype = 'f'
+             AND c.convalidated
+             AND c.confrelid = 'public.workspaces'::regclass
+             AND c.conkey = ARRAY[
+               (SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid=c.conrelid AND a.attname='tenant_id'),
+               (SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid=c.conrelid AND a.attname='workspace_id')
+             ]::smallint[]
+             AND c.confkey = ARRAY[
+               (SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid='public.workspaces'::regclass AND a.attname='tenant_id'),
+               (SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid='public.workspaces'::regclass AND a.attname='id')
+             ]::smallint[]
+             AND c.confmatchtype='s' AND c.confupdtype='r' AND c.confdeltype='r'
+             AND NOT c.condeferrable AND NOT c.condeferred)
     AND EXISTS (
       SELECT 1 FROM pg_catalog.pg_constraint c
        WHERE c.conrelid='public.demos'::regclass AND c.contype='u'
@@ -139,8 +157,17 @@ BEGIN
     AND pg_catalog.pg_get_indexdef('public.idx_admin_requests_tenant_lead_created'::regclass) = 'CREATE INDEX idx_admin_requests_tenant_lead_created ON public.admin_requests USING btree (tenant_id, lead_id, created_at DESC)'
     AND pg_catalog.pg_get_indexdef('public.idx_demos_tenant_lead'::regclass) = 'CREATE INDEX idx_demos_tenant_lead ON public.demos USING btree (tenant_id, lead_id)'
     AND (SELECT x.indisunique AND x.indisvalid AND x.indisready
+           AND x.indrelid='public.admin_requests'::regclass
+           AND x.indnkeyatts=3 AND x.indnatts=3
+           AND x.indkey[0]=(SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid='public.admin_requests'::regclass AND a.attname='tenant_id')
+           AND x.indkey[1]=(SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid='public.admin_requests'::regclass AND a.attname='lead_id')
+           AND x.indkey[2]=(SELECT a.attnum FROM pg_catalog.pg_attribute a WHERE a.attrelid='public.admin_requests'::regclass AND a.attname='request_type')
+           AND x.indexprs IS NULL
+           AND i.relam=(SELECT a.oid FROM pg_catalog.pg_am a WHERE a.amname='btree')
            AND pg_catalog.pg_get_expr(x.indpred,x.indrelid) = '(status = ANY (ARRAY[''new''::text, ''seen''::text, ''in_progress''::text, ''waiting_on_researcher''::text]))'
+           AND pg_catalog.pg_get_indexdef(x.indexrelid) = 'CREATE UNIQUE INDEX admin_requests_tenant_lead_open_unique ON public.admin_requests USING btree (tenant_id, lead_id, request_type) WHERE (status = ANY (ARRAY[''new''::text, ''seen''::text, ''in_progress''::text, ''waiting_on_researcher''::text]))'
            FROM pg_catalog.pg_index x
+           JOIN pg_catalog.pg_class i ON i.oid=x.indexrelid
           WHERE x.indexrelid='public.admin_requests_tenant_lead_open_unique'::regclass)
     AND (SELECT count(*) = 5
            FROM pg_catalog.pg_trigger t
@@ -214,22 +241,58 @@ BEGIN
           WHERE c.oid IN ('public.leads'::regclass,'public.lead_notes'::regclass,'public.outreach_events'::regclass,'public.admin_requests'::regclass,'public.demos'::regclass)
             AND c.relrowsecurity)
     AND NOT EXISTS (
-      SELECT 1 FROM information_schema.role_table_grants g
-       WHERE g.table_schema='public'
-         AND g.table_name IN ('leads','lead_notes','outreach_events','admin_requests','demos')
-         AND g.grantee IN ('PUBLIC','anon','authenticated')
-         AND g.privilege_type IN ('SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER')
-    )
-    AND EXISTS (
-      SELECT 1 FROM information_schema.routine_privileges p
-       WHERE p.specific_schema='public' AND p.routine_name='novatrade_published_demo_public'
-         AND p.grantee='anon' AND p.privilege_type='EXECUTE'
+      SELECT 1
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+        CROSS JOIN LATERAL pg_catalog.aclexplode(coalesce(c.relacl,pg_catalog.acldefault('r',c.relowner))) acl
+       WHERE n.nspname='public'
+         AND c.relname IN ('leads','lead_notes','outreach_events','admin_requests','demos')
+         AND acl.grantee=0
+         AND acl.privilege_type IN ('SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER')
     )
     AND NOT EXISTS (
-      SELECT 1 FROM information_schema.routine_privileges p
-       WHERE p.specific_schema='public' AND p.routine_name IN (
-         'novatrade_assert_lead_actor','novatrade_inherit_lead_child_scope','novatrade_lead_scope_guard','novatrade_published_demo_public'
-       ) AND p.grantee IN ('PUBLIC','authenticated') AND p.privilege_type='EXECUTE'
+      SELECT 1
+        FROM pg_catalog.pg_roles r
+        CROSS JOIN pg_catalog.pg_class c
+       WHERE r.rolname IN ('anon','authenticated')
+         AND c.oid IN ('public.leads'::regclass,'public.lead_notes'::regclass,'public.outreach_events'::regclass,'public.admin_requests'::regclass,'public.demos'::regclass)
+         AND pg_catalog.has_table_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+    )
+    AND NOT EXISTS (
+      SELECT 1
+        FROM pg_catalog.pg_roles r
+       WHERE r.rolname='anon'
+         AND NOT pg_catalog.has_function_privilege(r.oid,'public.novatrade_published_demo_public(text)'::regprocedure,'EXECUTE')
+    )
+    AND NOT EXISTS (
+      SELECT 1
+        FROM pg_catalog.pg_roles r
+       WHERE r.rolname='authenticated'
+         AND pg_catalog.has_function_privilege(r.oid,'public.novatrade_published_demo_public(text)'::regprocedure,'EXECUTE')
+    )
+    AND NOT EXISTS (
+      SELECT 1
+        FROM pg_catalog.pg_roles r
+        CROSS JOIN pg_catalog.pg_proc p
+       WHERE r.rolname IN ('anon','authenticated')
+         AND p.oid IN (
+           'public.novatrade_assert_lead_actor(uuid,uuid,text,boolean)'::regprocedure,
+           'public.novatrade_inherit_lead_child_scope()'::regprocedure,
+           'public.novatrade_lead_scope_guard()'::regprocedure
+         )
+         AND pg_catalog.has_function_privilege(r.oid,p.oid,'EXECUTE')
+    )
+    AND NOT EXISTS (
+      SELECT 1
+        FROM pg_catalog.pg_proc p
+        CROSS JOIN LATERAL pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) acl
+       WHERE p.oid IN (
+         'public.novatrade_assert_lead_actor(uuid,uuid,text,boolean)'::regprocedure,
+         'public.novatrade_inherit_lead_child_scope()'::regprocedure,
+         'public.novatrade_lead_scope_guard()'::regprocedure,
+         'public.novatrade_published_demo_public(text)'::regprocedure
+       )
+         AND acl.grantee=0 AND acl.privilege_type='EXECUTE'
     )
   INTO replay_complete;
   END IF;

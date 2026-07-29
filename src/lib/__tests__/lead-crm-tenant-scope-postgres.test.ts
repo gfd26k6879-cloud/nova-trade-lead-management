@@ -400,7 +400,7 @@ describe("G-003 lead CRM tenant scope", () => {
         `);
         await expectMigrationRejected(client, /G003_MATCHING_T028_RECEIPT_REQUIRED/);
 
-        for (const mutation of ["function_body", "function_owner", "trigger_shape", "index_predicate", "unvalidated_fk"] as const) {
+        for (const mutation of ["function_body", "function_owner", "trigger_shape", "index_predicate", "index_definition", "function_acl_overload", "unvalidated_fk"] as const) {
           await resetDatabase(client, true);
           await seedPostInstallGraph(client);
           if (mutation === "function_body") {
@@ -436,6 +436,23 @@ describe("G-003 lead CRM tenant scope", () => {
                 ON public.admin_requests(tenant_id,lead_id,request_type) WHERE status='new';
             `);
           }
+          if (mutation === "index_definition") {
+            await client.unsafe(`
+              DROP INDEX public.admin_requests_tenant_lead_open_unique;
+              CREATE UNIQUE INDEX admin_requests_tenant_lead_open_unique
+                ON public.admin_requests(tenant_id,id)
+                WHERE status = ANY (ARRAY['new','seen','in_progress','waiting_on_researcher']);
+            `);
+          }
+          if (mutation === "function_acl_overload") {
+            await client.unsafe(`
+              REVOKE ALL ON FUNCTION public.novatrade_published_demo_public(text) FROM anon;
+              CREATE FUNCTION public.novatrade_published_demo_public(integer) RETURNS integer
+                LANGUAGE sql IMMUTABLE AS 'SELECT $1';
+              REVOKE ALL ON FUNCTION public.novatrade_published_demo_public(integer) FROM PUBLIC;
+              GRANT EXECUTE ON FUNCTION public.novatrade_published_demo_public(integer) TO anon;
+            `);
+          }
           if (mutation === "unvalidated_fk") {
             await client.unsafe(`
               ALTER TABLE public.lead_notes DROP CONSTRAINT lead_notes_tenant_lead_fkey;
@@ -452,8 +469,16 @@ describe("G-003 lead CRM tenant scope", () => {
         await resetDatabase(client, true);
         await seedPostInstallGraph(client);
         const postInstallReplayBefore = await targetSnapshot(client);
+        await client.unsafe(`
+          CREATE SCHEMA g003_shadow;
+          CREATE TABLE g003_shadow.leads(sentinel text);
+          CREATE TABLE g003_shadow.workspaces(sentinel text);
+          SET search_path=g003_shadow,public;
+        `);
         await client.unsafe(g003Sql);
+        await client.unsafe("RESET search_path");
         expect(await targetSnapshot(client)).toEqual(postInstallReplayBefore);
+        expect((await client.unsafe("SELECT count(*)::integer count FROM public.compatibility_backfill_receipts"))[0].count).toBe(0);
 
         for (const mutation of ["missing", "count", "checksum", "duplicate"] as const) {
           await prepareUpgrade(client);
