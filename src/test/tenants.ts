@@ -163,7 +163,8 @@ const pendingHash = (hex: string): string => hex.repeat(64);
 export const CANONICAL_TENANT_FIXTURE_CATALOG = deepFreeze({
   behavior: {
     repeatSetup: "fail_before_insert_if_any_reserved_fixture_row_exists",
-    cleanup: "rollback_the_coordinator_transaction_including_callback_writes",
+    fullFixtureLifetime: "rollback_only_including_support_grant_history_and_callback_writes",
+    committedCoreCleanup: "delete_only_exact_cleanup_safe_core_ids_without_support_grant_history",
     concurrentSetup: "coordinator_serialization_or_database_unique_constraints_must_choose_one_commit",
   },
   timeBoundaries: FIXTURE_TIME_BOUNDARIES,
@@ -277,7 +278,23 @@ export function createCanonicalTenantFixtureTransactionCoordinator(
   return Object.freeze({ withTransaction: runner });
 }
 
-export async function setupCanonicalTenantFixtures({ transaction }: CanonicalTenantFixtureSetupOptions): Promise<CanonicalTenantFixtureSet> {
+/**
+ * Commits only the cleanup-safe canonical core. Support grant history is
+ * deliberately excluded because the production schemas make its scope rows
+ * immutable and deletion-proof.
+ */
+export async function setupCanonicalTenantCoreFixtures({ transaction }: CanonicalTenantFixtureSetupOptions): Promise<CanonicalTenantFixtureSet> {
+  let fixture!: CanonicalTenantFixtureSet;
+  await transaction.withTransaction(async (scope) => {
+    fixture = await populateCanonicalTenantFixtures(scope, false);
+  });
+  return fixture;
+}
+
+async function populateCanonicalTenantFixtures(
+  scope: CanonicalTenantFixtureTransactionScope,
+  includeSupportHistory: boolean,
+): Promise<CanonicalTenantFixtureSet> {
   const tenants: Awaited<ReturnType<TenantQueryRepository["createTenant"]>>[] = [];
   const workspaces: Awaited<ReturnType<TenantQueryRepository["createWorkspace"]>>[] = [];
   const memberships: Awaited<ReturnType<TenantQueryRepository["createMembership"]>>[] = [];
@@ -285,60 +302,59 @@ export async function setupCanonicalTenantFixtures({ transaction }: CanonicalTen
   const policies: Awaited<ReturnType<TenantQueryRepository["createTenantPolicy"]>>[] = [];
   const supportGrants: SupportAccessGrant[] = [];
 
-  let scopedDb!: DbClient;
-  const populate = async (scope: CanonicalTenantFixtureTransactionScope): Promise<void> => {
-    scopedDb = scope.db;
-    const transactionRepository = scope.repository;
-    for (const tenantKey of ["A", "B"] as const) {
-      tenants.push(await transactionRepository.createTenant({
-        id: TENANT_IDS[tenantKey], slug: `synthetic-tenant-${tenantKey.toLowerCase()}`, name: SHARED_TENANT_LABEL,
-        status: "active", locale: "en-US", timezone: "UTC", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
-      }));
-    }
-
-    for (const tenantKey of ["A", "B"] as const) {
-      for (const [id, slug] of [[WORKSPACE_IDS[tenantKey], "shared-workspace"], [WORKSPACE_IDS[`${tenantKey}_SIBLING` as "A_SIBLING" | "B_SIBLING"], "shared-workspace-sibling"]] as const) workspaces.push(await transactionRepository.createWorkspace(TENANT_IDS[tenantKey], {
-        id, slug, name: SHARED_WORKSPACE_LABEL,
-        status: "active", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
-      }));
-    }
-
-    for (const tenantKey of ["A", "B"] as const) {
-      const ownerMembershipId = MEMBERSHIP_IDS[tenantKey].owner;
-      for (const role of LAUNCH_ROLES) {
-        const membershipId = MEMBERSHIP_IDS[tenantKey][role];
-        memberships.push(await transactionRepository.createMembership(TENANT_IDS[tenantKey], {
-          id: membershipId,
-          authIdentityId: role === "owner" ? SHARED_IDENTITY_ID : ROLE_IDENTITY_IDS[tenantKey][role],
-          workspaceId: WORKSPACE_IDS[tenantKey], status: "active", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
-        }));
-        roleBindings.push(await transactionRepository.createRoleBinding(TENANT_IDS[tenantKey], {
-          id: ROLE_BINDING_IDS[tenantKey][role], membershipId, role,
-          createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, validFrom: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
-          assignedByMembershipId: role === "owner" ? null : ownerMembershipId, reasonCode: "initial_provisioning",
-        }));
-      }
-      memberships.push(await transactionRepository.createMembership(TENANT_IDS[tenantKey], {
-        id: MEMBERSHIP_IDS[tenantKey].pending, pendingIdentityRefHash: pendingHash(tenantKey === "A" ? "a" : "b"),
-        workspaceId: WORKSPACE_IDS[tenantKey], status: "pending", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
-      }));
-      memberships.push(await transactionRepository.createMembership(TENANT_IDS[tenantKey], {
-        id: MEMBERSHIP_IDS[tenantKey].suspended, authIdentityId: INACTIVE_IDENTITY_IDS[tenantKey].suspended,
-        workspaceId: WORKSPACE_IDS[tenantKey], status: "suspended", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
-      }));
-      memberships.push(await transactionRepository.createMembership(TENANT_IDS[tenantKey], {
-        id: MEMBERSHIP_IDS[tenantKey].disabled, authIdentityId: INACTIVE_IDENTITY_IDS[tenantKey].disabled,
-        workspaceId: WORKSPACE_IDS[tenantKey], status: "disabled", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
-      }));
-    }
-
-    policies.push(await transactionRepository.createTenantPolicy(TENANT_IDS.A, {
-      id: POLICY_IDS.A, aiProcessingEnabled: true, createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
+  const transactionRepository = scope.repository;
+  await assertFixtureIdsAreUnused(scope.db, includeSupportHistory);
+  for (const tenantKey of ["A", "B"] as const) {
+    tenants.push(await transactionRepository.createTenant({
+      id: TENANT_IDS[tenantKey], slug: `synthetic-tenant-${tenantKey.toLowerCase()}`, name: SHARED_TENANT_LABEL,
+      status: "active", locale: "en-US", timezone: "UTC", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
     }));
-    policies.push(await transactionRepository.createTenantPolicy(TENANT_IDS.B, {
-      id: POLICY_IDS.B, aiProcessingEnabled: false, createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
-    }));
+  }
 
+  for (const tenantKey of ["A", "B"] as const) {
+    for (const [id, slug] of [[WORKSPACE_IDS[tenantKey], "shared-workspace"], [WORKSPACE_IDS[`${tenantKey}_SIBLING` as "A_SIBLING" | "B_SIBLING"], "shared-workspace-sibling"]] as const) workspaces.push(await transactionRepository.createWorkspace(TENANT_IDS[tenantKey], {
+      id, slug, name: SHARED_WORKSPACE_LABEL,
+      status: "active", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
+    }));
+  }
+
+  for (const tenantKey of ["A", "B"] as const) {
+    const ownerMembershipId = MEMBERSHIP_IDS[tenantKey].owner;
+    for (const role of LAUNCH_ROLES) {
+      const membershipId = MEMBERSHIP_IDS[tenantKey][role];
+      memberships.push(await transactionRepository.createMembership(TENANT_IDS[tenantKey], {
+        id: membershipId,
+        authIdentityId: role === "owner" ? SHARED_IDENTITY_ID : ROLE_IDENTITY_IDS[tenantKey][role],
+        workspaceId: WORKSPACE_IDS[tenantKey], status: "active", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
+      }));
+      roleBindings.push(await transactionRepository.createRoleBinding(TENANT_IDS[tenantKey], {
+        id: ROLE_BINDING_IDS[tenantKey][role], membershipId, role,
+        createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, validFrom: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
+        assignedByMembershipId: role === "owner" ? null : ownerMembershipId, reasonCode: "initial_provisioning",
+      }));
+    }
+    memberships.push(await transactionRepository.createMembership(TENANT_IDS[tenantKey], {
+      id: MEMBERSHIP_IDS[tenantKey].pending, pendingIdentityRefHash: pendingHash(tenantKey === "A" ? "a" : "b"),
+      workspaceId: WORKSPACE_IDS[tenantKey], status: "pending", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
+    }));
+    memberships.push(await transactionRepository.createMembership(TENANT_IDS[tenantKey], {
+      id: MEMBERSHIP_IDS[tenantKey].suspended, authIdentityId: INACTIVE_IDENTITY_IDS[tenantKey].suspended,
+      workspaceId: WORKSPACE_IDS[tenantKey], status: "suspended", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
+    }));
+    memberships.push(await transactionRepository.createMembership(TENANT_IDS[tenantKey], {
+      id: MEMBERSHIP_IDS[tenantKey].disabled, authIdentityId: INACTIVE_IDENTITY_IDS[tenantKey].disabled,
+      workspaceId: WORKSPACE_IDS[tenantKey], status: "disabled", createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
+    }));
+  }
+
+  policies.push(await transactionRepository.createTenantPolicy(TENANT_IDS.A, {
+    id: POLICY_IDS.A, aiProcessingEnabled: true, createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
+  }));
+  policies.push(await transactionRepository.createTenantPolicy(TENANT_IDS.B, {
+    id: POLICY_IDS.B, aiProcessingEnabled: false, createdAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt, updatedAt: FIXTURE_TIME_BOUNDARIES.fixtureCreatedAt,
+  }));
+
+  if (includeSupportHistory) {
     supportGrants.push(await insertSupportGrant(scope.db, {
       id: SUPPORT_GRANT_IDS.approvedTenantA, tenantId: TENANT_IDS.A, workspaceId: WORKSPACE_IDS.A,
       approvedByAuthIdentityId: SHARED_IDENTITY_ID, state: "approved", approvedAt: FIXTURE_TIME_BOUNDARIES.supportApprovedAt,
@@ -349,16 +365,16 @@ export async function setupCanonicalTenantFixtures({ transaction }: CanonicalTen
       approvedByAuthIdentityId: SHARED_IDENTITY_ID, state: "revoked", approvedAt: FIXTURE_TIME_BOUNDARIES.supportApprovedAt,
       revokedByAuthIdentityId: SHARED_IDENTITY_ID, revokedAt: FIXTURE_TIME_BOUNDARIES.supportRevokedAt, expiresAt: FIXTURE_TIME_BOUNDARIES.revokedGrantExpiry, auditEventId: AUDIT_EVENT_IDS.revokedTenantB,
     }));
-  };
-  await transaction.withTransaction(async (scope) => {
-    await assertFixtureIdsAreUnused(scope.db);
-    await populate(scope);
-    await assertCanonicalTenantFixtureIsolation(scope);
-  });
+  }
+  await assertCanonicalTenantFixtureIsolation(scope, includeSupportHistory);
 
-  return { db: scopedDb, catalog: CANONICAL_TENANT_FIXTURE_CATALOG, tenants, workspaces, memberships, roleBindings, policies, supportGrants };
+  return { db: scope.db, catalog: CANONICAL_TENANT_FIXTURE_CATALOG, tenants, workspaces, memberships, roleBindings, policies, supportGrants };
 }
 
+/**
+ * Installs the full fixture, including immutable support grant history, and
+ * always rolls the enclosing transaction back after the callback.
+ */
 export async function withCanonicalTenantFixtures<T>(
   options: CanonicalTenantFixtureSetupOptions,
   callback: (fixture: CanonicalTenantFixtureSet, scope: CanonicalTenantFixtureTransactionScope) => Promise<T> | T,
@@ -367,8 +383,7 @@ export async function withCanonicalTenantFixtures<T>(
   let result!: T;
   try {
     await options.transaction.withTransaction(async (scope) => {
-      const transactionLocalCoordinator = createCanonicalTenantFixtureTransactionCoordinator(async (callbackInTransaction) => callbackInTransaction(scope));
-      const fixture = await setupCanonicalTenantFixtures({ transaction: transactionLocalCoordinator });
+      const fixture = await populateCanonicalTenantFixtures(scope, true);
       result = await callback(fixture, scope);
       throw rollback;
     });
@@ -379,19 +394,16 @@ export async function withCanonicalTenantFixtures<T>(
 }
 
 /**
- * Deletes only the fixed fixture IDs, in FK-safe order. It is intentionally
- * idempotent: missing fixture rows are not an error and unrelated rows cannot
- * match a reserved ID predicate.
+ * Deletes only fixed cleanup-safe core IDs, in FK-safe order. It never touches
+ * immutable support grant history. Missing rows are not an error and unrelated
+ * rows cannot match a reserved ID predicate.
  */
-export async function cleanupCanonicalTenantFixtures({ transaction }: CanonicalTenantFixtureSetupOptions): Promise<void> {
+export async function cleanupCanonicalTenantCoreFixtures({ transaction }: CanonicalTenantFixtureSetupOptions): Promise<void> {
   await transaction.withTransaction(async ({ db }) => {
     const remove = async (table: string, column: string, ids: readonly string[]) => {
       const placeholders = ids.map(() => "?").join(", ");
       await db.prepare(`DELETE FROM ${table} WHERE ${column} IN (${placeholders})`).run(...ids);
     };
-    await remove("support_access_grant_permissions", "grant_id", Object.values(SUPPORT_GRANT_IDS));
-    await remove("support_access_grant_data_classes", "grant_id", Object.values(SUPPORT_GRANT_IDS));
-    await remove("support_access_grants", "id", Object.values(SUPPORT_GRANT_IDS));
     await remove("tenant_role_bindings", "id", Object.values(ROLE_BINDING_IDS).flatMap(Object.values));
     await remove("tenant_memberships", "id", Object.values(MEMBERSHIP_IDS).flatMap(Object.values));
     await remove("tenant_policies", "id", Object.values(POLICY_IDS));
@@ -400,7 +412,10 @@ export async function cleanupCanonicalTenantFixtures({ transaction }: CanonicalT
   });
 }
 
-export async function assertCanonicalTenantFixtureIsolation(scope: CanonicalTenantFixtureTransactionScope): Promise<void> {
+export async function assertCanonicalTenantFixtureIsolation(
+  scope: CanonicalTenantFixtureTransactionScope,
+  includeSupportHistory: boolean,
+): Promise<void> {
   const { db } = scope;
   const tenantRows = await db.prepare("SELECT id, slug, name FROM tenants WHERE id IN (?, ?) ORDER BY id").all<{ id: string; slug: string; name: string }>(TENANT_IDS.A, TENANT_IDS.B);
   if (tenantRows.length !== 2 || tenantRows[0].id === tenantRows[1].id || tenantRows[0].name !== tenantRows[1].name) throw new Error("Canonical tenant identity or overlap invariant failed.");
@@ -415,7 +430,11 @@ export async function assertCanonicalTenantFixtureIsolation(scope: CanonicalTena
   const policies = await db.prepare("SELECT tenant_id, ai_processing_enabled FROM tenant_policies WHERE tenant_id IN (?, ?) ORDER BY tenant_id").all<{ tenant_id: string; ai_processing_enabled: unknown }>(TENANT_IDS.A, TENANT_IDS.B);
   if (policies.length !== 2 || normalizeDatabaseBoolean(policies[0].ai_processing_enabled) !== true || normalizeDatabaseBoolean(policies[1].ai_processing_enabled) !== false) throw new Error("Canonical fail-closed policy difference invariant failed.");
   const supportRows = await db.prepare("SELECT id, tenant_id, state, starts_at, expires_at, revoked_at FROM support_access_grants WHERE id IN (?, ?) ORDER BY id").all<{ id: string; tenant_id: string; state: string; starts_at: string; expires_at: string; revoked_at: string | null }>(SUPPORT_GRANT_IDS.approvedTenantA, SUPPORT_GRANT_IDS.revokedTenantB);
-  if (supportRows.length !== 2 || supportRows[0].state !== "approved" || supportRows[1].state !== "revoked" || supportRows[0].starts_at >= FIXTURE_TIME_BOUNDARIES.supportActiveAt || supportRows[0].expires_at <= FIXTURE_TIME_BOUNDARIES.supportActiveAt || supportRows[1].revoked_at === null) throw new Error("Canonical support grant scope/expiry invariant failed.");
+  if (includeSupportHistory) {
+    if (supportRows.length !== 2 || supportRows[0].state !== "approved" || supportRows[1].state !== "revoked" || supportRows[0].starts_at >= FIXTURE_TIME_BOUNDARIES.supportActiveAt || supportRows[0].expires_at <= FIXTURE_TIME_BOUNDARIES.supportActiveAt || supportRows[1].revoked_at === null) throw new Error("Canonical support grant scope/expiry invariant failed.");
+  } else if (supportRows.length !== 0) {
+    throw new Error("Canonical cleanup-safe core unexpectedly created support grant history.");
+  }
   const tenantBFromTenantA = await db.prepare("SELECT id FROM tenant_memberships WHERE tenant_id = ? AND id = ?").get(TENANT_IDS.A, MEMBERSHIP_IDS.B.owner);
   if (tenantBFromTenantA !== undefined) throw new Error("Cross-tenant membership query unexpectedly returned a row.");
   const tenantAWorkspacesForB = await db.prepare("SELECT id FROM workspaces WHERE tenant_id = ? AND id = ?").all(TENANT_IDS.A, WORKSPACE_IDS.B);
@@ -428,11 +447,12 @@ export function normalizeDatabaseBoolean(value: unknown): boolean {
   throw new Error("Expected a database boolean represented as true, false, 1, or 0.");
 }
 
-async function assertFixtureIdsAreUnused(db: DbClient): Promise<void> {
-  const checks: readonly [string, readonly string[]][] = [
+async function assertFixtureIdsAreUnused(db: DbClient, includeSupportHistory: boolean): Promise<void> {
+  const checks: ReadonlyArray<readonly [string, readonly string[]]> = [
     ["tenants", Object.values(TENANT_IDS)], ["workspaces", Object.values(WORKSPACE_IDS)],
     ["tenant_memberships", Object.values(MEMBERSHIP_IDS).flatMap(Object.values)], ["tenant_role_bindings", Object.values(ROLE_BINDING_IDS).flatMap(Object.values)],
-    ["tenant_policies", Object.values(POLICY_IDS)], ["support_access_grants", Object.values(SUPPORT_GRANT_IDS)],
+    ["tenant_policies", Object.values(POLICY_IDS)],
+    ...(includeSupportHistory ? [["support_access_grants", Object.values(SUPPORT_GRANT_IDS)] as const] : []),
   ];
   for (const [table, ids] of checks) {
     const placeholders = ids.map(() => "?").join(", ");
