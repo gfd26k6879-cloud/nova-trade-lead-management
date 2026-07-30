@@ -1209,3 +1209,18 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   record identity after their verification close. Evidence binds exact logical
   state and the persisted journal mode without claiming invariant pre-close
   main-file bytes or absence of SQLite-internal physical page movement.
+- The independent Windows WAL probe confirmed this ordering on Node 24.13.1,
+  better-sqlite3 12.9.0 and SQLite 3.53.0: last writer close kept FileId and WAL
+  mode but changed main-file SHA and removed WAL/SHM; closing a backup/read
+  snapshot while an immediate writer remained open changed none of the main or
+  WAL identities. No trace contained a journal-mode assignment or checkpoint.
+- Sol therefore bound a post-commit stabilization lease. After COMMIT, B1
+  closes its writer under the original no-delete FileId lease, requires WAL/SHM
+  absence, then acquires a second native main-file lease that permits reads but
+  denies write/delete sharing. Failure or remaining WAL/SHM means external
+  connection ownership is unproven and requires committed-unverified recovery.
+  While the stable lease is held, B1 inspects settled main bytes, runs and closes
+  the read-only snapshot verifier, again requires no WAL/SHM and identical
+  FileId/SHA, publishes COMMITTED, and only then releases the lease. This proves
+  settled evidence without an explicit checkpoint and blocks new writers during
+  verification/publication.
