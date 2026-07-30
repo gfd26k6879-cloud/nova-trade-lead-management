@@ -18,7 +18,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Immutable staged G-006A source `7286bc6b2ee15cba2d19de0cd57b74c86f979fa2`, exactly one four-path commit over dispatch control `88e49440d2ff52b4db249bd199b2b2a3547fe9a3`, is under fresh dual review with no startup activation. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-006A source `7286bc6b2ee15cba2d19de0cd57b74c86f979fa2` is rejected by fresh dual review; repair round 1 is bounded to the same four paths with no startup activation. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-004A source `c0892a06325b33657e5b73813635fec6a4081012` is accepted through integration `8383fa70a2bac8de71413ae135918bbaedf907b4`; runtime G-004B remains preserved and blocked for co-delivery with G-013/G-014. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
@@ -59,7 +59,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 | `G-005` | Accepted | Source `28005a3` passed repaired dual review, merged at `d2d6e7f`, and passed the full merged release gate. Runtime propagation and T029 reconciliation remain later cards. |
 | `G-006` | Parent split open | Preserve every success criterion through serialized G-006R recovery identity, staged G-006A fresh schema/coordinator, G-006B receipt-bound finalization, and the G-006C compatibility-adapter sequence. Accept only after all children independently pass and startup activation is proven. |
 | `G-006R` | Accepted | Repaired source `3443816` passed fresh domain/security and independent Quality review, merged at `43a2387`, and passed the full merged release gate. |
-| `G-006A` | Immutable staged source under dual review | Source `7286bc6` contains exactly the four authorized artifacts and passed producer gates; `schema.ts`, `getDb()`, writers, finalization, and startup activation remain frozen. |
+| `G-006A` | Repair round 1 authorized | Source `7286bc6` is rejected for rollback escape, copyable/reusable capability, incomplete 37-table preservation, same-connection physical-schema trust, and an unpinned definition digest. The same four-path ceiling remains binding. |
 | `G-006B` | Blocked on accepted G-006A | Consume exactly one verified T028 SQLite receipt and verified backup to atomically finalize 17 non-audit tables with interruption/replay proof. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
@@ -621,3 +621,29 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 - `sqlite-schema` and `recovery-contract` remain held. No merge, acceptance,
   startup activation, destructive finalization, or external action may occur
   until both reviews pass and Sol completes the local merged gate.
+
+## G-006A review rejection and repair round 1
+
+- Source `7286bc6b2ee15cba2d19de0cd57b74c86f979fa2` is rejected and must not be
+  merged or accepted. Both lanes proved that the raw database callback can issue
+  `COMMIT` or `END`, escape the wrapper transaction, persist partial data or
+  catalog changes, and still make the coordinator throw or misreport success.
+- Independent Quality also proved that the enumerable symbol capability can be
+  copied with a spread, its callback replaced, and one minted capability reused
+  across multiple staged databases. Repair must use private identity-backed
+  state, exact database/source/handoff binding, and one-shot consumption.
+- Domain review proved that preservation omits non-target tables: deleting a
+  `zip_codes` row still returned finalized. Repair must snapshot the source
+  columns, counts, and canonical payload of all 37 application tables. The
+  generated definition digest must be a pinned literal asserted by production
+  code, not only a live computation or test literal.
+- Quality persisted an exact-SQL-digest but physically wrong partial index that
+  passed same-connection postconditions. A new connection exposed the missing
+  index entry and failed integrity. Repair must prevent transaction/writable
+  schema control through its bounded executor and require a file-backed,
+  post-commit fresh-connection catalog, physical-index, FK, integrity, and
+  preservation verification before reporting finalized.
+- Repair round 1 stays inside the existing four paths. `schema.ts`, `getDb()`,
+  writers, T-028, recovery files, package/startup wiring, G-006B/C/G-007/G-008,
+  provider/customer systems, and remote/production state remain out of scope.
+  Fresh dual rereview is mandatory; both locks remain held.
