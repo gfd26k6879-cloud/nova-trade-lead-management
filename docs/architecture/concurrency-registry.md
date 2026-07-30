@@ -881,3 +881,8 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   immutable rejected source `9756f93ff6d296c851539f2486ebe48ac4838d28`.
   The dispatch is evidence-only, exactly one same-scope commit, with no merge,
   startup activation, later-card work, or external action.
+- The immutable domain/security preflight is complete with no file changes. It
+  requires exact-`undefined` absence semantics and primary-error retention for
+  writer rollback/close, capability lease cleanup, exact-open cleanup, and
+  partial file-lease cleanup. Cleanup-only failures remain primary, while
+  coexisting cleanup failures are attached in deterministic phase order.
