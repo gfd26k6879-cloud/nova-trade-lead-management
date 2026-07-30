@@ -1566,3 +1566,44 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   Terra-medium implementation packet before any producer edit. G006C1-C6,
   final G006B/G006A activation, G007+, provider, remote, production, customer,
   paid, push and deployment work remain unauthorized during this launch.
+
+## G-006C0 binding-verifier reconciliation
+
+- All three read-only preflights completed against clean `80d11c8` with no
+  changes, locks, tests, external activity or stale-root access. They agree C0
+  is verifier-only and must not call `getDb()`, initialize or mutate schema,
+  edit writers, rewrite SQL, change public signatures, infer backend/scope, or
+  treat any receipt or binding hash as authentication or authorization.
+- Sol selects the three-path design. Upgraded SQLite input contains the full
+  explicit `SqliteG006bReplayInput`; C0 itself calls the accepted G006B replay
+  and mints an opaque storage-scope capability only after replay succeeds. It
+  never accepts a caller-supplied G006B result, receipt, hash, latest file,
+  directory scan, first/only row, active request, environment-derived tenant or
+  default identity. The existing transient local G006B lock and bounded native
+  broker are authorized for this verification call; no G006B source/helper edit
+  or lock transfer is authorized.
+- PostgreSQL is an exact explicit pass-through discriminant that cannot touch
+  SQLite or G006B. Fresh SQLite binding fails closed in C0 with a typed
+  fresh-foundation-required result until C1 explicitly provisions and verifies
+  every named tenant, workspace, owner membership/role, policy, source-card,
+  play, catalog, count/checksum and zero-orphan fact. C0 creates or infers none
+  of those facts and cannot fabricate T-028.
+- The opaque SQLite value is privately registered, frozen and forge-resistant.
+  A separate assertion API compares exact database path, tenant and workspace
+  selectors before revealing only the replay-verified owner, policy,
+  source-card, play/configuration and canonical binding evidence needed by later
+  C1-C6 storage guards. It grants no actor, permission, request or provider
+  authority and preserves original G006B failure taxonomy.
+- Terra-medium implementation is limited to
+  `src/lib/db/sqlite-compatibility-scope.ts`,
+  `src/lib/__tests__/sqlite-compatibility-scope.test.ts`, and
+  `docs/validation/2026-07-30-g006c0-sqlite-compatibility-scope.md`. The packet
+  must prove exact input keys/deep snapshotting; explicit PostgreSQL isolation;
+  real upgraded replay and restart reconstruction; handoff, path, native,
+  catalog, receipt, G023, source/play and hash drift rejection; fresh fail-
+  closed behavior; forged/copied/cross-database capability rejection; zero
+  mutation/residue; and byte-identical exclusion of initialization, schema,
+  queries, app-users, actions/workers and G006B artifacts. Existing G006B,
+  coordinator, PostgreSQL/session regressions, typecheck, zero-warning lint,
+  build, recovery and diff/scope gates are required. Stop on any fourth path,
+  G006B edit, inability to reconstruct full replay input, or need for C1-C6.
