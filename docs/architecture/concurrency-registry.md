@@ -1653,3 +1653,22 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   residue, clean diff and accurate local-only receipt. No finding requires a
   repair delta. Source is reviewed and eligible for a non-fast-forward local
   merge; C0 is not accepted until merged gates pass.
+
+## G-006C0 accepted binding-verifier milestone
+
+- Sol merged reviewed source `55cf5f8` with non-fast-forward merge `57ee0d6`,
+  whose first parent is exact review control `59e7e94`. The merge contributes
+  exactly the three authorized new C0 paths, and every merged blob is identical
+  to its independently reviewed source blob.
+- On the merged integration line, focused C0 passes 12/12 in 165.78 seconds and
+  coordinator/PostgreSQL/session regressions pass 64/64 in 17.92 seconds.
+  Typecheck, zero-warning lint, Next.js 16.2.6 production build with 11/11
+  static pages, exact 37-table recovery verification, diff/scope, JSONL,
+  protected-blob, worktree and residue gates all pass. Producer's frozen full
+  accepted G006B gate passed 71/71; its G006B blobs are unchanged by C0 and the
+  merged focused matrix executes the real verifier.
+- G006C0 is accepted only as the local storage-scope verifier milestone. It does
+  not wire startup or writers, provision fresh foundations, grant access,
+  complete parent G006C/G006B/G006, or authorize external activity. The next
+  serialized child is G006C1 initialization and explicit fresh binding. The
+  known policy-blocked `g006b-identity-cleanup-qjkSgV` root remains untouched.
