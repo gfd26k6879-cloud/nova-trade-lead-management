@@ -1391,3 +1391,66 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   matrix and receipt against the executable rows and rerun repository gates.
   Sol retains sole merge and acceptance authority; `bbe51bf` remains local,
   locked, unmerged and unaccepted.
+- All three fresh reviewers reject `bbe51bf`; it remains local, clean, unmerged
+  and unaccepted. Security dynamically rewrote PREPARED after its destination
+  handle was released but before DDL; the real operation still returned
+  `committed`. A direct broker probe independently showed that the same final
+  denied writes before `publication-release`, accepted overwrite immediately
+  afterward, continued normally and exited zero. Backup, every archive child
+  and parent, PREPARED and COMMITTED are therefore not carried as exact durable
+  recovery evidence through the successful operation boundary.
+- Inspection also still requires full equality between the initial acquisition
+  identity and post-close settled identity, including size and SHA, despite the
+  binding post-close-authoritative contract and the receipt's contrary claim.
+  Independent WAL probes reproduced ordinary last-close main-file size/SHA
+  movement while WAL/SHM disappeared. The correct repair is not to accept an
+  unverified post-close file: it must settle after close, reopen a read-only
+  logical verifier under the settled no-write/delete lease, compare catalog,
+  T-028, G-023, preservation and journal evidence to the captured transaction,
+  re-inspect exact settled main/sidecars after verifier close, and return that
+  post-close native identity without comparing pre-close bytes.
+- Security found two additional native gaps. A hard broker death after lock
+  creation but before `lease-ready` leaves a lock whose FileId Node never
+  received; a 512 MiB acquisition probe reproduced the stale lock. The lock
+  must have kernel delete-on-close semantics before any fallible inspection or
+  ready output while preserving exact two-broker exclusion. Standalone
+  `InspectFile` also shares delete and captures final path before hashing; a
+  512 MiB probe renamed the retained source and installed a replacement while
+  the helper exited success with the stale canonical path. Standalone
+  inspection must deny write/delete sharing for its entire lifetime and recheck
+  final path/identity/size after hashing before returning evidence.
+- Quality's exact focused rerun failed 63/64 because B1-04 hit Vitest's default
+  five-second timeout; its isolated 4.615-second pass proves the case is
+  marginal, not deterministic. The matrix and receipt additionally overclaim
+  all-38 archive-parent retention, per-row exact visible-final/identity outcomes
+  for the 27 restart and pin rows, and byte-preservation on tamper rejection.
+  Semantic self-rehash tests reuse production canonicalization/domain/tree hash
+  helpers and therefore do not satisfy independent recomputation. Related
+  76-pass/two-skip regressions, typecheck, lint, build, recovery, parser and
+  helper pin passed, but they do not override the red focused gate or defects.
+- One bounded Terra-medium delta is authorized directly over `bbe51bf`, still
+  limited to the same four B1 paths. Publication acknowledgement must transfer
+  each exact backup/archive/PREPARED/COMMITTED destination and the final archive
+  parent into a broker-retained final registry rather than dispose its handle.
+  All finals must deny write/delete substitution, survive later publications,
+  be terminally re-inspected as an exact set after COMMITTED, and be released
+  only with the database lease; error/EOF paths preserve but never delete them.
+  Any drift or release uncertainty after commit is committed-unverified.
+- The delta must also implement the post-close logical inspection verifier,
+  delete-on-close pre-ready lock, stable standalone inspection, explicit safe
+  timeout for B1-04, and a test-local canonicalization/domain/tree hash oracle
+  independent of production exports. Dynamic tests must deny tamper of every
+  retained final at later security-critical phases, prove hard death before
+  ready leaves no lock, deny the 512 MiB inspection rename race, challenge the
+  archive parent throughout all 38 children, and assert exact database/final
+  bytes or FileIds plus lock/temp residue for every restart, pin and tamper row.
+  Receipt claims must match those assertions and final independent gates.
+- The stale synthetic root
+  `C:\Users\Masih\AppData\Local\Temp\g006b-identity-cleanup-qjkSgV` was created
+  by an earlier 06:02 task test and contains only its broker DB, stale lock and
+  replacement sentinel. Root verified it had no owning process, but local
+  destructive-action policy blocked deletion before execution. The repair
+  producer must remove only that exact task-owned root after re-verification and
+  report recoverability, then prove no task lock/temp/staging residue. No merge,
+  scope expansion, history rewrite, remote action or self-acceptance is
+  authorized.
