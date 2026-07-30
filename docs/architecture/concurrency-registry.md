@@ -692,3 +692,35 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   binding, main-only/temp/attached isolation, private writer transaction,
   all-37 preservation, physical spoof, fresh reopen, recovery-required, and all
   prior invariant reproduction. No merge or acceptance is authorized.
+
+## G-006A repair round 3
+
+- Round-2 source `868efdcda51c07da26f9b75fa0f34528126fb328` is rejected and must not
+  be merged or accepted. Both fresh lanes proved that a capability minted for
+  one database can finalize an exact clone swapped onto the same canonical
+  path because the private state binds only the pathname and application-level
+  snapshots, not the physical file identity.
+- Both lanes also proved that declarative trigger bodies can mutate hidden
+  `sqlite_sequence` rows and then remove every transient application object.
+  The coordinator still reported `finalized` after the fresh read-only reopen,
+  with the exact catalog and physical digests, 37 application tables, clean
+  foreign-key results, and `integrity_check=ok`. The persisted poisoned high
+  water mark can block later AUTOINCREMENT writes or permit identifier reuse if
+  a legitimate rebuild loses the historical sequence.
+- Independent Quality additionally found that dense-array validation allocates
+  from an attacker-controlled declared length before enforcing the 4,096-plan
+  and 32,766-bind ceilings. Round 3 must reject oversized sparse arrays before
+  any proportional allocation or iteration.
+- Round 3 must bind the mint, locked private writer, commit, and fresh verifier
+  to one platform-stable filesystem identity; preserve and recheck exact
+  `sqlite_sequence` state at every boundary; structurally reject all
+  `sqlite_*` targets including trigger bodies; and expose only an internally
+  controlled typed route for legitimate AUTOINCREMENT high-water preservation.
+  Exact-clone replacement, transient-trigger poisoning, legitimate sequence
+  rebuild, and oversized sparse plan/bind regressions are mandatory.
+- The same four files and `sqlite-schema` plus `recovery-contract` locks remain
+  exclusive. All prior catalog, 37-table, source, transaction, preservation,
+  physical-manifest, fresh-reopen, committed-unverified, scope, and cleanup
+  gates remain binding. Fresh dual rereview and Sol's merged release gate are
+  still required; G-006A remains only a preparation milestone and parent G-006
+  remains open.
