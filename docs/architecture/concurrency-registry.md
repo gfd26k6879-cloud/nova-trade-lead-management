@@ -1368,3 +1368,26 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   journal-mode pin, error taxonomy, exact-existing/two-publisher behavior and
   hostile PATH protections must be retained. No merge, scope expansion,
   history rewrite, remote action or self-acceptance is authorized.
+- The Terra-medium producer completed repair commit `bbe51bf` as exactly one
+  new commit over rejected source `9dc6742`, changing only the same four B1
+  paths and leaving the Platform worktree clean. Sol independently confirmed
+  the exact parent, four-path diff, clean `diff --check`, clean worktree and
+  normalized helper hash/pin
+  `30ed26bdb82a104412a35e4dc2251e19f92b6a42d670aba63cbec04c522c0e75`.
+- Producer evidence reports the final focused file passing 64/64 with no test
+  or command timeout, 76 related regressions passing with two environment-gated
+  PostgreSQL skips, typecheck, zero-warning lint, production build, the exact
+  37-table recovery verifier and PowerShell parser. The receipt binds rejection
+  control `752f17a` and launch control `f4e5390`, separates 49 operation/contract
+  cases from 15 direct Windows broker/host cases, and enumerates dynamic crash,
+  substitution, WAL, pin, restart, tamper, conflict and cleanup rows. These are
+  source and producer claims until fresh reviewers independently validate them.
+- Fresh post-repair acceptance now returns to the three specialist lanes at the
+  four-total-agent ceiling. Security must rerun parent EOF, broker death before
+  and after move, exact lock/fallback cleanup, retained-write substitution and
+  publisher races. Architecture must inspect the closed production union,
+  handle-rooted write/backup/archive lifecycle, native/cloud/WAL snapshot,
+  restart and error-taxonomy boundaries. Quality must validate the 64-case
+  matrix and receipt against the executable rows and rerun repository gates.
+  Sol retains sole merge and acceptance authority; `bbe51bf` remains local,
+  locked, unmerged and unaccepted.
