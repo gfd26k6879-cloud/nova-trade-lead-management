@@ -404,3 +404,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 - The original Terra-medium producer is repairing the immutable rejected
   source within that same ceiling. Fresh dual review is mandatory on the new
   one-commit repair tip before Sol may merge or accept it.
+- Two read-only G-006A preflights may run concurrently with that repair because
+  they hold no locks and make no changes. They cannot authorize G-006A or cross
+  its accepted-G-006R dependency; their only output is Sol-reconciled launch
+  evidence for the next child.
