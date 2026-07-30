@@ -203,7 +203,8 @@ blocked-root activity.
 ## Repair-1 P3 correction and validation
 
 Repair baseline (pre-repair source): db501cced3ab4be459e9f5b7caad86da43ef65c5.
-Repair commit (this receipt): 27582d1f9cb8702dba8c2b2231ece6b63627401c.
+Repair-1 content commit: 27582d1f9cb8702dba8c2b2231ece6b63627401c.
+The receipt-only lineage commit is recorded in the append-only implementation ledger; this receipt does not self-embed its own Git hash.
 
 Repair-1 corrects two documentation findings only:
 
