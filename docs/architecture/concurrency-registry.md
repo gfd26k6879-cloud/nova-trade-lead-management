@@ -2178,3 +2178,14 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   its own Git hash. No second path, other text, code, test, result, validation,
   external action or self-acceptance is permitted. The ledger will record the
   resulting immutable tip after it exists; both reviewers must verify closure.
+
+## G-006C2A self-reference-safe repair result
+
+- Terra-medium completed exact receipt-only commit `05d2e2a` atop `3cba1d0`.
+  The one-path/one-hunk delta names the pre-repair baseline and Repair-1 content
+  commit, then delegates the receipt-only tip to this append-only ledger without
+  embedding a self-invalidating hash. `git diff --check` passes, cumulative scope
+  remains four paths and the source worktree is clean; no tests were required.
+- Architecture and security now perform the final exact-delta closure check on
+  immutable source `05d2e2a`. No edits, tests, commits, merge, acceptance,
+  blocked-root access or external activity are authorized.
