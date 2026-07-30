@@ -61,7 +61,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 | `G-006R` | Accepted | Repaired source `3443816` passed fresh domain/security and independent Quality review, merged at `43a2387`, and passed the full merged release gate. |
 | `G-006A` | Accepted staged-artifact milestone; child remains open | Round-6 source `87795a7` passed fresh dual review, merged at `f340752`, and passed the full merged release gate. Startup activation remains blocked until G-006B and G-006C0-C6 complete. |
 | `G-006A-P` | Accepted recognition-only prerequisite | Source `c7d6e8e` passed fresh dual review, merged at `10a46db`, and passed the full merged release gate. It grants no prepared-state finalizer or startup authority. |
-| `G-006B` | B1 authorized; awaiting Terra-medium dispatch | B1 is legacy-only: verified backup/schema-3 archive and source binding, four nullable source columns, exact backfill, durable prepared/committed evidence, and restart proof. Final constraints, `location_mode`, and startup remain later work. |
+| `G-006B` | B1 Terra-medium producer active at `99d3227` | B1 is legacy-only: verified backup/schema-3 archive and source binding, four nullable source columns, exact backfill, durable prepared/committed evidence, and restart proof. Final constraints, `location_mode`, and startup remain later work. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
 | `UI-000` | Ready; capacity/approval-queued | Seven-artifact design packet is ready. Terra-medium is authorized, but implementation remains capacity-queued and explicit product/design/accessibility approval is still required before task acceptance. |
@@ -1087,3 +1087,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   37-table recovery verification, exact diff/scope checks, and zero residue.
   Producer evidence cannot self-authorize review, merge, acceptance, lock
   release, B1 final constraints, G-006C, startup, or external action.
+- The existing Terra-medium producer is active against immutable baseline
+  `99d3227` with exactly one attributable commit permitted. It must stop before
+  a fifth path, accepted-contract edit, authority inference, or weakened native
+  durability claim; no review, merge, or acceptance is preauthorized.
