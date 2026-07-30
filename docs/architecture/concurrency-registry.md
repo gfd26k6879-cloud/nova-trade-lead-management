@@ -1932,3 +1932,64 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   and run non-mutating discovery only; they cannot edit, test mutable shared
   fixtures, commit, merge, accept, access blocked roots or perform external work.
   Sol must reconcile one exact Terra-medium producer packet before any C2 edit.
+
+## G-006C2 preflight result and serialized execution reconciliation
+
+- Architecture and security both STOP a single broad C2 implementation. The
+  three accepted G002 tables currently span more than twenty mutable exports and
+  share the 10,000-line `queries.ts` surface with later G006C3-C6 work. Changing
+  those helpers or their callers now would cross the accepted parent boundary,
+  couple storage verification to authorization and create avoidable collision
+  risk. No preflight made a source edit or ran a mutable fixture.
+- Quality inventories 75 effective SQL templates, 50 SQL-bearing helpers, 21
+  mutable exports and nine direct production caller modules for the three-table
+  family. It gives a conditional GO only for three serialized detached packets:
+  C2A operation permit, C2B `user_market_access` writer, then C2C crawl writer.
+  These are execution packets beneath the existing G006C2 card; they do not add,
+  remove, complete or renumber any implementation card, and G006C2 remains open
+  until all three packets pass independent review and merged-control acceptance.
+- Sol accepts that reconciliation. C2A owns only an opaque operation permit and
+  its seam tests. C2B owns only the access writer. C2C owns only the crawl writer.
+  None may edit or activate legacy query/action/route/worker call sites. Startup,
+  public integration, audit persistence and final caller conversion remain in
+  their already planned later G006C packets. PostgreSQL behavior and public
+  legacy signatures stay byte-identical throughout the detached sequence.
+- The accepted G002 contract is unchanged: only `user_market_access`,
+  `crawl_runs` and `crawl_units` are tenant-owned; nullable workspace scope must
+  match the exact tenant; units inherit exact tenant/workspace from their parent
+  run. `zip_codes`, `location_markets` and `location_cells` remain platform-global
+  references and never grant authority. Legacy ZIP, platform-cell and generalized
+  modes require explicit persisted discriminants and exact reference checks; no
+  identifier, market, token, session default, receipt or caller result may infer
+  scope or authority.
+
+## G-006C2A SQLite G002 operation-permit launch packet
+
+- Terra-medium receives a four-path ceiling: new
+  `src/lib/db/sqlite-g002-operation-permit.ts`, shared test fixtures at
+  `src/lib/__tests__/sqlite-g002-operation-fixtures.ts`, focused tests at
+  `src/lib/__tests__/sqlite-g002-operation-permit.test.ts`, and validation receipt
+  `docs/validation/2026-07-30-g006c2a-sqlite-g002-operation-permit.md`.
+- Before editing, the producer must return a GO/STOP API checkpoint. A GO design
+  must expose a small fieldless, private-WeakMap permit and a narrow exact-match
+  consumer seam for C2B/C. Permit creation requires an explicit fresh or upgraded
+  lifecycle, the corresponding genuine C0/C1 binding, exact database/tenant and
+  nullable operation-workspace selectors, and independently resolved authority.
+  A non-null operation workspace must equal the storage binding's named workspace;
+  a null operation workspace is explicit tenant-wide scope, never a default.
+- Interactive authority must be resolved inside the permit boundary through
+  `requireTenantPermission` with an operation-fixed tenant permission, action and
+  policy evaluation. A caller-supplied session shape or boolean is not authority.
+  Worker authority must come from the active `requireWorkerTenantContext()` value
+  established by the durable lease authorization flow, with exact tenant,
+  nullable workspace, worker name and action agreement. Cron authentication alone
+  is never tenant authority. Copying, spreading, proxying or fabricating a permit
+  must fail closed.
+- C2A performs no table mutation and grants no provider execution. Its focused
+  matrix contains at least 18 substantive fresh/upgraded, member/worker, nullable-
+  workspace, operation, mismatch, forgery, proxy and no-context cases. Existing
+  C0 12-case and C1 53-case gates, G006A, PostgreSQL/readiness/session, typecheck,
+  zero-warning lint, protected-blob/four-path and owned-prefix residue checks are
+  mandatory. A fifth path, writer/query/caller/startup/schema/auth implementation
+  edit, PostgreSQL change, plain authority object, receipt authority, inferred
+  selector, persistent audit, external activity or self-acceptance is a stop.
