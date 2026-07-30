@@ -1850,3 +1850,31 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   explicitly verify P1 closure and capability revocation; architecture must
   verify API/transaction compatibility and unchanged C1 scope. Sol alone decides
   repair acceptance, exception disposition and merge.
+
+## G-006C1 repaired-source review result and merge eligibility
+
+- Architecture ACCEPTS cumulative source `141aa2c` with no P0-P3 finding. It
+  independently confirms exact two-commit/four-path lineage, unchanged public C0
+  behavior, compatible final lease/reproof/mint flow, no persistent resource
+  transfer, preserved staged/five-row/C2-C6 boundaries and truthful receipt. Its
+  focused gate passes 53/53 with one parent-only worker skip in 17.92 seconds.
+- Security ACCEPTS the same immutable repair and closes its P1 with no remaining
+  P0-P3 finding. It confirms the sole private-map mint occurs synchronously
+  after full reproof under `BEGIN IMMEDIATE`, pre-lease mutation rejects,
+  post-mint writers wait for release, every post-mint uncertainty revokes, and
+  no failed capability escapes. Its focused gate passes 53/53 with the same
+  intentional parent skip in 18.29 seconds.
+- Sol's cumulative audit confirms exact dispatch parent `b38641f`, source commits
+  `28b04d8` then `141aa2c`, exactly four authorized paths, clean source worktree,
+  clean diff and accurate receipt. No implementation repair remains.
+- Sol classifies the unchanged full-G006B 70/71 result as an inherited Windows
+  fixture sharing race because the exact failed case passes 1/1, both immutable
+  G006B source and helper blobs remain unchanged, and no C1 behavior participates
+  in that publisher path. The two timeout roots are recoverable, ownerless and
+  policy-blocked; they remain explicit environmental residue rather than a
+  concealed green gate. These exceptions permit reviewed local merge but are not
+  represented as passing and remain visible in acceptance evidence.
+- Source is eligible for a non-fast-forward local merge. G006C1 remains
+  unaccepted until Sol verifies source-blob equivalence and runs the mandatory
+  merged-control focused, regression, release, recovery, scope, JSONL and residue
+  gates. C2-C6 and all parent completion remain closed.
