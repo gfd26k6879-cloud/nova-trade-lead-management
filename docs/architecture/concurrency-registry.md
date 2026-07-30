@@ -2,7 +2,7 @@
 
 Date: 2026-07-29
 
-Status: **Stage 3 pilot accepted; Stage 4 active; G-003, G-004A, G-005, G-006R, the G-006A staged-artifact milestone, and Q-002 accepted; the G-006A prepared-state recognition prerequisite is authorized; parent G-006 and final G-006A activation remain open; G-004B preserved for G-013/G-014.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. G-003 passed fresh domain/security and Quality review, merged at `ba1b646974e1bf91234f37567ca8b4a9a6342171`, and passed the final merged integration gate. G-004A passed fresh dual review, merged at `8383fa70a2bac8de71413ae135918bbaedf907b4`, and passed the final merged release gate; parent G-004 remains open for preserved runtime G-004B. G-005 passed repaired fresh dual review, merged at `d2d6e7f4d84c8ed94f15f9c2988b786f765f75b6`, and passed the final merged release gate. Q-002 remains accepted at `f95681062200d13be71f85797c38f6dfa28edcbb`. G-006 preflight proved that archive identity must be versioned before SQLite physical keys can change, so Sol preserved the full card as serialized children G-006R, G-006A, G-006B, and the compatibility-adapter G-006C sequence. Repaired G-006R passed its final merged gate. G-006A round-6 source `87795a7ade9eb8ce51ee249d8adc7ac3e3d34341` passed fresh dual review, merged at `f340752fe4c76df6952982f8e742332b88193d65`, and passed the final merged release gate as a startup-disabled preparation artifact. G-006B preflight then required one serialized, recognition-only G-006A prerequisite before B1; `sqlite-schema` is held for that four-file packet while `recovery-contract` remains available. Sol remains the sole final integration/acceptance authority, and the four-total-agent ceiling remains binding.
+Status: **Stage 3 pilot accepted; Stage 4 active; G-003, G-004A, G-005, G-006R, the G-006A staged-artifact milestone, G-006A-P, and Q-002 accepted; G-006B B1 is ready; parent G-006 and final G-006A activation remain open; G-004B preserved for G-013/G-014.** Commit `3b1135c1c781a5a806a6053a01987a91b63e0bf3` contains the reviewed transition manifest. Control commit `1c9647d76c35dbac991b07eb962de5a54135bce2` is the exact start revision for all five domain branches and worktrees. G-002 was independently reviewed, repaired, merged at `cb329b4a6adaaa0c940f16b433198297e2712c7f`, and passed the final integration gate. G-003 passed fresh domain/security and Quality review, merged at `ba1b646974e1bf91234f37567ca8b4a9a6342171`, and passed the final merged integration gate. G-004A passed fresh dual review, merged at `8383fa70a2bac8de71413ae135918bbaedf907b4`, and passed the final merged release gate; parent G-004 remains open for preserved runtime G-004B. G-005 passed repaired fresh dual review, merged at `d2d6e7f4d84c8ed94f15f9c2988b786f765f75b6`, and passed the final merged release gate. Q-002 remains accepted at `f95681062200d13be71f85797c38f6dfa28edcbb`. G-006 preflight proved that archive identity must be versioned before SQLite physical keys can change, so Sol preserved the full card as serialized children G-006R, G-006A, G-006B, and the compatibility-adapter G-006C sequence. Repaired G-006R passed its final merged gate. G-006A round-6 source `87795a7ade9eb8ce51ee249d8adc7ac3e3d34341` passed fresh dual review, merged at `f340752fe4c76df6952982f8e742332b88193d65`, and passed the final merged release gate as a startup-disabled preparation artifact. G-006A-P source `c7d6e8e2848d993f7af178dae287d46522738e8b` passed fresh dual review, merged at `10a46dba346e3c62aff54e0785f552e04bcced72`, and passed the full merged release gate as an exact recognition-only prerequisite. Its lock is released and G-006B B1 may now launch explicitly. Sol remains the sole final integration/acceptance authority, and the four-total-agent ceiling remains binding.
 
 ## Final integration authority
 
@@ -18,7 +18,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-006A staged artifact is accepted through `f340752`; G-006A-P source `c7d6e8e` passed fresh dual review and is authorized for Sol's local merge and merged release gate. G-006B B1 remains blocked until that gate passes. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-006A-P source `c7d6e8e` is accepted through integration merge `10a46db` and its full merged release gate. G-006B B1 is ready for explicit lock acquisition; startup activation remains blocked. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-004A source `c0892a06325b33657e5b73813635fec6a4081012` is accepted through integration `8383fa70a2bac8de71413ae135918bbaedf907b4`; runtime G-004B remains preserved and blocked for co-delivery with G-013/G-014. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
@@ -33,14 +33,14 @@ The non-OneDrive root is selected to avoid sync churn and lock contention. The a
 | `integration-ledger` | Final integration conductor | Held | Released only when final integration authority ends. |
 | `migration-sequence` | None | Available after accepted G-005 | G-006 must declare whether this PostgreSQL sequence lock is needed before acquisition. |
 | `migration-harness` | None | Available after accepted G-005 | G-006 must name any shared inventory harness before acquisition. |
-| `sqlite-schema` | `G-006A-P` | Held for the prepared-state recognition prerequisite | Exact four-path ceiling; release only after attributable commit, producer gates, fresh dual review, local Sol merge, and merged release gate. |
+| `sqlite-schema` | None | Available after accepted G-006A-P | Source `c7d6e8e` passed fresh dual review, merged at `10a46db`, and passed the full merged release gate. |
 | `auth-session` | None | Available | Accepted task receipt. |
 | `permissions` | None | Available | Accepted task receipt. |
 | `database-adapter` | None | Available | Accepted task receipt. |
 | `package-config` | None | Available | Accepted task receipt. |
 | `protected-shell` | None | Available | Accepted task receipt. |
 | `recovery-contract` | None | Available for explicit G-006B acquisition | G-006A edited no recovery files and its staged artifact passed the merged release gate at `f340752`. |
-| `full-release-gate` | None | Available; merged G-006A staged-artifact gate passed | `npm run release:check` exited 0 in 89.8 seconds at merge `f340752fe4c76df6952982f8e742332b88193d65`. |
+| `full-release-gate` | None | Available; merged G-006A-P gate passed | `npm run release:check` exited 0 in 140.5 seconds at merge `10a46dba346e3c62aff54e0785f552e04bcced72`. |
 
 No domain lane may claim a lock implicitly. Every acquisition must name the task, exhaustive protected paths, integration baseline, expected release evidence, and stop conditions in the ledger.
 
@@ -60,8 +60,8 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 | `G-006` | Parent split open | Preserve every success criterion through serialized G-006R recovery identity, staged G-006A fresh schema/coordinator, G-006B receipt-bound finalization, and the G-006C compatibility-adapter sequence. Accept only after all children independently pass and startup activation is proven. |
 | `G-006R` | Accepted | Repaired source `3443816` passed fresh domain/security and independent Quality review, merged at `43a2387`, and passed the full merged release gate. |
 | `G-006A` | Accepted staged-artifact milestone; child remains open | Round-6 source `87795a7` passed fresh dual review, merged at `f340752`, and passed the full merged release gate. Startup activation remains blocked until G-006B and G-006C0-C6 complete. |
-| `G-006A-P` | Fresh dual review passed; ready for local merge | Source `c7d6e8e` has no P0-P3 findings. Sol must merge locally and pass the full merged release gate before acceptance or lock release. |
-| `G-006B` | Blocked on accepted G-006A-P | B1 remains legacy-only: verified backup/schema-3 archive and source binding, four nullable source columns, exact backfill, durable prepared/committed evidence, and restart proof. Final constraints, `location_mode`, and startup remain later work. |
+| `G-006A-P` | Accepted recognition-only prerequisite | Source `c7d6e8e` passed fresh dual review, merged at `10a46db`, and passed the full merged release gate. It grants no prepared-state finalizer or startup authority. |
+| `G-006B` | B1 ready for explicit launch | B1 remains legacy-only: verified backup/schema-3 archive and source binding, four nullable source columns, exact backfill, durable prepared/committed evidence, and restart proof. Final constraints, `location_mode`, and startup remain later work. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
 | `UI-000` | Ready; capacity/approval-queued | Seven-artifact design packet is ready. Terra-medium is authorized, but implementation remains capacity-queued and explicit product/design/accessibility approval is still required before task acceptance. |
@@ -1009,6 +1009,16 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 - Sol authorizes only the local no-fast-forward merge and merged release gate.
   B1, lock release, prerequisite acceptance, startup, and external activity
   remain unauthorized until that gate passes.
+- Sol merged source `c7d6e8e` locally without conflicts at
+  `10a46dba346e3c62aff54e0785f552e04bcced72`. The exact merged
+  `npm run release:check` exited 0 in 140.5 seconds: TypeScript, ESLint, the
+  37-table recovery verifier, 126 passing test files with 2,247 passing tests,
+  the Next.js production build, and Playwright 5/5 all passed. The integration
+  worktree is clean with zero matching temp directories or processes.
+- G-006A-P is accepted as a recognition-only prerequisite and `sqlite-schema`
+  is released. G-006A remains open, no startup/finalizer authority was added,
+  and parent G-006 remains open. G-006B B1 is now eligible only for its own
+  explicit locks and bounded producer packet.
 - After that prerequisite is accepted, B1 owns its separate `BEGIN IMMEDIATE`
   pre-finalization transaction and exact intermediate verifier. B1 will retain
   T-028's historical checksum unchanged, use a separately versioned full-row
