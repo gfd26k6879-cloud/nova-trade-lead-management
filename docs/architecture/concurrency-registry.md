@@ -850,3 +850,12 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   only accepted result; failures preserve the primary verification error while
   still attempting rollback and deterministic close. Commits after the second
   sample are explicitly outside the returned guarantee.
+- Round-5 source `9756f93ff6d296c851539f2486ebe48ac4838d28` is exactly one
+  commit over rejected `c23d280`, changes three of the four permitted paths,
+  and leaves the Platform worktree clean. Producer gates report focused Vitest
+  32/32, typecheck, full lint, 37-table recovery verification, diff/scope, and
+  zero residue. The unchanged schema-pin file required no round-5 edit.
+- Fresh domain/security and independent Quality rereviews are active. They own
+  the options-claim lifecycle, malformed falsey handoffs, exhaustive schema
+  partition, coherent verifier interval, all prior exploit classes, topology,
+  and cleanup. No merge or acceptance is authorized yet.
