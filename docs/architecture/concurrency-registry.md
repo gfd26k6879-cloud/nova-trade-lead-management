@@ -1672,3 +1672,24 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   complete parent G006C/G006B/G006, or authorize external activity. The next
   serialized child is G006C1 initialization and explicit fresh binding. The
   known policy-blocked `g006b-identity-cleanup-qjkSgV` root remains untouched.
+
+## G-006C1 initialization and fresh-binding preflight launch
+
+- G006C1 begins from clean accepted C0 control `dbad727`. It may define the
+  smallest explicit fresh-foundation provisioning/verification boundary and
+  the initialization handoff required by later writer slices. It cannot wire
+  ordinary C2-C6 writers, apply final G006B constraints, activate final G006A
+  startup, infer a tenant/workspace/owner/policy/source/play identity, fabricate
+  T-028, or grant authentication/authorization/provider authority.
+- Three read-only preflights run under the four-agent ceiling. Architecture owns
+  the current initialization call graph, staged G006A/B contracts, fresh versus
+  upgraded lifecycle handoff and smallest compile-safe path ceiling. Security
+  owns explicit-foundation trust, idempotency, transaction/race/failure
+  boundaries, no defaults or receipt-as-authority, and storage-only capability
+  semantics. Quality owns every initialization/catalog mutation, PostgreSQL and
+  public-signature invariance, executable fresh/upgraded/restart/negative matrix,
+  path collisions, locks and split sizing.
+- Preflights are lock-free and read-only, may use only disposable local fixtures,
+  and cannot edit, implement, accept, merge or touch the known blocked root.
+  Sol must reconcile one explicit bounded Terra-medium packet before any C1
+  producer edit. C2-C6 and final G006B/G006A/G006 remain closed.
