@@ -408,3 +408,13 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   they hold no locks and make no changes. They cannot authorize G-006A or cross
   its accepted-G-006R dependency; their only output is Sol-reconciled launch
   evidence for the next child.
+- Repair source `f11cb1abcb6b36734b8dee637bc832aad82811f5` is exactly
+  one commit over rejected `9087af7`, changes the same seven paths, and leaves
+  the producer worktree clean. Producer evidence is green; fresh independent
+  rereview is active and the source is not merged or accepted.
+- The G-006A domain preflight found that its final schema/coordinator can be a
+  four-path structural artifact, but startup activation before current SQLite
+  writers receive an explicit compatibility scope would break the preserved
+  local workflow. A bounded G-006C compatibility adapter is therefore under
+  Sol reconciliation; tenant defaults, inferred scope, and early startup wiring
+  remain forbidden.
