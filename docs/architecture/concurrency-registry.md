@@ -1693,3 +1693,59 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   and cannot edit, implement, accept, merge or touch the known blocked root.
   Sol must reconcile one explicit bounded Terra-medium packet before any C1
   producer edit. C2-C6 and final G006B/G006A/G006 remain closed.
+
+## G-006C1 fresh-foundation reconciliation
+
+- All three preflights completed read-only against clean launch `43209da` with
+  no edits, tests, locks, temporary resources or blocked-root access. They agree
+  C1 is a detached explicit fresh-foundation producer/verifier only. It must not
+  call `getDb()`, `ensureDbReady()`, wire startup, seed geography, edit ordinary
+  writers, alter PostgreSQL, fabricate T-028, or create source/play/location
+  records absent from the accepted schema.
+- Quality found 123 `ensureDbReady()` call sites across 21 files and 224 direct
+  `getDb()` calls, making any C1 runtime hook unbounded. The legacy SQLite path
+  reaches 191 conditional column migrations, a four-DDL leads rebuild, 190
+  schema objects, business-type repair, 179 ZIP upserts, geography seeds and
+  repairs. These paths remain byte-identical and disconnected from C1.
+- Sol selects a four-path contract: modify
+  `src/lib/db/sqlite-compatibility-scope.ts`; add
+  `src/lib/db/sqlite-fresh-compatibility-scope.ts`; add
+  `src/lib/__tests__/sqlite-fresh-compatibility-scope.test.ts`; and add
+  `docs/validation/2026-07-30-g006c1-sqlite-fresh-foundation.md`. Existing C0
+  `verifyCompatibilityScope`, `requireSqliteCompatibilityScope`, upgraded scope
+  type and typed fresh rejection remain exact. New separately named fresh
+  provision/require APIs use the same fieldless `SqliteCompatibilityBinding`
+  type but a private fresh state map and fresh storage-scope result. Only the
+  explicit fresh API dynamically loads the new SQLite producer.
+- Fresh input is an exact descriptor-safe deep snapshot naming a canonical
+  caller-owned existing empty database, expected device/FileId and journal
+  mode, tenant/workspace, owner identity/membership/role, every persisted tenant
+  and policy fact, fixed `google_places_legacy` source card, explicit accepted
+  compatibility-play seed/version/configuration/binding pins, staged G006A
+  catalog/internal/physical/user-version pins, and caller-pinned canonical
+  foundation/binding hashes. No first/only/latest/environment/request/default
+  selection or SQL default establishes authority.
+- C1 retains the exact file descriptor and verifies path identity before opening
+  an uncached direct connection. One outer `BEGIN IMMEDIATE` owns both accepted
+  `createFreshSqliteSchemaV1` and the five named foundation inserts. A local
+  disposable probe proved the existing nested immediate transaction becomes a
+  savepoint: outer rollback removes both schema and rows. Exact staged state
+  with the identical full foundation is replay; empty/partial/extra/different
+  staged state and every other catalog kind reject without repair.
+- The only successful durable rows are exactly one tenant, workspace, active
+  owner membership, current owner role binding and tenant policy. Every other
+  application table, including T-028 receipts and location reference data,
+  remains empty. After commit C1 closes, independently reopens read-only under
+  the retained identity, and repeats catalog, row, relationship, count, orphan,
+  policy/source/play/hash and journal verification before C0 mints a capability.
+  Post-commit uncertainty is typed committed-unverified recovery-required;
+  pre-commit failure rolls back and never deletes the caller-owned file.
+- Logical producer locks are `sqlite-schema`, `sqlite-compatibility-binding` and
+  `fresh-foundation`. C1 creates no G006B lock and transfers no descriptor or
+  lock beyond the call. The focused matrix must contain at least 24 substantive
+  fresh/create/replay/race/failure/input/trust cases; existing C0, G006A, G006B,
+  PostgreSQL/readiness/session, typecheck, zero-warning lint, build, recovery,
+  four-path/protected-blob and zero-residue gates are mandatory. Stop on a fifth
+  path, signature drift, non-atomicity, unsafe cleanup, final user-version 6002,
+  startup/writer/G006A/B edit, new schema/receipt, location ownership need,
+  inference/defaulting, external activity or blocked-root access.
