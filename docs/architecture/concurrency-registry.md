@@ -741,3 +741,13 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   are preserved across mint, lock, plan, commit, reopen, and replay; a caller
   can never supply the sequence value. Declared plan and bind lengths must be
   rejected before allocation, descriptor walking, or element inspection.
+- Round-3 source `b2843b8bff6d44d2861318c9523fe8780f12395e` is exactly one
+  commit over rejected `868efdc`, changes the same four paths, and leaves the
+  Platform worktree clean. Producer gates report focused Vitest 23/23,
+  typecheck, full lint, 37-table recovery verification, diff/scope checks, and
+  zero task residue. This evidence does not authorize merge or acceptance.
+- Fresh domain/security and independent Quality rereviews are active against
+  the immutable source. In addition to all prior gates, they must test whether
+  the mint-time file lease is truly retained rather than reduced to a reusable
+  identity tuple, and whether every unexpected SQLite-owned object such as
+  `sqlite_stat1` is rejected rather than only validating `sqlite_sequence`.
