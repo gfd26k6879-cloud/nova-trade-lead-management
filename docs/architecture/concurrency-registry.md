@@ -1878,3 +1878,29 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   unaccepted until Sol verifies source-blob equivalence and runs the mandatory
   merged-control focused, regression, release, recovery, scope, JSONL and residue
   gates. C2-C6 and all parent completion remain closed.
+
+## G-006C1 accepted fresh-foundation milestone
+
+- Sol locally merged reviewed cumulative source `141aa2c` with non-fast-forward
+  merge `4b681d3`, whose first parent is exact source-review control `0dc41da`.
+  The first-parent delta is exactly the four authorized C1 paths, and every
+  merged source blob is byte-identical to the independently reviewed source.
+- On merged control, focused C1 passes 53/53 with one intentional parent-only
+  worker skip in 20.98 seconds. The combined C0, G006A, PostgreSQL/readiness and
+  tenant-session regression family passes 76/76 in 160.17 seconds.
+- Mandatory `npm run release:check` passes end to end in 1112.7 seconds:
+  TypeScript, full ESLint, 37-table recovery, the entire Vitest suite including
+  inherited G006B, Next.js production build and local public read-only Playwright
+  smoke are green. This merged full-suite pass resolves the producer's inherited
+  G006B 70/71 validation exception without changing G006B source.
+- Final diff/scope, source-blob, JSONL (551 records), worktree and process audits
+  pass. No C1 temp root or task Node process remains. The two previously disclosed
+  ownerless `g006b-b1-ZKgBDT` and `g006b-b1-Y18U0Y` roots remain recoverable only
+  because guarded cleanup is policy-blocked; no new root was created by merged
+  validation. The known `g006b-identity-cleanup-qjkSgV` root remains excluded and
+  untouched.
+- G006C1 is accepted only as the local explicit fresh-foundation provisioning,
+  verification and fieldless storage-binding milestone. It does not wire startup
+  or ordinary writers, grant authentication/authorization/provider execution,
+  complete G006C/G006B/G006, or authorize external activity. The next serialized
+  child is G006C2.
