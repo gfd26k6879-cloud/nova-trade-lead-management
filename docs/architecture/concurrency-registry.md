@@ -2419,3 +2419,47 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   edit, test mutable fixtures, create temporary resources, access blocked roots,
   perform external activity or authorize finalization, C2B/C, C3-C6, startup or
   later-card implementation. Sol must reconcile their evidence before any edit.
+
+## G-006 finalization-first reconciliation and G-006B-B2 launch packet
+
+- Architecture returns GO for finalizer implementation first and STOP for
+  finalizer activation first. The existing product order remains binding for the
+  durable database and startup: G006B finalization is not executed or activated
+  until C2-C6 writer coverage passes. Source implementation and disposable-
+  fixture proof do not depend on those writers and may run first so every writer
+  subsequently targets the same final schema.
+- Security and Terra-medium Quality return REPAIR because current control has no
+  remaining-finalizer contract. They agree on the safe runtime boundary: the
+  final handoff authenticates historical B1 lineage, canonical/native file
+  identity, final catalog/physical schema, immutable receipt/foundation/scope,
+  journal and health. Operational rows are mutable by design after finalization.
+  The binding does not claim detection or provenance for a constraint-valid
+  offline in-place operational-row edit; a stronger claim would require a
+  separately approved external mutable integrity root that is not inferred here.
+- B2 implements only the exact quiescent `prepared-legacy@6000` to `final@6002`
+  transition. It authenticates the existing B1 PREPARED/COMMITTED chain, publishes
+  a separately versioned finalization PREPARED record, retains the same-file
+  native lease through one `BEGIN IMMEDIATE`, losslessly rebuilds the seventeen
+  transformation tables, explicitly derives `crawl_units.location_mode` only
+  from validated legacy facts, preserves audit/receipt and sequence state, then
+  close/reopen-verifies and durably publishes finalization COMMITTED evidence.
+  Execute, resume, replay and every ambiguous artifact/database crash pairing are
+  explicit; B1 artifacts are never overwritten or reinterpreted.
+- The B2 producer ceiling is seven existing paths:
+  `sqlite-g006b-pre-finalization.ts`, its focused test, the Windows durable-
+  publisher script, the existing G006B receipt, `sqlite-schema-coordinator.ts`,
+  its focused test, and the existing G006A receipt. The producer must first return
+  a GO/STOP API/state-machine choreography with zero changes. The publisher path
+  may remain unchanged if its existing closed command vocabulary suffices; an
+  eighth path, schema-definition change, generic prepared-state capability,
+  C0/C1/C2A/C2B edit, startup/caller/PostgreSQL change, persistent database
+  execution or external action is a stop.
+- C0/C1 finalized-only remint and C2A finalized-binding consumption remain a
+  separate serialized repair after accepted B2 source. C2B/C and C3-C6 remain
+  their original cards and will be implemented/tested against disposable fresh-
+  final and upgraded-final fixtures. Final activation and startup remain last.
+  G006A/B/C and parent G006 stay open; no card, Q-040 or T-029 scope is removed.
+- Terra-medium owns isolated branch `codex/nova-g006b-finalization` in
+  `C:\Users\Masih\Documents\NovaTradeWorktrees\g006b-finalization` from this
+  launch control. It has no acceptance authority. Architecture/security review,
+  Sol merged-control gates and truthful receipt evidence remain mandatory.
