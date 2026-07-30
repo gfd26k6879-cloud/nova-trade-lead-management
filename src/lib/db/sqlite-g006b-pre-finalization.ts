@@ -444,7 +444,7 @@ function canonicalDirectoryTarget(value: string, label: string): string {
 
 const POWERSHELL_EXE = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 const PUBLISHER_SCRIPT_PATH = fileURLToPath(new URL("../../../scripts/g006b-windows-durable-publish.ps1", import.meta.url));
-const PUBLISHER_NORMALIZED_SHA256 = "30ed26bdb82a104412a35e4dc2251e19f92b6a42d670aba63cbec04c522c0e75";
+const PUBLISHER_NORMALIZED_SHA256 = "d56b9450dccb8da2877ef12078b78d1887b6ab77ae6d4f181f16b3c33b3e4a27";
 const NATIVE_COMMAND_TIMEOUT_MS = 30_000;
 const BROKER_RESPONSE_TIMEOUT_MS = 30_000;
 
@@ -1057,6 +1057,24 @@ class NativeDatabaseLease {
     await this.#ack(`resource-release\t${path}`, "resource-released");
   }
 
+  public async retainFinal(path: string, kind: "file" | "directory"): Promise<void> {
+    let retained: Record<string, unknown> | SqliteG006bNativeIdentity;
+    if (kind === "file") {
+      await this.writeCommand(`final-retain-file\t${path}`);
+      retained = await this.#next("final-retained");
+    } else {
+      retained = await this.#ack(`final-retain-directory\t${path}`, "final-retained");
+      exactKeys(retained, ["status", "volumeSerialNumber", "fileId", "size", "numberOfLinks", "attributes", "finalPath", "sha256", "fileSystem"], "retained final directory");
+      if (typeof retained.volumeSerialNumber !== "string" || !/^[0-9]+$/u.test(retained.volumeSerialNumber)
+          || typeof retained.fileId !== "string" || !/^[0-9a-f]{32}$/u.test(retained.fileId)
+          || !Number.isSafeInteger(retained.size) || Number(retained.size) < 0 || !Number.isSafeInteger(retained.numberOfLinks)
+          || Number(retained.numberOfLinks) < 1 || retained.sha256 !== null || retained.fileSystem !== "NTFS" || retained.finalPath !== path) {
+        fail("G006B_PUBLISH_FAILED", "retained final directory identity");
+      }
+    }
+    this.#publicationEver = true;
+  }
+
   async #reconcilePublication(error: unknown): Promise<never> {
     const pending = this.#pendingPublication!;
     await this.#terminate();
@@ -1443,6 +1461,32 @@ function readEnvelope(path: string, phase: "prepared" | "committed"): RecordEnve
   return envelope;
 }
 
+async function retainRecoveryArtifactSet(input: ValidatedInput, lease: NativeDatabaseLease, includeCommitted: boolean): Promise<RecordEnvelope> {
+  try {
+    await lease.retainFinal(input.preparedPath, "file");
+  } catch (error) {
+    if (!includeCommitted) fail("G006B_PREPARED_RECORD_REQUIRED", `resume PREPARED retention: ${message(error)}`);
+    fail("G006B_RECOVERY_REQUIRED", `replay PREPARED retention: ${message(error)}`);
+  }
+  if (includeCommitted) {
+    try {
+      await lease.retainFinal(input.committedPath, "file");
+    } catch (error) {
+      fail("G006B_RECOVERY_REQUIRED", `replay COMMITTED retention: ${message(error)}`);
+    }
+  }
+  const prepared = readEnvelope(input.preparedPath, "prepared");
+  try {
+    await lease.retainFinal(input.backupPath, "file");
+    await lease.retainFinal(input.archiveDirectory, "directory");
+    const names = [...TABLE_NAMES.map((table: string) => `${table}.json`), "manifest.json"].sort(compareCodeUnits);
+    for (const name of names) await lease.retainFinal(join(input.archiveDirectory, name), "file");
+    return prepared;
+  } catch (error) {
+    fail("G006B_RECOVERY_REQUIRED", `${includeCommitted ? "replay" : "resume"} retained artifact set: ${message(error)}`);
+  }
+}
+
 function archiveEntries(directory: string): readonly Record<string, CanonicalValue>[] {
   const expected = [...TABLE_NAMES.map((table: string) => `${table}.json`), "manifest.json"].sort(compareCodeUnits);
   const actual = readdirSync(directory).sort(compareCodeUnits);
@@ -1751,10 +1795,11 @@ export async function inspectSqliteG006bPreFinalizationEvidence(input: SqliteG00
     const journalMode = assertDatabaseConnectionBoundary(db);
     const dataVersion = Number(db.pragma("data_version", { simple: true }));
     const physical = sqliteSchemaV1PhysicalManifestDigest(db);
-    assertAcceptedState(db, physical);
+    const capturedState = assertAcceptedState(db, physical);
     const preservation = capturePreservation(db);
     const row = receiptRow(db, snapshot.manifest);
     const receipt = parseReceipt(row);
+    const capturedReceiptRowSha256 = receiptRowSha256(row);
     const manifestHash = compatibilityManifestHash(snapshot.manifest);
     const replay = runSqliteCompatibilityBackfill(readonlyBackfillAdapter(db), snapshot.manifest);
     if (!sameCanonical(replay, receipt)) fail("G006B_EVIDENCE_DRIFT", "inspection T028 replay");
@@ -1775,12 +1820,47 @@ export async function inspectSqliteG006bPreFinalizationEvidence(input: SqliteG00
     db = undefined;
     const sourceIdentity = await acquired.lease.settle();
     await acquired.lease.captureSidecars(snapshot.databasePath);
+    const verifier = new Database(snapshot.databasePath, { readonly: true, fileMustExist: true });
+    try {
+      verifier.pragma("foreign_keys = ON");
+      verifier.exec("BEGIN");
+      const reopenedDataVersion = Number(verifier.pragma("data_version", { simple: true }));
+      const reopenedJournalMode = assertDatabaseConnectionBoundary(verifier);
+      const reopenedPhysical = sqliteSchemaV1PhysicalManifestDigest(verifier);
+      const reopenedState = assertAcceptedState(verifier, physical);
+      const reopenedPreservation = capturePreservation(verifier);
+      const reopenedRow = receiptRow(verifier, snapshot.manifest);
+      const reopenedReceipt = parseReceipt(reopenedRow);
+      const reopenedReplay = runSqliteCompatibilityBackfill(readonlyBackfillAdapter(verifier), snapshot.manifest);
+      const reopenedBinding = bindLegacyWebsiteLeadPlay({
+        tenantId: snapshot.manifest.tenantId,
+        workspaceId: snapshot.manifest.workspaceId,
+        manifest: snapshot.manifest,
+        receipt: reopenedReceipt,
+        seed: parsedSeed.seed,
+      });
+      if (reopenedPhysical !== physical || !sameCanonical(reopenedState, capturedState)
+          || !samePreservation(reopenedPreservation, preservation)
+          || receiptRowSha256(reopenedRow) !== capturedReceiptRowSha256
+          || !sameCanonical(reopenedReceipt, receipt) || !sameCanonical(reopenedReplay, receipt)
+          || !reopenedBinding.ok || reopenedBinding.binding.bindingId !== binding.binding.bindingId
+          || reopenedBinding.binding.configurationHash !== binding.binding.configurationHash
+          || reopenedJournalMode !== journalMode || reopenedDataVersion !== dataVersion
+          || Number(verifier.pragma("data_version", { simple: true })) !== reopenedDataVersion) {
+        fail("G006B_EVIDENCE_DRIFT", "inspection reopened logical snapshot differs from captured BEGIN IMMEDIATE snapshot");
+      }
+      verifier.exec("COMMIT");
+    } catch (error) {
+      if (verifier.open && verifier.inTransaction) { try { verifier.exec("ROLLBACK"); } catch { /* primary is preserved */ } }
+      throw error;
+    } finally { verifier.close(); }
     await acquired.lease.inspectAndReleaseSidecars();
-    if (!sameCanonical(sourceIdentity, acquired.identity)) fail("G006B_EVIDENCE_DRIFT", "inspection main bytes changed across snapshot close");
+    const postCloseIdentity = await acquired.lease.inspect();
+    if (!sameCanonical(postCloseIdentity, sourceIdentity)) fail("G006B_EVIDENCE_DRIFT", "inspection main changed after settled logical verification");
     result = deepFreeze({
-      sourceIdentity,
+      sourceIdentity: postCloseIdentity,
       acceptedPhysicalManifestDigest: physical,
-      receiptRowSha256: receiptRowSha256(row),
+      receiptRowSha256: capturedReceiptRowSha256,
       bindingId: binding.binding.bindingId,
       configurationHash: binding.binding.configurationHash,
       preservationAggregateSha256: preservation.aggregateSha256,
@@ -1821,14 +1901,10 @@ export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFina
     }
     let prepared: RecordEnvelope;
     let receipt: CompatibilityBackfillReceipt;
-    const preparedExists = existsSync(input.preparedPath);
-    const committedExists = existsSync(input.committedPath);
-    if (input.mode === "execute" && (preparedExists || committedExists)) fail("G006B_STATE_REJECTED", "execute requires absent handoff records");
-    if (input.mode === "resume" && (!preparedExists || committedExists)) fail("G006B_PREPARED_RECORD_REQUIRED", "resume requires PREPARED and absent COMMITTED");
-    if (input.mode === "replay" && (!preparedExists || !committedExists)) fail("G006B_RECOVERY_REQUIRED", "replay requires PREPARED and COMMITTED");
+    if (input.mode === "execute" && (existsSync(input.preparedPath) || existsSync(input.committedPath))) fail("G006B_STATE_REJECTED", "execute requires absent handoff records");
 
     if (input.mode === "replay") {
-      prepared = readEnvelope(input.preparedPath, "prepared");
+      prepared = await retainRecoveryArtifactSet(input, lease, true);
       if (prepared.handoffId !== input.expectedPreparedHandoffId) fail("G006B_RECOVERY_REQUIRED", "prepared handoff pin");
       ({ receipt } = assertPreparedPayload(input, prepared.payload));
       const committed = readEnvelope(input.committedPath, "committed");
@@ -1843,7 +1919,8 @@ export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFina
       if (committed.payload.bindingHash !== bindingHash) fail("G006B_RECOVERY_REQUIRED", "committed binding hash");
       result = deepFreeze({ mode: "replay", status: "replayed", preparedHandoffId: prepared.handoffId, committedHandoffId: committed.handoffId, bindingHash });
     } else if (input.mode === "resume") {
-      prepared = readEnvelope(input.preparedPath, "prepared");
+      prepared = await retainRecoveryArtifactSet(input, lease, false);
+      if (existsSync(input.committedPath)) fail("G006B_PREPARED_RECORD_REQUIRED", "resume requires absent COMMITTED");
       if (prepared.handoffId !== input.expectedPreparedHandoffId) fail("G006B_RECOVERY_REQUIRED", "prepared handoff pin");
       ({ receipt } = assertPreparedPayload(input, prepared.payload));
     } else {
@@ -1939,14 +2016,19 @@ export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFina
   const detail = [commitError === undefined ? undefined : `COMMIT returned: ${message(commitError)}`, primary === undefined ? undefined : message(primary)].filter(Boolean).join("; ") || "post-commit cleanup failed";
   if (commitInvoked || (result?.status === "replayed")) throw new SqliteG006bCommittedUnverifiedError(detail, cleanup);
   if (primary instanceof SqliteG006bCommittedUnverifiedError) throw new SqliteG006bCommittedUnverifiedError(message(primary), [...primary.cleanupFailures, ...cleanup]);
-  if (primary instanceof SqliteG006bPublishedUnverifiedError || cleanupPublishedUnverified) {
-    const published = primary instanceof SqliteG006bPublishedUnverifiedError ? primary : cleanupPublishedUnverified!;
+  if (primary instanceof SqliteG006bPublishedUnverifiedError) {
     throw new SqliteG006bPublishedUnverifiedError(
-      primary && primary !== published ? `${message(primary)}; ${message(published)}` : message(published),
-      [...published.cleanupFailures, ...cleanup],
+      message(primary),
+      [...primary.cleanupFailures, ...cleanup],
     );
   }
   if (primary instanceof SqliteG006bError) throw new SqliteG006bError(primary.code, message(primary), [...primary.cleanupFailures, ...cleanup]);
+  if (cleanupPublishedUnverified) {
+    throw new SqliteG006bPublishedUnverifiedError(
+      primary ? `${message(primary)}; ${message(cleanupPublishedUnverified)}` : message(cleanupPublishedUnverified),
+      [...cleanupPublishedUnverified.cleanupFailures, ...cleanup],
+    );
+  }
   throw new SqliteG006bError(
     input.mode === "replay" ? "G006B_RECOVERY_REQUIRED" : "G006B_STATE_REJECTED",
     primary === undefined ? `${input.mode} cleanup failed` : message(primary),

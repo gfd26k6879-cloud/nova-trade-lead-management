@@ -4,72 +4,77 @@ Date: 2026-07-30
 
 Branch: `codex/nova-platform-tenancy`
 
-Immutable repair parent: `9dc6742baf0cb5472871449c0b409b55f189ec67`
+Immutable rejected repair parent: `bbe51bfa7d76e0bcb44e4c1523e2a20fecb00f58`
 
-Integration rejection control: `752f17a1e0190b2a2cde67359f004df9ed0af647`
+Integration rejection control: `262b7391c67b0ad749503d6e845383adb9a9f23e`
 
-Launch control: `f4e5390cf6f39088c87bb9f565f5989fe9f38f76`
+Launch control: `1c4e33ab54f8006e62c2936d8caadb606958a97d`
 
 Authority remains local legacy-only B1 preparation. This delta does not authorize startup activation, journal-mode transition, WAL checkpointing, provider execution, restore, deployment, production mutation, or final schema upgrade.
 
 ## Result
 
-The rejected B1 tip is repaired by making the long-lived Windows broker the sole writer and lifecycle owner for backup, archive, PREPARED, and COMMITTED staging files. Each file is created with a retained native handle, written in bounded chunks through that same handle, flushed, inspected, and moved with no-replace semantics without a Node path reopen. The backup bytes come from `better-sqlite3` serialization while the existing `BEGIN IMMEDIATE` transaction remains held.
+The rejected B1 tip is repaired by extending the long-lived Windows broker's native ownership through the complete operation boundary. Publication acknowledgement now transfers the exact backup, 38 archive children, PREPARED, COMMITTED, and final archive-parent handles into a retained-final registry. The broker challenges each final and its parent before acknowledgement, re-inspects the exact terminal set, requires the archive directory to contain exactly its 38 registered children, flushes parent handles, and releases finals only with the database lease. EOF, transport, and error paths inspect and release handles but never delete published finals. Drift or release uncertainty after COMMIT is committed-unverified.
 
-The final archive directory is retained through all 38 child publications, its parent is flushed through the broker, and its complete tree is validated before release. A newly created final directory is persistent rather than cleanup-owned; an exact preexisting final directory is retained as a non-owning resource. Cleanup-owned resources are finalized in reverse creation order, so children precede parents. Persistent and non-owning resources are released, not deleted. The exact lock identity is deleted and its parent flushed after resource cleanup. Cleanup failures remain ordered diagnostics.
+Resume and replay retain PREPARED (and COMMITTED for replay) before reading either handoff. They then retain the backup, strict archive parent, and all 38 archive children before validation. A real acquisition loss is recovery-required; malformed or semantically invalid retained records preserve the established input/evidence taxonomy. An explicit pre-COMMIT `SqliteG006bError` primary is not masked by cleanup-only publication uncertainty.
 
-After any publication command loses the broker, Node independently inspects the exact recorded source and destination. An exact source identity with exact bytes is an ordinary failure only when no earlier publication occurred. A missing, replaced, or changed source is publication-uncertain; the destination is preserved, exact fallback cleanup is attempted only against recorded identities, and the exact lock receives the same identity-safe fallback. A moved destination is never deleted. Once `COMMIT` has been invoked, all unresolved verification, publication, transport, lease-release, or cleanup outcomes are committed-unverified.
+The lock is marked delete-on-close immediately after kernel creation and before flush, hash, inspection, or ready output. A broker death before ready therefore removes the lock while an active first broker still excludes a second broker. Standalone `InspectFile` denies write/delete sharing for its entire hash, then rechecks exact identity, size, attributes, link count, and final path before returning.
 
-The public execute/resume/replay union, T-028 receipt contract, G-023 binding, 37-table preservation evidence, schema-3 archive, four-table nullable `source_card_id` mutation, `user_version = 6000`, journal-mode pin, hostile-PATH protection, and error taxonomy remain intact. Error details are normalized so a G006B code is not duplicated when one G006B error wraps another.
+The public execute/resume/replay union, T-028 receipt contract, G-023 binding, 37-table preservation evidence, schema-3 archive, four-table nullable `source_card_id` mutation, `user_version = 6000`, journal-mode pin, hostile-PATH protection, and error taxonomy remain intact. The independent test oracle implements test-local canonical JSON, domain SHA-256, archive-tree hashing, envelope rehashing, and binding rehashing rather than using production exports for rejection expectations.
 
 ## WAL and native identity boundary
 
 The operation accepts only the already-persisted `delete/normal` or `wal/normal` boundary. It reads `PRAGMA journal_mode`; the implementation contains no journal-mode assignment and no WAL checkpoint.
 
-Zero-WAL inspection is performed while `BEGIN IMMEDIATE` excludes a valid competing writer. After writer close, the broker acquires the settled main-file handle, then captures WAL/SHM through retained metadata handles derived from their final paths. It rejects a nonzero WAL, later WAL appearance, sidecar disappearance or replacement, and size growth. It rechecks the retained sidecars after the read-only verifier before releasing them. The settled main identity is authoritative; the repair does not claim unsupported equality between pre-close and post-close main-file size/SHA.
+Inspection captures catalog, physical manifest, accepted state, T-028 row and replay, G-023 binding/configuration, 37-table preservation, journal mode, and a `data_version` bracket inside `BEGIN IMMEDIATE`. After rollback and connection close, the broker settles the main file and captures sidecars. A read-only verifier reopens under the settled no-write/delete lease and must reproduce the captured logical evidence before close. The broker then re-inspects sidecars and the main handle and returns that post-close native identity. A real WAL last-close probe preserves volume/FileId while changing main-file size or SHA and is accepted only after this logical revalidation.
 
-All native inspection derives the final path, filesystem, and cloud-sync decision from the retained handle. Standalone native calls, broker command writes, response reads, and exit waits are bounded. The helper is invoked only with absolute `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`, `shell: false`, and a repository-relative canonical helper path.
+All native inspection derives final path, filesystem, and cloud-sync decisions from the retained handle. Standalone native calls, broker command writes, response reads, and exit waits are bounded. The helper is invoked only with absolute `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`, `shell: false`, and the repository-relative canonical helper path.
 
 Final normalized UTF-8/no-BOM helper SHA-256 and TypeScript pin:
 
-`30ed26bdb82a104412a35e4dc2251e19f92b6a42d670aba63cbec04c522c0e75`
+`d56b9450dccb8da2877ef12078b78d1887b6ab77ae6d4f181f16b3c33b3e4a27`
 
 ## Dynamic matrix
 
-The final test file contains 64 Vitest cases: 49 operation/contract cases using temporary SQLite fixtures and 15 direct Windows broker/host cases. Important dynamic rows executed inside those cases were:
+The final test file contains 71 executable Vitest cases. Important dynamic rows inside those cases are:
 
-| Matrix | Rows | Result |
+| Matrix | Rows | Executable assertion |
 | --- | ---: | --- |
-| Application-write substitution attempts | 79 retained paths covering backup, both archive stages, PREPARED, and COMMITTED | 79/79 rename and competing path-write attempts denied; zero temporary residue |
-| Final archive parent ownership | 2 (new and exact preexisting) | 2/2 retained through all 38 child publications; exact 38-entry tree |
-| Hard broker death after move but before ready | 4 (backup, archive child, PREPARED, COMMITTED) | 4/4 preserved the exact visible destination and returned published- or committed-unverified |
-| Parent EOF during application writes | 5 (backup, archive staging, archive child, PREPARED, COMMITTED) | 5/5 removed exact sentinels and lock without deleting prior finals |
-| Restart state table | 27 (`accepted/prepared/other` x PREPARED `absent/valid/invalid` x COMMITTED `absent/valid/invalid`) | 27/27 matched the explicit execute/resume/replay rules; rejected rows preserved exact database bytes and left zero temp/lock residue |
-| Source identity pins | 4 (volume serial, FileId, size, SHA-256) | 4/4 rejected before mutation |
-| Other evidence pins | 6 (accepted digest, T-028 row, G-023 binding, G-023 configuration, preservation, journal mode) | 6/6 rejected before mutation |
-| Exact-existing publication | 12 destination challenges | 12/12 retained and revalidated exact bytes |
-| Preexisting derived resources | 5 (backup temp, archive staging, archive child temp, PREPARED temp, COMMITTED temp) | 5/5 refused and preserved the occupant |
-| Retained sidecar races | 3 (replacement/disappearance, captured growth, appearance after absent capture) | 3/3 denied or rejected with exact lock cleanup |
-| Tamper coverage | PREPARED/COMMITTED missing, extra, raw alteration, self-rehashed semantic alteration; archive missing, extra, altered, self-rehashed semantic alteration; backup byte alteration | All rows rejected; published evidence not rewritten |
-| Binding/conflict coverage | operation ID, archive path, envelope hash, committed binding hash, nonidentical COMMITTED destination | All rows rejected; conflicting COMMITTED bytes preserved and reported committed-unverified |
-| Broker lifecycle | EOF child-before-parent cleanup, persistent release, exact lock deletion, two-broker exclusion, identical/different two-publisher races, real cleanup FileId mismatch | All rows passed; replacement occupants survived |
+| Retained final lifetime | 41 exact finals at PREPARED; 42 at terminal (backup, archive parent, 38 children, PREPARED, then COMMITTED) | Every file denies raw write/delete/rename and preserves bytes/FileId; the parent denies rename at PREPARED and terminal; terminal release succeeds only after exact-set inspection. |
+| Final archive-parent ownership | 2 (new and exact preexisting) | 2/2 deny parent replacement throughout child publication and finish with the exact 38-entry tree. |
+| Terminal tree drift | 1 injected extra child after COMMITTED | Returns committed-unverified; all 41 registered files preserve exact bytes/FileIds, the extra survives, database is prepared, and no lock/temp remains. |
+| Recovery acquisition loss | 1 child detached immediately before archive-parent retention | Source-absent/detached-present is proven before the broker command; resume returns recovery-required and preserves the detached bytes/FileId plus every other final. |
+| WAL last-close movement | 1 scoped real `VACUUM` at authority-connection close | Volume/FileId remain equal while settled size or SHA changes; logical post-close verifier accepts the settled identity and wrong journal pins remain evidence-drift. |
+| Pre-ready lock death | 512 MiB sparse database | No ready acknowledgement; second broker exits 16 while first lives; hard death leaves only the database and no lock/temp/process residue. |
+| Stable standalone inspection | 512 MiB file, 20 rename/write pairs | A non-mutating `r+` probe proves write sharing before spawn, denial while the helper is alive, and availability after exit; all attacks are denied and exact bytes/FileId/path/size return. |
+| Restart state table | 27 (`accepted/prepared/other` x PREPARED `absent/valid/invalid` x COMMITTED `absent/valid/invalid`) | 27/27 match execute/resume/replay rules; every row preserves database FileId and every preexisting final's bytes/FileId, successful rows have PREPARED/COMMITTED plus 38 children, and all rows leave zero lock/temp residue. |
+| Pin/replay coverage | 17 (2 handoff, 4 binding/path/envelope, 10 source/evidence, 1 successful replay) | Every row snapshots database, archive parent, and every visible final and proves the exact set, bytes, and FileIds are unchanged with zero lock/temp residue. |
+| Tamper coverage | 14 raw, malformed, missing/extra, trailing-byte, and independently self-rehashed semantic subrows | Every rejected row snapshots database, archive parent, and every visible final and proves no published evidence was rewritten; genuine pre-read acquisition loss is recovery-required and later semantic/content/tree drift remains evidence-drift. |
+| Hard broker death after move but before ready | 4 (backup, archive child, PREPARED, COMMITTED) | 4/4 preserve the exact visible destination and return published- or committed-unverified. |
+| Parent EOF during application writes | 5 (backup, archive staging, archive child, PREPARED, COMMITTED) | 5/5 remove exact sentinels and lock without deleting prior finals. |
+| Exact-existing publication and derived resources | 12 destination challenges plus 5 preexisting temp/staging occupants | All exact-existing destinations are retained and revalidated; every derived-resource occupant preserves exact bytes/FileId. |
+| Released-final process loss | 2 (EOF and hard death after three publication-release acknowledgements) | Every released final preserves exact bytes/FileId; no lock/temp remains. |
 
-The restart table authorizes only fresh execute; resume with valid PREPARED, absent COMMITTED, and an accepted or prepared database; and replay with valid PREPARED/COMMITTED plus the prepared database. No stale lock is broken, missing PREPARED is not reconstructed, and no automatic restore occurs.
+The restart table authorizes only fresh execute; resume with valid PREPARED, absent COMMITTED, and an accepted or prepared database; and replay with valid PREPARED/COMMITTED plus the prepared database. No stale lock is broken, missing PREPARED is reconstructed, or automatic restore occurs.
 
 ## Validation evidence
 
-Environment used for the final local gates: Windows, Node 24.13.1, better-sqlite3 12.9.0, SQLite 3.53.0.
+Environment: Windows, Node 24.13.1, better-sqlite3 12.9.0, SQLite 3.53.0.
 
-- `npx vitest run src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts --reporter=dot` - 64/64 passed, 1/1 file, exit 0; 648.61 seconds total and 647.69 seconds test time; no declared test or command timeout fired.
-- `npx vitest run src/lib/__tests__/compatibility-play.test.ts src/lib/__tests__/compatibility-tenant-backfill.test.ts src/lib/__tests__/data-transfer-contract.test.ts src/lib/__tests__/sqlite-schema-coordinator.test.ts --reporter=dot` - 4/4 files passed, 76 passed, 2 environment-gated PostgreSQL tests skipped, exit 0.
+- Post-readiness pre-freeze full gate: `npx vitest run src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts --reporter=dot` - 71/71 passed, 1/1 file, exit 0; 977.75 seconds total and 976.69 seconds test time.
+- Affected pin/tamper/inspection gate: the focused 17-case command passed 17/17 with 54 skipped, exit 0; 240.50 seconds total.
+- Standalone 512 MiB readiness probe: three consecutive isolated runs passed 1/1 each, exit 0; test times 1.20, 1.22, and 1.16 seconds.
+- `npx vitest run src/lib/__tests__/compatibility-play.test.ts src/lib/__tests__/compatibility-tenant-backfill.test.ts src/lib/__tests__/data-transfer-contract.test.ts src/lib/__tests__/sqlite-schema-coordinator.test.ts --reporter=dot` - 4/4 files passed, 76 passed, 2 environment-gated PostgreSQL tests skipped, exit 0; 33.31 seconds total.
 - `npm run typecheck` - exit 0.
 - `npm run lint` - exit 0, zero warnings.
-- `npm run build` - Next.js 16.2.6 production build passed, exit 0; compiled in 6.0 seconds, TypeScript completed in 11.3 seconds, 11/11 static pages generated.
+- `npm run build` - Next.js 16.2.6 production build passed, exit 0; compiled in 6.4 seconds, TypeScript completed in 12.2 seconds, 11/11 static pages generated.
 - `npm run db:verify:recovery` - exact 37-application-table recovery contract passed, exit 0.
 - PowerShell parser and helper hash/pin comparison - 0 parser errors; helper hash exactly equals the TypeScript pin above, exit 0.
 
-The 64-case file includes both operation-level tests and direct host probes; it is not described as a production or deployed end-to-end test. The two skipped related tests require PostgreSQL environment configuration and are not counted as passes. No external service, authenticated production environment, push, deploy, or production mutation was used.
+The 71-case file combines operation tests and direct Windows host probes; it is not a production or deployed end-to-end test. The two skipped related tests require PostgreSQL environment configuration and are not counted as passes. No external service, authenticated production environment, push, deploy, or production mutation was used. The post-receipt frozen authoritative rerun is reported from observed output in the producer handoff rather than preclaimed here.
 
 ## Remaining boundary
 
 This is a fail-closed Windows/NTFS durability and restart-reconciliation boundary. It does not claim cross-file ACID atomicity or physical-media survival across every controller/storage power-loss mode. It does not self-accept the integration rejection or authorize launch.
+
+The exact stale synthetic root `C:\Users\Masih\AppData\Local\Temp\g006b-identity-cleanup-qjkSgV` was reverified before repair work as the earlier task-owned root containing only `broker.db`, `broker.db.g006b.lock`, and `owned.tmp`, with no subdirectories or owning process. Local destructive-action policy rejected its exact guarded removal, so it remains untouched and recoverable and is not counted as residue from this repair run.

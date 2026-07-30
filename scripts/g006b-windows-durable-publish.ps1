@@ -45,13 +45,15 @@ public sealed class G006BNativeLease : IDisposable
     internal readonly bool Directory;
     internal readonly string OpenedPath;
     internal readonly bool MetadataOnly;
+    internal readonly bool DatabaseLock;
 
-    internal G006BNativeLease(SafeFileHandle handle, bool directory, string openedPath, bool metadataOnly = false)
+    internal G006BNativeLease(SafeFileHandle handle, bool directory, string openedPath, bool metadataOnly = false, bool databaseLock = false)
     {
         Handle = handle;
         Directory = directory;
         OpenedPath = openedPath;
         MetadataOnly = metadataOnly;
+        DatabaseLock = databaseLock;
     }
 
     public void Dispose()
@@ -234,7 +236,7 @@ public static class G006BNativeFile
         string filePath, int infoClass, IntPtr infoBuffer, uint infoBufferLength, IntPtr returnedLength);
 
     private static G006BNativeLease Open(
-        string path, uint access, uint share, bool directory, uint disposition, bool metadataOnly = false)
+        string path, uint access, uint share, bool directory, uint disposition, bool metadataOnly = false, bool databaseLock = false)
     {
         uint flags = FILE_FLAG_OPEN_REPARSE_POINT |
             (directory ? FILE_FLAG_BACKUP_SEMANTICS : FILE_ATTRIBUTE_NORMAL);
@@ -246,12 +248,12 @@ public static class G006BNativeFile
             handle.Dispose();
             throw new Win32Exception(error, "CreateFileW failed error " + error + " for " + path);
         }
-        return new G006BNativeLease(handle, directory, path, metadataOnly);
+        return new G006BNativeLease(handle, directory, path, metadataOnly, databaseLock);
     }
 
     public static G006BNativeLease OpenStableRead(string path, bool directory)
     {
-        return Open(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, directory, OPEN_EXISTING);
+        return Open(path, GENERIC_READ, FILE_SHARE_READ, directory, OPEN_EXISTING);
     }
 
     public static G006BNativeLease OpenSettledRead(string path)
@@ -276,7 +278,7 @@ public static class G006BNativeFile
 
     public static G006BNativeLease CreateLock(string path)
     {
-        return Open(path, GENERIC_READ | GENERIC_WRITE | DELETE, 0, false, CREATE_NEW);
+        return Open(path, GENERIC_READ | GENERIC_WRITE | DELETE, 0, false, CREATE_NEW, false, true);
     }
 
     public static G006BNativeLease CreateOwnedFile(string path)
@@ -289,7 +291,17 @@ public static class G006BNativeFile
         return Open(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, true, OPEN_EXISTING);
     }
 
-    public static G006BNativeLease CreateOwnedDirectory(G006BNativeLease parent, string path)
+    public static G006BNativeLease OpenDirectoryBridge(string path)
+    {
+        return Open(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, true, OPEN_EXISTING);
+    }
+
+    public static G006BNativeLease OpenRetainedDirectory(string path)
+    {
+        return Open(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, true, OPEN_EXISTING);
+    }
+
+    public static G006BNativeLease CreateOwnedDirectory(G006BNativeLease parent, string path, bool persistent)
     {
         string leaf = Path.GetFileName(path);
         if (String.IsNullOrWhiteSpace(leaf) || leaf.IndexOfAny(new char[] { '\\', '/', '\0' }) >= 0)
@@ -316,8 +328,9 @@ public static class G006BNativeFile
                 SecurityQualityOfService = IntPtr.Zero
             };
             IO_STATUS_BLOCK ioStatus;
+            uint desiredAccess = GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE | (persistent ? 0 : DELETE);
             int status = NtCreateFile(
-                out rawHandle, GENERIC_READ | GENERIC_WRITE | DELETE | SYNCHRONIZE,
+                out rawHandle, desiredAccess,
                 ref attributes, out ioStatus, IntPtr.Zero, FILE_ATTRIBUTE_DIRECTORY,
                 FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_CREATE,
                 FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT,
@@ -416,16 +429,29 @@ public static class G006BNativeFile
         StringBuilder id = new StringBuilder(32);
         foreach (byte value in identity.FileId.Identifier) id.Append(value.ToString("x2"));
         string finalPath = FinalPath(lease.Handle);
-        AssertNotCloudSyncRoot(finalPath);
+        bool deletePendingLock = lease.DatabaseLock;
+        if (!deletePendingLock) AssertNotCloudSyncRoot(finalPath);
+        string sha256 = lease.Directory || lease.MetadataOnly ? null : Hash(lease.Handle);
+        FILE_BASIC_INFO finalBasic = ReadInfo<FILE_BASIC_INFO>(lease.Handle, FileBasicInfo);
+        FILE_STANDARD_INFO finalStandard = ReadInfo<FILE_STANDARD_INFO>(lease.Handle, FileStandardInfo);
+        FILE_ID_INFO finalIdentity = ReadInfo<FILE_ID_INFO>(lease.Handle, FileIdInfo);
+        StringBuilder finalId = new StringBuilder(32);
+        foreach (byte value in finalIdentity.FileId.Identifier) finalId.Append(value.ToString("x2"));
+        string checkedFinalPath = FinalPath(lease.Handle);
+        if (identity.VolumeSerialNumber != finalIdentity.VolumeSerialNumber || id.ToString() != finalId.ToString() ||
+            standard.EndOfFile != finalStandard.EndOfFile || standard.NumberOfLinks != finalStandard.NumberOfLinks ||
+            basic.FileAttributes != finalBasic.FileAttributes || finalPath != checkedFinalPath)
+            throw new InvalidOperationException("retained inspection identity/size/path drift");
+        if (!deletePendingLock) AssertNotCloudSyncRoot(checkedFinalPath);
         return new G006BNativeIdentity {
-            VolumeSerialNumber = identity.VolumeSerialNumber.ToString(),
-            FileId = id.ToString(),
-            Size = standard.EndOfFile,
-            NumberOfLinks = standard.NumberOfLinks,
-            Attributes = basic.FileAttributes,
-            FinalPath = finalPath,
-            Sha256 = lease.Directory || lease.MetadataOnly ? null : Hash(lease.Handle),
-            FileSystem = FileSystemFor(finalPath)
+            VolumeSerialNumber = finalIdentity.VolumeSerialNumber.ToString(),
+            FileId = finalId.ToString(),
+            Size = finalStandard.EndOfFile,
+            NumberOfLinks = finalStandard.NumberOfLinks,
+            Attributes = finalBasic.FileAttributes,
+            FinalPath = checkedFinalPath,
+            Sha256 = sha256,
+            FileSystem = FileSystemFor(checkedFinalPath)
         };
     }
 
@@ -595,6 +621,17 @@ function Assert-IdentityExpectation {
   if ($Actual.volumeSerialNumber -cne $Volume -or $Actual.fileId -cne $FileId) { Throw-G006BError 11 'owned identity mismatch' }
 }
 
+function Assert-ExactIdentity {
+  param($Actual, $Expected, [bool]$Directory = $false)
+  if ($Actual.volumeSerialNumber -cne $Expected.volumeSerialNumber -or
+      $Actual.fileId -cne $Expected.fileId -or $Actual.size -ne $Expected.size -or
+      $Actual.numberOfLinks -ne $Expected.numberOfLinks -or $Actual.attributes -ne $Expected.attributes -or
+      $Actual.finalPath -cne $Expected.finalPath -or $Actual.fileSystem -cne $Expected.fileSystem -or
+      (-not $Directory -and $Actual.sha256 -cne $Expected.sha256)) {
+    Throw-G006BError 14 'retained final identity/bytes drift'
+  }
+}
+
 $moved = $false
 $publicationReady = $false
 $primary = $null
@@ -639,11 +676,17 @@ try {
     Assert-PathChain $parent; Assert-TrustedParentAcl $parent
     $parentLease = [G006BNativeFile]::OpenParent($parent); $leases.Add($parentLease)
     $databaseLease = [G006BNativeFile]::OpenDatabaseLease($canonical); $leases.Add($databaseLease)
-    try { $lockLease = [G006BNativeFile]::CreateLock($canonicalLock); $leases.Add($lockLease) }
-    catch { if ($_.Exception.Message -match 'error 80|error 183|exists') { Throw-G006BError 16 'database lock held' }; throw }
+    try {
+      $lockLease = [G006BNativeFile]::CreateLock($canonicalLock); $leases.Add($lockLease)
+      [G006BNativeFile]::MarkDelete($lockLease)
+    }
+    catch {
+      if ($_.Exception.Message -match 'error (5|32|80|183|303)|exists|sharing|delete.pending') { Throw-G006BError 16 'database lock held' }
+      throw
+    }
     [G006BNativeFile]::Flush($lockLease); [G006BNativeFile]::Flush($parentLease)
     $ready = Convert-Identity ([G006BNativeFile]::Inspect($databaseLease)) 'lease-ready'
-    $lockIdentity = Convert-Identity ([G006BNativeFile]::Inspect($lockLease)) 'lock-ready'
+    $lockIdentity = Convert-Identity ([G006BNativeFile]::Inspect($lockLease)) 'lock-ready' $true
     if ($ready.finalPath -cne $canonical) { Throw-G006BError 10 'database lease final path mismatch' }
     $ready['lockVolumeSerialNumber'] = $lockIdentity.volumeSerialNumber
     $ready['lockFileId'] = $lockIdentity.fileId
@@ -653,6 +696,7 @@ try {
     $resourceOrder = 0
     $publication = $null
     $sidecars = $null
+    $retainedFinals = @{}
     while ($true) {
       $command = [Console]::In.ReadLine()
       if ($null -eq $command) { Throw-G006BError 15 'lease protocol EOF' }
@@ -662,15 +706,43 @@ try {
           if ($current.finalPath -cne $publication.Destination -or $current.fileId -cne $publication.Identity.fileId -or
               $current.volumeSerialNumber -cne $publication.Identity.volumeSerialNumber -or
               $current.sha256 -cne $publication.Sha256 -or $current.size -ne $publication.Bytes) { Throw-G006BError 14 'retained publication challenge drift' }
+          $currentParent = Convert-Identity ([G006BNativeFile]::Inspect($publication.Parent)) 'publication-parent-inspected' $true
+          Assert-ExactIdentity $currentParent $publication.ParentIdentity $true
           ($current | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
         }
         if ($command -ceq 'publication-release') {
           $released = Convert-Identity ([G006BNativeFile]::Inspect($publication.Lease)) 'publication-released'
-          $publication.Lease.Dispose(); $leases.Remove($publication.Lease) | Out-Null
+          Assert-ExactIdentity $released $publication.Identity
+          $releasedParent = Convert-Identity ([G006BNativeFile]::Inspect($publication.Parent)) 'publication-parent-released' $true
+          Assert-ExactIdentity $releasedParent $publication.ParentIdentity $true
+          if ($retainedFinals.ContainsKey($publication.Destination)) { Throw-G006BError 14 'duplicate retained final publication' }
+          $retainedFinals[$publication.Destination] = [pscustomobject]@{Lease=$publication.Lease;Parent=$publication.Parent;ParentPath=[IO.Path]::GetDirectoryName($publication.Destination);Directory=$false;Identity=$released}
           $publication = $null
           ($released | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
         }
         Throw-G006BError 14 'publication challenge/release required'
+      }
+      if ($command.StartsWith('final-retain-file' + "`t", [StringComparison]::Ordinal) -or
+          $command.StartsWith('final-retain-directory' + "`t", [StringComparison]::Ordinal)) {
+        $parts = $command -split "`t", 2
+        if ($parts.Count -ne 2) { Throw-G006BError 14 'final retention protocol shape' }
+        $directory = $parts[0] -ceq 'final-retain-directory'
+        $finalPath = Assert-CanonicalPath $parts[1] $true $directory
+        if ($retainedFinals.ContainsKey($finalPath) -or $ownedResources.ContainsKey($finalPath)) { Throw-G006BError 14 'duplicate retained final' }
+        $finalParentPath = [IO.Path]::GetDirectoryName($finalPath)
+        Assert-PathChain $(if ($directory) { $finalPath } else { $finalParentPath }); Assert-TrustedParentAcl $finalParentPath
+        if ($retainedFinals.ContainsKey($finalParentPath) -and $retainedFinals[$finalParentPath].Directory) {
+          $finalParent = $retainedFinals[$finalParentPath].Lease
+        } else {
+          $finalParent = [G006BNativeFile]::OpenParent($finalParentPath); $leases.Add($finalParent)
+        }
+        $finalLease = if ($directory) { [G006BNativeFile]::OpenRetainedDirectory($finalPath) } else { [G006BNativeFile]::OpenSettledRead($finalPath) }
+        $leases.Add($finalLease)
+        $finalIdentity = Convert-Identity ([G006BNativeFile]::Inspect($finalLease)) 'final-retained' $directory
+        if ($finalIdentity.finalPath -cne $finalPath) { Throw-G006BError 14 'retained final path mismatch' }
+        $retainedFinals[$finalPath] = [pscustomobject]@{Lease=$finalLease;Parent=$finalParent;ParentPath=$finalParentPath;Directory=$directory;Identity=$finalIdentity}
+        $publicationReady = $true
+        ($finalIdentity | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
       }
       if ($command.StartsWith('resource-create-file' + "`t", [StringComparison]::Ordinal) -or
           $command.StartsWith('resource-create-directory' + "`t", [StringComparison]::Ordinal)) {
@@ -688,7 +760,7 @@ try {
         } else {
           $resourceParentLease = [G006BNativeFile]::OpenParent($resourceParentPath); $leases.Add($resourceParentLease)
         }
-        $resourceLease = if ($directory) { [G006BNativeFile]::CreateOwnedDirectory($resourceParentLease, $resourcePath) } else { [G006BNativeFile]::CreateOwnedFile($resourcePath) }
+        $resourceLease = if ($directory) { [G006BNativeFile]::CreateOwnedDirectory($resourceParentLease, $resourcePath, ($disposition -ceq 'release')) } else { [G006BNativeFile]::CreateOwnedFile($resourcePath) }
         $leases.Add($resourceLease)
         $resourceIdentity = Convert-Identity ([G006BNativeFile]::Inspect($resourceLease)) 'resource-created' $directory
         if ($resourceIdentity.finalPath -cne $resourcePath) { Throw-G006BError 11 'created resource final path mismatch' }
@@ -776,9 +848,22 @@ try {
         if ($resource.Disposition -cne 'release') { Throw-G006BError 11 'resource is not release-owned' }
         $current = Convert-Identity ([G006BNativeFile]::Inspect($resource.Lease)) 'resource-released' $resource.Directory
         Assert-IdentityExpectation $current $resource.Identity.volumeSerialNumber $resource.Identity.fileId
-        $resource.Lease.Dispose(); $leases.Remove($resource.Lease) | Out-Null
-        [G006BNativeFile]::Flush($resource.Parent)
+        if ($retainedFinals.ContainsKey($resourcePath)) { Throw-G006BError 14 'duplicate retained final resource' }
+        [G006BNativeFile]::Flush($resource.Lease); [G006BNativeFile]::Flush($resource.Parent)
+        $retainedLease = $resource.Lease
+        if ($resource.Directory) {
+          $bridgeLease = [G006BNativeFile]::OpenDirectoryBridge($resourcePath); $leases.Add($bridgeLease)
+          $resource.Lease.Dispose(); $leases.Remove($resource.Lease) | Out-Null
+          $retainedLease = [G006BNativeFile]::OpenRetainedDirectory($resourcePath); $leases.Add($retainedLease)
+          $retainedIdentity = Convert-Identity ([G006BNativeFile]::Inspect($retainedLease)) 'resource-released' $true
+          Assert-ExactIdentity $retainedIdentity $current $true
+          $bridgeLease.Dispose(); $leases.Remove($bridgeLease) | Out-Null
+          foreach ($retainedChild in @($retainedFinals.Values | Where-Object { -not $_.Directory -and $_.ParentPath -ceq $resourcePath })) { $retainedChild.Parent = $retainedLease }
+          $current = $retainedIdentity
+        }
+        $retainedFinals[$resourcePath] = [pscustomobject]@{Lease=$retainedLease;Parent=$resource.Parent;ParentPath=[IO.Path]::GetDirectoryName($resourcePath);Directory=$resource.Directory;Identity=$current}
         $ownedResources.Remove($resourcePath)
+        $publicationReady = $true
         ($current | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
       }
       if ($command.StartsWith('resource-publish' + "`t", [StringComparison]::Ordinal)) {
@@ -825,7 +910,8 @@ try {
         if ($published.sha256 -cne $resourceSha -or $published.size -ne $resourceBytes -or $published.finalPath -cne $destination) { Throw-G006BError 14 'published resource verification failed' }
         $ownedResources.Remove($resourcePath)
         $publicationReady = $true
-        $publication = [pscustomobject]@{Lease=$destinationLease;Destination=$destination;Identity=$published;Sha256=$resourceSha;Bytes=$resourceBytes}
+        $publicationParentIdentity = Convert-Identity ([G006BNativeFile]::Inspect($resource.Parent)) 'publication-parent-ready' $true
+        $publication = [pscustomobject]@{Lease=$destinationLease;Parent=$resource.Parent;ParentIdentity=$publicationParentIdentity;Destination=$destination;Identity=$published;Sha256=$resourceSha;Bytes=$resourceBytes}
         ($published | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
       }
       if ($command.StartsWith('sidecars-capture' + "`t", [StringComparison]::Ordinal)) {
@@ -887,9 +973,24 @@ try {
       }
       if ($command -ceq 'release') {
         if ($ownedResources.Count -ne 0 -or $null -ne $publication -or $null -ne $sidecars) { Throw-G006BError 15 'retained resources remain at database lease release' }
+        foreach ($entry in @($retainedFinals.GetEnumerator() | Sort-Object -Property Key)) {
+          $retained = $entry.Value
+          $currentFinal = Convert-Identity ([G006BNativeFile]::Inspect($retained.Lease)) 'final-release-inspected' $retained.Directory
+          Assert-ExactIdentity $currentFinal $retained.Identity $retained.Directory
+          if ($retained.Directory) {
+            $expectedNames = @($retainedFinals.Values | Where-Object { -not $_.Directory -and $_.ParentPath -ceq $entry.Key } | ForEach-Object { [IO.Path]::GetFileName($_.Identity.finalPath) } | Sort-Object)
+            $actualNames = @(Get-ChildItem -LiteralPath $entry.Key -Force | ForEach-Object { $_.Name } | Sort-Object)
+            if ($expectedNames.Count -ne 38 -or $actualNames.Count -ne $expectedNames.Count -or (Compare-Object -ReferenceObject $expectedNames -DifferenceObject $actualNames -CaseSensitive)) { Throw-G006BError 14 'retained archive tree binding drift' }
+          }
+          [G006BNativeFile]::Flush($retained.Parent)
+        }
+        foreach ($retained in @($retainedFinals.Values)) { $retained.Lease.Dispose(); $leases.Remove($retained.Lease) | Out-Null }
+        $retainedFinals.Clear()
         $activeLease = if ($null -ne $settledLease) { $settledLease } else { $databaseLease }
         $final = Convert-Identity ([G006BNativeFile]::Inspect($activeLease)) 'lease-released'
-        [G006BNativeFile]::MarkDelete($lockLease); $lockLease.Dispose(); $leases.Remove($lockLease) | Out-Null
+        $currentLock = Convert-Identity ([G006BNativeFile]::Inspect($lockLease)) 'lock-release' $true
+        Assert-ExactIdentity $currentLock $lockIdentity
+        $lockLease.Dispose(); $leases.Remove($lockLease) | Out-Null
         $lockLease = $null
         [G006BNativeFile]::Flush($parentLease)
         ($final | ConvertTo-Json -Compress); [Console]::Out.Flush(); exit 0
@@ -921,6 +1022,17 @@ try {
     try { $publication.Lease.Dispose(); $leases.Remove($publication.Lease) | Out-Null } catch { $cleanup.Add('publication release: ' + $_.Exception.Message) }
     $publication = $null
   }
+  if ($Mode -ceq 'LeaseDatabase' -and (Get-Variable -Name retainedFinals -ErrorAction SilentlyContinue)) {
+    foreach ($retained in @($retainedFinals.Values)) {
+      try {
+        $currentFinal = Convert-Identity ([G006BNativeFile]::Inspect($retained.Lease)) 'final-preserved' $retained.Directory
+        Assert-ExactIdentity $currentFinal $retained.Identity $retained.Directory
+        [G006BNativeFile]::Flush($retained.Parent)
+      } catch { $cleanup.Add(('retained final {0}: ' -f $retained.Identity.finalPath) + $_.Exception.Message) }
+      try { $retained.Lease.Dispose(); $leases.Remove($retained.Lease) | Out-Null } catch { $cleanup.Add('retained final dispose: ' + $_.Exception.Message) }
+    }
+    $retainedFinals.Clear()
+  }
   if ($Mode -ceq 'LeaseDatabase' -and (Get-Variable -Name ownedResources -ErrorAction SilentlyContinue)) {
     $remaining = @($ownedResources.Values | Sort-Object -Property Order -Descending)
     foreach ($resource in $remaining) {
@@ -937,7 +1049,7 @@ try {
   if ($Mode -ceq 'LeaseDatabase' -and $null -ne $lockLease) {
     try {
       if (Get-Variable -Name lockIdentity -ErrorAction SilentlyContinue) {
-        $currentLock = Convert-Identity ([G006BNativeFile]::Inspect($lockLease)) 'lock-finalize'
+        $currentLock = Convert-Identity ([G006BNativeFile]::Inspect($lockLease)) 'lock-finalize' $true
         Assert-IdentityExpectation $currentLock $lockIdentity.volumeSerialNumber $lockIdentity.fileId
       }
       [G006BNativeFile]::MarkDelete($lockLease); $lockLease.Dispose(); $leases.Remove($lockLease) | Out-Null

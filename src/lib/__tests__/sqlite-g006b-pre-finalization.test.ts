@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -45,7 +45,6 @@ import {
   SQLITE_G006B_PREPARED_DOMAIN,
   canonicalizeSqliteG006bRecord,
   computeSqliteG006bArchiveTreeHash,
-  hashSqliteG006bDomain,
   inspectSqliteG006bPreFinalizationEvidence,
   runSqliteG006bPreFinalization,
   type SqliteG006bExecuteInput,
@@ -267,6 +266,44 @@ function temporaryResidue(root: string): string[] {
   return result;
 }
 
+interface ExactEvidenceSnapshot {
+  readonly archiveDirectory: string;
+  readonly extraPaths: readonly string[];
+  readonly files: ReadonlyMap<string, { readonly directory: boolean; readonly bytes: Buffer | null; readonly ino: bigint }>;
+}
+
+function visibleEvidencePaths(base: SqliteG006bExecuteInput, archiveDirectory = base.archiveDirectory, extraPaths: readonly string[] = []): string[] {
+  const candidates = [base.databasePath, base.backupPath, base.preparedPath, base.committedPath, archiveDirectory, ...extraPaths];
+  for (const candidate of [...candidates]) {
+    if (existsSync(candidate) && statSync(candidate).isDirectory()) {
+      candidates.push(...readdirSync(candidate).map((name) => join(candidate, name)));
+    }
+  }
+  return [...new Set(candidates.filter((path) => existsSync(path)))].sort();
+}
+
+function snapshotExactEvidence(base: SqliteG006bExecuteInput, archiveDirectory = base.archiveDirectory, extraPaths: readonly string[] = []): ExactEvidenceSnapshot {
+  const files = new Map(visibleEvidencePaths(base, archiveDirectory, extraPaths).map((path) => {
+    const stat = statSync(path, { bigint: true });
+    const directory = stat.isDirectory();
+    return [path, { directory, bytes: directory ? null : readFileSync(path), ino: stat.ino }] as const;
+  }));
+  return { archiveDirectory, extraPaths, files };
+}
+
+function expectExactEvidenceUnchanged(snapshot: ExactEvidenceSnapshot, base: SqliteG006bExecuteInput, label: string): void {
+  expect(visibleEvidencePaths(base, snapshot.archiveDirectory, snapshot.extraPaths), `${label}: visible evidence set`)
+    .toEqual([...snapshot.files.keys()]);
+  for (const [path, expected] of snapshot.files) {
+    const stat = statSync(path, { bigint: true });
+    expect(stat.isDirectory(), `${label}: ${path} kind`).toBe(expected.directory);
+    expect(stat.ino, `${label}: ${path} FileId`).toBe(expected.ino);
+    if (!expected.directory) expect(readFileSync(path), `${label}: ${path} bytes`).toEqual(expected.bytes);
+  }
+  expect(temporaryResidue(dirname(base.databasePath)), `${label}: temporary residue`).toEqual([]);
+  expect(existsSync(`${base.databasePath}.g006b.lock`), `${label}: lock residue`).toBe(false);
+}
+
 interface TestBroker {
   readonly child: ChildProcessWithoutNullStreams;
   send(command: string): Promise<void>;
@@ -320,11 +357,22 @@ function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function independentCanonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(independentCanonicalJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${independentCanonicalJson(record[key])}`).join(",")}}`;
+}
+
+function independentDomainSha256(domain: string, value: unknown): string {
+  return createHash("sha256").update(domain, "utf8").update(independentCanonicalJson(value), "utf8").digest("hex");
+}
+
 function rehashEnvelope(path: string, domain: string): { handoffId: string; recordSha256: string; payload: Record<string, unknown> } {
   const envelope = JSON.parse(readFileSync(path, "utf8")) as { handoffId: string; recordSha256: string; payload: Record<string, unknown> };
-  envelope.recordSha256 = hashSqliteG006bDomain(domain, envelope.payload);
+  envelope.recordSha256 = independentDomainSha256(domain, envelope.payload);
   envelope.handoffId = `g006b:v1:${envelope.recordSha256}`;
-  writeFileSync(path, canonicalizeSqliteG006bRecord(envelope));
+  writeFileSync(path, independentCanonicalJson(envelope));
   return envelope;
 }
 
@@ -333,6 +381,10 @@ function archiveEvidence(directory: string): Array<{ name: string; size: number;
     const bytes = readFileSync(join(directory, name));
     return { name, size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
   });
+}
+
+function independentArchiveTreeHash(directory: string): string {
+  return independentDomainSha256("NOVATRADE\0G006B\0B1\0ARCHIVE\0V1\0", archiveEvidence(directory));
 }
 
 describe("G-006B B1 SQLite pre-finalization", () => {
@@ -386,16 +438,20 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const base = await operationInput(fixture);
     await runSqliteG006bPreFinalization(base);
 
+    const wrongPreparedEvidence = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization({
       ...base,
       mode: "replay",
       expectedPreparedHandoffId: `g006b:v1:${"0".repeat(64)}`,
       expectedCommittedHandoffId: handoffId(base.committedPath),
     })).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
+    expectExactEvidenceUnchanged(wrongPreparedEvidence, base, "wrong PREPARED handoff pin");
+    const wrongCommittedEvidence = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization({
       ...replayInput(base),
       expectedCommittedHandoffId: `g006b:v1:${"0".repeat(64)}`,
     } as SqliteG006bPreFinalizationInput)).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
+    expectExactEvidenceUnchanged(wrongCommittedEvidence, base, "wrong COMMITTED handoff pin");
   }, 120_000);
 
   it("B1-04 rejects a held native lock and resume without PREPARED before mutation", async () => {
@@ -410,7 +466,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const db = new Database(fixture.databasePath, { readonly: true });
     expect(classifySqliteSchemaV1(db).kind).toBe("accepted-legacy");
     db.close();
-  });
+  }, 30_000);
 
   it("B1-01 rejects deep accessors, proxies, symbols, sparse arrays, and malformed mode fields before effects", async () => {
     const fixture = createAcceptedFixture();
@@ -463,7 +519,27 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const journal = new Database(fixture.databasePath);
     expect(String(journal.pragma("journal_mode = WAL", { simple: true })).toLowerCase()).toBe("wal");
     journal.close();
+    const beforeProbe = spawnSync(POWERSHELL, [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PUBLISHER,
+      "-Mode", "InspectFile", "-Path", fixture.databasePath,
+    ], { encoding: "utf8", shell: false, windowsHide: true });
+    expect(beforeProbe.status).toBe(0);
+    const beforeNative = JSON.parse(beforeProbe.stdout) as Record<string, unknown>;
+    const originalClose = Database.prototype.close;
+    let rewritePending = true;
+    const closeProbe = vi.spyOn(Database.prototype, "close").mockImplementation(function (this: Database.Database) {
+      if (rewritePending && this.name === fixture.databasePath) {
+        rewritePending = false;
+        this.exec("VACUUM");
+      }
+      return originalClose.call(this);
+    });
     const base = await operationInput(fixture);
+    closeProbe.mockRestore();
+    expect(rewritePending).toBe(false);
+    expect(base.expectedSourceIdentity.fileId).toBe(beforeNative.fileId);
+    expect(base.expectedSourceIdentity.volumeSerialNumber).toBe(beforeNative.volumeSerialNumber);
+    expect(base.expectedSourceIdentity.size !== beforeNative.size || base.expectedSourceIdentity.sha256 !== beforeNative.sha256).toBe(true);
     const originalExec = Database.prototype.exec;
     const executeFault = vi.spyOn(Database.prototype, "exec").mockImplementation(function (this: Database.Database, sql: string) {
       if (this.name === fixture.databasePath && sql.startsWith('ALTER TABLE "place_cache"')) throw new Error("WAL execute interruption");
@@ -567,6 +643,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const originalExec = Database.prototype.exec;
     let committed = false;
     let writeDenied = false;
+    let rawWriteDenied = false;
     vi.spyOn(Database.prototype, "exec").mockImplementation(function (this: Database.Database, sql: string) {
       if (this.name === fixture.databasePath && sql === "COMMIT") {
         const value = originalExec.call(this, sql);
@@ -583,11 +660,13 @@ describe("G-006B B1 SQLite pre-finalization", () => {
           "db.close()",
         ].join(";"), fixture.databasePath], { encoding: "utf8", shell: false, windowsHide: true });
         writeDenied = competing.status !== 0;
+        try { writeFileSync(fixture.databasePath, "raw-attacker-byte-change"); } catch { rawWriteDenied = true; }
       }
       return originalExec.call(this, sql);
     });
     await runSqliteG006bPreFinalization(base);
     expect(writeDenied).toBe(true);
+    expect(rawWriteDenied).toBe(true);
     const committedRecord = JSON.parse(readFileSync(base.committedPath, "utf8")) as { payload: { database: { native: Record<string, unknown> } } };
     const inspected = spawnSync(POWERSHELL, [
       "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PUBLISHER,
@@ -713,11 +792,11 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const fixture = createAcceptedFixture();
     const base = await operationInput(fixture);
     await runSqliteG006bPreFinalization(base);
-    const before = readFileSync(fixture.databasePath);
+    const before = snapshotExactEvidence(base);
     const replay = await runSqliteG006bPreFinalization(replayInput(base));
     expect(replay).toMatchObject({ mode: "replay", status: "replayed" });
     expect(Object.isFrozen(replay)).toBe(true);
-    expect(readFileSync(fixture.databasePath)).toEqual(before);
+    expectExactEvidenceUnchanged(before, base, "successful pinned replay");
   }, 120_000);
 
   it("binds replay to the operation ID, archive path, envelope hashes, and committed binding hash", async () => {
@@ -728,8 +807,10 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const committedId = handoffId(base.committedPath);
     const committedBytes = readFileSync(base.committedPath);
 
+    const operationEvidence = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization({ ...replayInput(base), operationId: "wrong-operation" }))
       .rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    expectExactEvidenceUnchanged(operationEvidence, base, "wrong operation ID pin");
 
     const alternateParent = join(fixture.root, "alternate-archive-parent");
     const alternateArchive = join(alternateParent, basename(base.archiveDirectory));
@@ -737,26 +818,32 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     for (const entry of readdirSync(base.archiveDirectory)) {
       writeFileSync(join(alternateArchive, entry), readFileSync(join(base.archiveDirectory, entry)));
     }
+    const archivePathEvidence = snapshotExactEvidence(base, alternateArchive, [base.archiveDirectory]);
     await expect(runSqliteG006bPreFinalization({ ...replayInput(base), archiveDirectory: alternateArchive }))
       .rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    expectExactEvidenceUnchanged(archivePathEvidence, base, "wrong archive path pin");
 
     const envelopeHashTamper = JSON.parse(committedBytes.toString("utf8")) as { recordSha256: string };
     envelopeHashTamper.recordSha256 = `${envelopeHashTamper.recordSha256[0] === "0" ? "1" : "0"}${envelopeHashTamper.recordSha256.slice(1)}`;
-    writeFileSync(base.committedPath, canonicalizeSqliteG006bRecord(envelopeHashTamper));
+    writeFileSync(base.committedPath, independentCanonicalJson(envelopeHashTamper));
+    const envelopeEvidence = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization({ ...base, mode: "replay", expectedPreparedHandoffId: preparedId, expectedCommittedHandoffId: committedId }))
       .rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    expectExactEvidenceUnchanged(envelopeEvidence, base, "COMMITTED envelope hash tamper");
     writeFileSync(base.committedPath, committedBytes);
 
     const committed = JSON.parse(committedBytes.toString("utf8")) as { payload: { bindingHash: string } };
     committed.payload.bindingHash = `${committed.payload.bindingHash[0] === "0" ? "1" : "0"}${committed.payload.bindingHash.slice(1)}`;
-    writeFileSync(base.committedPath, canonicalizeSqliteG006bRecord(committed));
+    writeFileSync(base.committedPath, independentCanonicalJson(committed));
     const rehashed = rehashEnvelope(base.committedPath, SQLITE_G006B_COMMITTED_DOMAIN);
+    const bindingEvidence = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization({
       ...base,
       mode: "replay",
       expectedPreparedHandoffId: preparedId,
       expectedCommittedHandoffId: rehashed.handoffId,
     })).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
+    expectExactEvidenceUnchanged(bindingEvidence, base, "self-rehashed COMMITTED binding tamper");
     expect(temporaryResidue(fixture.root)).toEqual([]);
   }, 120_000);
 
@@ -792,12 +879,14 @@ describe("G-006B B1 SQLite pre-finalization", () => {
       case "journal mode": input = { ...base, expectedJournalMode: base.expectedJournalMode === "wal" ? "delete" : "wal" }; break;
       default: throw new Error(`unknown pin ${pin}`);
     }
+    const evidenceBefore = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization(input)).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    expectExactEvidenceUnchanged(evidenceBefore, base, `pin ${pin}`);
     const db = new Database(fixture.databasePath, { readonly: true });
     expect(classifySqliteSchemaV1(db).kind).toBe("accepted-legacy");
     db.close();
     expect(existsSync(base.preparedPath)).toBe(false);
-  });
+  }, 120_000);
 
   it("uses the pinned absolute PowerShell/helper despite hostile PATH and rejects a modified helper copy as authority", async () => {
     const fixture = createAcceptedFixture();
@@ -866,6 +955,130 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     expect(challenged).toBe(true);
     expect(readdirSync(base.archiveDirectory)).toHaveLength(38);
     expect(computeSqliteG006bArchiveTreeHash(base.archiveDirectory)).toBe(basename(base.archiveDirectory));
+  }, 120_000);
+
+  it("retains every acknowledged final through PREPARED, COMMITTED, and terminal release", async () => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    const snapshots = new Map<string, { bytes: Buffer; ino: bigint }>();
+    const failures: string[] = [];
+    const challengeFiles = (paths: readonly string[], phase: string): void => {
+      for (const path of paths) {
+        if (!snapshots.has(path)) snapshots.set(path, { bytes: readFileSync(path), ino: statSync(path, { bigint: true }).ino });
+        try { writeFileSync(path, `attacker-${phase}`); failures.push(`${phase} write ${path}`); } catch { /* final lease denies writes */ }
+        try { rmSync(path); failures.push(`${phase} delete ${path}`); } catch { /* final lease denies deletes */ }
+        try { renameSync(path, `${path}.attacker-${phase}`); failures.push(`${phase} rename ${path}`); } catch { /* final lease denies replacement */ }
+      }
+    };
+    const originalExec = Database.prototype.exec;
+    let preparedChallenge = false;
+    vi.spyOn(Database.prototype, "exec").mockImplementation(function (this: Database.Database, sql: string) {
+      if (!preparedChallenge && this.name === fixture.databasePath && sql.startsWith('ALTER TABLE "place_cache"')) {
+        preparedChallenge = true;
+        challengeFiles([base.backupPath, base.preparedPath, ...readdirSync(base.archiveDirectory).map((name) => join(base.archiveDirectory, name))], "prepared");
+        try { renameSync(base.archiveDirectory, `${base.archiveDirectory}.attacker-prepared`); failures.push("prepared archive parent rename"); } catch { /* final parent retained */ }
+      }
+      return originalExec.call(this, sql);
+    });
+    let terminalChallenge = false;
+    leaseProcesses.onCommand = (_child, command) => {
+      if (terminalChallenge || command.trimEnd() !== "release") return;
+      terminalChallenge = true;
+      challengeFiles([base.backupPath, base.preparedPath, base.committedPath, ...readdirSync(base.archiveDirectory).map((name) => join(base.archiveDirectory, name))], "terminal");
+      try { renameSync(base.archiveDirectory, `${base.archiveDirectory}.attacker-terminal`); failures.push("terminal archive parent rename"); } catch { /* final parent retained */ }
+    };
+    await runSqliteG006bPreFinalization(base);
+    expect(preparedChallenge).toBe(true);
+    expect(terminalChallenge).toBe(true);
+    expect(failures).toEqual([]);
+    for (const [path, snapshot] of snapshots) {
+      expect(readFileSync(path), path).toEqual(snapshot.bytes);
+      expect(statSync(path, { bigint: true }).ino, path).toBe(snapshot.ino);
+    }
+    expect(readdirSync(base.archiveDirectory)).toHaveLength(38);
+    expect(temporaryResidue(fixture.root)).toEqual([]);
+  }, 120_000);
+
+  it("reports terminal archive-tree drift after COMMIT as committed-unverified and preserves all visible evidence", async () => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    const snapshots = new Map<string, { bytes: Buffer; ino: bigint }>();
+    const extra = join(base.archiveDirectory, "attacker-extra.json");
+    let injected = false;
+    leaseProcesses.onCommand = (_child, command) => {
+      if (injected || command.trimEnd() !== "release") return;
+      injected = true;
+      for (const path of [base.backupPath, base.preparedPath, base.committedPath, ...readdirSync(base.archiveDirectory).map((name) => join(base.archiveDirectory, name))]) {
+        snapshots.set(path, { bytes: readFileSync(path), ino: statSync(path, { bigint: true }).ino });
+      }
+      writeFileSync(extra, "terminal-tree-drift-evidence");
+    };
+    await expect(runSqliteG006bPreFinalization(base)).rejects.toMatchObject({
+      code: "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
+      committed: true,
+      cleanupFailures: expect.arrayContaining([expect.stringMatching(/retained archive tree binding drift/)]),
+    });
+    expect(injected).toBe(true);
+    expect(readFileSync(extra, "utf8")).toBe("terminal-tree-drift-evidence");
+    for (const [path, snapshot] of snapshots) {
+      expect(readFileSync(path), path).toEqual(snapshot.bytes);
+      expect(statSync(path, { bigint: true }).ino, path).toBe(snapshot.ino);
+    }
+    const db = new Database(fixture.databasePath, { readonly: true });
+    expect(classifySqliteSchemaV1(db).kind).toBe("prepared-legacy");
+    db.close();
+    expect(existsSync(`${fixture.databasePath}.g006b.lock`)).toBe(false);
+    expect(temporaryResidue(fixture.root)).toEqual([]);
+  }, 120_000);
+
+  it("keeps pre-commit resume retention loss in recovery taxonomy and preserves all evidence occupants", async () => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    const originalExec = Database.prototype.exec;
+    const interruption = vi.spyOn(Database.prototype, "exec").mockImplementation(function (this: Database.Database, sql: string) {
+      if (this.name === fixture.databasePath && sql.startsWith('ALTER TABLE "place_cache"')) throw new Error("leave PREPARED for retention probe");
+      return originalExec.call(this, sql);
+    });
+    await expect(runSqliteG006bPreFinalization(base)).rejects.toThrow(/leave PREPARED/);
+    interruption.mockRestore();
+    const preparedBytes = readFileSync(base.preparedPath);
+    const archiveSnapshots = new Map(readdirSync(base.archiveDirectory).map((name) => {
+      const path = join(base.archiveDirectory, name);
+      return [path, { bytes: readFileSync(path), ino: statSync(path, { bigint: true }).ino }] as const;
+    }));
+    const attacked = join(base.archiveDirectory, "audit_logs.json");
+    const detached = `${attacked}.detached-evidence`;
+    let retentionAttacked = false;
+    leaseProcesses.onCommand = (_child, command) => {
+      if (retentionAttacked || command.trimEnd() !== `final-retain-directory\t${base.archiveDirectory}`) return;
+      retentionAttacked = true;
+      const deadline = Date.now() + 2_000;
+      while (true) {
+        try { renameSync(attacked, detached); break; }
+        catch (error) {
+          if (Date.now() >= deadline) throw error;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+        }
+      }
+      while (existsSync(attacked) || !existsSync(detached)) {
+        if (Date.now() >= deadline) throw new Error("retention-loss rename did not become visible before broker command");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      }
+    };
+    await expect(runSqliteG006bPreFinalization(resumeInput(base))).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
+    expect(retentionAttacked).toBe(true);
+    expect(existsSync(attacked)).toBe(false);
+    expect(readFileSync(detached)).toEqual(archiveSnapshots.get(attacked)!.bytes);
+    expect(statSync(detached, { bigint: true }).ino).toBe(archiveSnapshots.get(attacked)!.ino);
+    expect(readFileSync(base.preparedPath)).toEqual(preparedBytes);
+    for (const [path, snapshot] of archiveSnapshots) {
+      if (path === attacked) continue;
+      expect(readFileSync(path), path).toEqual(snapshot.bytes);
+      expect(statSync(path, { bigint: true }).ino, path).toBe(snapshot.ino);
+    }
+    expect(existsSync(base.backupPath)).toBe(true);
+    expect(existsSync(base.committedPath)).toBe(false);
+    expect(temporaryResidue(fixture.root)).toEqual([]);
   }, 120_000);
 
   it("rejects a byte-identical database replacement with a different FileId", async () => {
@@ -951,6 +1164,14 @@ describe("G-006B B1 SQLite pre-finalization", () => {
           if (committedState === "valid") writeFileSync(base.committedPath, committedRecord);
           if (committedState === "invalid") writeFileSync(base.committedPath, "{}");
           const before = readFileSync(fixture.databasePath);
+          const databaseIno = statSync(fixture.databasePath, { bigint: true }).ino;
+          const durablePaths = [
+            base.backupPath,
+            ...readdirSync(base.archiveDirectory).map((name) => join(base.archiveDirectory, name)),
+            ...(existsSync(base.preparedPath) ? [base.preparedPath] : []),
+            ...(existsSync(base.committedPath) ? [base.committedPath] : []),
+          ];
+          const durableBefore = new Map(durablePaths.map((path) => [path, { bytes: readFileSync(path), ino: statSync(path, { bigint: true }).ino }] as const));
           const input: SqliteG006bPreFinalizationInput = preparedState === "valid" && committedState === "absent"
             ? { ...base, mode: "resume", expectedPreparedHandoffId: preparedId }
             : preparedState !== "absent" || committedState !== "absent"
@@ -963,6 +1184,16 @@ describe("G-006B B1 SQLite pre-finalization", () => {
           try { await runSqliteG006bPreFinalization(input); } catch (error) { failure = error; }
           expect(failure === undefined, `${databaseState}/${preparedState}/${committedState}: ${failure instanceof Error ? failure.message : String(failure)}`).toBe(shouldPass);
           if (!shouldPass) expect(readFileSync(fixture.databasePath)).toEqual(before);
+          expect(statSync(fixture.databasePath, { bigint: true }).ino).toBe(databaseIno);
+          for (const [path, snapshot] of durableBefore) {
+            expect(readFileSync(path), `${databaseState}/${preparedState}/${committedState}:${path}`).toEqual(snapshot.bytes);
+            expect(statSync(path, { bigint: true }).ino, `${databaseState}/${preparedState}/${committedState}:${path}`).toBe(snapshot.ino);
+          }
+          if (shouldPass) {
+            expect(existsSync(base.preparedPath)).toBe(true);
+            expect(existsSync(base.committedPath)).toBe(true);
+            expect(readdirSync(base.archiveDirectory)).toHaveLength(38);
+          }
           expect(temporaryResidue(fixture.root)).toEqual([]);
           expect(existsSync(`${fixture.databasePath}.g006b.lock`)).toBe(false);
         }
@@ -985,51 +1216,59 @@ describe("G-006B B1 SQLite pre-finalization", () => {
         const envelope = JSON.parse(original.toString("utf8")) as Record<string, unknown>;
         if (mutation === "missing") delete envelope.format;
         else envelope.unexpected = "tamper";
-        writeFileSync(path, canonicalizeSqliteG006bRecord(envelope));
+        writeFileSync(path, independentCanonicalJson(envelope));
+        const evidenceBefore = snapshotExactEvidence(base);
         await expect(runSqliteG006bPreFinalization({
           ...base,
           mode: "replay",
           expectedPreparedHandoffId: preparedId,
           expectedCommittedHandoffId: committedId,
         })).rejects.toMatchObject({ code: expect.stringMatching(/^G006B_(?:INPUT_REJECTED|EVIDENCE_DRIFT)$/u) });
+        expectExactEvidenceUnchanged(evidenceBefore, base, `${basename(path)} ${mutation} envelope key`);
         writeFileSync(path, original);
       }
     }
 
     for (const path of [base.preparedPath, base.committedPath]) {
       writeFileSync(path, Buffer.concat([readFileSync(path), Buffer.from("\n")]));
+      const evidenceBefore = snapshotExactEvidence(base);
       await expect(runSqliteG006bPreFinalization({
         ...base,
         mode: "replay",
         expectedPreparedHandoffId: handoffId(base.preparedPath),
         expectedCommittedHandoffId: handoffId(base.committedPath),
       })).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+      expectExactEvidenceUnchanged(evidenceBefore, base, `${basename(path)} trailing-byte tamper`);
       writeFileSync(base.preparedPath, preparedBytes);
       writeFileSync(base.committedPath, committedBytes);
     }
 
     const prepared = JSON.parse(preparedBytes.toString("utf8")) as { payload: { basis: { kind: string } } };
     prepared.payload.basis.kind = "semantic-tamper";
-    writeFileSync(base.preparedPath, canonicalizeSqliteG006bRecord(prepared));
+    writeFileSync(base.preparedPath, independentCanonicalJson(prepared));
     const rehashedPrepared = rehashEnvelope(base.preparedPath, SQLITE_G006B_PREPARED_DOMAIN);
+    const preparedEvidenceBefore = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization({
       ...base,
       mode: "replay",
       expectedPreparedHandoffId: rehashedPrepared.handoffId,
       expectedCommittedHandoffId: handoffId(base.committedPath),
     })).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    expectExactEvidenceUnchanged(preparedEvidenceBefore, base, "self-rehashed PREPARED semantic tamper");
     writeFileSync(base.preparedPath, preparedBytes);
 
     const committed = JSON.parse(committedBytes.toString("utf8")) as { payload: { verification: { relationshipOrphanCount: number } } };
     committed.payload.verification.relationshipOrphanCount = 1;
-    writeFileSync(base.committedPath, canonicalizeSqliteG006bRecord(committed));
+    writeFileSync(base.committedPath, independentCanonicalJson(committed));
     const rehashedCommitted = rehashEnvelope(base.committedPath, SQLITE_G006B_COMMITTED_DOMAIN);
+    const committedEvidenceBefore = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization({
       ...base,
       mode: "replay",
       expectedPreparedHandoffId: handoffId(base.preparedPath),
       expectedCommittedHandoffId: rehashedCommitted.handoffId,
     })).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
+    expectExactEvidenceUnchanged(committedEvidenceBefore, base, "self-rehashed COMMITTED semantic tamper");
   }, 120_000);
 
   it("rejects raw archive tampering and a semantically altered self-rehashed archive tree", async () => {
@@ -1040,7 +1279,9 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const auditBytes = readFileSync(auditPath);
 
     writeFileSync(auditPath, Buffer.concat([auditBytes, Buffer.from("\n")]));
+    const rawArchiveEvidenceBefore = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization(replayInput(base))).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    expectExactEvidenceUnchanged(rawArchiveEvidenceBefore, base, "raw archive tamper");
     writeFileSync(auditPath, auditBytes);
 
     const rows = JSON.parse(auditBytes.toString("utf8")) as Array<Record<string, unknown>>;
@@ -1054,7 +1295,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     manifest.tables.audit_logs!.bytes = tamperedAuditBytes.length;
     manifest.tables.audit_logs!.sha256 = createHash("sha256").update(tamperedAuditBytes).digest("hex");
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    const treeHash = computeSqliteG006bArchiveTreeHash(base.archiveDirectory);
+    const treeHash = independentArchiveTreeHash(base.archiveDirectory);
     const tamperedArchive = join(fixture.root, treeHash);
     renameSync(base.archiveDirectory, tamperedArchive);
     const entries = archiveEvidence(tamperedArchive);
@@ -1070,7 +1311,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
       treeHash,
       manifestSha256: manifestEntry.sha256,
     };
-    writeFileSync(base.preparedPath, canonicalizeSqliteG006bRecord(prepared));
+    writeFileSync(base.preparedPath, independentCanonicalJson(prepared));
     const preparedEnvelope = rehashEnvelope(base.preparedPath, SQLITE_G006B_PREPARED_DOMAIN);
 
     const committed = JSON.parse(readFileSync(base.committedPath, "utf8")) as {
@@ -1078,9 +1319,10 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     };
     committed.payload.preparedHandoffId = preparedEnvelope.handoffId;
     committed.payload.preparedRecordSha256 = preparedEnvelope.recordSha256;
-    committed.payload.bindingHash = hashSqliteG006bDomain(SQLITE_G006B_BINDING_DOMAIN, preparedEnvelope.payload);
-    writeFileSync(base.committedPath, canonicalizeSqliteG006bRecord(committed));
+    committed.payload.bindingHash = independentDomainSha256(SQLITE_G006B_BINDING_DOMAIN, preparedEnvelope.payload);
+    writeFileSync(base.committedPath, independentCanonicalJson(committed));
     const committedEnvelope = rehashEnvelope(base.committedPath, SQLITE_G006B_COMMITTED_DOMAIN);
+    const semanticArchiveEvidenceBefore = snapshotExactEvidence(base, tamperedArchive);
 
     await expect(runSqliteG006bPreFinalization({
       ...base,
@@ -1089,6 +1331,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
       expectedPreparedHandoffId: preparedEnvelope.handoffId,
       expectedCommittedHandoffId: committedEnvelope.handoffId,
     })).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    expectExactEvidenceUnchanged(semanticArchiveEvidenceBefore, base, "self-rehashed archive semantic tamper");
   }, 120_000);
 
   it("rejects missing, extra, and altered archive entries plus backup byte tampering", async () => {
@@ -1100,21 +1343,29 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const detached = join(fixture.root, "audit_logs.detached");
 
     renameSync(auditPath, detached);
-    await expect(runSqliteG006bPreFinalization(replayInput(base))).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    const missingEvidenceBefore = snapshotExactEvidence(base, base.archiveDirectory, [detached]);
+    await expect(runSqliteG006bPreFinalization(replayInput(base))).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
+    expectExactEvidenceUnchanged(missingEvidenceBefore, base, "missing archive entry");
     renameSync(detached, auditPath);
 
     const extra = join(base.archiveDirectory, "unexpected.json");
     writeFileSync(extra, "[]\n");
+    const extraEvidenceBefore = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization(replayInput(base))).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    expectExactEvidenceUnchanged(extraEvidenceBefore, base, "extra archive entry");
     rmSync(extra);
 
     writeFileSync(auditPath, Buffer.concat([auditBytes, Buffer.from("\n")]));
+    const alteredEvidenceBefore = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization(replayInput(base))).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    expectExactEvidenceUnchanged(alteredEvidenceBefore, base, "altered archive entry");
     writeFileSync(auditPath, auditBytes);
 
     const backupBytes = readFileSync(base.backupPath);
     writeFileSync(base.backupPath, Buffer.concat([backupBytes, Buffer.from([0])]));
+    const backupEvidenceBefore = snapshotExactEvidence(base);
     await expect(runSqliteG006bPreFinalization(replayInput(base))).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    expectExactEvidenceUnchanged(backupEvidenceBefore, base, "altered backup bytes");
     expect(readFileSync(base.preparedPath)).toBeTruthy();
     expect(readFileSync(base.committedPath)).toBeTruthy();
     expect(temporaryResidue(fixture.root)).toEqual([]);
@@ -1313,11 +1564,78 @@ describe("G-006B B1 SQLite pre-finalization", () => {
       "-Mode", "LeaseDatabase", "-Path", databasePath, "-LockPath", lockPath,
     ], { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     expect(await new Promise<number | null>((resolveExit) => secondChild.once("exit", resolveExit))).toBe(16);
-    expect(existsSync(lockPath)).toBe(true);
+    expect(existsSync(lockPath)).toBe(false);
     await first.send("release"); expect(await first.next()).toMatchObject({ status: "lease-released" });
     first.child.stdin.end(); expect(await first.exit()).toBe(0);
     expect(existsSync(lockPath)).toBe(false);
   });
+
+  it("delete-pends the lock before ready and a hard kill leaves no lock or process-held residue", async () => {
+    const root = mkdtempSync(join(tmpdir(), "g006b-pre-ready-lock-"));
+    roots.push(root);
+    const databasePath = join(root, "wide.db");
+    writeFileSync(databasePath, Buffer.alloc(0));
+    truncateSync(databasePath, 512 * 1024 * 1024);
+    const lockPath = `${databasePath}.g006b.lock`;
+    const first = spawn(POWERSHELL, [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PUBLISHER,
+      "-Mode", "LeaseDatabase", "-Path", databasePath, "-LockPath", lockPath,
+    ], { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    let firstStdout = "";
+    first.stdout.setEncoding("utf8"); first.stdout.on("data", (chunk: string) => { firstStdout += chunk; });
+    await new Promise((resolveWait) => setTimeout(resolveWait, 750));
+    expect(first.exitCode).toBeNull();
+    expect(firstStdout).toBe("");
+    const second = spawn(POWERSHELL, [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PUBLISHER,
+      "-Mode", "LeaseDatabase", "-Path", databasePath, "-LockPath", lockPath,
+    ], { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    expect(await new Promise<number | null>((resolveExit) => second.once("exit", resolveExit))).toBe(16);
+    first.kill();
+    await new Promise<void>((resolveExit) => first.once("exit", () => resolveExit()));
+    expect(existsSync(lockPath)).toBe(false);
+    expect(readdirSync(root).sort()).toEqual(["wide.db"]);
+  }, 30_000);
+
+  it("InspectFile denies a 512MiB rename/replacement race and returns the exact occupant", async () => {
+    const root = mkdtempSync(join(tmpdir(), "g006b-inspect-race-"));
+    roots.push(root);
+    const path = join(root, "large.bin");
+    writeFileSync(path, "stable-occupant");
+    truncateSync(path, 512 * 1024 * 1024);
+    const baseline = statSync(path, { bigint: true });
+    const beforeDescriptor = openSync(path, "r+"); closeSync(beforeDescriptor);
+    const child = spawn(POWERSHELL, [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PUBLISHER,
+      "-Mode", "InspectFile", "-Path", path,
+    ], { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = ""; let stderr = "";
+    child.stdout.setEncoding("utf8"); child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.setEncoding("utf8"); child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    const readyDeadline = Date.now() + 5_000;
+    let retained = false;
+    while (!retained && child.exitCode === null && Date.now() < readyDeadline) {
+      try { const descriptor = openSync(path, "r+"); closeSync(descriptor); }
+      catch { retained = true; }
+      if (!retained) await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    expect(retained).toBe(true);
+    expect(child.exitCode).toBeNull();
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      expect(() => renameSync(path, `${path}.attacker-${attempt}`)).toThrow();
+      expect(() => writeFileSync(path, `replacement-${attempt}`)).toThrow();
+    }
+    expect(await new Promise<number | null>((resolveExit) => child.once("exit", resolveExit)), stderr).toBe(0);
+    const afterDescriptor = openSync(path, "r+"); closeSync(afterDescriptor);
+    const inspected = JSON.parse(stdout) as Record<string, unknown>;
+    expect(inspected).toMatchObject({ status: "inspected", size: 512 * 1024 * 1024, finalPath: path });
+    expect(statSync(path, { bigint: true }).ino).toBe(baseline.ino);
+    const prefix = Buffer.alloc(15);
+    const descriptor = openSync(path, "r");
+    try { expect(readSync(descriptor, prefix, 0, prefix.length, 0)).toBe(prefix.length); } finally { closeSync(descriptor); }
+    expect(prefix.toString("utf8")).toBe("stable-occupant");
+    expect(readdirSync(root)).toEqual(["large.bin"]);
+  }, 60_000);
 
   it("retains sidecar identities so disappearance and replacement are denied until post-settle release", async () => {
     const root = mkdtempSync(join(tmpdir(), "g006b-sidecar-retained-"));
@@ -1403,11 +1721,14 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     } else {
       writeFileSync(path, "preexisting-file-occupant");
     }
+    const occupantPath = kind === "directory" ? join(path, "victim.txt") : path;
+    const occupantIno = statSync(occupantPath, { bigint: true }).ino;
+    const occupantBytes = readFileSync(occupantPath);
     const broker = await startTestBroker(root);
     await broker.send(`resource-create-${kind}\t${path}`);
     expect(await broker.exit()).toBe(12);
-    expect(kind === "directory" ? readFileSync(join(path, "victim.txt"), "utf8") : readFileSync(path, "utf8"))
-      .toMatch(/preexisting-.*-occupant/);
+    expect(readFileSync(occupantPath)).toEqual(occupantBytes);
+    expect(statSync(occupantPath, { bigint: true }).ino).toBe(occupantIno);
   });
 
   it("denies post-registration file/directory substitution and acts only on retained identities", async () => {
@@ -1504,6 +1825,34 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     expect(await broker.exit()).toBe(14);
     expect(readFileSync(destination, "utf8")).toBe(bytes);
   });
+
+  it.each(["EOF", "hard-death"] as const)("preserves every released final after %s later in the protocol", async (ending) => {
+    const root = mkdtempSync(join(tmpdir(), "g006b-released-final-"));
+    roots.push(root);
+    const broker = await startTestBroker(root);
+    const expected = new Map<string, { bytes: Buffer; ino: bigint }>();
+    for (let index = 0; index < 3; index += 1) {
+      const bytes = Buffer.from(`released-final-${index}`, "utf8");
+      const destination = join(root, `final-${index}.json`);
+      const temporary = `${destination}.g006b.tmp.${randomBytes(24).toString("hex")}`;
+      await broker.send(`resource-create-file\t${temporary}`); await broker.next();
+      await broker.write(temporary, bytes);
+      await broker.send(`resource-publish\t${temporary}\t${destination}\t${createHash("sha256").update(bytes).digest("hex")}\t${String(bytes.length)}`);
+      await broker.next();
+      await broker.send("publication-inspect"); await broker.next();
+      await broker.send("publication-release"); await broker.next();
+      expected.set(destination, { bytes, ino: statSync(destination, { bigint: true }).ino });
+    }
+    if (ending === "EOF") broker.child.stdin.end();
+    else broker.child.kill();
+    expect(await broker.exit()).not.toBe(0);
+    for (const [path, snapshot] of expected) {
+      expect(readFileSync(path), path).toEqual(snapshot.bytes);
+      expect(statSync(path, { bigint: true }).ino, path).toBe(snapshot.ino);
+    }
+    expect(existsSync(join(root, "broker.db.g006b.lock"))).toBe(false);
+    expect(temporaryResidue(root)).toEqual([]);
+  }, 30_000);
 
   it("reports a real cleanup identity failure and never deletes the replacement occupant", async () => {
     const root = mkdtempSync(join(tmpdir(), "g006b-identity-cleanup-"));
