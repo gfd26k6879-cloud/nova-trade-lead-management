@@ -1634,3 +1634,22 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   or expand scope. Sol separately owns executable quality, receipt accuracy,
   source attribution, gate reproduction and final acceptance. G006C1-C6 and
   final G006B/G006 activation remain closed.
+
+## G-006C0 immutable-source review result
+
+- Architecture ACCEPTS `55cf5f8` with no finding. It independently confirmed
+  exact replay-derived scope, closed backend/lifecycle discrimination, the
+  fieldless selector-gated capability, C1-C6 deferral, truthful receipt and
+  protected-path/public-signature exclusions. Its focused native gate passed
+  12/12 in 175.95 seconds.
+- Security ACCEPTS the same immutable source with no P0-P3 finding. It
+  independently confirmed descriptor/proxy and post-invocation mutation
+  defenses, caller-result rejection, raw G006B error propagation, capability
+  forgery/copy/prototype/proxy rejection, fresh fail-closed behavior,
+  PostgreSQL isolation and literal non-authority. Its focused native gate
+  passed 12/12 in 178.12 seconds.
+- Sol's source-quality audit confirms exact parent `b79a10c`, one-commit
+  distance, three added paths only, clean source worktree, zero focused-test
+  residue, clean diff and accurate local-only receipt. No finding requires a
+  repair delta. Source is reviewed and eligible for a non-fast-forward local
+  merge; C0 is not accepted until merged gates pass.
