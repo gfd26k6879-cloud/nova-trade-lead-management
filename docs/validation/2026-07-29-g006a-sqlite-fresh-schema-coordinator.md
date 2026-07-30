@@ -12,6 +12,8 @@ Rejected round-0 source: `7286bc6b2ee15cba2d19de0cd57b74c86f979fa2`
 
 Rejected round-1 source: `ff479d95ef624996b019968a489917a740ec2071`
 
+Rejected round-2 source: `868efdcda51c07da26f9b75fa0f34528126fb328`
+
 ## Result
 
 G-006A is prepared locally as an inert, deterministic SQLite final-catalog
@@ -110,29 +112,46 @@ database handle is accepted or retained.
 
 The operation plan is a closed discriminated union: single-statement
 create-table/index/trigger; insert/update/delete with scalar binds; and
-identifier-validated drop/rename operations. Minting inspects own property
+identifier-validated drop/rename operations. A single typed internal
+`restore-autoincrement-high-water` operation is available only after a
+validated rebuild of the sole catalog AUTOINCREMENT table,
+`tenant_deletion_checkpoint_events`; arbitrary SQL can never write
+`sqlite_sequence`. Minting inspects own property
 descriptors, rejects accessors, proxies, functions, async/thenable values,
 symbols, unknown keys, non-plain prototypes, malformed arrays, and non-scalar
-bind objects, and clones byte binds. It freezes a deep private copy; no caller
+bind objects, and clones byte binds. Declared array lengths are rejected before
+descriptor enumeration, proportional allocation, iteration, or `Set`
+construction: plans are capped at 4,096 operations and each bind list at
+32,766 values. It freezes a deep private copy; no caller
 object, callback, method, thenable, closure, or mutable bind reference enters
 capability state or the transaction.
 
 A private `WeakSet` consumes the opaque identity before any writer transaction
 attempt. Copies, spread/prototype forgeries, path aliases, path or binding
 mismatch, cross-file use, plan failure, and second use reject closed and cannot
-retry with the same token. The coordinator opens its own exact-path writer,
+retry with the same token. Minting records exact physical file identity as
+BigInt `dev` plus `ino`; content-identical same-path clones are different files
+and reject before plan execution. Each private open first acquires a
+coordinator-owned descriptor lease, proves descriptor/path identity, opens its
+own exact-path SQLite connection, and proves the same identity again. Identity
+is rechecked at transaction and verifier boundaries, and every descriptor and
+SQLite connection closes deterministically. The separate-writer
+replacement-exclusion proof relies on Windows/NTFS SQLite open-handle behavior,
+so this preparation fails closed with `G006A_FILE_IDENTITY_UNAVAILABLE` on
+other platforms. The coordinator opens its own exact-path writer,
 acquires `BEGIN IMMEDIATE`, and revalidates every mint-time source invariant and
 snapshot under the lock before executing the private plan. A quote/comment-
 aware token scanner denies transaction/savepoint control, PRAGMA,
 `writable_schema`, ATTACH/DETACH, VACUUM, catalog targets, TEMP/TEMPORARY, and
-qualified or attached-schema routes. Each statement is revalidated and
+qualified or attached-schema routes. Every `sqlite_*` identifier is rejected
+globally, including quoted identifiers and trigger bodies. Each statement is revalidated and
 compiled with single-statement `prepare` before execution. The coordinator
 alone controls `user_version`, commit, and rollback.
 
 Every inspector, writer, and verifier requires `database_list` to contain only
 the exact `main` file plus SQLite's optional empty `temp` entry, and requires
 zero `sqlite_temp_schema` objects. The only test boundary is an opaque token
-with one of three closed internal fault modes; it cannot carry a callback,
+with one of four closed internal fault modes; it cannot carry a callback,
 connection, path, or arbitrary success result. This remains a local
 program-integrity boundary only. G-006B/C still own the receipt/sidecar
 authority that permits a real handoff.
@@ -147,6 +166,15 @@ count, and deterministic type-tagged canonical row-payload digest. This
 includes platform/reference tables, ZIP rows, `audit_logs`, the receipt table,
 and existing T-028 tenant/workspace values. A final catalog may add
 migration-owned columns, but it cannot remove or change any source-state value.
+
+SQLite-owned state is a separate exact invariant. At capability mint, under
+the writer lock, after plan execution, before commit, on the fresh
+verifier, and during replay, the coordinator requires the canonical
+`sqlite_sequence` table schema and its exact BigInt-safe row set. Unknown or
+duplicate names, non-integer/negative/out-of-range values, a missing row for a
+nonempty AUTOINCREMENT table, or a high-water below `MAX(id)` reject closed.
+The only permitted rebuild restoration is copied from the private mint-time
+snapshot; historical high-water above current rows is preserved exactly.
 
 Before plan execution under the owned writer lock, it requires the exact
 mint-time state, user version, catalog, physical metadata, all-table payloads,
@@ -165,8 +193,8 @@ In-memory finalization fails closed.
 
 ## Local validation evidence
 
-- `npx vitest run src/lib/__tests__/sqlite-schema-coordinator.test.ts --reporter=verbose`
-  - PASS: 1 file, 18/18 tests, final round-2 run 6.41 s.
+- `npm exec vitest run src/lib/__tests__/sqlite-schema-coordinator.test.ts`
+  - PASS: 1 file, 23/23 tests, final round-3 run 7.67 s.
   - Covers deterministic fresh construction, exact catalog metadata, tenant
     and source key enforcement, both nullable-workspace unique identities,
     cross-tenant and invalid-source rejection, all coordinator classifications,
@@ -177,14 +205,19 @@ In-memory finalization fails closed.
     catalog/index/user-version drift, connection-list/temp-schema guards, normal and accepted-
     legacy rollback/restart, all-37 preservation, close/reopen finalization,
     committed-unverified reporting, persistent physical-index spoof rejection,
-    final replay, and row-count/payload/FK/integrity guards.
+    exact and poisoned same-path clone swaps, deterministic unsafe-integer
+    BigInt identity comparison, pre-verifier replacement reporting, global
+    direct/quoted/trigger-body `sqlite_*` denial, exact `sqlite_sequence` poison
+    detection, legitimate historical AUTOINCREMENT high-water rebuild and
+    restoration, pre-allocation huge sparse-array bounds, final replay, and
+    row-count/payload/FK/integrity guards.
 - `npm run typecheck`
-  - PASS: `tsc --noEmit --pretty false`, final run 4.6 s.
+  - PASS: `tsc --noEmit --pretty false`, final run 5.3 s.
 - `npm run lint`
-  - PASS: full repository ESLint, final run 18.6 s.
+  - PASS: full repository ESLint, final run 22.9 s.
 - `npm run db:verify:recovery`
   - PASS: all 37 application tables match SQLite schema and tracked
-    migrations, 2.0 s.
+    migrations, 2.2 s.
 - `git diff --cached --check`
   - PASS: no whitespace errors.
 - `git diff --cached --name-only` plus `git diff --name-only`
@@ -240,6 +273,31 @@ index predicate. The two null/non-null workspace probe rows from round 1 were
 restored, and source health is now revalidated under `BEGIN IMMEDIATE` before
 any plan operation. The fresh 18-test matrix then passed. No production
 catalog, manifest pin, SQL denial, or connection boundary was weakened.
+
+## Repair round 3 notes
+
+Round-2 source `868efdcda51c07da26f9b75fa0f34528126fb328` was
+rejected because the capability was bound to path and content rather than exact
+physical file identity, finalizer SQL could address SQLite-owned objects,
+`sqlite_sequence` was outside the preservation contract, and hostile array
+lengths were bounded only after proportional inspection. Repair round 3 adds
+the BigInt physical identity/lease protocol, exact SQLite-owned-state snapshots
+and typed AUTOINCREMENT high-water restoration, global `sqlite_*` rejection,
+and pre-inspection length bounds while retaining the declarative one-shot
+capability and all prior catalog/preservation invariants.
+
+The first expanded round-3 focused run passed 20/23 tests. Two adversarial
+fixtures had bound JavaScript numbers into no-affinity `sqlite_sequence`,
+correctly producing REAL rather than INTEGER values; they now bind BigInt. The
+third failure exposed an overbroad trigger scanner that rejected canonical
+table-alias column references. The scanner now distinguishes trigger-body
+schema routes from ordinary alias expressions while continuing to reject
+attached targets and every `sqlite_*` token. One subsequent run exposed a
+nonportable test assumption that every NTFS inode exceeds
+`Number.MAX_SAFE_INTEGER`; deterministic colliding high-BigInt identities now
+exercise the exact comparison directly, while real clone swaps still exercise
+the filesystem boundary. The fresh 23-test matrix then passed. No catalog pin,
+physical manifest, preservation check, or SQL denial was weakened.
 
 All database exercises used in-memory or task-owned temporary file-backed
 SQLite instances with synthetic rows. Every temporary directory and verifier

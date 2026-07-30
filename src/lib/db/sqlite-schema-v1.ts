@@ -7,6 +7,9 @@ export const SQLITE_SCHEMA_V1_STAGED_USER_VERSION = 6001 as const;
 export const SQLITE_SCHEMA_V1_FINAL_USER_VERSION = 6002 as const;
 export const SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT = 37 as const;
 export const SQLITE_SCHEMA_V1_PRIMARY_SCHEMA = "main" as const;
+export const SQLITE_SCHEMA_V1_AUTOINCREMENT_TABLES = Object.freeze([
+  "tenant_deletion_checkpoint_events",
+] as const);
 export const SQLITE_SCHEMA_V1_CATALOG_DIGEST = "080477dd8fce09c3e8d8ca7461f2bc0a8b2222edab26afe7297367bdfe6362cf" as const;
 export const SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_DIGEST = "b47346d186f2768f577b6e9b52f6112ee09c5d94b05aad3ef31303343c07a8f8" as const;
 export const SQLITE_SCHEMA_V1_DEFINITION_DIGEST = "fd28b893542b08248df08f58706f2947d1c3bef5aeecf920ee19ea2eeeb280d2" as const;

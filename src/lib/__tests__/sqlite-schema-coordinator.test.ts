@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, renameSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
 import {
+  __testOnlySqliteSchemaV1PhysicalFileIdentityMatches,
   ACCEPTED_LEGACY_SQLITE_CATALOG_DIGEST,
   assertSqliteSchemaV1DatabaseHealth,
   assertSqliteSchemaV1Preservation,
@@ -24,6 +25,7 @@ import {
 import {
   SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT,
   SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_DIGEST,
+  SQLITE_SCHEMA_V1_AUTOINCREMENT_TABLES,
   SQLITE_SCHEMA_V1_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_DEFINITION_DIGEST,
   SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
@@ -55,6 +57,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     expect(SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_DIGEST).toBe("b47346d186f2768f577b6e9b52f6112ee09c5d94b05aad3ef31303343c07a8f8");
     expect(SQLITE_SCHEMA_V1_DEFINITION_DIGEST).toBe("fd28b893542b08248df08f58706f2947d1c3bef5aeecf920ee19ea2eeeb280d2");
     expect(SQLITE_SCHEMA_V1_PRIMARY_SCHEMA).toBe("main");
+    expect(SQLITE_SCHEMA_V1_AUTOINCREMENT_TABLES).toEqual(["tenant_deletion_checkpoint_events"]);
     expect(() => assertSqliteSchemaV1DefinitionDigest(SQLITE_SCHEMA_V1_SQL)).not.toThrow();
     expect(() => assertSqliteSchemaV1DefinitionDigest(`${SQLITE_SCHEMA_V1_SQL} `))
       .toThrow(/generated schema-v1 definition digest drift/);
@@ -396,6 +399,34 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
+  it("rejects declared plan and bind lengths before proportional inspection or allocation", () => {
+    const fixture = createTemporaryStagedDatabase();
+    try {
+      const hugePlan = new Array<unknown>(0xffff_ffff);
+      expect(() => createSqliteSchemaV1LaterFinalizerCapability({
+        databasePath: fixture.path,
+        handoffBindingId: "g006b:bounded:plan",
+        targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+        plan: hugePlan as SqliteSchemaV1FinalizerPlan,
+      })).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_PLAN_REJECTED" }));
+
+      const hugeBinds = new Array<never>(32767);
+      expect(() => createSqliteSchemaV1LaterFinalizerCapability({
+        databasePath: fixture.path,
+        handoffBindingId: "g006b:bounded:binds",
+        targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+        plan: [{
+          kind: "insert",
+          sql: "INSERT INTO location_markets (id, name, country_code) VALUES (?, ?, ?)",
+          binds: hugeBinds,
+        }],
+      })).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_PLAN_REJECTED" }));
+      expect(classifySqliteSchemaV1(fixture.db).kind).toBe("staged");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("keeps opaque capability identity one-shot across copies, wrong bindings, cross-path attempts, failures, and success", () => {
     const first = createTemporaryStagedDatabase();
     const second = createTemporaryStagedDatabase();
@@ -457,6 +488,50 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
+  it("binds capabilities to bigint physical file identity and rejects same-path exact or poisoned clones before plan execution", () => {
+    const exact = createTemporaryStagedDatabase();
+    const poisoned = createTemporaryStagedDatabase();
+    try {
+      const exactIdentity = statSync(exact.path, { bigint: true });
+      expect(typeof exactIdentity.ino).toBe("bigint");
+      const unsafeInode = BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1);
+      const collidingInode = unsafeInode + BigInt(1);
+      expect(Number(unsafeInode)).toBe(Number(collidingInode));
+      expect(__testOnlySqliteSchemaV1PhysicalFileIdentityMatches(
+        { device: exactIdentity.dev, inode: unsafeInode },
+        { device: exactIdentity.dev, inode: collidingInode },
+      )).toBe(false);
+      expect(__testOnlySqliteSchemaV1PhysicalFileIdentityMatches(
+        { device: exactIdentity.dev, inode: unsafeInode },
+        { device: exactIdentity.dev, inode: unsafeInode },
+      )).toBe(true);
+      const exactHandoff = createFinalizerHandoff(exact.path, "g006b:identity:exact-clone", []);
+      replaceFixtureWithClone(exact);
+      expect(statSync(exact.path, { bigint: true }).ino).not.toBe(exactIdentity.ino);
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(exact.path, exactHandoff)).toThrowError(expect.objectContaining({
+        code: "G006A_FILE_IDENTITY_DRIFT",
+      }));
+      expect(classifySqliteSchemaV1(exact.db).kind).toBe("staged");
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(exact.path, exactHandoff)).toThrowError(expect.objectContaining({
+        code: "G006A_FINALIZER_CONSUMED",
+      }));
+
+      const poisonedHandoff = createFinalizerHandoff(poisoned.path, "g006b:identity:poisoned-clone", []);
+      replaceFixtureWithClone(poisoned, (clone) => {
+        clone.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)")
+          .run("tenant_deletion_checkpoint_events", BigInt(91));
+      });
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(poisoned.path, poisonedHandoff)).toThrowError(expect.objectContaining({
+        code: "G006A_FILE_IDENTITY_DRIFT",
+      }));
+      expect(readSequenceHighWater(poisoned.db)).toBe(BigInt(91));
+      expect(classifySqliteSchemaV1(poisoned.db).kind).toBe("staged");
+    } finally {
+      exact.cleanup();
+      poisoned.cleanup();
+    }
+  });
+
   it("rejects transaction, catalog, multi-statement, TEMP, and attached-schema SQL at mint", () => {
     const fixture = createTemporaryStagedDatabase();
     const attempts: ReadonlyArray<readonly [string, SqliteSchemaV1FinalizerPlan]> = [
@@ -473,6 +548,10 @@ describe("G-006A staged SQLite schema and coordinator", () => {
       ["multi", [{ kind: "insert", sql: "INSERT INTO location_markets (id, name, country_code) VALUES ('multi', 'Multi', 'US'); DELETE FROM location_markets" }]],
       ["catalog", [{ kind: "update", sql: "UPDATE [sqlite_schema] SET sql = sql" }]],
       ["master", [{ kind: "update", sql: "UPDATE `sqlite_master` SET sql = sql" }]],
+      ["sequence", [{ kind: "update", sql: "UPDATE sqlite_sequence SET seq = seq + 1" }]],
+      ["quoted-sequence", [{ kind: "delete", sql: "DELETE FROM \"sqlite_sequence\"" }]],
+      ["internal-shadow", [{ kind: "create-table", sql: "CREATE TABLE [sqlite_shadow_probe] (id TEXT)" }]],
+      ["internal-stat", [{ kind: "delete", sql: "DELETE FROM sqlite_stat1" }]],
       ["writable", [{ kind: "create-table", sql: "CREATE TABLE \"writable_schema\" (id TEXT)" }]],
       ["temp-table", [{ kind: "create-table", sql: "CREATE /*x*/ TeMp TABLE denied (id TEXT)" }]],
       ["temporary-table", [{ kind: "create-table", sql: "CREATE TEMPORARY TABLE denied (id TEXT)" }]],
@@ -483,6 +562,8 @@ describe("G-006A staged SQLite schema and coordinator", () => {
       ["attached-insert", [{ kind: "insert", sql: "INSERT INTO \"other\" . location_markets (id) VALUES ('x')" }]],
       ["qualified-main", [{ kind: "update", sql: "UPDATE main.location_markets SET name = name" }]],
       ["attached-trigger", [{ kind: "create-trigger", sql: "CREATE TRIGGER denied AFTER INSERT ON aux.location_markets BEGIN SELECT NEW.name; END" }]],
+      ["sequence-trigger", [{ kind: "create-trigger", sql: "CREATE TRIGGER denied AFTER INSERT ON location_markets BEGIN UPDATE sqlite_sequence SET seq = 0; END" }]],
+      ["quoted-sequence-trigger", [{ kind: "create-trigger", sql: "CREATE TRIGGER denied AFTER INSERT ON location_markets BEGIN UPDATE [sqlite_sequence] SET seq = 0; END" }]],
       ["trigger-multi", [{ kind: "create-trigger", sql: "CREATE TRIGGER denied AFTER INSERT ON location_markets BEGIN SELECT 1; END; DROP TABLE location_markets" }]],
     ];
     try {
@@ -491,6 +572,26 @@ describe("G-006A staged SQLite schema and coordinator", () => {
           code: "G006A_FINALIZER_SQL_REJECTED",
         }));
       }
+      expect(() => createFinalizerHandoff(fixture.path, "g006b:sql:autoincrement-hidden", [
+        { kind: "create-table", sql: "CREATE TABLE g006a_auto_probe (id INTEGER PRIMARY KEY AUTOINCREMENT)" },
+        { kind: "drop-table", name: "g006a_auto_probe" },
+      ])).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_PLAN_REJECTED" }));
+      expect(() => createFinalizerHandoff(fixture.path, "g006b:sql:restore-without-rebuild", [
+        { kind: "restore-autoincrement-high-water", table: "tenant_deletion_checkpoint_events" },
+      ])).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_PLAN_REJECTED" }));
+      expect(() => createFinalizerHandoff(fixture.path, "g006b:sql:restore-with-create-only", [
+        {
+          kind: "create-table",
+          sql: "CREATE TABLE tenant_deletion_checkpoint_events (id INTEGER PRIMARY KEY AUTOINCREMENT)",
+        },
+        { kind: "restore-autoincrement-high-water", table: "tenant_deletion_checkpoint_events" },
+      ])).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_PLAN_REJECTED" }));
+      expect(() => createFinalizerHandoff(fixture.path, "g006b:sql:restore-wrong-table", [
+        {
+          kind: "restore-autoincrement-high-water",
+          table: "other_table",
+        } as unknown as SqliteSchemaV1FinalizerPlan[number],
+      ])).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_PLAN_REJECTED" }));
       expect(classifySqliteSchemaV1(fixture.db).kind).toBe("staged");
       expect(Number(fixture.db.pragma("writable_schema", { simple: true }))).toBe(0);
     } finally {
@@ -557,6 +658,45 @@ describe("G-006A staged SQLite schema and coordinator", () => {
       catalog.cleanup();
       physical.cleanup();
       version.cleanup();
+    }
+  });
+
+  it("binds exact sqlite_sequence rows at mint and rejects same-file high-water poison under the writer lock", () => {
+    const fixture = createTemporaryStagedDatabase();
+    try {
+      const handoff = createFinalizerHandoff(fixture.path, "g006b:sequence:mint-drift", []);
+      fixture.db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)")
+        .run("tenant_deletion_checkpoint_events", BigInt(41));
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff)).toThrowError(expect.objectContaining({
+        code: "G006A_SQLITE_OWNED_STATE_DRIFT",
+      }));
+      expect(readSequenceHighWater(fixture.db)).toBe(BigInt(41));
+      expect(classifySqliteSchemaV1(fixture.db).kind).toBe("staged");
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff)).toThrowError(expect.objectContaining({
+        code: "G006A_FINALIZER_CONSUMED",
+      }));
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("rebuilds the sole AUTOINCREMENT table only with private mint-time high-water restoration", () => {
+    const fixture = createTemporaryStagedDatabase();
+    try {
+      fixture.db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)")
+        .run("tenant_deletion_checkpoint_events", BigInt(77));
+      const rebuild = readAutoincrementRebuildPlan(fixture.db);
+      const handoff = createFinalizerHandoff(fixture.path, "g006b:sequence:legitimate-rebuild", rebuild);
+      expect(coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff)).toMatchObject({
+        status: "finalized",
+        state: { kind: "final", catalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST },
+      });
+      expect(readSequenceHighWater(fixture.db)).toBe(BigInt(77));
+      expect(sqliteSchemaV1PhysicalManifestDigest(fixture.db)).toBe(SQLITE_SCHEMA_V1_PHYSICAL_MANIFEST_DIGEST);
+      expect(fixture.db.prepare("SELECT COUNT(*) AS count FROM tenant_deletion_checkpoint_events").get())
+        .toMatchObject({ count: 0 });
+    } finally {
+      fixture.cleanup();
     }
   });
 
@@ -671,6 +811,28 @@ describe("G-006A staged SQLite schema and coordinator", () => {
         reopened.close();
       }
       fixture.db = new Database(fixture.path);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("reports committed-but-unverified when an exact clone replaces the file between writer close and verifier open", () => {
+    const fixture = createTemporaryStagedDatabase();
+    try {
+      const handoff = createFinalizerHandoff(fixture.path, "g006b:reopen:identity-swap", []);
+      fixture.db.close();
+      const boundary = createSqliteSchemaV1FreshVerifierTestBoundary("replace-before-verifier");
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff, {
+        freshVerifierTestBoundary: boundary,
+      })).toThrowError(expect.objectContaining({
+        code: "G006A_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
+        committed: true,
+        status: "committed-unverified-recovery-required",
+      }));
+      expect(existsSync(`${fixture.path}.g006a-verifier-clone`)).toBe(false);
+      expect(existsSync(`${fixture.path}.g006a-verifier-original`)).toBe(false);
+      fixture.db = new Database(fixture.path);
+      expect(classifySqliteSchemaV1(fixture.db).kind).toBe("final");
     } finally {
       fixture.cleanup();
     }
@@ -842,6 +1004,70 @@ function duplicateMarketPlan(id: string): SqliteSchemaV1FinalizerPlan {
     binds: [id, "Failure", "US"],
   };
   return [operation, { ...operation }];
+}
+
+function replaceFixtureWithClone(
+  fixture: TemporaryDatabaseFixture,
+  mutateClone?: (db: Database.Database) => void,
+): void {
+  if (fixture.db.open) fixture.db.close();
+  const clonePath = join(fixture.directory, "schema-clone.db");
+  const originalPath = join(fixture.directory, "schema-original.db");
+  copyFileSync(fixture.path, clonePath);
+  if (mutateClone) {
+    const clone = new Database(clonePath);
+    try {
+      mutateClone(clone);
+    } finally {
+      clone.close();
+    }
+  }
+  renameSync(fixture.path, originalPath);
+  try {
+    renameSync(clonePath, fixture.path);
+    rmSync(originalPath, { force: true });
+  } catch (error) {
+    if (!existsSync(fixture.path) && existsSync(originalPath)) renameSync(originalPath, fixture.path);
+    throw error;
+  } finally {
+    rmSync(clonePath, { force: true });
+  }
+  fixture.db = new Database(fixture.path);
+  fixture.db.pragma("foreign_keys = ON");
+}
+
+function readSequenceHighWater(db: Database.Database): bigint {
+  const row = db.prepare(`
+    SELECT CAST(seq AS TEXT) AS seq_text
+    FROM sqlite_sequence
+    WHERE name = 'tenant_deletion_checkpoint_events'
+  `).get() as { seq_text: string } | undefined;
+  if (!row) throw new Error("missing tenant_deletion_checkpoint_events sqlite_sequence row");
+  return BigInt(row.seq_text);
+}
+
+function readAutoincrementRebuildPlan(db: Database.Database): SqliteSchemaV1FinalizerPlan {
+  const table = "tenant_deletion_checkpoint_events";
+  const tableRow = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
+    .get(table) as { sql: string } | undefined;
+  if (!tableRow?.sql) throw new Error(`missing ${table} table SQL`);
+  const objects = db.prepare(`
+    SELECT type, sql
+    FROM sqlite_schema
+    WHERE tbl_name = ? AND type IN ('index', 'trigger') AND sql IS NOT NULL
+    ORDER BY CASE type WHEN 'index' THEN 0 ELSE 1 END, name COLLATE BINARY
+  `).all(table) as Array<{ type: "index" | "trigger"; sql: string }>;
+  const plan: Array<SqliteSchemaV1FinalizerPlan[number]> = [
+    { kind: "drop-table", name: table },
+    { kind: "create-table", sql: tableRow.sql },
+  ];
+  for (const object of objects) {
+    plan.push(object.type === "index"
+      ? { kind: "create-index", sql: object.sql }
+      : { kind: "create-trigger", sql: object.sql });
+  }
+  plan.push({ kind: "restore-autoincrement-high-water", table });
+  return plan;
 }
 
 function insertPartialIndexProbeRows(db: Database.Database, withFoundation = true): void {
