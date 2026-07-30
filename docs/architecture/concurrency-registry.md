@@ -839,3 +839,14 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   Exactly one same-scope commit is permitted. Producer output remains evidence
   only and authorizes no merge, startup activation, later-card work, or
   external action.
+- Round-5 preflight found exactly three faulty production schema predicates and
+  one duplicate test predicate. The preferred repair reads all main-catalog
+  rows once and partitions them in code by a case-folded literal `sqlite_`
+  prefix, proving exhaustive/disjoint ownership without depending on SQLite
+  `LIKE` settings.
+- The verifier contract samples same-connection `main.data_version`, begins one
+  deferred read transaction, performs every logical check in that snapshot,
+  commits the read transaction, and immediately samples again. Equality is the
+  only accepted result; failures preserve the primary verification error while
+  still attempting rollback and deterministic close. Commits after the second
+  sample are explicitly outside the returned guarantee.
