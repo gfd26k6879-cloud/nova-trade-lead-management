@@ -18,7 +18,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Immutable G-006A repair source `ff479d95ef624996b019968a489917a740ec2071`, exactly one four-path commit over rejected `7286bc6`, is under fresh dual rereview with no startup activation. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-006A repair `ff479d95ef624996b019968a489917a740ec2071` is rejected; repair round 2 must remove caller callbacks/shared writable handles while staying within the same four paths. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-004A source `c0892a06325b33657e5b73813635fec6a4081012` is accepted through integration `8383fa70a2bac8de71413ae135918bbaedf907b4`; runtime G-004B remains preserved and blocked for co-delivery with G-013/G-014. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
@@ -59,7 +59,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 | `G-005` | Accepted | Source `28005a3` passed repaired dual review, merged at `d2d6e7f`, and passed the full merged release gate. Runtime propagation and T029 reconciliation remain later cards. |
 | `G-006` | Parent split open | Preserve every success criterion through serialized G-006R recovery identity, staged G-006A fresh schema/coordinator, G-006B receipt-bound finalization, and the G-006C compatibility-adapter sequence. Accept only after all children independently pass and startup activation is proven. |
 | `G-006R` | Accepted | Repaired source `3443816` passed fresh domain/security and independent Quality review, merged at `43a2387`, and passed the full merged release gate. |
-| `G-006A` | Repair round 1 under fresh dual rereview | Source `ff479d9` claims bounded transaction ownership, identity-bound one-shot capability, all-37 preservation, pinned manifests, and post-commit fresh reopen verification; producer evidence is not acceptance. |
+| `G-006A` | Repair round 2 authorized | Source `ff479d9` is rejected because its callback can capture the raw DB, source payload is not mint-bound, async callbacks escape, and TEMP artifacts evade the main manifest. Same four-path ceiling; no startup activation. |
 | `G-006B` | Blocked on accepted G-006A | Consume exactly one verified T028 SQLite receipt and verified backup to atomically finalize 17 non-audit tables with interruption/replay proof. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
@@ -657,3 +657,27 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   the immutable repair. They must independently replay every transaction,
   capability, all-37 preservation, physical-index spoof, reopen, and
   committed-unverified recovery boundary. No merge or acceptance is authorized.
+
+## G-006A repair round 2
+
+- Repair `ff479d95ef624996b019968a489917a740ec2071` is rejected. Both lanes
+  independently closed over the raw writable DB passed to the capability
+  factory, bypassed the bounded session, committed partial data/catalog changes,
+  and then threw. Rollback and preservation were no longer possible.
+- Quality also proved that the token is not bound to the all-37 source payload
+  at mint time, async callbacks can continue after a false finalized result,
+  and a TEMP trigger can evade main-catalog/reopen verification and mutate data
+  on a later ordinary write.
+- Round 2 must execute no caller JavaScript inside the owned transaction. The
+  capability stores a deeply validated/copied synchronous declarative operation
+  plan, canonical file binding, exact mint-time source catalog/physical/all-37
+  snapshot, and one-shot private state. The coordinator privately opens, locks,
+  executes, verifies, and closes the writable file connection.
+- Only main-schema, single-statement, bounded DDL/DML operations are allowed.
+  Accessors, functions, thenables, mutable parameter objects, TEMP/TEMPORARY,
+  attached databases, transaction/PRAGMA/writable-schema/catalog-control, and
+  multi-statement routes fail closed. Fresh post-commit read-only reopen and
+  committed-unverified recovery semantics remain mandatory.
+- The same four files and both locks remain exclusive. Every prior passing
+  catalog, source-identity, preservation, digest, physical-manifest, cleanup,
+  and scope invariant must remain green. Fresh dual rereview is mandatory.
