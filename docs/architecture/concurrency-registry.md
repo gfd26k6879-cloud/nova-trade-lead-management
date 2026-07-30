@@ -516,3 +516,28 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 - Two lock-free G-006B handoff preflights may inspect the immutable T-028 and
   recovery contracts beside round 3. They cannot implement, modify the T-028
   receipt, acquire locks, or waive any G-006R/G-006A dependency.
+- Round-3 source `3443816f0e2dbe98c12a95aafb36ba03a3040e37` is
+  one three-path repair commit over `295dac1`; the full aggregate remains the
+  exact original seven G-006R paths and the worktree is clean. Fresh dual
+  rereview is active.
+
+## G-006B handoff storage decision
+
+- G-006B will use an append-only, backup-bound, content-addressed sidecar with
+  separate prepared and committed records. It will not add a 38th SQLite table,
+  change the current 37-table recovery inventory, or reinterpret T-028.
+- The operator must provide the exact sidecar path and expected handoff ID.
+  C0 never scans a directory, selects latest, or infers identity. Both records
+  bind the lossless SQLite backup, schema-3 logical archive, T-028 evidence for
+  legacy mode, explicit fresh-provisioning evidence for fresh mode, scope,
+  source/play, catalog, counts/checksums, audit preservation, and zero-orphan
+  postconditions under canonical hashes.
+- The prepared record is written and fsynced before SQLite commit. After commit
+  and exact reopen verification, a separate immutable committed record is
+  atomically published and directory-fsynced. C0 permits startup only for the
+  explicitly pinned committed record and exact database state; every ambiguous
+  crash state fails closed or resumes only from the bound archive.
+- Database-only restore remains intentionally blocked without the pinned
+  sidecar. If unattended database-only restore becomes a requirement, it needs
+  a separate approved recovery-contract/version expansion. Fresh mode requires
+  an explicit owner/foundation manifest and never fabricates a T-028 receipt.
