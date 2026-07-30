@@ -1235,3 +1235,16 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   settled main FileId/SHA. Auxiliary files, when present, remain subject to the
   exact local-NTFS, non-cloud, non-reparse checks. No claim of stable auxiliary
   absence is permitted.
+- The Terra-medium producer completed repair commit `6c8c2dc` as exactly one
+  new commit over rejected source `07a2129`, modifying only the same four B1
+  paths and leaving the Platform worktree clean. Producer evidence reports
+  typecheck, full lint, build, the grouped 5/5 B1-01-through-B1-12 matrix,
+  76 passing related regressions with two environment-gated PostgreSQL skips,
+  the 37-table recovery verifier, helper pin/parser and native lease/publication
+  probes, plus zero residue. The commit is local and unmerged.
+- Fresh post-repair reviews now occupy the three specialist lanes at the
+  four-agent ceiling. Security is rerunning every prior exploit and native race;
+  architecture is checking the closed API, handoff/state/WAL/snapshot/sidecar
+  contract; quality is verifying that five grouped tests substantively cover
+  every required matrix row and that the receipt matches the actual evidence.
+  Sol retains the sole acceptance and merge authority; B1 locks remain held.
