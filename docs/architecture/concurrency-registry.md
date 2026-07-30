@@ -464,3 +464,13 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   repair holds the recovery contract. Two lock-free, read-only G-006C source
   inventories may run beside it; they cannot implement or waive G-006R,
   G-006A, or G-006B dependencies.
+- Round-2 source `295dac10b414439d54e07b0d6e2976c074bf0185` is
+  exactly one three-path repair commit over `f11cb1a`; the full aggregate still
+  contains exactly the original seven G-006R paths and the worktree is clean.
+  Fresh domain and independent Quality rereview are active.
+- G-006C domain inventory found roughly 120 mutations across the seventeen
+  ordinary T-028-owned tables, including scoped candidate/parent reads and
+  hidden startup repairs. It cannot be reduced to INSERT/UPSERT or transparent
+  SQL rewriting. Its implementation must use serialized compile-safe slices,
+  unchanged PostgreSQL SQL, an opaque G-006B finalizer handoff containing exact
+  source identity, and a fail-closed non-rewriting SQLite mutation guard.
