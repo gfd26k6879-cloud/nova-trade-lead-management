@@ -2254,3 +2254,53 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   gates. All three preflights are local, read-only, lock-free and cannot edit,
   run mutable shared fixtures, commit, merge, accept, touch blocked roots or use
   external services. Sol must reconcile one Terra-medium producer packet first.
+
+## G-006C2B preflight stop and C2A Repair-4 reconciliation
+
+- Architecture, security and Terra-medium Quality independently STOP C2B before
+  implementation. Accepted C2A retains only exact lifecycle/path/tenant/storage-
+  workspace/operation-workspace/operation selectors. It deliberately discards
+  the C0/C1 file, journal, catalog, physical-manifest and foundation anchors that
+  C2B must compare against current state. A writer could validate the current
+  path in isolation but could not prove it is the physical database previously
+  bound by C0/C1. `BEGIN IMMEDIATE` closes only races after open and cannot repair
+  that missing provenance. All preflights were read-only and made no source,
+  fixture, test, lock, temporary-resource, blocked-root or external change.
+- The table inventory is preserved for the resumed writer packet. Fresh/staged
+  SQLite has explicit tenant scope, nullable workspace scope, no legacy primary
+  key and two null-safe partial unique identities. Upgraded/prepared-legacy keeps
+  the global `(user_id, market_id)` primary key while its backfilled tenant and
+  workspace columns remain nullable. Neither lifecycle has a SQLite access-table
+  validation trigger. The legacy helper remains unsafe because it deletes only
+  by user, inserts no scope and validates markets outside its transaction.
+- Sol preserves the original G006C2 card and all 318-card/Q-040/T-029 scope. C2B
+  remains open and unimplemented; C2C and C3-C6 remain ordered behind it. The
+  smallest unblock is C2A Repair-4, an evidence-propagation repair beneath the
+  already accepted C2A milestone, not a new card or authority expansion.
+- Repair-4 has an exact five-path ceiling: `sqlite-compatibility-scope.ts`, its
+  focused test, `sqlite-g002-operation-permit.ts`, its focused test, and the
+  existing C2A validation receipt. The shared fixture, C1, G006B, schemas,
+  migrations, legacy queries/actions/callers, startup, PostgreSQL paths, public
+  barrels and persistent audit stay byte-identical.
+- C0 must mint a fieldless, non-barrel, private-WeakMap storage-anchor capability
+  only from a genuine lifecycle binding and exact selectors. Fresh private state
+  may retain the already verified C1 file/journal/catalog/physical/foundation
+  facts. Upgraded private state must retain the already snapshotted and verified
+  G006B replay proof, including its native identity and journal pin, so C2B can
+  repeat the authoritative current proof. Caller-supplied anchors, receipts,
+  hashes, paths, callbacks or reconstructed trust are forbidden. A post-replay
+  `stat` alone is insufficient and cannot replace the sealed replay proof.
+- C2A must keep its existing public selector-only, literal-non-authority evidence
+  stable. It stores only the fieldless C0 anchor with private permit state and
+  adds a deep, non-barrel writer-consumer seam that burns both one-shot states
+  before hostile expectation processing. It must not expose replay payloads,
+  identity details, PII, a database handle or an authority callback. Every grant
+  remains literal false; G009/G010/G013 still own actor/request/worker authority.
+- Repair tests must directly cover the new C0 contract for both lifecycles and
+  the C2A propagation/burn boundary: genuine-binding-only minting, exact selector
+  matching, frozen/fieldless/copy/proxy/forgery denial, cross-lifecycle denial,
+  replay and terminal failure, sealed upgraded proof, fresh anchor preservation,
+  no serialization or PII exposure, stable public evidence and zero mutation or
+  activation. Existing C0/C1/C2A/G006A, PostgreSQL/readiness/session, typecheck,
+  zero-warning lint, five-path/protected-blob and residue/process gates remain
+  mandatory. The producer must return GO/STOP API choreography before editing.
