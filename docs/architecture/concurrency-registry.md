@@ -1823,3 +1823,30 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   boundaries and validation-exception disclosures. No fifth path, schema,
   startup, writer, G006A/B, PostgreSQL, receipt-as-authority or external action
   is authorized.
+
+## G-006C1 repair producer result and immutable review launch
+
+- Terra-medium completed repair commit `141aa2c` directly atop rejected source
+  `28b04d8`, with exactly the same four authorized paths and a clean worktree.
+  The repair preserves public C0 signatures and moves the actual private-map
+  mint under a final no-write `BEGIN IMMEDIATE` lease after complete logical
+  reproof. The binding and idempotent revoker remain private until rollback,
+  close, final identity and descriptor checks succeed; every post-mint failure
+  revokes, with a C0 deletion backstop.
+- The repaired focused matrix passes 53/53 with one intentional parent worker
+  skip executed by child processes in 20.12 seconds. It proves pre-lease
+  external mutation rejection without mint, post-mint writer exclusion until
+  lease release, and post-mint failure revocation followed by successful replay.
+  C0 passes 12/12, G006A 37/37, PostgreSQL/readiness/session 27/27, and typecheck,
+  zero-warning lint, build and 37-table recovery pass.
+- The repair did not rerun the unchanged full G006B suite. Its prior truthful
+  70/71 plus targeted 1/1 exception remains, as do the policy-blocked
+  `g006b-b1-ZKgBDT` and `g006b-b1-Y18U0Y` roots. Zero C1 roots or owning task
+  processes remain, and `g006b-identity-cleanup-qjkSgV` stays excluded and
+  untouched.
+- Architecture and the original security reviewer now inspect immutable repair
+  `141aa2c`. They may run focused disposable checks but cannot edit, commit,
+  merge, accept, touch blocked roots or perform external activity. Security must
+  explicitly verify P1 closure and capability revocation; architecture must
+  verify API/transaction compatibility and unchanged C1 scope. Sol alone decides
+  repair acceptance, exception disposition and merge.
