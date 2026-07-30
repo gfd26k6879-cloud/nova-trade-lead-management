@@ -751,3 +751,33 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   the mint-time file lease is truly retained rather than reduced to a reusable
   identity tuple, and whether every unexpected SQLite-owned object such as
   `sqlite_stat1` is rejected rather than only validating `sqlite_sequence`.
+
+## G-006A repair round 4
+
+- Round-3 source `b2843b8bff6d44d2861318c9523fe8780f12395e` is rejected and must not
+  be merged or accepted. Both lanes confirmed that successful mint closes its
+  inspector descriptor and stores only `(dev, ino)`, so no live lease spans the
+  capability handoff and exact-original-file binding remains exposed to file-ID
+  reuse. A private mint lease must survive through writer acquisition and the
+  fresh verifier, with deterministic cancel/dispose and exactly-once closure.
+- Both lanes independently created `sqlite_stat1` and `sqlite_stat4` with
+  `ANALYZE`. Staged and accepted-legacy mint, locked finalization, and final
+  replay all accepted the contaminated catalog because the application digest
+  excludes `sqlite_%` and the owned-state snapshot selects only
+  `sqlite_sequence`. Round 4 must pin the complete legacy and staged/final
+  internal catalogs and reject every statistics or unknown internal object at
+  mint, under lock, pre/post commit, fresh verification, and replay.
+- Independent Quality also proved that a nonempty AUTOINCREMENT table containing
+  explicit ID `0` is accepted after its required sequence row is deleted.
+  Presence must be based on independent row count, not only positive `MAX(id)`;
+  every nonempty AUTOINCREMENT table requires its one exact sequence row even
+  when all IDs are zero or negative.
+- The fresh verifier currently checks the path/descriptor only before its reads.
+  It must revalidate the retained identity after every verification phase and
+  immediately before returning success so a replacement can never be accepted
+  while the open verifier still reads an older file object.
+- Repair round 4 stays within the same four paths and keeps both locks. All
+  prior passing SQL, callback, object, capability, transaction, 37-table,
+  physical-manifest, sequence, sparse-array, rollback, reopen, cleanup, and
+  scope gates remain binding. Fresh dual rereview and Sol's merged release gate
+  are mandatory; G-006A and parent G-006 remain open.
