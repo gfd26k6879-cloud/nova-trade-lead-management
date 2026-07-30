@@ -724,3 +724,8 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   gates remain binding. Fresh dual rereview and Sol's merged release gate are
   still required; G-006A remains only a preparation milestone and parent G-006
   remains open.
+- Repair round 3 is active with the original Terra medium producer against
+  immutable rejected source `868efdcda51c07da26f9b75fa0f34528126fb328`.
+  Producer output is evidence only: exactly one commit and the same four paths
+  are permitted. No merge, acceptance, startup activation, G-006B/C work, or
+  external action is authorized by this dispatch.
