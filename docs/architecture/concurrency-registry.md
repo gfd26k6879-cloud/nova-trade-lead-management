@@ -1127,3 +1127,20 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   IDs. Replay parses, revalidates, rebinds, and requires byte-for-byte canonical
   equality. The accepted play is unchanged and the outer numeric grammar is
   not widened.
+- The Terra-medium B1 producer completed source commit `07a2129` as exactly one
+  commit over `99d3227`, touching only the four authorized new paths and leaving
+  its worktree clean. Producer evidence reports 3/3 focused B1 tests, 76 passing
+  T-028/G-023/recovery/coordinator regressions with two environment-gated
+  PostgreSQL skips, typecheck, focused ESLint, the 37-table recovery check,
+  PowerShell parsing, a real non-cloud NTFS native probe, and mandatory OneDrive
+  rejection. Full lint remains an independent acceptance gate because the
+  producer ran only focused ESLint.
+- Fresh post-producer reviews are active at the four-agent ceiling: the security
+  lane owns caller authority, native publication, cloud/ACL/path identity and
+  restart fault review; the architecture lane owns T-028/G-023/schema-3,
+  four-table mutation, sidecar and recovery-contract review; and the quality
+  lane owns receipt accuracy plus full repository gates. Sol retains the sole
+  merge and acceptance authority. During root inspection, the exported input's
+  caller-controlled `publisherScriptPath` was identified as a candidate
+  release-blocking authority injection and is explicitly under independent
+  review; no merge, lock release, or downstream unlock is authorized.
