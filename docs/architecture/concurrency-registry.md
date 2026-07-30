@@ -511,3 +511,5 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 - The binary comparator and valid quote/comment/escape handling remain closed
   findings and must be preserved. Repair stays inside the existing seven-path
   ceiling, with fresh dual rereview and the recovery lock retained.
+- The original Terra-medium producer is executing round 3 from `295dac1`; no
+  dependent implementation or overlapping recovery-contract work is active.
