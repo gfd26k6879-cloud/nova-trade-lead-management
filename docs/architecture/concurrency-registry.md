@@ -1091,9 +1091,21 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   `99d3227` with exactly one attributable commit permitted. It must stop before
   a fifth path, accepted-contract edit, authority inference, or weakened native
   durability claim; no review, merge, or acceptance is preauthorized.
-- Two disjoint read-only feasibility preflights run concurrently at the
-  four-total-agent ceiling against immutable `99d3227`. One owns exact existing
-  API/import/process reachability under the four-file ceiling; the other owns
-  the native Windows file/directory durability semantics and hard-stop gap
-  analysis. They hold no locks, cannot inspect producer work, and cannot
-  authorize scope expansion, implementation, or acceptance.
+- Two disjoint read-only feasibility preflights completed at the four-total-
+  agent ceiling against immutable `99d3227` with zero changes or residue. The
+  API lane proved the exact four paths can expose one deep staged production
+  library API using accepted T-028/G-023/G-006A exports and schema-3 child
+  processes without cycles or contract edits. A CLI, package/startup caller,
+  or C0 surface stays deferred.
+- The native lane proved no-replace `MoveFileExW(WRITE_THROUGH)`, stable
+  `FileIdInfo`, file and directory `FlushFileBuffers`, and collision error 183
+  on this host, while identifying a mandatory Cloud Files check: ordinary
+  attributes do not reveal that the OneDrive checkout is a sync root.
+  `CfGetSyncRootInfoByPath` must reject every cloud parent; explicit source and
+  artifact paths must be non-cloud local NTFS. The receipt may claim only the
+  documented Win32 write-through plus fail-closed restart protocol, never
+  cross-file ACID or controller-level physical-media durability.
+- Sol reconciled the private-helper boundaries: B1 must precheck one exact
+  existing T-028 receipt before exported replay, compare it completely before
+  and after, and independently own its bounded path/file-lease/reopen checks.
+  It may not export, copy authority from, or modify accepted coordinators.
