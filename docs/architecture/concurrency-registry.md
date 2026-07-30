@@ -808,3 +808,29 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   the immutable source. They own all lifecycle, internal-catalog, sequence,
   late-verifier, replay, prior exploit, topology, and cleanup acceptance. No
   merge or milestone acceptance is authorized by producer evidence.
+
+## G-006A repair round 5
+
+- Round-4 source `c23d280773f1594c7a2a28598bf5dd0c780f1440` is rejected and must not
+  be merged or accepted. Options are validated before a recognizable handoff
+  is claimed, so invalid or proxied options leave the capability READY, its
+  root descriptor open, and the one-shot token reusable. Round 5 must claim the
+  handoff first and terminalize every subsequent options error.
+- Application schema predicates still use unescaped `sqlite_%`, so the
+  underscore wildcard excludes legal `sqliteX...` objects while the escaped
+  internal predicate also excludes them. Both pre-existing and plan-created
+  hidden tables survived `finalized` and `replayed`. Every application-side
+  complement must escape the underscore and form one exhaustive, disjoint
+  partition with the internal catalog; table, view, trigger, and index cases
+  require regressions.
+- Fresh verification currently issues independent autocommit reads. A separate
+  WAL writer changed a preserved row after its comparison and both finalization
+  and replay still succeeded. Round 5 must sample `PRAGMA data_version`, run all
+  verifier reads in one explicit read transaction, end it, immediately resample
+  `data_version`, and reject any change before the final identity/close checks.
+  Finalization maps the drift to committed-unverified; replay reports ordinary
+  uncommitted drift. No writable/exclusive verifier authority is permitted.
+- The same four paths and both locks remain exclusive. All 29 prior focused
+  tests and every catalog, lease, sequence, SQL, sparse, all-37, physical,
+  rollback, reopen, scope, and cleanup gate remain binding. Fresh dual rereview
+  and Sol's merged release gate are mandatory; G-006A and parent G-006 stay open.
