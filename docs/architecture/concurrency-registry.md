@@ -2091,3 +2091,28 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   cleanup containment and failure disclosure. Reviewers may run focused local
   checks but cannot edit, commit, merge, accept, access blocked roots or perform
   external activity. Sol alone authorizes a bounded repair and final merge.
+
+## G-006C2A immutable review result and documentation repair
+
+- Architecture and security both ACCEPT immutable implementation source
+  `db501cc` with no P0-P2 finding. Each independently reruns the focused suite
+  36/36 and leaves zero C2A roots. They confirm the three-operation deep module,
+  genuine lifecycle binding, explicit nullable workspace, terminal one-shot
+  consumption, literal non-authority, four-path scope and non-activation.
+- Both reviewers confirm Sol's dependency-record P3. Architecture adds one P3
+  trust-description correction: the permit narrows a genuine binding whose
+  storage facts were verified earlier; it does not reopen/read the database,
+  hold a SQLite lease or prove current file/row state at permit creation or
+  consumption. The runtime API remains correct, but its comment and receipt must
+  say so precisely.
+- One Terra-medium repair commit is authorized on top of `db501cc`, limited to
+  the module comment and existing validation receipt. It must record the actual
+  pre-dispatch `npm ci` and observed 14 findings, distinguish that preparation
+  from producer implementation, and retain that no remediation occurred. It
+  must describe the capability as narrowing previously verified C0/C1 evidence,
+  not current-state proof, and state that C2B/C own current canonical file/schema,
+  tenant/workspace, parent and persisted location-mode checks in their atomic
+  operations. No code behavior, test, fixture, API, third path, authority,
+  caller, startup, PostgreSQL or external change is permitted.
+- Source remains unmerged and unaccepted. Both reviewers must verify the exact
+  repair delta before Sol may adjudicate merge eligibility.
