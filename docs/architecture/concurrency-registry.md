@@ -2162,3 +2162,19 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   only for lineage closure and delta integrity. No edit, commit, merge,
   acceptance, blocked-root access or external activity is authorized. Sol alone
   decides source eligibility and merged-control validation.
+
+## G-006C2A self-reference-safe receipt lineage correction
+
+- Architecture ACCEPTS `3cba1d0` as the exact one-path/one-hunk correction.
+  Security finds that `Repair commit (this receipt): 27582d1` still mislabels
+  the current receipt revision. Sol accepts the wording defect but rejects the
+  proposed insertion of `3cba1d0` as a durable solution: any commit changing
+  the receipt necessarily has a different hash, so a Git commit cannot contain
+  its own final hash.
+- A final receipt-only Terra-medium correction is authorized on top of
+  `3cba1d0`: name `db501cc` the pre-repair baseline and `27582d1` the Repair-1
+  content commit, then state that the receipt-only lineage commit is recorded in
+  the append-only implementation ledger because the receipt cannot self-embed
+  its own Git hash. No second path, other text, code, test, result, validation,
+  external action or self-acceptance is permitted. The ledger will record the
+  resulting immutable tip after it exists; both reviewers must verify closure.
