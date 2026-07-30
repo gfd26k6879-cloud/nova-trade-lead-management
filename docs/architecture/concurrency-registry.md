@@ -2304,3 +2304,37 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   activation. Existing C0/C1/C2A/G006A, PostgreSQL/readiness/session, typecheck,
   zero-warning lint, five-path/protected-blob and residue/process gates remain
   mandatory. The producer must return GO/STOP API choreography before editing.
+
+## G-006C2A Repair-4 producer result and immutable review launch
+
+- Terra-medium returned GO before editing, and Sol authorized the corrected
+  ownership design: a deep-module exported but fieldless anchor brand backed by
+  C0 private state; terminal upgraded current proof repeats the sealed verified
+  G006B replay; fresh proof transfers only prior frozen C1 storage anchors; and
+  C2A separates ordinary consumption from writer transfer without changing its
+  public evidence shape or running current proof too early.
+- Producer commit `1d2931d30222957a7dad856360607bc3b7121558` is one commit
+  directly over dispatch control `b9fb91314bf5338127b0a6ea632579ec1371b988`.
+  Its delta is exactly the five authorized paths. The shared fixture, C1, G006B,
+  schema/migrations, legacy queries/actions/callers, startup, PostgreSQL and
+  barrels remain unchanged; the producer worktree is clean.
+- Producer validation passes C0 14/14, C2A 38/38, and the combined C1/G006A/
+  schema/PostgreSQL/readiness/session family with 83 passed and one intentional
+  subprocess skip. Typecheck, focused ESLint, full repository zero-warning lint,
+  diff-check, exact-five-path, no-barrel/caller and owned-residue gates pass.
+  Dependencies came from a local integration `node_modules` junction; no install,
+  registry access or other external activity occurred in Repair-4.
+- A pre-commit scope audit found that the producer initially replaced the prior
+  validation receipt instead of appending. Sol required correction before any
+  commit. Final source preserves the accepted 246-line receipt byte-for-byte and
+  appends only a 31-line Repair-4 section; the discarded uncommitted rewrite is
+  not represented as accepted evidence.
+- Architecture and security now review immutable `1d2931d` independently.
+  Architecture owns API compatibility, deep-module minimality, lifecycle proof,
+  terminal ownership, C2B usability and exact five-path/later-card preservation.
+  Security owns sealed-proof provenance, async burn/revoke ordering, file-swap
+  and in-place mutation coverage, forgery/proxy/serialization/PII exposure and
+  literal non-authority. They must explicitly examine upgraded null-prototype
+  replay compatibility and whether the receipt records all Repair-4 validation.
+  Reviewers may run local focused checks but cannot edit, commit, merge, accept,
+  touch blocked roots or perform external activity. Sol retains sole authority.
