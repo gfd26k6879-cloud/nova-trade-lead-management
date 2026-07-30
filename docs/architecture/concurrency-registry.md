@@ -461,4 +461,6 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   repair commit is mandatory; no merge, acceptance, G-006A implementation, or
   external action is authorized.
 - The original Terra-medium producer is executing round 2 from `f11cb1a`; the
-  other three agent slots remain available for Sol and later immutable review.
+  repair holds the recovery contract. Two lock-free, read-only G-006C source
+  inventories may run beside it; they cannot implement or waive G-006R,
+  G-006A, or G-006B dependencies.
