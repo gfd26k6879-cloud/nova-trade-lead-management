@@ -4,15 +4,23 @@ Date: 2026-07-30
 
 Branch: `codex/nova-platform-tenancy`
 
-Immutable rejected repair parent: `bbe51bfa7d76e0bcb44e4c1523e2a20fecb00f58`
+Historical rejected repair parent: `bbe51bfa7d76e0bcb44e4c1523e2a20fecb00f58`
 
-Integration rejection control: `262b7391c67b0ad749503d6e845383adb9a9f23e`
+Historical runtime-repair rejection control: `262b7391c67b0ad749503d6e845383adb9a9f23e`
 
-Launch control: `1c4e33ab54f8006e62c2936d8caadb606958a97d`
+Historical runtime-repair launch control: `1c4e33ab54f8006e62c2936d8caadb606958a97d`
+
+Final acceptance-review launch control: `f3d285e88844eb26e456e17bec72271ea2f78e6a`
+
+Evidence-matrix rejection control: `bdba0cd65c52edc78ac39844f662a50041075b45`
+
+Immutable evidence-only delta parent: `485308076395bc426d61ca3c975e50bdb7ecdef3`
 
 Authority remains local legacy-only B1 preparation. This delta does not authorize startup activation, journal-mode transition, WAL checkpointing, provider execution, restore, deployment, production mutation, or final schema upgrade.
 
 ## Result
+
+This evidence-only delta closes the final quality rejection without changing the production TypeScript or PowerShell helper. Both archive-parent rows now issue and count a replacement challenge during every one of the 38 distinct child write/publication intervals, bind those 38 challenged temporary paths to the exact final tree, and preserve the retained parent directory FileId. Every restart row now asserts the parent kind/FileId, exact visible-final set, and every preexisting final's kind, bytes, and FileId. Successful execute/resume rows additionally compare each newly created PREPARED/COMMITTED artifact with the exact known golden bytes.
 
 The rejected B1 tip is repaired by extending the long-lived Windows broker's native ownership through the complete operation boundary. Publication acknowledgement now transfers the exact backup, 38 archive children, PREPARED, COMMITTED, and final archive-parent handles into a retained-final registry. The broker challenges each final and its parent before acknowledgement, re-inspects the exact terminal set, requires the archive directory to contain exactly its 38 registered children, flushes parent handles, and releases finals only with the database lease. EOF, transport, and error paths inspect and release handles but never delete published finals. Drift or release uncertainty after COMMIT is committed-unverified.
 
@@ -41,13 +49,13 @@ The final test file contains 71 executable Vitest cases. Important dynamic rows 
 | Matrix | Rows | Executable assertion |
 | --- | ---: | --- |
 | Retained final lifetime | 41 exact finals at PREPARED; 42 at terminal (backup, archive parent, 38 children, PREPARED, then COMMITTED) | Every file denies raw write/delete/rename and preserves bytes/FileId; the parent denies rename at PREPARED and terminal; terminal release succeeds only after exact-set inspection. |
-| Final archive-parent ownership | 2 (new and exact preexisting) | 2/2 deny parent replacement throughout child publication and finish with the exact 38-entry tree. |
+| Final archive-parent ownership | 2 (new and exact preexisting), 38 distinct child intervals each | 2/2 issue exactly 38 unique parent-replacement challenges, bind every challenged child to the exact final 38-entry tree, and preserve the retained parent directory FileId. |
 | Terminal tree drift | 1 injected extra child after COMMITTED | Returns committed-unverified; all 41 registered files preserve exact bytes/FileIds, the extra survives, database is prepared, and no lock/temp remains. |
 | Recovery acquisition loss | 1 child detached immediately before archive-parent retention | Source-absent/detached-present is proven before the broker command; resume returns recovery-required and preserves the detached bytes/FileId plus every other final. |
 | WAL last-close movement | 1 scoped real `VACUUM` at authority-connection close | Volume/FileId remain equal while settled size or SHA changes; logical post-close verifier accepts the settled identity and wrong journal pins remain evidence-drift. |
 | Pre-ready lock death | 512 MiB sparse database | No ready acknowledgement; second broker exits 16 while first lives; hard death leaves only the database and no lock/temp/process residue. |
 | Stable standalone inspection | 512 MiB file, 20 rename/write pairs | A non-mutating `r+` probe proves write sharing before spawn, denial while the helper is alive, and availability after exit; all attacks are denied and exact bytes/FileId/path/size return. |
-| Restart state table | 27 (`accepted/prepared/other` x PREPARED `absent/valid/invalid` x COMMITTED `absent/valid/invalid`) | 27/27 match execute/resume/replay rules; every row preserves database FileId and every preexisting final's bytes/FileId, successful rows have PREPARED/COMMITTED plus 38 children, and all rows leave zero lock/temp residue. |
+| Restart state table | 27 (`accepted/prepared/other` x PREPARED `absent/valid/invalid` x COMMITTED `absent/valid/invalid`) | 27/27 match execute/resume/replay rules; every row asserts the archive-parent directory kind/FileId, exact visible-final set, database FileId, and every preexisting final's kind/bytes/FileId. Successful execute/resume rows prove newly created PREPARED/COMMITTED exact golden bytes; all rows retain the exact 38-entry tree and leave zero lock/temp residue. |
 | Pin/replay coverage | 17 (2 handoff, 4 binding/path/envelope, 10 source/evidence, 1 successful replay) | Every row snapshots database, archive parent, and every visible final and proves the exact set, bytes, and FileIds are unchanged with zero lock/temp residue. |
 | Tamper coverage | 14 raw, malformed, missing/extra, trailing-byte, and independently self-rehashed semantic subrows | Every rejected row snapshots database, archive parent, and every visible final and proves no published evidence was rewritten; genuine pre-read acquisition loss is recovery-required and later semantic/content/tree drift remains evidence-drift. |
 | Hard broker death after move but before ready | 4 (backup, archive child, PREPARED, COMMITTED) | 4/4 preserve the exact visible destination and return published- or committed-unverified. |
@@ -61,17 +69,21 @@ The restart table authorizes only fresh execute; resume with valid PREPARED, abs
 
 Environment: Windows, Node 24.13.1, better-sqlite3 12.9.0, SQLite 3.53.0.
 
-- Post-readiness pre-freeze full gate: `npx vitest run src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts --reporter=dot` - 71/71 passed, 1/1 file, exit 0; 977.75 seconds total and 976.69 seconds test time.
-- Affected pin/tamper/inspection gate: the focused 17-case command passed 17/17 with 54 skipped, exit 0; 240.50 seconds total.
-- Standalone 512 MiB readiness probe: three consecutive isolated runs passed 1/1 each, exit 0; test times 1.20, 1.22, and 1.16 seconds.
-- `npx vitest run src/lib/__tests__/compatibility-play.test.ts src/lib/__tests__/compatibility-tenant-backfill.test.ts src/lib/__tests__/data-transfer-contract.test.ts src/lib/__tests__/sqlite-schema-coordinator.test.ts --reporter=dot` - 4/4 files passed, 76 passed, 2 environment-gated PostgreSQL tests skipped, exit 0; 33.31 seconds total.
-- `npm run typecheck` - exit 0.
-- `npm run lint` - exit 0, zero warnings.
-- `npm run build` - Next.js 16.2.6 production build passed, exit 0; compiled in 6.4 seconds, TypeScript completed in 12.2 seconds, 11/11 static pages generated.
-- `npm run db:verify:recovery` - exact 37-application-table recovery contract passed, exit 0.
-- PowerShell parser and helper hash/pin comparison - 0 parser errors; helper hash exactly equals the TypeScript pin above, exit 0.
+- Current evidence-only targeted gate: `npx vitest run src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts -t "retains the .* final archive parent|dynamically closes the 3x3x3" --reporter=dot` - 3/3 affected cases passed, 68 skipped, exactly 71 enumerated, exit 0; 181.8 seconds tool wall time and 179.91 seconds Vitest duration (178.80 seconds test time).
 
-The 71-case file combines operation tests and direct Windows host probes; it is not a production or deployed end-to-end test. The two skipped related tests require PostgreSQL environment configuration and are not counted as passes. No external service, authenticated production environment, push, deploy, or production mutation was used. The post-receipt frozen authoritative rerun is reported from observed output in the producer handoff rather than preclaimed here.
+The immutable `485308076395bc426d61ca3c975e50bdb7ecdef3` parent recorded these inherited source gates; they were not rerun before this evidence-only receipt freeze:
+
+- Frozen authoritative full gate: 71/71 passed, 1/1 file, exit 0; 974.1 seconds tool wall time and 957.10 seconds Vitest duration (951.97 seconds test time).
+- Earlier post-readiness pre-freeze full gate: 71/71 passed, 1/1 file, exit 0; 977.75 seconds total and 976.69 seconds test time.
+- Affected pin/tamper/inspection gate: 17/17 passed with 54 skipped, exit 0; 240.50 seconds total.
+- Standalone 512 MiB readiness probe: three consecutive isolated runs passed 1/1 each, exit 0; test times 1.20, 1.22, and 1.16 seconds.
+- Related compatibility/data-transfer/schema gate: 4/4 files passed, 76 passed, 2 environment-gated PostgreSQL tests skipped, exit 0; 33.31 seconds total.
+- `npm run typecheck` and `npm run lint` passed; lint reported zero warnings.
+- `npm run build` passed with Next.js 16.2.6; compilation completed in 6.4 seconds, TypeScript in 12.2 seconds, and 11/11 static pages were generated.
+- `npm run db:verify:recovery` passed the exact 37-application-table recovery contract.
+- PowerShell parsing reported 0 errors and the normalized helper hash exactly matched the TypeScript pin.
+
+The 71-case file combines operation tests and direct Windows host probes; it is not a production or deployed end-to-end test. The two inherited related-test skips require PostgreSQL environment configuration and are not counted as passes. Related tests, recovery verification, and the build were not rerun for this locked evidence-only delta because shared and production code did not change. Current post-receipt typecheck, zero-warning lint, helper parser/hash/pin, diff/scope/residue checks, and the frozen authoritative full run are reported only from observed output in the producer handoff rather than preclaimed here. No external service, authenticated production environment, push, deploy, or production mutation was used.
 
 ## Remaining boundary
 

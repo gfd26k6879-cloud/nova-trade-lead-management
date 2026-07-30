@@ -944,16 +944,37 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const fixture = createAcceptedFixture();
     const base = await operationInput(fixture);
     if (preexisting) mkdirSync(base.archiveDirectory);
-    let challenged = false;
+    let parentFileId = preexisting ? statSync(base.archiveDirectory, { bigint: true }).ino : undefined;
+    const challengedChildren = new Set<string>();
+    const challengeFailures: string[] = [];
+    let challengeAttempts = 0;
     leaseProcesses.onCommand = (_child, rawCommand) => {
-      const [verb, path] = rawCommand.trimEnd().split("\t", 3);
-      if (challenged || verb !== "resource-write" || !path || dirname(path) !== base.archiveDirectory) return;
-      challenged = true;
-      expect(() => renameSync(base.archiveDirectory, `${base.archiveDirectory}.replacement`)).toThrow();
+      const [verb, path, offset] = rawCommand.trimEnd().split("\t", 4);
+      if (verb !== "resource-write" || !path || offset !== "0" || dirname(path) !== base.archiveDirectory || challengedChildren.has(path)) return;
+      challengedChildren.add(path);
+      const parent = statSync(base.archiveDirectory, { bigint: true });
+      if (!parent.isDirectory()) challengeFailures.push(`${path}: archive parent is not a directory`);
+      if (parentFileId === undefined) parentFileId = parent.ino;
+      else if (parent.ino !== parentFileId) challengeFailures.push(`${path}: archive parent FileId changed`);
+      challengeAttempts += 1;
+      try {
+        renameSync(base.archiveDirectory, `${base.archiveDirectory}.replacement-${String(challengedChildren.size)}`);
+        challengeFailures.push(`${path}: archive parent replacement succeeded`);
+      } catch { /* retained parent denies replacement throughout every child interval */ }
     };
     await runSqliteG006bPreFinalization(base);
-    expect(challenged).toBe(true);
-    expect(readdirSync(base.archiveDirectory)).toHaveLength(38);
+    const finalEntries = readdirSync(base.archiveDirectory).sort();
+    const challengedFinalEntries = [...challengedChildren]
+      .map((path) => basename(path).replace(/\.g006b\.tmp\.[0-9a-f]{48}$/u, ""))
+      .sort();
+    const finalParent = statSync(base.archiveDirectory, { bigint: true });
+    expect(challengeFailures).toEqual([]);
+    expect(challengeAttempts).toBe(38);
+    expect(challengedChildren.size).toBe(38);
+    expect(challengedFinalEntries).toEqual(finalEntries);
+    expect(finalEntries).toHaveLength(38);
+    expect(finalParent.isDirectory()).toBe(true);
+    expect(finalParent.ino).toBe(parentFileId);
     expect(computeSqliteG006bArchiveTreeHash(base.archiveDirectory)).toBe(basename(base.archiveDirectory));
   }, 120_000);
 
@@ -1141,6 +1162,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const preparedBytes = readFileSync(fixture.databasePath);
     const preparedRecord = readFileSync(base.preparedPath);
     const committedRecord = readFileSync(base.committedPath);
+    const expectedArchiveEntries = readdirSync(base.archiveDirectory).sort();
     const preparedId = handoffId(base.preparedPath);
     const committedId = handoffId(base.committedPath);
     writeFileSync(fixture.databasePath, preparedBytes);
@@ -1163,15 +1185,18 @@ describe("G-006B B1 SQLite pre-finalization", () => {
           if (preparedState === "invalid") writeFileSync(base.preparedPath, "{}");
           if (committedState === "valid") writeFileSync(base.committedPath, committedRecord);
           if (committedState === "invalid") writeFileSync(base.committedPath, "{}");
+          const label = `${databaseState}/${preparedState}/${committedState}`;
           const before = readFileSync(fixture.databasePath);
           const databaseIno = statSync(fixture.databasePath, { bigint: true }).ino;
-          const durablePaths = [
-            base.backupPath,
-            ...readdirSync(base.archiveDirectory).map((name) => join(base.archiveDirectory, name)),
-            ...(existsSync(base.preparedPath) ? [base.preparedPath] : []),
-            ...(existsSync(base.committedPath) ? [base.committedPath] : []),
-          ];
-          const durableBefore = new Map(durablePaths.map((path) => [path, { bytes: readFileSync(path), ino: statSync(path, { bigint: true }).ino }] as const));
+          const archiveParentBefore = statSync(base.archiveDirectory, { bigint: true });
+          expect(archiveParentBefore.isDirectory(), `${label}: archive parent kind before`).toBe(true);
+          const visibleBefore = visibleEvidencePaths(base);
+          const finalsBefore = new Map(visibleBefore.filter((path) => path !== fixture.databasePath).map((path) => {
+            const stat = statSync(path, { bigint: true });
+            return [path, { directory: stat.isDirectory(), bytes: stat.isDirectory() ? null : readFileSync(path), ino: stat.ino }] as const;
+          }));
+          const preparedExisted = existsSync(base.preparedPath);
+          const committedExisted = existsSync(base.committedPath);
           const input: SqliteG006bPreFinalizationInput = preparedState === "valid" && committedState === "absent"
             ? { ...base, mode: "resume", expectedPreparedHandoffId: preparedId }
             : preparedState !== "absent" || committedState !== "absent"
@@ -1182,17 +1207,33 @@ describe("G-006B B1 SQLite pre-finalization", () => {
             || databaseState === "prepared" && preparedState === "valid" && committedState === "valid";
           let failure: unknown;
           try { await runSqliteG006bPreFinalization(input); } catch (error) { failure = error; }
-          expect(failure === undefined, `${databaseState}/${preparedState}/${committedState}: ${failure instanceof Error ? failure.message : String(failure)}`).toBe(shouldPass);
+          expect(failure === undefined, `${label}: ${failure instanceof Error ? failure.message : String(failure)}`).toBe(shouldPass);
           if (!shouldPass) expect(readFileSync(fixture.databasePath)).toEqual(before);
-          expect(statSync(fixture.databasePath, { bigint: true }).ino).toBe(databaseIno);
-          for (const [path, snapshot] of durableBefore) {
-            expect(readFileSync(path), `${databaseState}/${preparedState}/${committedState}:${path}`).toEqual(snapshot.bytes);
-            expect(statSync(path, { bigint: true }).ino, `${databaseState}/${preparedState}/${committedState}:${path}`).toBe(snapshot.ino);
+          expect(statSync(fixture.databasePath, { bigint: true }).ino, `${label}: database FileId`).toBe(databaseIno);
+          const expectedVisible = shouldPass
+            ? [...new Set([...visibleBefore, base.preparedPath, base.committedPath])].sort()
+            : visibleBefore;
+          expect(visibleEvidencePaths(base), `${label}: exact visible-final set`).toEqual(expectedVisible);
+          const archiveParentAfter = statSync(base.archiveDirectory, { bigint: true });
+          expect(archiveParentAfter.isDirectory(), `${label}: archive parent kind after`).toBe(true);
+          expect(archiveParentAfter.ino, `${label}: archive parent FileId`).toBe(archiveParentBefore.ino);
+          expect(readdirSync(base.archiveDirectory).sort(), `${label}: exact 38-entry archive tree`).toEqual(expectedArchiveEntries);
+          for (const [path, snapshot] of finalsBefore) {
+            const stat = statSync(path, { bigint: true });
+            expect(stat.isDirectory(), `${label}: ${path} kind`).toBe(snapshot.directory);
+            expect(stat.ino, `${label}: ${path} FileId`).toBe(snapshot.ino);
+            if (!snapshot.directory) expect(readFileSync(path), `${label}: ${path} bytes`).toEqual(snapshot.bytes);
           }
           if (shouldPass) {
-            expect(existsSync(base.preparedPath)).toBe(true);
-            expect(existsSync(base.committedPath)).toBe(true);
-            expect(readdirSync(base.archiveDirectory)).toHaveLength(38);
+            const newlyCreated = [
+              ...(!preparedExisted ? [[base.preparedPath, preparedRecord] as const] : []),
+              ...(!committedExisted ? [[base.committedPath, committedRecord] as const] : []),
+            ];
+            for (const [path, expectedBytes] of newlyCreated) {
+              expect(statSync(path).isFile(), `${label}: ${path} newly created kind`).toBe(true);
+              expect(readFileSync(path), `${label}: ${path} newly created exact bytes`).toEqual(expectedBytes);
+            }
+            expect(expectedArchiveEntries, `${label}: archive entry count`).toHaveLength(38);
           }
           expect(temporaryResidue(fixture.root)).toEqual([]);
           expect(existsSync(`${fixture.databasePath}.g006b.lock`)).toBe(false);
