@@ -2338,3 +2338,44 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   replay compatibility and whether the receipt records all Repair-4 validation.
   Reviewers may run local focused checks but cannot edit, commit, merge, accept,
   touch blocked roots or perform external activity. Sol retains sole authority.
+
+## G-006C2A Repair-4 review rejection and Repair-5 proof preflight
+
+- Architecture STOPs and security requires repair on immutable `1d2931d`; Sol
+  rejects it for merge. The principal P1 is availability: every upgraded anchor
+  consumes the original G006B historical replay, whose COMMITTED comparison pins
+  immutable database/full-row evidence. The first legitimate G002 write changes
+  that evidence, so every later consume, idempotent replacement and fresh-process
+  C0 remint fails permanently. The focused tests exercise upgraded proof only
+  before mutation and C2A writer transfer only on fresh storage, so they do not
+  expose this failure.
+- Security adds a P1 sequencing gap: terminal anchor proof completes only after
+  G006B releases its native lease and returns no retained file/connection/lease
+  token. C2A then transfers only evidence and a fieldless anchor. Repair-4 alone
+  therefore does not prove the same file remains continuously bound through a
+  later C2B `BEGIN IMMEDIATE`; current proof and mutation are still separated.
+- Both reviewers identify the upgraded snapshotter regression. Reusing C1's
+  plain-record copier rejects nested null-prototype values accepted by G006B and
+  silently drops decorated non-enumerable string properties instead of rejecting
+  them, changing accepted C0 input semantics. Architecture also finds that the
+  proof returns full fresh/upgraded scope objects with identity/membership/role/
+  policy/source/play fields beyond C2B's minimal storage needs. The receipt does
+  not record actual Repair-4 commands/results and its no-PII statement overclaims.
+- The source remains a clean, attributable rejected commit in its isolated
+  worktree; it is not merged, accepted or discarded. C2B remains unopened. No
+  review test, edit, lock, temporary root, blocked-root or external action ran.
+- Repair-5 is a read-only reconciliation before any further edit. Architecture
+  must decide whether an operational proof distinct from immutable historical
+  G006B replay can support repeated prepared-legacy mutations, exact restart
+  reminting and later C3-C6 writers without weakening provenance or requiring a
+  persistent mutable checkpoint. Security must design continuous file/lease/
+  transaction identity across proof and future writer mutation without exposing
+  a database handle, arbitrary callback or authority. Terra-medium Quality must
+  define the mutation-then-reconsume, restart/remint, exact-clone swap, in-place
+  mutation, null-prototype/decorated-input and receipt/gate matrix and the honest
+  path ceiling. A need to change G006B, reorder finalization, add a durable proof
+  record or exceed the existing packet is a reported STOP, not an inferred waiver.
+- This reconciliation remains beneath the same original G006C2 card and may
+  change its internal packet sequencing only after Sol adjudication. All 318
+  cards, Q-040, T-029, G006C2B/C, C3-C6 and G009/G010/G013 authority remain open
+  and preserved. No implementation is authorized by this preflight launch.
