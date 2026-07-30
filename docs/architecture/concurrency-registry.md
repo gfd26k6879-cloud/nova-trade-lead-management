@@ -1483,3 +1483,38 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   found only its three disclosed files, no subdirectories and no external
   owner process. Sol retains sole acceptance and merge authority; `4853080`
   remains local, locked, unmerged and unaccepted.
+- Final architecture review accepts the runtime and contract at `4853080`.
+  Its independent eight-case retained-final/archive-parent/restart/tamper/WAL/
+  replay gate passed in 293.12 seconds; helper hash and parser checks passed;
+  and it found no production-union, post-close logical verifier, resume/replay,
+  terminal exact-set, journal or taxonomy blocker. Security likewise found no
+  runtime defect after eight adversarial lifecycle cases passed in 66.61
+  seconds and the primary-error case passed in 6.50 seconds.
+- Security proposed rejecting because the source receipt does not name review
+  launch `f3d285e`. Sol rejects that finding: immutable source `4853080`
+  necessarily predates the review-launch control, while its receipt already
+  binds repair-authorizing rejection control `262b739`. The later launch is
+  independently immutable on the integration line and cannot be a forward
+  self-reference inside the source commit.
+- Quality rejects the executable evidence at `4853080`. Both parameterized
+  archive-parent rows set one boolean after the first archive child challenge,
+  so each attempts replacement once rather than throughout all 38 children as
+  control `262b739` requires. The 27-row restart loop snapshots the database and
+  pre-existing artifact files but omits the archive-parent directory FileId;
+  successful execute/resume rows also assert newly created PREPARED/COMMITTED
+  files only exist rather than asserting their exact bytes or FileIds. Receipt
+  claims for archive-parent and restart coverage therefore exceed executable
+  proof even though Vitest enumerates exactly 71 cases and prior full runs pass.
+- One final bounded Terra-medium evidence-only delta is authorized directly
+  over `4853080`. Production TypeScript and PowerShell are locked. The delta may
+  modify only `src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts` and
+  `docs/validation/2026-07-30-g006b-pre-finalization.md`: challenge and count the
+  archive parent at every one of the 38 child write/publication intervals for
+  both new and exact-preexisting parents; assert the archive-parent FileId and
+  exact visible-final set for all 27 restart rows; and assert exact known bytes
+  or FileIds for every newly created PREPARED/COMMITTED success artifact. The
+  receipt must state only the strengthened executable evidence and observed
+  gates. Focused repaired rows, the complete frozen 71-case file, typecheck,
+  zero-warning lint, helper hash/pin, parser, diff, scope and residue checks must
+  pass before exactly one commit. No production edit, merge, push, deployment,
+  external action, stale-root deletion or self-acceptance is authorized.
