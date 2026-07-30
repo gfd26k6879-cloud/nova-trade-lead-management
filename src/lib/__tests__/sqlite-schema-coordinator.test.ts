@@ -9,6 +9,7 @@ import {
   __testOnlyResetSqliteSchemaV1LeaseAudit,
   __testOnlySqliteSchemaV1CapabilityLeaseStatus,
   __testOnlySqliteSchemaV1LeaseAudit,
+  __testOnlySqliteSchemaV1NameIsInternal,
   __testOnlySqliteSchemaV1PhysicalFileIdentityMatches,
   ACCEPTED_LEGACY_SQLITE_CATALOG_DIGEST,
   assertSqliteSchemaV1DatabaseHealth,
@@ -113,7 +114,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
       expect(sqliteCatalogDigest(first)).toBe("080477dd8fce09c3e8d8ca7461f2bc0a8b2222edab26afe7297367bdfe6362cf");
       expect(sqliteSchemaV1PhysicalManifestDigest(first)).toBe(SQLITE_SCHEMA_V1_PHYSICAL_MANIFEST_DIGEST);
       expect(first.prepare("SELECT COUNT(*) AS count FROM settings").get()).toMatchObject({ count: 0 });
-      expect(first.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").get())
+      expect(first.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'").get())
         .toMatchObject({ count: 37 });
     } finally {
       first.close();
@@ -292,6 +293,70 @@ describe("G-006A staged SQLite schema and coordinator", () => {
       partial.close();
       drift.close();
       stagedDrift.close();
+    }
+  });
+
+  it("exhaustively partitions sqliteX schema objects and rejects them at mint, finalization, and replay", () => {
+    const beforeMint = createTemporaryStagedDatabase();
+    const duringPlan = createTemporaryStagedDatabase();
+    const duringReplay = createTemporaryStagedDatabase();
+    try {
+      for (const type of ["table", "view", "trigger", "index"]) {
+        for (const prefix of ["sqlite", "sqliteX", "SQLITEX"]) {
+          expect(__testOnlySqliteSchemaV1NameIsInternal(`${prefix}${type}`)).toBe(false);
+        }
+        for (const prefix of ["sqlite_", "SQLITE_"]) {
+          expect(__testOnlySqliteSchemaV1NameIsInternal(`${prefix}${type}`)).toBe(true);
+        }
+      }
+      expect(() => __testOnlySqliteSchemaV1NameIsInternal(1))
+        .toThrowError(expect.objectContaining({ code: "G006A_CATALOG_DRIFT" }));
+      for (const [prefix, suffix] of [
+        ["sqlite", "preexisting_a"],
+        ["sqliteX", "preexisting_b"],
+        ["SQLITEX", "preexisting_c"],
+      ] as const) {
+        createApplicationPrefixedSchemaObjects(beforeMint.db, prefix, suffix);
+        expect(readApplicationPrefixedSchemaObjects(beforeMint.db, prefix, suffix)).toHaveLength(4);
+      }
+      expect(classifySqliteSchemaV1(beforeMint.db).kind).toBe("drift");
+      expect(() => createFinalizerHandoff(beforeMint.path, "g006b:sqlitex:mint", []))
+        .toThrowError(expect.objectContaining({ code: "G006A_STATE_REJECTED" }));
+
+      const planHandoff = createFinalizerHandoff(duringPlan.path, "g006b:sqlitex:plan", [
+        { kind: "create-table", sql: "CREATE TABLE sqliteX_plan_table (id TEXT PRIMARY KEY)" },
+        { kind: "create-index", sql: "CREATE INDEX sqliteX_plan_index ON zip_codes(city)" },
+        {
+          kind: "create-trigger",
+          sql: "CREATE TRIGGER sqliteX_plan_trigger AFTER INSERT ON zip_codes BEGIN SELECT NEW.zip; END",
+        },
+      ]);
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(duringPlan.path, planHandoff))
+        .toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_POSTCONDITION_FAILED" }));
+      expect(readApplicationPrefixedSchemaObjects(duringPlan.db, "sqliteX", "plan")).toEqual([]);
+      expect(classifySqliteSchemaV1(duringPlan.db).kind).toBe("staged");
+      expect(__testOnlySqliteSchemaV1CapabilityLeaseStatus(planHandoff.capability))
+        .toEqual({ lifecycle: "terminal", descriptorOpen: false });
+
+      expect(() => createFinalizerHandoff(duringPlan.path, "g006b:sqlitex:view-plan", [{
+        kind: "create-table",
+        sql: "CREATE VIEW sqliteX_plan_view AS SELECT zip FROM zip_codes",
+      }])).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_SQL_REJECTED" }));
+      expect(readApplicationPrefixedSchemaObjects(duringPlan.db, "sqliteX", "plan")).toEqual([]);
+
+      expect(coordinateSqliteSchemaV1WholeUpgrade(
+        duringReplay.path,
+        createFinalizerHandoff(duringReplay.path, "g006b:sqlitex:replay-setup", []),
+      )).toMatchObject({ status: "finalized" });
+      createApplicationPrefixedSchemaObjects(duringReplay.db, "sqliteX", "replay");
+      expect(classifySqliteSchemaV1(duringReplay.db).kind).toBe("drift");
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(duringReplay.path))
+        .toThrowError(expect.objectContaining({ code: "G006A_CATALOG_DRIFT" }));
+      expect(readApplicationPrefixedSchemaObjects(duringReplay.db, "sqliteX", "replay")).toHaveLength(4);
+    } finally {
+      beforeMint.cleanup();
+      duringPlan.cleanup();
+      duringReplay.cleanup();
     }
   });
 
@@ -603,6 +668,72 @@ describe("G-006A staged SQLite schema and coordinator", () => {
       invalid.cleanup();
       mintFailure.cleanup();
       success.cleanup();
+    }
+  });
+
+  it("claims recognizable capabilities before rejecting options without inspecting hidden authority", () => {
+    const fixture = createTemporaryStagedDatabase();
+    let getterCalls = 0;
+    let proxyCalls = 0;
+    try {
+      const accessorOptions = Object.defineProperty({}, "freshVerifierTestBoundary", {
+        enumerable: true,
+        get: () => { getterCalls += 1; return undefined; },
+      });
+      const proxyOptions = new Proxy({}, {
+        ownKeys: (target) => { proxyCalls += 1; return Reflect.ownKeys(target); },
+      });
+      const invalidOptions: unknown[] = [
+        { unknown: true },
+        accessorOptions,
+        proxyOptions,
+        { freshVerifierTestBoundary: Object.freeze(Object.create(null)) },
+      ];
+      for (const [index, options] of invalidOptions.entries()) {
+        const handoff = createFinalizerHandoff(fixture.path, `g006b:options:invalid:${index}`, []);
+        expect(() => coordinateSqliteSchemaV1WholeUpgrade(
+          fixture.path,
+          handoff,
+          options as Parameters<typeof coordinateSqliteSchemaV1WholeUpgrade>[2],
+        )).toThrowError(expect.objectContaining({ code: "G006A_VERIFIER_BOUNDARY_REJECTED" }));
+        expect(__testOnlySqliteSchemaV1CapabilityLeaseStatus(handoff.capability))
+          .toEqual({ lifecycle: "terminal", descriptorOpen: false });
+        expect(cancelSqliteSchemaV1LaterFinalizerCapability(handoff.capability)).toBe(false);
+        expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff)).toThrowError(expect.objectContaining({
+          code: "G006A_FINALIZER_CONSUMED",
+        }));
+      }
+
+      const accessorAuthority = createFinalizerHandoff(fixture.path, "g006b:options:hidden-accessor", []);
+      const accessorHandoff = Object.defineProperty({
+        handoffBindingId: accessorAuthority.handoffBindingId,
+      }, "capability", {
+        enumerable: true,
+        get: () => { getterCalls += 1; return accessorAuthority.capability; },
+      });
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(
+        fixture.path,
+        accessorHandoff as unknown as SqliteSchemaV1FinalizerHandoff,
+      )).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_MISMATCH" }));
+      expect(__testOnlySqliteSchemaV1CapabilityLeaseStatus(accessorAuthority.capability))
+        .toEqual({ lifecycle: "ready", descriptorOpen: true });
+      expect(cancelSqliteSchemaV1LaterFinalizerCapability(accessorAuthority.capability)).toBe(true);
+
+      const proxyAuthority = createFinalizerHandoff(fixture.path, "g006b:options:hidden-proxy", []);
+      const proxyHandoff = new Proxy(proxyAuthority, {
+        ownKeys: (target) => { proxyCalls += 1; return Reflect.ownKeys(target); },
+      });
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, proxyHandoff))
+        .toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_MISMATCH" }));
+      expect(__testOnlySqliteSchemaV1CapabilityLeaseStatus(proxyAuthority.capability))
+        .toEqual({ lifecycle: "ready", descriptorOpen: true });
+      expect(cancelSqliteSchemaV1LaterFinalizerCapability(proxyAuthority.capability)).toBe(true);
+
+      expect(getterCalls).toBe(0);
+      expect(proxyCalls).toBe(0);
+      expect(classifySqliteSchemaV1(fixture.db).kind).toBe("staged");
+    } finally {
+      fixture.cleanup();
     }
   });
 
@@ -1120,6 +1251,80 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
+  it("rejects concurrent WAL commits across the verifier read interval and closes the snapshot connection", () => {
+    const finalization = createTemporaryStagedDatabase();
+    const replay = createTemporaryStagedDatabase();
+    try {
+      for (const fixture of [finalization, replay]) {
+        expect(fixture.db.pragma("journal_mode = WAL", { simple: true })).toBe("wal");
+        fixture.db.prepare(`
+          INSERT INTO zip_codes (zip, city, state, county)
+          VALUES ('g006a-wal-preserved', 'Original', 'CO', 'Test')
+        `).run();
+      }
+
+      const handoff = createFinalizerHandoff(finalization.path, "g006b:wal:finalization", []);
+      const finalizationBoundary = createSqliteSchemaV1FreshVerifierTestBoundary(
+        "wal-mutate-after-verifier-preservation",
+      );
+      __testOnlyResetSqliteSchemaV1LeaseAudit();
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(finalization.path, handoff, {
+        freshVerifierTestBoundary: finalizationBoundary,
+      })).toThrowError(expect.objectContaining({
+        code: "G006A_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
+        committed: true,
+        status: "committed-unverified-recovery-required",
+        message: expect.stringContaining("verifier data_version changed 2->3"),
+      }));
+      expect(__testOnlySqliteSchemaV1CapabilityLeaseStatus(handoff.capability))
+        .toEqual({ lifecycle: "terminal", descriptorOpen: false });
+      expect(leaseAuditShape()).toEqual([
+        "open:connection",
+        "close:connection",
+        "open:connection",
+        "close:connection",
+        "close:capability-root",
+      ]);
+      expect(finalization.db.prepare(
+        "SELECT city FROM zip_codes WHERE zip = 'g006a-wal-preserved'",
+      ).get()).toMatchObject({ city: "Original:concurrent-wal-drift" });
+
+      expect(coordinateSqliteSchemaV1WholeUpgrade(
+        replay.path,
+        createFinalizerHandoff(replay.path, "g006b:wal:replay-setup", []),
+      )).toMatchObject({ status: "finalized" });
+      const replayBoundary = createSqliteSchemaV1FreshVerifierTestBoundary(
+        "wal-mutate-before-verifier-return",
+      );
+      __testOnlyResetSqliteSchemaV1LeaseAudit();
+      let replayFailure: unknown;
+      try {
+        coordinateSqliteSchemaV1WholeUpgrade(replay.path, undefined, {
+          freshVerifierTestBoundary: replayBoundary,
+        });
+      } catch (error) {
+        replayFailure = error;
+      }
+      expect(replayFailure).toMatchObject({
+        code: "G006A_SOURCE_SNAPSHOT_DRIFT",
+        message: expect.stringContaining("verifier data_version changed 2->3"),
+      });
+      expect(replayFailure).not.toMatchObject({ committed: true });
+      expect(leaseAuditShape()).toEqual([
+        "open:replay-root",
+        "open:connection",
+        "close:connection",
+        "close:replay-root",
+      ]);
+      expect(replay.db.prepare(
+        "SELECT city FROM zip_codes WHERE zip = 'g006a-wal-preserved'",
+      ).get()).toMatchObject({ city: "Original:concurrent-wal-drift" });
+    } finally {
+      finalization.cleanup();
+      replay.cleanup();
+    }
+  });
+
   it("rolls back ordinary accepted-legacy plan failures and allows a fresh capability", () => {
     const fixture = createTemporaryAcceptedLegacyDatabase();
     try {
@@ -1290,6 +1495,35 @@ function readInternalCatalogRowCount(db: Database.Database): number {
     WHERE name LIKE 'sqlite\\_%' ESCAPE '\\'
   `).get() as { count: number };
   return Number(row.count);
+}
+
+function createApplicationPrefixedSchemaObjects(
+  db: Database.Database,
+  prefix: "sqlite" | "sqliteX" | "SQLITEX",
+  suffix: string,
+): void {
+  const baseName = `${prefix}${suffix}`;
+  db.exec(`
+    CREATE TABLE ${baseName}_table (id TEXT PRIMARY KEY);
+    CREATE VIEW ${baseName}_view AS SELECT zip FROM zip_codes;
+    CREATE TRIGGER ${baseName}_trigger
+      AFTER INSERT ON zip_codes BEGIN SELECT NEW.zip; END;
+    CREATE INDEX ${baseName}_index ON zip_codes(city);
+  `);
+}
+
+function readApplicationPrefixedSchemaObjects(
+  db: Database.Database,
+  prefix: "sqlite" | "sqliteX" | "SQLITEX",
+  suffix: string,
+): string[] {
+  return (db.prepare(`
+    SELECT type, name
+    FROM sqlite_schema
+    WHERE name GLOB ?
+    ORDER BY type COLLATE BINARY, name COLLATE BINARY
+  `).all(`${prefix}${suffix}_*`) as Array<{ type: string; name: string }>)
+    .map(({ type, name }) => `${type}:${name}`);
 }
 
 function duplicateMarketPlan(id: string): SqliteSchemaV1FinalizerPlan {

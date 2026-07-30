@@ -16,6 +16,8 @@ Rejected round-2 source: `868efdcda51c07da26f9b75fa0f34528126fb328`
 
 Rejected round-3 source: `b2843b8bff6d44d2861318c9523fe8780f12395e`
 
+Rejected round-4 source: `c23d280773f1594c7a2a28598bf5dd0c780f1440`
+
 ## Result
 
 G-006A is prepared locally as an inert, deterministic SQLite final-catalog
@@ -77,9 +79,13 @@ The constructor accepts only the repository's exact frozen `SCHEMA_SQL`:
 - exact staged/final SQLite-internal catalog digest (57 rows):
   `2d866e21e5a30454bcfb7ea709aac96cdda17a1e7ab813b7e161265c0a060844`
 
-The internal-catalog digest covers every `sqlite_%` schema row as the exact
-`type`, `name`, `tbl_name`, and SQL tuple, in binary type/name/table order.
-It intentionally excludes unstable root-page numbers. Raw `SCHEMA_SQL` alone
+One ordered read of every `main.sqlite_schema` row is partitioned in JavaScript
+by the case-insensitive literal `sqlite_` prefix. The application and internal
+sets are therefore exhaustive and disjoint without relying on SQLite LIKE
+wildcards or `case_sensitive_like`. Non-string schema identities reject closed.
+The internal-catalog digest covers each internal row as the exact `type`,
+`name`, `tbl_name`, and SQL tuple, in binary type/name/table order. It
+intentionally excludes unstable root-page numbers. Raw `SCHEMA_SQL` alone
 produces 51 rows and digest
 `19fac76630dc9db2dcbc4654958e3def38a1dd416e01107832ad5d452f69b823`;
 that intermediate shape is evidence, not an accepted source state. ANALYZE
@@ -151,7 +157,11 @@ capability state or the transaction.
 
 A private lifecycle transitions `READY` to `CONSUMING` synchronously before
 post-handoff validation and reaches one terminal state on every success or
-failure path. Copies, spread/prototype forgeries, path aliases, path or binding
+failure path. A recognizably conveyed capability and its retained root lease
+are claimed before coordinate options are inspected, so unknown options,
+accessors, proxies, and fake boundaries consume and terminalize that authority.
+An authority hidden behind an accessor or proxy is neither inspected nor
+seized. Copies, spread/prototype forgeries, path aliases, path or binding
 mismatch, cross-file use, plan failure, and second use reject closed and cannot
 retry with the same token. The exported cancellation operation deterministically
 disposes an unused capability; a `FinalizationRegistry` fallback holds only the
@@ -219,20 +229,28 @@ commit the writer closes, then the coordinator opens a distinct fresh read-only
 connection to the exact canonical file path and rechecks final state/user version/catalog,
 37-table and target cardinalities, the pinned full table/index/index-xinfo/
 partial-predicate/FK manifest, all-table preservation, FK health, and
-integrity. Descriptor/path identity is rechecked after every verifier phase,
-again while the verifier is open immediately before return, and once more from
-the retained mint-time descriptor after the verifier closes. Only that fresh
-verification can return `finalized`. A post-commit reopen or late-identity
-failure throws the distinct `committed-unverified-recovery-required` outcome
-and never claims rollback. Replay uses the same self-baselined read-only
-verifier under one retained root lease, with no writer, transaction, or writable
-gap; replay drift is an ordinary identity error and never claims a commit.
-In-memory finalization fails closed.
+integrity. On that same connection it validates nonnegative safe-integer
+`main.data_version` immediately before `BEGIN DEFERRED`; every logical,
+catalog, manifest, preservation, sequence, health, connection, TEMP,
+writable-schema, and identity check then runs inside that one read snapshot.
+After read `COMMIT`, the immediately adjacent same-connection data-version
+sample must be unchanged. This detects a separate WAL commit anywhere from the
+pre-BEGIN sample through read COMMIT; a commit after the post-sample is outside
+the returned verification interval. Descriptor/path identity is rechecked
+after every verifier phase, again after the post-sample, and once more from the
+retained mint-time descriptor after the verifier closes. A pre-COMMIT verifier
+error rolls back its read transaction; rollback, close, and final-root cleanup
+failures never replace the primary failure. Only this verification can return
+`finalized`. A post-application-commit verification failure throws the distinct
+`committed-unverified-recovery-required` outcome and never claims rollback.
+Replay uses the same self-baselined read-only verifier and read transaction
+under one retained root lease, with no writer or writable gap; replay drift is
+an ordinary noncommitted error. In-memory finalization fails closed.
 
 ## Local validation evidence
 
 - `npm exec vitest run src/lib/__tests__/sqlite-schema-coordinator.test.ts`
-  - PASS: 1 file, 29/29 tests, final round-4 run 13.10 s.
+  - PASS: 1 file, 32/32 tests, final round-5 run 11.75 s.
   - Covers deterministic fresh construction, exact catalog metadata, tenant
     and source key enforcement, both nullable-workspace unique identities,
     cross-tenant and invalid-source rejection, all coordinator classifications,
@@ -248,23 +266,29 @@ In-memory finalization fails closed.
     deterministic unused-capability cancellation, terminal close after every
     ownership/failure/success path, full SQLite-internal catalog pins, ANALYZE
     poisoning at mint/lock/replay, late-verifier replacement/removal reporting,
+    capability consumption before hostile options inspection without touching
+    accessor/proxy-hidden authority, exhaustive case-insensitive literal-prefix
+    partitioning of `sqlite`, `sqliteX`, `SQLITEX`, `sqlite_`, and `SQLITE_`
+    names, pre-existing and plan-created table/view/trigger/index rejection,
+    one explicit fresh-verifier read transaction, concurrent WAL mutation and
+    exact `main.data_version` 2-to-3 detection for both finalization and replay,
     global direct/quoted/trigger-body `sqlite_*` denial, exact
     `sqlite_sequence` poison detection including zero/negative-ID nonempty
     tables, legitimate historical AUTOINCREMENT high-water rebuild and
     restoration, pre-allocation huge sparse-array bounds, single-read-only-
     verifier replay, and row-count/payload/FK/integrity guards.
 - `npm run typecheck`
-  - PASS: `tsc --noEmit --pretty false`, final run 5.7 s.
+  - PASS: `tsc --noEmit --pretty false`, final run 4.2 s.
 - `npm run lint`
-  - PASS: full repository ESLint, final run 58.2 s.
+  - PASS: full repository ESLint, final run 18.2 s.
 - `npm run db:verify:recovery`
   - PASS: all 37 application tables match SQLite schema and tracked
-    migrations, 2.8 s.
+    migrations, 1.9 s.
 - `git diff --cached --check`
   - PASS: no whitespace errors.
 - `git diff --cached --name-only` plus `git diff --name-only`
-  - PASS: exactly the four authorized G-006A paths are staged and there is no
-    unstaged delta.
+  - PASS: only modified paths inside the four-path G-006A authorization are
+    staged and there is no unstaged delta.
 - Task residue checks
   - PASS: zero `novatrade-g006a-*` temporary directories and zero lingering
     task Vitest, ESLint, TypeScript, or recovery-verification processes.
@@ -359,6 +383,29 @@ one runtime backslash too few, so SQLite rejected the escape expression before
 classification. The source literal was corrected without changing the query,
 catalog pins, or accepted states. The subsequent complete matrix passed 29/29,
 and the final matrix after cleanup passed 29/29 again.
+
+## Repair round 5 notes
+
+Round-4 source `c23d280773f1594c7a2a28598bf5dd0c780f1440` was
+rejected because coordinate options were inspected before a recognizable
+capability was claimed, unescaped underscore wildcards left `sqliteX...`
+objects outside both schema partitions, and fresh-verifier logical reads were
+not one coherent snapshot guarded against concurrent WAL commits. Repair round
+5 claims authority before options inspection, partitions every
+`main.sqlite_schema` row by the literal case-insensitive `sqlite_` prefix, and
+runs every read-only verifier check inside one data-version-guarded
+`BEGIN DEFERRED` transaction.
+
+The first expanded round-5 matrix passed 31/32 tests. Its only failure was the
+new lease-audit expectation, which included mint events even though the test
+intentionally reset the audit after mint; the expectation was corrected to the
+writer, verifier, and retained-root close interval. The stronger prefix matrix
+then exposed a test-fixture collision because SQLite identifiers are
+case-insensitive, so `sqliteX...` and `SQLITEX...` with identical suffixes name
+the same object. Distinct suffixes now exercise `sqlite`, `sqliteX`, and
+`SQLITEX` application prefixes without changing production partition logic.
+The resulting 32-test matrix passed. No catalog pin, accepted state, SQL denial,
+or preserved payload rule was weakened.
 
 All database exercises used in-memory or task-owned temporary file-backed
 SQLite instances with synthetic rows. Every temporary directory and verifier
