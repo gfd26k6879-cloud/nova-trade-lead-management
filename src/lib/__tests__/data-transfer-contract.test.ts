@@ -194,12 +194,13 @@ describe("data recovery contract", () => {
       expect.objectContaining({ name: "bracket WHERE decoy", predicate: "market_id IS NOT NULL" }),
       expect.objectContaining({ name: "single 'WHERE' decoy", predicate: "tenant_id IS NOT NULL" }),
     ]));
+    assertPersistedSqliteIndexStatementRegressions();
     driftAdversarialSqliteNullIndex(dbPath);
     expect(() => exportSqliteData({ dbPath, outDir }))
       .toThrow(/user_market_access: schema-4 row identity lacks exact SQLite unique enforcement/);
     expect(() => verifySqliteDatabase(dbPath, TABLE_CONTRACTS, DATA_EXPORT_SCHEMA_VERSION))
       .toThrow(/user_market_access: schema-4 row identity lacks exact SQLite unique enforcement/);
-  });
+  }, 10_000);
 
   it.each([
     [
@@ -576,6 +577,135 @@ function driftAdversarialSqliteNullIndex(dbPath: string) {
         WHERE workspace_id /* 'WHERE' predicate decoy */ IS NULL
           AND tenant_id <> '';
     `);
+  } finally {
+    db.close();
+  }
+}
+
+function assertPersistedSqliteIndexStatementRegressions() {
+  const terminal = createSyntheticSqliteDatabase();
+  appendStoredIndexSql(
+    terminal.dbPath,
+    "g006r_user_market_access_null_identity",
+    "; /* terminal WHERE decoy */ -- WHERE line-comment decoy\n",
+  );
+  expect(readOnlyIntegrityCheck(terminal.dbPath)).toBe("ok");
+  expect(() => verifySqliteDatabase(terminal.dbPath, TABLE_CONTRACTS, DATA_EXPORT_SCHEMA_VERSION)).not.toThrow();
+  const terminalManifest = exportSqliteData(terminal);
+  expect((terminalManifest.tables as Record<string, { uniqueKeys: Array<{ predicate: string | null }> }>)
+    .user_market_access.uniqueKeys).toEqual(expect.arrayContaining([
+      expect.objectContaining({ predicate: "workspace_id IS NULL" }),
+    ]));
+
+  const malformedSuffixes: Array<[string, RegExp]> = [
+    [")", /stored CREATE INDEX has parenthesis underflow/],
+    ["(", /stored CREATE INDEX has unbalanced parentheses/],
+    [" WHERE workspace_id IS NULL", /stored CREATE INDEX must contain exactly one top-level WHERE/],
+    ["; SELECT 1", /stored CREATE INDEX has tokens after its terminal semicolon/],
+  ];
+  for (const [suffix, expectedError] of malformedSuffixes) {
+    const createSql = `CREATE UNIQUE INDEX structural_probe
+      ON user_market_access(tenant_id, user_id, market_id)
+      WHERE workspace_id IS NULL${suffix}`;
+    expect(() => loadSqliteUniqueKeyMetadata(storedIndexMetadataProbe(createSql), "user_market_access"))
+      .toThrow(expectedError);
+  }
+
+  const forged = createPersistedWrongIndexForgery();
+  expect(readOnlyIntegrityCheck(forged.dbPath)).toBe("ok");
+  expect(readOnlyNullWorkspaceGrantCount(forged.dbPath)).toBe(2);
+  expect(() => exportSqliteData(forged)).toThrow(/stored CREATE INDEX has tokens after its terminal semicolon/);
+  expect(() => verifySqliteDatabase(forged.dbPath, TABLE_CONTRACTS, DATA_EXPORT_SCHEMA_VERSION))
+    .toThrow(/stored CREATE INDEX has tokens after its terminal semicolon/);
+}
+
+function createPersistedWrongIndexForgery() {
+  const result = createSyntheticSqliteDatabase();
+  const db = new Database(result.dbPath);
+  const tenantId = "10000000-0000-4000-8000-000000000001";
+  const userId = "90000000-0000-4000-8000-000000000099";
+  const marketId = "market-forged-index";
+  try {
+    db.exec(`
+      DROP INDEX g006r_user_market_access_null_identity;
+      CREATE UNIQUE INDEX g006r_user_market_access_null_identity
+        ON user_market_access(tenant_id, user_id, market_id)
+        WHERE workspace_id IS NOT NULL;
+    `);
+    db.prepare("INSERT INTO location_markets (id, name, country_code, admin_area1) VALUES (?, ?, 'US', ?)")
+      .run(marketId, "Forged Index Market", "CO");
+    const insertGrant = db.prepare(
+      "INSERT INTO user_market_access (tenant_id, workspace_id, user_id, market_id) VALUES (?, NULL, ?, ?)",
+    );
+    insertGrant.run(tenantId, userId, marketId);
+    insertGrant.run(tenantId, userId, marketId);
+  } finally {
+    db.close();
+  }
+  appendStoredIndexSql(
+    result.dbPath,
+    "g006r_user_market_access_null_identity",
+    "; WHERE workspace_id IS NULL",
+  );
+  return result;
+}
+
+function appendStoredIndexSql(dbPath: string, indexName: string, suffix: string) {
+  const db = new Database(dbPath);
+  try {
+    db.unsafeMode(true);
+    db.pragma("writable_schema = ON");
+    const update = db.prepare(`
+      UPDATE sqlite_schema
+      SET sql = sql || ?
+      WHERE type = 'index' AND name = ? AND sql IS NOT NULL
+    `).run(suffix, indexName);
+    if (update.changes !== 1) throw new Error(`expected one stored index definition for ${indexName}`);
+    db.pragma("writable_schema = OFF");
+    db.unsafeMode(false);
+  } finally {
+    db.close();
+  }
+}
+
+function storedIndexMetadataProbe(createSql: string) {
+  return {
+    prepare(statement: string) {
+      if (statement.startsWith("PRAGMA index_list")) {
+        return { all: () => [{ name: "structural_probe", unique: 1, origin: "c", partial: 1 }] };
+      }
+      if (statement === "SELECT * FROM pragma_index_xinfo(?)") {
+        return {
+          all: () => [
+            { seqno: 0, cid: 0, name: "tenant_id", key: 1 },
+            { seqno: 1, cid: 1, name: "user_id", key: 1 },
+            { seqno: 2, cid: 2, name: "market_id", key: 1 },
+          ],
+        };
+      }
+      if (statement.startsWith("SELECT sql FROM sqlite_schema")) return { get: () => ({ sql: createSql }) };
+      throw new Error(`unexpected metadata probe statement: ${statement}`);
+    },
+  } as unknown as Database.Database;
+}
+
+function readOnlyIntegrityCheck(dbPath: string) {
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    return String((db.pragma("integrity_check") as Array<{ integrity_check: string }>)[0]?.integrity_check);
+  } finally {
+    db.close();
+  }
+}
+
+function readOnlyNullWorkspaceGrantCount(dbPath: string) {
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    return Number((db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM user_market_access
+      WHERE workspace_id IS NULL AND market_id = 'market-forged-index'
+    `).get() as { count: number }).count);
   } finally {
     db.close();
   }

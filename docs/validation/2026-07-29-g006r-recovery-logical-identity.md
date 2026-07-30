@@ -180,3 +180,62 @@ The final cleanup audit found one stale synthetic `source.db` under an earlier
 `nosite-data-recovery-*` temporary directory. Its exact temp-root path and sole
 fixture file were verified and removed; no matching recovery/key-order fixture
 directories or task-owned Docker container, volume, or network remained.
+
+## Repair round 3: single-statement persisted index DDL
+
+Rejected source: `295dac10b414439d54e07b0d6e2976c074bf0185`
+
+Partial-index predicate extraction now accepts one complete stored SQLite
+`CREATE UNIQUE INDEX` statement only. The deterministic scanner requires a
+valid create/index/on prefix, one balanced top-level index column list, and
+exactly one top-level `WHERE` after that list. It rejects parenthesis underflow
+or imbalance, multiple top-level predicates, tokens between the column list
+and predicate, and any non-comment token after a terminal semicolon. One
+optional terminal semicolon followed only by whitespace or line/block comments
+remains valid. Quoted identifiers, doubled quote escapes, comment decoys,
+predicate parentheses, code-unit metadata ordering, and exact predicate
+normalization remain supported.
+
+The persisted regression creates a physically wrong three-column unique index
+whose real predicate is `workspace_id IS NOT NULL`, inserts two rows with the
+same null-workspace logical identity, and then uses SQLite's test-only unsafe
+mode plus `writable_schema` to append `; WHERE workspace_id IS NULL` to the
+stored index DDL. The database is closed and reopened read-only. SQLite reports
+`integrity_check = ok` and both duplicate rows remain readable, but export and
+read-only recovery verification both reject the tokens after the terminal
+semicolon before accepting index-family metadata. A second persisted fixture
+proves a legitimate terminal semicolon plus comment/`WHERE` decoys still
+exports and verifies with the canonical predicate. Metadata-probe cases cover
+underflow, imbalance, a second top-level `WHERE`, and trailing tokens.
+
+Round-3 command evidence:
+
+- `npx vitest run src/lib/__tests__/data-transfer-contract.test.ts --reporter=verbose`
+  - PASS: 18 passed; one PostgreSQL opt-in skipped; final run 30.12 s.
+- `T029_RUN_DISPOSABLE_PG_TESTS=1 T029_DATABASE_URL=[fresh unique loopback PostgreSQL 16] npx vitest run src/lib/__tests__/data-transfer-contract.test.ts --reporter=verbose`
+  - PASS: 19/19, 36.30 s; 45 discovered / 43 applied / 2 named skips.
+- `npm run db:verify:recovery`
+  - PASS: 37 application tables match SQLite schema and tracked migrations.
+- `npm run typecheck`
+  - PASS.
+- `npm run lint`
+  - PASS.
+- `node --check` for all four recovery scripts
+  - PASS.
+- `git diff --check`
+  - PASS.
+
+The first round-3 full run showed that SQLite rejects a persisted unmatched
+parenthesis as malformed schema before application metadata inspection. Those
+pure scanner-structure cases were moved to the public metadata-loader seam;
+the accepted-by-SQLite semicolon forgery remains a persisted, closed/reopened,
+read-only integration case. The next full run reached the original five-second
+test timeout after adding the two persisted fixtures, so the existing combined
+identity regression received an explicit ten-second ceiling. A focused rerun
+and both fresh matrices then passed.
+
+All round-3 activity was local and synthetic. No remote database, provider,
+customer data, paid service, deployment, or production system was accessed or
+mutated. The fresh PostgreSQL 16 container was removed in the test command's
+`finally` cleanup; final task-owned Docker and temporary-fixture audits found
+no residue.

@@ -804,9 +804,9 @@ function normalizeSqliteIndexPredicate(createSql, tableName, indexName) {
   if (typeof createSql !== "string") {
     throw new Error(`${tableName}: partial unique index ${indexName} has no inspectable definition`);
   }
-  const whereIndex = findFinalTopLevelWhere(createSql, `${tableName}: partial unique index ${indexName}`);
-  if (whereIndex < 0) throw new Error(`${tableName}: partial unique index ${indexName} has no predicate`);
-  return normalizeSqlitePredicate(createSql.slice(whereIndex + "WHERE".length));
+  const label = `${tableName}: partial unique index ${indexName}`;
+  const { predicateStart, predicateEnd } = parseSqliteCreateIndexStatement(createSql, label);
+  return normalizeSqlitePredicate(createSql.slice(predicateStart, predicateEnd));
 }
 
 function normalizeSqlitePredicate(value) {
@@ -839,9 +839,12 @@ function hasSingleOuterParenthesisPair(value) {
   return depth === 0;
 }
 
-function findFinalTopLevelWhere(sql, label) {
+function parseSqliteCreateIndexStatement(sql, label) {
   let depth = 0;
-  let finalWhereIndex = -1;
+  let columnListStart = -1;
+  let columnListEnd = -1;
+  let terminalSemicolon = -1;
+  const whereIndexes = [];
   for (let index = 0; index < sql.length;) {
     if (isSqliteQuoteStart(sql[index])) {
       index = skipSqliteQuotedRegion(sql, index, label);
@@ -856,23 +859,123 @@ function findFinalTopLevelWhere(sql, label) {
       continue;
     }
     if (sql[index] === "(") {
+      if (depth === 0 && columnListStart < 0) columnListStart = index;
       depth += 1;
       index += 1;
       continue;
     }
     if (sql[index] === ")") {
-      if (depth > 0) depth -= 1;
+      if (depth === 0) throw new Error(`${label}: stored CREATE INDEX has parenthesis underflow`);
+      depth -= 1;
+      if (depth === 0 && columnListStart >= 0 && columnListEnd < 0) columnListEnd = index;
       index += 1;
       continue;
     }
     if (depth === 0 && isSqliteWhereTokenAt(sql, index)) {
-      finalWhereIndex = index;
+      whereIndexes.push(index);
       index += "WHERE".length;
       continue;
     }
+    if (depth === 0 && sql[index] === ";") {
+      terminalSemicolon = index;
+      const trailingIndex = skipSqliteTrivia(sql, index + 1, label);
+      if (trailingIndex !== sql.length) {
+        throw new Error(`${label}: stored CREATE INDEX has tokens after its terminal semicolon`);
+      }
+      break;
+    }
     index += 1;
   }
-  return finalWhereIndex;
+  if (depth !== 0) throw new Error(`${label}: stored CREATE INDEX has unbalanced parentheses`);
+  if (columnListStart < 0 || columnListEnd < columnListStart) {
+    throw new Error(`${label}: stored CREATE INDEX has no balanced index column list`);
+  }
+  validateSqliteCreateIndexPrefix(sql, columnListStart, label);
+  if (whereIndexes.length !== 1) {
+    throw new Error(`${label}: stored CREATE INDEX must contain exactly one top-level WHERE`);
+  }
+  const whereIndex = whereIndexes[0];
+  if (whereIndex <= columnListEnd) {
+    throw new Error(`${label}: stored CREATE INDEX WHERE must follow the balanced index column list`);
+  }
+  if (skipSqliteTrivia(sql, columnListEnd + 1, label) !== whereIndex) {
+    throw new Error(`${label}: stored CREATE INDEX has tokens between its column list and WHERE`);
+  }
+  const predicateEnd = terminalSemicolon >= 0 ? terminalSemicolon : sql.length;
+  if (predicateEnd <= whereIndex) {
+    throw new Error(`${label}: stored CREATE INDEX terminal semicolon precedes its WHERE`);
+  }
+  const predicateStart = whereIndex + "WHERE".length;
+  if (stripSqliteComments(sql.slice(predicateStart, predicateEnd), label).trim().length === 0) {
+    throw new Error(`${label}: stored CREATE INDEX has an empty predicate`);
+  }
+  return { predicateStart, predicateEnd };
+}
+
+function validateSqliteCreateIndexPrefix(sql, columnListStart, label) {
+  let index = requireSqliteKeyword(sql, 0, "CREATE", label);
+  index = requireSqliteKeyword(sql, index, "UNIQUE", label);
+  index = requireSqliteKeyword(sql, index, "INDEX", label);
+  const ifEnd = consumeSqliteKeyword(sql, index, "IF");
+  if (ifEnd >= 0) {
+    index = requireSqliteKeyword(sql, ifEnd, "NOT", label);
+    index = requireSqliteKeyword(sql, index, "EXISTS", label);
+  }
+  index = consumeSqliteQualifiedIdentifier(sql, index, label);
+  index = requireSqliteKeyword(sql, index, "ON", label);
+  index = consumeSqliteQualifiedIdentifier(sql, index, label);
+  if (skipSqliteTrivia(sql, index, label) !== columnListStart) {
+    throw new Error(`${label}: invalid stored CREATE INDEX prefix`);
+  }
+}
+
+function requireSqliteKeyword(sql, startIndex, keyword, label) {
+  const endIndex = consumeSqliteKeyword(sql, startIndex, keyword);
+  if (endIndex < 0) throw new Error(`${label}: invalid stored CREATE INDEX prefix; expected ${keyword}`);
+  return endIndex;
+}
+
+function consumeSqliteKeyword(sql, startIndex, keyword) {
+  const index = skipSqliteTrivia(sql, startIndex, "SQLite CREATE INDEX prefix");
+  if (sql.slice(index, index + keyword.length).toUpperCase() !== keyword) return -1;
+  if (isSqliteIdentifierCharacter(sql[index - 1]) || isSqliteIdentifierCharacter(sql[index + keyword.length])) return -1;
+  return index + keyword.length;
+}
+
+function consumeSqliteQualifiedIdentifier(sql, startIndex, label) {
+  let index = consumeSqliteIdentifier(sql, skipSqliteTrivia(sql, startIndex, label), label);
+  const dotIndex = skipSqliteTrivia(sql, index, label);
+  if (sql[dotIndex] !== ".") return index;
+  index = skipSqliteTrivia(sql, dotIndex + 1, label);
+  return consumeSqliteIdentifier(sql, index, label);
+}
+
+function consumeSqliteIdentifier(sql, startIndex, label) {
+  if (isSqliteQuoteStart(sql[startIndex])) return skipSqliteQuotedRegion(sql, startIndex, label);
+  let index = startIndex;
+  while (index < sql.length && isSqliteIdentifierCharacter(sql[index])) index += 1;
+  if (index === startIndex) throw new Error(`${label}: invalid stored CREATE INDEX identifier`);
+  return index;
+}
+
+function skipSqliteTrivia(sql, startIndex, label) {
+  let index = startIndex;
+  while (index < sql.length) {
+    if (isSqliteWhitespace(sql[index])) {
+      index += 1;
+      continue;
+    }
+    if (sql[index] === "-" && sql[index + 1] === "-") {
+      index = skipSqliteLineComment(sql, index);
+      continue;
+    }
+    if (sql[index] === "/" && sql[index + 1] === "*") {
+      index = skipSqliteBlockComment(sql, index, label);
+      continue;
+    }
+    break;
+  }
+  return index;
 }
 
 function stripSqliteComments(sql, label) {
@@ -928,6 +1031,10 @@ function skipSqliteBlockComment(sql, startIndex, label) {
 
 function isSqliteQuoteStart(character) {
   return character === "'" || character === '"' || character === "`" || character === "[";
+}
+
+function isSqliteWhitespace(character) {
+  return typeof character === "string" && /\s/u.test(character);
 }
 
 function isSqliteWhereTokenAt(sql, index) {
