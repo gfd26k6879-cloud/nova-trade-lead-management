@@ -924,3 +924,22 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   with 2,244 passing tests, the Next.js production build, and Playwright 5/5
   all passed. The G-006A staged artifact is therefore accepted and both locks
   are released. G-006A startup activation and parent G-006 remain open.
+
+## G-006B preparation preflight launch
+
+- G-006B begins only as its pre-adapter preparation milestone: verified
+  lossless backup plus schema-3 archive binding, exact T-028 and compatibility-
+  play/source identity validation, nullable scope/source backfill, immutable
+  prepared evidence, and restart-safe handoff mechanics. Final NOT NULL,
+  rebuilt keys, final-catalog activation, and startup consumption remain after
+  G-006C0-C6 and are not authorized in this packet.
+- Three concurrent read-only preflights are active against immutable Platform
+  baseline `87795a7`. They respectively own exact B1 write-set/API
+  reconciliation, security and crash-state analysis, and executable
+  acceptance/test design. They hold no locks, may create only disposable local
+  fixtures, and cannot edit, implement, acquire authority, reinterpret T-028,
+  or waive the accepted 37-table recovery contract.
+- Sol will reconcile the three receipts into one bounded Terra-medium producer
+  packet before `recovery-contract` or `migration-harness` is acquired. No
+  G-006B implementation, G-006C work, startup wiring, external action, or
+  production/customer data access is active during preflight.
