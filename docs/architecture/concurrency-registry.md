@@ -786,3 +786,15 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   Producer evidence remains non-authorizing; exactly one commit and the same
   four paths are allowed, with no merge, startup activation, later-card work,
   or external action.
+- Round-4 preflight corrected the source catalog pins. Raw `SCHEMA_SQL` has the
+  internal digest `19fac766...`, but it is not an accepted coordinator source.
+  Compatibility preparation adds two receipt autoindexes, so accepted legacy
+  is `eb29b4dec23fa7311cd93c298515b871b94fe109d00a3d9db149ef6726f1637c`;
+  staged/final is `2d866e21e5a30454bcfb7ea709aac96cdda17a1e7ab813b7e161265c0a060844`.
+  The complete query escapes the underscore in `sqlite\_%`; sequence payloads
+  remain a separate BigInt-safe snapshot.
+- The retained root lease follows a deterministic READY, CONSUMING, and
+  terminal state machine. A unique finalizer token supplies fallback cleanup,
+  while explicit cancel and every normal/error outcome own correctness.
+  Verifier acceptance requires a late check while open and another retained
+  descriptor/path check after close immediately before reporting success.
