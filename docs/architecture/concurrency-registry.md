@@ -401,3 +401,6 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 - `recovery-contract` remains held. No merge, acceptance, release, external
   action, SQLite schema change, or G-006A implementation is authorized during
   this repair.
+- The original Terra-medium producer is repairing the immutable rejected
+  source within that same ceiling. Fresh dual review is mandatory on the new
+  one-commit repair tip before Sol may merge or accept it.
