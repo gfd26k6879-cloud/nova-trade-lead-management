@@ -1454,3 +1454,32 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   report recoverability, then prove no task lock/temp/staging residue. No merge,
   scope expansion, history rewrite, remote action or self-acceptance is
   authorized.
+- The approved Terra-medium producer completed repair commit `4853080` as
+  exactly one commit over rejected source `bbe51bf`, changing only the four
+  authorized B1 paths and leaving the Platform worktree clean. Sol independently
+  confirmed full parent `bbe51bfa7d76e0bcb44e4c1523e2a20fecb00f58`, exact
+  four-path scope, one-commit distance, clean `diff --check`, clean worktree and
+  normalized helper hash/TypeScript pin
+  `d56b9450dccb8da2877ef12078b78d1887b6ab77ae6d4f181f16b3c33b3e4a27`.
+- Frozen producer evidence reports the authoritative focused file passing
+  71/71 in 974.1 seconds within its 1,200-second bound. The post-readiness
+  preliminary file also passed 71/71; the affected pin/tamper/inspection set
+  passed 17/17; three consecutive 512 MiB inspection-readiness probes passed;
+  76 related regressions passed with two environment-gated PostgreSQL skips;
+  typecheck, zero-warning lint, production build, exact 37-table recovery
+  verification and PowerShell parsing passed. The receipt distinguishes local
+  host/operation evidence from production verification and does not preclaim
+  the final frozen result. These remain producer claims until independent
+  review.
+- Fresh acceptance returns to three independent specialist lanes under the
+  binding four-agent ceiling. Security owns retained-final lifetime, pre-ready
+  lock death, standalone inspection substitution and cleanup/error precedence;
+  architecture owns post-close logical verification, resume/replay acquisition,
+  exact-set terminal release, production-union and taxonomy review; quality
+  owns the executable 71-case matrix, per-row identity assertions, independent
+  hashing claims, receipt accuracy and repository gates. The earlier exact
+  `g006b-identity-cleanup-qjkSgV` root remains untouched and recoverable because
+  local destructive-action policy blocked its removal; read-only revalidation
+  found only its three disclosed files, no subdirectories and no external
+  owner process. Sol retains sole acceptance and merge authority; `4853080`
+  remains local, locked, unmerged and unaccepted.
