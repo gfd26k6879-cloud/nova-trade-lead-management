@@ -798,3 +798,13 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   while explicit cancel and every normal/error outcome own correctness.
   Verifier acceptance requires a late check while open and another retained
   descriptor/path check after close immediately before reporting success.
+- Round-4 source `c23d280773f1594c7a2a28598bf5dd0c780f1440` is exactly one
+  commit over rejected `b2843b8`, changes the same four paths, and leaves the
+  Platform worktree clean. Producer gates report focused Vitest 29/29,
+  typecheck, full lint, 37-table recovery verification, diff/scope checks, and
+  zero final task residue. Twenty-two stale task-owned test directories from
+  an earlier failed run were verified and removed before the commit.
+- Fresh domain/security and independent Quality rereviews are active against
+  the immutable source. They own all lifecycle, internal-catalog, sequence,
+  late-verifier, replay, prior exploit, topology, and cleanup acceptance. No
+  merge or milestone acceptance is authorized by producer evidence.
