@@ -460,3 +460,5 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 - `recovery-contract` remains held. Fresh dual rereview of the new immutable
   repair commit is mandatory; no merge, acceptance, G-006A implementation, or
   external action is authorized.
+- The original Terra-medium producer is executing round 2 from `f11cb1a`; the
+  other three agent slots remain available for Sol and later immutable review.
