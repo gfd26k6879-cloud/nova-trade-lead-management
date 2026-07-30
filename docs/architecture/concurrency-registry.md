@@ -729,3 +729,15 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   Producer output is evidence only: exactly one commit and the same four paths
   are permitted. No merge, acceptance, startup activation, G-006B/C work, or
   external action is authorized by this dispatch.
+- Read-only acceptance preflights pin physical identity to exact bigint
+  `(dev, ino)` values; NTFS birth time is not authoritative. Every inspector,
+  writer, transaction, commit, and fresh-verifier boundary must recheck the
+  retained lease, with deterministic cancel/dispose and all-path closure.
+  Unsupported platform/filesystem behavior fails closed unless the producer
+  retains the exact private SQLite connection from mint through coordination.
+- The internal-state contract permits exactly the canonical `sqlite_sequence`
+  table and zero or one BigInt-safe row for
+  `tenant_deletion_checkpoint_events`. Exact row presence and high-water value
+  are preserved across mint, lock, plan, commit, reopen, and replay; a caller
+  can never supply the sequence value. Declared plan and bind lengths must be
+  rejected before allocation, descriptor walking, or element inspection.
