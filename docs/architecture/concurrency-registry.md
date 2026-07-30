@@ -18,7 +18,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Staged G-006A is dispatched from accepted control baseline `a7c296298bf33f1cfb670741863c0ffe1629002c` with an exact four-path ceiling and no startup activation. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Immutable staged G-006A source `7286bc6b2ee15cba2d19de0cd57b74c86f979fa2`, exactly one four-path commit over dispatch control `88e49440d2ff52b4db249bd199b2b2a3547fe9a3`, is under fresh dual review with no startup activation. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-004A source `c0892a06325b33657e5b73813635fec6a4081012` is accepted through integration `8383fa70a2bac8de71413ae135918bbaedf907b4`; runtime G-004B remains preserved and blocked for co-delivery with G-013/G-014. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
@@ -59,7 +59,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 | `G-005` | Accepted | Source `28005a3` passed repaired dual review, merged at `d2d6e7f`, and passed the full merged release gate. Runtime propagation and T029 reconciliation remain later cards. |
 | `G-006` | Parent split open | Preserve every success criterion through serialized G-006R recovery identity, staged G-006A fresh schema/coordinator, G-006B receipt-bound finalization, and the G-006C compatibility-adapter sequence. Accept only after all children independently pass and startup activation is proven. |
 | `G-006R` | Accepted | Repaired source `3443816` passed fresh domain/security and independent Quality review, merged at `43a2387`, and passed the full merged release gate. |
-| `G-006A` | Staged artifact in progress | Terra-medium is implementing only the four-path final-schema catalog/coordinator packet from `a7c2962`; `schema.ts`, `getDb()`, writers, finalization, and startup activation remain frozen. |
+| `G-006A` | Immutable staged source under dual review | Source `7286bc6` contains exactly the four authorized artifacts and passed producer gates; `schema.ts`, `getDb()`, writers, finalization, and startup activation remain frozen. |
 | `G-006B` | Blocked on accepted G-006A | Consume exactly one verified T028 SQLite receipt and verified backup to atomically finalize 17 non-audit tables with interruption/replay proof. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
@@ -602,3 +602,22 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   tests, typecheck, lint, diff/scope checks, and a truthful receipt. Fresh dual
   review and Sol's final integration gate remain mandatory; no external action
   is authorized.
+
+## G-006A producer and review receipt
+
+- Terra-medium source `7286bc6b2ee15cba2d19de0cd57b74c86f979fa2`
+  is exactly one commit over dispatch control
+  `88e49440d2ff52b4db249bd199b2b2a3547fe9a3`, changes exactly the four
+  authorized paths, and leaves the Platform worktree clean.
+- Producer evidence is focused Vitest 9/9, full typecheck, full lint, diff and
+  scope checks. The pinned source, definition, final-catalog, and accepted
+  legacy digests are recorded in the source receipt. The artifact claims 37
+  application tables, 17 transform targets, no coordinator table, no identity
+  defaults, preserved audit history, and no runtime/startup/recovery wiring.
+- This is producer evidence only. Fresh domain/security review owns exact
+  migration/key/FK/index/partial-uniqueness and hostile-catalog validation.
+  Independent Quality owns capability-gate, transaction, interruption,
+  rollback, replay, preservation, and milestone-boundary validation.
+- `sqlite-schema` and `recovery-contract` remain held. No merge, acceptance,
+  startup activation, destructive finalization, or external action may occur
+  until both reviews pass and Sol completes the local merged gate.
