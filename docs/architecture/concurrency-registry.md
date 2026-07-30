@@ -1794,3 +1794,32 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   commits, merges, acceptance claims, external calls or blocked-root access.
   Sol remains the sole authority for repair, exception disposition, merge and
   acceptance; C2-C6 and all parent completion remain closed.
+
+## G-006C1 immutable-source review result and repair delta
+
+- Architecture ACCEPTS exact source `28b04d8` with no P0-P3 finding. It confirms
+  one-commit/four-path scope, additive C0 compatibility, atomic nested G006A
+  creation plus five-row foundation, exact staged replay/rejection, independent
+  read-only proof, later-writer deferral and truthful exception disclosure. Its
+  independently run focused gate passed 50 tests with one parent-only worker
+  skip executed in child processes, in 11.93 seconds.
+- Security REJECTS the source with one P1. After the read-only verifier commits
+  its snapshot, only path and device/FileId identity are rechecked before the
+  private fresh capability is minted. A separate process can modify the same
+  SQLite file in place during that pre-mint window without changing those
+  identifiers. The focused gate passed 50 tests with the same parent-only skip
+  in 11.58 seconds but does not exercise that exact window.
+- Sol accepts the finding and keeps G006C1 unmerged. The bounded repair remains
+  inside the same four paths and must establish a genuine SQLite no-write lease
+  across a final exact logical-state attestation and the actual private-WeakMap
+  mint. Any uncertainty after mint but before successful lease release must
+  revoke the WeakMap entry and return typed committed-unverified recovery. No
+  capability may escape an unsuccessful mint/release sequence.
+- The repair adds an adversarial external-process mutation at the former
+  post-proof/pre-mint window and proves deterministic ordering: mutation either
+  wins before the final lease and the full reproof rejects without minting, or
+  waits until after successful mint/release. It also proves post-mint failure
+  revocation and preserves all existing 50 focused cases, C0 behavior, source
+  boundaries and validation-exception disclosures. No fifth path, schema,
+  startup, writer, G006A/B, PostgreSQL, receipt-as-authority or external action
+  is authorized.
