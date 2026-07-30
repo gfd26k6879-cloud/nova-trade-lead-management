@@ -443,3 +443,20 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   nullable final ownership, early startup activation, and treating a receipt as
   access authority are forbidden. G-009 through G-022 later replace the bounded
   adapter with ordinary required request/worker scope.
+
+## G-006R repair round 2
+
+- Source `f11cb1abcb6b36734b8dee637bc832aad82811f5` is rejected and must not be
+  merged or accepted. Both fresh lanes reproduced locale-dependent ordering of
+  schema-4 SQLite unique-key metadata. Independent Quality review also found
+  that predicate extraction treats a lexical `WHERE` inside a quoted index
+  identifier as the start of the partial-index predicate.
+- All earlier physical-key, logical-identity, SQLite partial-family, schema-3,
+  PostgreSQL immediate-arbiter, rollback, hostile-path, scope, and cleanup
+  findings are closed on this source, but their evidence must be rerun after
+  repair. Round 2 is limited to a binary/code-unit comparator, a top-level
+  quote/comment-aware final `WHERE` extractor, focused regressions, and truthful
+  receipt wording within the same seven-path ceiling.
+- `recovery-contract` remains held. Fresh dual rereview of the new immutable
+  repair commit is mandatory; no merge, acceptance, G-006A implementation, or
+  external action is authorized.
