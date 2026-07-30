@@ -1,41 +1,22 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
-  TABLE_CONTRACTS,
+  DATA_EXPORT_SCHEMA_VERSION,
+  LEGACY_DATA_EXPORT_SCHEMA_VERSION,
   TABLE_NAMES,
   DYNAMIC_SOURCE_TABLES,
+  loadSqliteUniqueKeyMetadata,
   parseCliArgs,
   quoteIdent,
+  sqliteKeyMetadataSupportsIdentity,
+  tableContractsForSchemaVersion,
   validateDataExportDirectory,
 } from "./data-transfer-contract.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const args = parseCliArgs(process.argv.slice(2));
-
-verifyTrackedTableCoverage();
-console.log(`Recovery contract: ${TABLE_NAMES.length} application tables match SQLite schema and tracked migrations.`);
-
-const dbArg = args.get("db");
-if (typeof dbArg === "string") {
-  verifySqliteDatabase(path.resolve(dbArg));
-  console.log(`SQLite schema: ${path.resolve(dbArg)} matches the recovery contract (read-only check).`);
-} else if (dbArg === true) {
-  throw new Error("--db requires a SQLite file path");
-}
-
-const dirArg = args.get("dir");
-if (typeof dirArg === "string") {
-  const validated = validateDataExportDirectory(dirArg);
-  const totalRows = validated.manifest.tableOrder.reduce(
-    (sum, table) => sum + validated.manifest.tables[table].rows,
-    0,
-  );
-  console.log(`Export archive: ${validated.dir} passed manifest, checksum, row, key, and secret-exclusion checks (${totalRows} rows).`);
-} else if (dirArg === true) {
-  throw new Error("--dir requires an export directory path");
-}
 
 function verifyTrackedTableCoverage() {
   const sqliteSchema = fs.readFileSync(path.join(repoRoot, "src/lib/db/schema.ts"), "utf8");
@@ -52,11 +33,11 @@ function verifyTrackedTableCoverage() {
   assertExactTableSet(migrationTables, "supabase/migrations");
 }
 
-function verifySqliteDatabase(inputPath) {
+export function verifySqliteDatabase(inputPath, tableContracts, selectedSchemaVersion) {
   if (!fs.existsSync(inputPath)) throw new Error(`SQLite DB not found: ${inputPath}`);
   const db = new Database(inputPath, { readonly: true, fileMustExist: true });
   try {
-    for (const contract of TABLE_CONTRACTS) {
+    for (const contract of tableContracts) {
       const schema = db.prepare(`PRAGMA table_info(${quoteIdent(contract.name)})`).all();
       if (schema.length === 0) {
         if (contract.dynamicSource) throw new Error(`${contract.name}: T-028 SQLite preparation is required; receipt table is not prepared`);
@@ -66,10 +47,20 @@ function verifySqliteDatabase(inputPath) {
         .filter(({ pk }) => Number(pk) > 0)
         .sort((left, right) => Number(left.pk) - Number(right.pk))
         .map(({ name }) => String(name));
-      if (!sameStringArray(primaryKey, contract.primaryKey)) {
+      if (selectedSchemaVersion === LEGACY_DATA_EXPORT_SCHEMA_VERSION
+        && !sameStringArray(primaryKey, contract.physicalPrimaryKey)) {
         throw new Error(`${contract.name}: SQLite primary key does not match the recovery contract`);
       }
       const columns = new Set(schema.map(({ name }) => String(name)));
+      for (const column of contract.rowIdentity) {
+        if (!columns.has(column)) throw new Error(`${contract.name}: schema-${selectedSchemaVersion} row identity column ${column} is missing`);
+      }
+      if (selectedSchemaVersion !== LEGACY_DATA_EXPORT_SCHEMA_VERSION) {
+        const uniqueKeys = loadSqliteUniqueKeyMetadata(db, contract.name);
+        if (!sqliteKeyMetadataSupportsIdentity(primaryKey, uniqueKeys, contract)) {
+          throw new Error(`${contract.name}: schema-${selectedSchemaVersion} row identity lacks exact SQLite unique enforcement`);
+        }
+      }
       for (const column of contract.excludedColumns) {
         if (!columns.has(column)) throw new Error(`${contract.name}: protected source column ${column} is missing`);
       }
@@ -97,3 +88,34 @@ function assertExactTableSet(actual, label, allowedMissing = new Set()) {
 function sameStringArray(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
+
+function main() {
+  const args = parseCliArgs(process.argv.slice(2));
+  const schemaVersion = Number(args.get("schema-version") ?? DATA_EXPORT_SCHEMA_VERSION);
+  const contracts = tableContractsForSchemaVersion(schemaVersion);
+
+  verifyTrackedTableCoverage();
+  console.log(`Recovery contract: ${TABLE_NAMES.length} application tables match SQLite schema and tracked migrations.`);
+
+  const dbArg = args.get("db");
+  if (typeof dbArg === "string") {
+    verifySqliteDatabase(path.resolve(dbArg), contracts, schemaVersion);
+    console.log(`SQLite schema: ${path.resolve(dbArg)} matches recovery schema ${schemaVersion} (read-only check).`);
+  } else if (dbArg === true) {
+    throw new Error("--db requires a SQLite file path");
+  }
+
+  const dirArg = args.get("dir");
+  if (typeof dirArg === "string") {
+    const validated = validateDataExportDirectory(dirArg);
+    const totalRows = validated.manifest.tableOrder.reduce(
+      (sum, table) => sum + validated.manifest.tables[table].rows,
+      0,
+    );
+    console.log(`Export archive: ${validated.dir} passed manifest, checksum, row, key, and secret-exclusion checks (${totalRows} rows).`);
+  } else if (dirArg === true) {
+    throw new Error("--dir requires an export directory path");
+  }
+}
+
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) main();

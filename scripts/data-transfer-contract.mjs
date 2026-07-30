@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 export const DATA_EXPORT_FORMAT = "nosite-data-export";
-export const DATA_EXPORT_SCHEMA_VERSION = 3;
+export const LEGACY_DATA_EXPORT_SCHEMA_VERSION = 3;
+export const DATA_EXPORT_SCHEMA_VERSION = 4;
 export const TENANT_INTEGRITY_CONTRACT_VERSION = 1;
 export const DYNAMIC_SOURCE_TABLES = Object.freeze(["compatibility_backfill_receipts"]);
 export const SQLITE_COMPATIBILITY_SOURCE_ENGINE = "sqlite";
@@ -15,7 +16,7 @@ export const DATA_EXPORT_SANITIZED_COLUMNS = Object.freeze({
   place_observations: Object.freeze(["raw_json:strip_google_reviews"]),
 });
 
-const definitions = [
+const schema3Definitions = [
   { name: "zip_codes", primaryKey: ["zip"] },
   { name: "location_markets", primaryKey: ["id"] },
   { name: "location_cells", primaryKey: ["id"] },
@@ -66,17 +67,61 @@ const definitions = [
   { name: "audit_logs", primaryKey: ["id"], jsonbColumns: ["metadata"] },
 ];
 
-export const TABLE_CONTRACTS = Object.freeze(definitions.map((definition) => Object.freeze({
-  name: definition.name,
-  primaryKey: Object.freeze([...(definition.primaryKey ?? [])]),
-  jsonbColumns: Object.freeze([...(definition.jsonbColumns ?? [])]),
-  excludedColumns: Object.freeze([...(definition.excludedColumns ?? [])]),
-  dynamicSource: definition.dynamicSource === true,
-  targetColumnMap: Object.freeze({ ...(definition.targetColumnMap ?? {}) }),
-})));
+const schema4RowIdentities = new Map([
+  ["user_market_access", ["tenant_id", "workspace_id", "user_id", "market_id"]],
+  ["place_cache", ["tenant_id", "source_card_id", "place_id"]],
+  ["places_master", ["tenant_id", "source_card_id", "place_id"]],
+  ["place_observations", ["tenant_id", "source_card_id", "id"]],
+  ["api_usage_events", ["tenant_id", "source_card_id", "id"]],
+]);
+
+const schema4SqliteNullableIdentityIndexFamilies = new Map([
+  ["user_market_access", [
+    { columns: ["tenant_id", "user_id", "market_id"], predicate: "workspace_id IS NULL" },
+    { columns: ["tenant_id", "workspace_id", "user_id", "market_id"], predicate: "workspace_id IS NOT NULL" },
+  ]],
+]);
+
+function buildContracts(schemaVersion) {
+  return Object.freeze(schema3Definitions.map((definition) => Object.freeze({
+    name: definition.name,
+    rowIdentity: Object.freeze([
+      ...(schemaVersion === DATA_EXPORT_SCHEMA_VERSION
+        ? schema4RowIdentities.get(definition.name) ?? definition.primaryKey
+        : definition.primaryKey),
+    ]),
+    nullableIdentityColumns: Object.freeze(
+      schemaVersion === DATA_EXPORT_SCHEMA_VERSION && definition.name === "user_market_access"
+        ? ["workspace_id"]
+        : [],
+    ),
+    sqliteNullableIdentityIndexFamily: Object.freeze(
+      (schemaVersion === DATA_EXPORT_SCHEMA_VERSION
+        ? schema4SqliteNullableIdentityIndexFamilies.get(definition.name) ?? []
+        : []).map((key) => Object.freeze({
+          columns: Object.freeze([...key.columns]),
+          predicate: key.predicate,
+        })),
+    ),
+    physicalPrimaryKey: Object.freeze([...(definition.primaryKey ?? [])]),
+    jsonbColumns: Object.freeze([...(definition.jsonbColumns ?? [])]),
+    excludedColumns: Object.freeze([...(definition.excludedColumns ?? [])]),
+    dynamicSource: definition.dynamicSource === true,
+    targetColumnMap: Object.freeze({ ...(definition.targetColumnMap ?? {}) }),
+  })));
+}
+
+export const LEGACY_SCHEMA_3_TABLE_CONTRACTS = buildContracts(LEGACY_DATA_EXPORT_SCHEMA_VERSION);
+export const TABLE_CONTRACTS = buildContracts(DATA_EXPORT_SCHEMA_VERSION);
 
 export const TABLE_NAMES = Object.freeze(TABLE_CONTRACTS.map(({ name }) => name));
 export const TABLE_CONTRACT_BY_NAME = new Map(TABLE_CONTRACTS.map((contract) => [contract.name, contract]));
+
+export function tableContractsForSchemaVersion(schemaVersion) {
+  if (schemaVersion === LEGACY_DATA_EXPORT_SCHEMA_VERSION) return LEGACY_SCHEMA_3_TABLE_CONTRACTS;
+  if (schemaVersion === DATA_EXPORT_SCHEMA_VERSION) return TABLE_CONTRACTS;
+  throw new Error(`Unsupported export schema version: ${String(schemaVersion ?? "missing")}`);
+}
 
 const LEGACY_SCOPED_TABLES = new Set([
   "settings", "user_market_access", "leads", "place_cache", "places_master", "place_observations",
@@ -481,9 +526,7 @@ export function validateDataExportDirectory(inputDir) {
   if (manifest.format !== DATA_EXPORT_FORMAT) {
     throw new Error(`Unsupported export format: ${String(manifest.format ?? "missing")}`);
   }
-  if (manifest.schemaVersion !== DATA_EXPORT_SCHEMA_VERSION) {
-    throw new Error(`Unsupported export schema version: ${String(manifest.schemaVersion ?? "missing")}`);
-  }
+  const contracts = tableContractsForSchemaVersion(manifest.schemaVersion);
   assertRecord(manifest.integrityContract, "Export manifest integrityContract must be an object");
   assertExactKeys(manifest.integrityContract, ["version", "rules"], "Export manifest integrityContract");
   if (manifest.integrityContract.version !== TENANT_INTEGRITY_CONTRACT_VERSION) throw new Error("Unsupported tenant integrity contract version");
@@ -510,7 +553,7 @@ export function validateDataExportDirectory(inputDir) {
   assertExactKeys(manifest.tables, TABLE_NAMES, "Export manifest tables");
 
   const expectedExclusions = Object.fromEntries(
-    TABLE_CONTRACTS
+    contracts
       .filter(({ excludedColumns }) => excludedColumns.length > 0)
       .map(({ name, excludedColumns }) => [name, [...excludedColumns]]),
   );
@@ -526,14 +569,14 @@ export function validateDataExportDirectory(inputDir) {
   }
 
   const tables = new Map();
-  for (const contract of TABLE_CONTRACTS) {
+  for (const contract of contracts) {
     const tableInfo = manifest.tables[contract.name];
     assertRecord(tableInfo, `Manifest entry for ${contract.name} must be an object`);
-    assertExactKeys(
-      tableInfo,
-      ["file", "rows", "columns", "primaryKey", "bytes", "sha256"],
-      `Manifest entry for ${contract.name}`,
-    );
+    const legacySchema3 = manifest.schemaVersion === LEGACY_DATA_EXPORT_SCHEMA_VERSION;
+    assertExactKeys(tableInfo, legacySchema3
+      ? ["file", "rows", "columns", "primaryKey", "bytes", "sha256"]
+      : ["file", "rows", "columns", "physicalPrimaryKey", "uniqueKeys", "rowIdentity", "nullableIdentityColumns", "bytes", "sha256"],
+    `Manifest entry for ${contract.name}`);
 
     const expectedFile = `${contract.name}.json`;
     if (tableInfo.file !== expectedFile) {
@@ -541,10 +584,27 @@ export function validateDataExportDirectory(inputDir) {
     }
     assertStringArray(tableInfo.columns, `${contract.name}: columns`);
     assertUnique(tableInfo.columns, `${contract.name}: columns`);
-    assertStringArrayEqual(tableInfo.primaryKey, contract.primaryKey, `${contract.name}: primaryKey`);
-    for (const column of contract.primaryKey) {
+    const physicalPrimaryKey = legacySchema3 ? tableInfo.primaryKey : tableInfo.physicalPrimaryKey;
+    assertStringArray(physicalPrimaryKey, `${contract.name}: physical primary key`);
+    assertUnique(physicalPrimaryKey, `${contract.name}: physical primary key`);
+    if (legacySchema3) {
+      assertStringArrayEqual(physicalPrimaryKey, contract.physicalPrimaryKey, `${contract.name}: primaryKey`);
+    } else {
+      assertStringArrayEqual(tableInfo.rowIdentity, contract.rowIdentity, `${contract.name}: rowIdentity`);
+      assertStringArrayEqual(tableInfo.nullableIdentityColumns, contract.nullableIdentityColumns, `${contract.name}: nullableIdentityColumns`);
+      assertUniqueKeyMetadata(tableInfo.uniqueKeys, tableInfo.columns, contract.name);
+      if (!keyMetadataSupportsIdentity(physicalPrimaryKey, tableInfo.uniqueKeys, contract)) {
+        throw new Error(`${contract.name}: rowIdentity is not backed by an exact physical primary or unique key`);
+      }
+    }
+    for (const column of physicalPrimaryKey) {
       if (!tableInfo.columns.includes(column)) {
-        throw new Error(`${contract.name}: primary key column ${column} is absent from the export`);
+        throw new Error(`${contract.name}: physical primary key column ${column} is absent from the export`);
+      }
+    }
+    for (const column of contract.rowIdentity) {
+      if (!tableInfo.columns.includes(column)) {
+        throw new Error(`${contract.name}: row identity column ${column} is absent from the export`);
       }
     }
     for (const column of contract.excludedColumns) {
@@ -584,7 +644,8 @@ export function validateDataExportDirectory(inputDir) {
       throw new Error(`${contract.name}: row count mismatch (manifest ${tableInfo.rows}, file ${rows.length})`);
     }
 
-    const seenPrimaryKeys = new Set();
+    const seenPhysicalPrimaryKeys = new Set();
+    const seenRowIdentities = new Set();
     for (const [rowIndex, row] of rows.entries()) {
       assertRecord(row, `${contract.name}[${rowIndex}] must be a JSON object`);
       assertExactKeys(row, tableInfo.columns, `${contract.name}[${rowIndex}]`);
@@ -604,18 +665,26 @@ export function validateDataExportDirectory(inputDir) {
           throw new Error(`${contract.name}[${rowIndex}].raw_json: raw Google reviews must be redacted`);
         }
       }
-      const primaryKey = contract.primaryKey.map((column) => {
-        const value = row[column];
-        if (value === null || value === undefined || value === "") {
-          throw new Error(`${contract.name}[${rowIndex}]: primary key column ${column} is empty`);
-        }
-        return value;
-      });
-      const encodedPrimaryKey = JSON.stringify(primaryKey);
-      if (seenPrimaryKeys.has(encodedPrimaryKey)) {
-        throw new Error(`${contract.name}: duplicate primary key at row ${rowIndex}`);
+      const encodedIdentity = encodeRowIdentity(contract, row, `${contract.name}[${rowIndex}]`);
+      if (seenRowIdentities.has(encodedIdentity)) {
+        throw new Error(`${contract.name}: duplicate row identity at row ${rowIndex}`);
       }
-      seenPrimaryKeys.add(encodedPrimaryKey);
+      seenRowIdentities.add(encodedIdentity);
+
+      if (physicalPrimaryKey.length > 0) {
+        const primaryKey = physicalPrimaryKey.map((column) => {
+          const value = row[column];
+          if (value === null || value === undefined || value === "") {
+            throw new Error(`${contract.name}[${rowIndex}]: physical primary key column ${column} is empty`);
+          }
+          return value;
+        });
+        const encodedPrimaryKey = JSON.stringify(primaryKey);
+        if (seenPhysicalPrimaryKeys.has(encodedPrimaryKey)) {
+          throw new Error(`${contract.name}: duplicate physical primary key at row ${rowIndex}`);
+        }
+        seenPhysicalPrimaryKeys.add(encodedPrimaryKey);
+      }
     }
 
     tables.set(contract.name, {
@@ -628,7 +697,365 @@ export function validateDataExportDirectory(inputDir) {
 
   validateTenantIntegrity(tables);
 
-  return { dir, manifest, tables };
+  return { dir, manifest, contracts, tables };
+}
+
+export function encodeRowIdentity(contract, row, label = contract.name) {
+  const nullableColumns = new Set(contract.nullableIdentityColumns);
+  return JSON.stringify(contract.rowIdentity.map((column) => {
+    if (!Object.hasOwn(row, column) || row[column] === undefined || row[column] === "") {
+      throw new Error(`${label}: row identity column ${column} is missing or empty`);
+    }
+    if (row[column] === null) {
+      if (!nullableColumns.has(column)) {
+        throw new Error(`${label}: row identity column ${column} is null`);
+      }
+      return ["null"];
+    }
+    return [typeof row[column], stableCanonicalize(row[column])];
+  }));
+}
+
+function stableCanonicalize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableCanonicalize).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableCanonicalize(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function assertUniqueKeyMetadata(value, columns, tableName) {
+  if (!Array.isArray(value)) throw new Error(`${tableName}: uniqueKeys must be an array`);
+  const seen = new Set();
+  for (const [index, key] of value.entries()) {
+    assertRecord(key, `${tableName}: uniqueKeys[${index}] must be an object`);
+    assertExactKeys(key, ["name", "columns", "predicate", "nullsNotDistinct"], `${tableName}: uniqueKeys[${index}]`);
+    if (typeof key.name !== "string" || key.name.length === 0) {
+      throw new Error(`${tableName}: uniqueKeys[${index}].name must be a non-empty string`);
+    }
+    assertStringArray(key.columns, `${tableName}: uniqueKeys[${index}].columns`);
+    if (key.columns.length === 0) throw new Error(`${tableName}: uniqueKeys[${index}].columns must not be empty`);
+    assertUnique(key.columns, `${tableName}: uniqueKeys[${index}].columns`);
+    if (key.columns.some((column) => !columns.includes(column))) {
+      throw new Error(`${tableName}: uniqueKeys[${index}] references a missing column`);
+    }
+    if (typeof key.nullsNotDistinct !== "boolean") {
+      throw new Error(`${tableName}: uniqueKeys[${index}].nullsNotDistinct must be boolean`);
+    }
+    if (key.nullsNotDistinct) {
+      throw new Error(`${tableName}: SQLite unique metadata cannot use NULLS NOT DISTINCT`);
+    }
+    if (key.predicate !== null && (typeof key.predicate !== "string" || key.predicate.length === 0)) {
+      throw new Error(`${tableName}: uniqueKeys[${index}].predicate must be null or a non-empty string`);
+    }
+    if (key.predicate !== normalizeSqlitePredicate(key.predicate)) {
+      throw new Error(`${tableName}: uniqueKeys[${index}].predicate is not normalized`);
+    }
+    const encoded = JSON.stringify(key.name);
+    if (seen.has(encoded)) throw new Error(`${tableName}: uniqueKeys contains duplicate metadata`);
+    seen.add(encoded);
+  }
+}
+
+function keyMetadataSupportsIdentity(physicalPrimaryKey, uniqueKeys, contract) {
+  return sqliteKeyMetadataSupportsIdentity(physicalPrimaryKey, uniqueKeys, contract);
+}
+
+export function loadSqliteUniqueKeyMetadata(db, tableName) {
+  return db.prepare(`PRAGMA index_list(${quoteIdent(tableName)})`).all()
+    .filter((index) => Number(index.unique) === 1 && String(index.origin) !== "pk")
+    .map((index) => {
+      const name = String(index.name);
+      const columns = db.prepare("SELECT * FROM pragma_index_xinfo(?)").all(name)
+        .filter((column) => Number(column.key) === 1)
+        .sort((left, right) => Number(left.seqno) - Number(right.seqno));
+      if (columns.length === 0 || columns.some((column) => Number(column.cid) < 0 || typeof column.name !== "string")) return null;
+      const partial = Number(index.partial) === 1;
+      const schemaRow = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?").get(name);
+      const predicate = partial ? normalizeSqliteIndexPredicate(schemaRow?.sql, tableName, name) : null;
+      return {
+        name,
+        columns: columns.map((column) => String(column.name)),
+        predicate,
+        nullsNotDistinct: false,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => compareCodeUnits(JSON.stringify(left), JSON.stringify(right)));
+}
+
+export function sqliteKeyMetadataSupportsIdentity(physicalPrimaryKey, uniqueKeys, contract) {
+  if (contract.nullableIdentityColumns.length === 0) {
+    return sameStringArray(physicalPrimaryKey, contract.rowIdentity)
+      || uniqueKeys.some((key) => key.predicate === null && sameStringArray(key.columns, contract.rowIdentity));
+  }
+  return contract.sqliteNullableIdentityIndexFamily.length > 0
+    && contract.sqliteNullableIdentityIndexFamily.every((required) => uniqueKeys.some((key) => (
+      key.nullsNotDistinct === false
+      && key.predicate === required.predicate
+      && sameStringArray(key.columns, required.columns)
+    )));
+}
+
+function normalizeSqliteIndexPredicate(createSql, tableName, indexName) {
+  if (typeof createSql !== "string") {
+    throw new Error(`${tableName}: partial unique index ${indexName} has no inspectable definition`);
+  }
+  const label = `${tableName}: partial unique index ${indexName}`;
+  const { predicateStart, predicateEnd } = parseSqliteCreateIndexStatement(createSql, label);
+  return normalizeSqlitePredicate(createSql.slice(predicateStart, predicateEnd));
+}
+
+function normalizeSqlitePredicate(value) {
+  if (typeof value !== "string") return value;
+  let normalized = stripSqliteComments(value, "SQLite index predicate")
+    .trim()
+    .replace(/;\s*$/, "")
+    .replace(/\s+/g, " ");
+  while (normalized.startsWith("(") && normalized.endsWith(")") && hasSingleOuterParenthesisPair(normalized)) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  const workspaceNull = /^(?:workspace_id|"workspace_id"|`workspace_id`|\[workspace_id\])\s+IS\s+(NOT\s+)?NULL$/i.exec(normalized);
+  if (workspaceNull) return `workspace_id IS ${workspaceNull[1] ? "NOT " : ""}NULL`;
+  return normalized;
+}
+
+function hasSingleOuterParenthesisPair(value) {
+  let depth = 0;
+  for (let index = 0; index < value.length;) {
+    if (isSqliteQuoteStart(value[index])) {
+      index = skipSqliteQuotedRegion(value, index, "SQLite index predicate");
+      continue;
+    }
+    if (value[index] === "(") depth += 1;
+    else if (value[index] === ")") depth -= 1;
+    if (depth === 0 && index < value.length - 1) return false;
+    if (depth < 0) return false;
+    index += 1;
+  }
+  return depth === 0;
+}
+
+function parseSqliteCreateIndexStatement(sql, label) {
+  let depth = 0;
+  let columnListStart = -1;
+  let columnListEnd = -1;
+  let terminalSemicolon = -1;
+  const whereIndexes = [];
+  for (let index = 0; index < sql.length;) {
+    if (isSqliteQuoteStart(sql[index])) {
+      index = skipSqliteQuotedRegion(sql, index, label);
+      continue;
+    }
+    if (sql[index] === "-" && sql[index + 1] === "-") {
+      index = skipSqliteLineComment(sql, index);
+      continue;
+    }
+    if (sql[index] === "/" && sql[index + 1] === "*") {
+      index = skipSqliteBlockComment(sql, index, label);
+      continue;
+    }
+    if (sql[index] === "(") {
+      if (depth === 0 && columnListStart < 0) columnListStart = index;
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (sql[index] === ")") {
+      if (depth === 0) throw new Error(`${label}: stored CREATE INDEX has parenthesis underflow`);
+      depth -= 1;
+      if (depth === 0 && columnListStart >= 0 && columnListEnd < 0) columnListEnd = index;
+      index += 1;
+      continue;
+    }
+    if (depth === 0 && isSqliteWhereTokenAt(sql, index)) {
+      whereIndexes.push(index);
+      index += "WHERE".length;
+      continue;
+    }
+    if (depth === 0 && sql[index] === ";") {
+      terminalSemicolon = index;
+      const trailingIndex = skipSqliteTrivia(sql, index + 1, label);
+      if (trailingIndex !== sql.length) {
+        throw new Error(`${label}: stored CREATE INDEX has tokens after its terminal semicolon`);
+      }
+      break;
+    }
+    index += 1;
+  }
+  if (depth !== 0) throw new Error(`${label}: stored CREATE INDEX has unbalanced parentheses`);
+  if (columnListStart < 0 || columnListEnd < columnListStart) {
+    throw new Error(`${label}: stored CREATE INDEX has no balanced index column list`);
+  }
+  validateSqliteCreateIndexPrefix(sql, columnListStart, label);
+  if (whereIndexes.length !== 1) {
+    throw new Error(`${label}: stored CREATE INDEX must contain exactly one top-level WHERE`);
+  }
+  const whereIndex = whereIndexes[0];
+  if (whereIndex <= columnListEnd) {
+    throw new Error(`${label}: stored CREATE INDEX WHERE must follow the balanced index column list`);
+  }
+  if (skipSqliteTrivia(sql, columnListEnd + 1, label) !== whereIndex) {
+    throw new Error(`${label}: stored CREATE INDEX has tokens between its column list and WHERE`);
+  }
+  const predicateEnd = terminalSemicolon >= 0 ? terminalSemicolon : sql.length;
+  if (predicateEnd <= whereIndex) {
+    throw new Error(`${label}: stored CREATE INDEX terminal semicolon precedes its WHERE`);
+  }
+  const predicateStart = whereIndex + "WHERE".length;
+  if (stripSqliteComments(sql.slice(predicateStart, predicateEnd), label).trim().length === 0) {
+    throw new Error(`${label}: stored CREATE INDEX has an empty predicate`);
+  }
+  return { predicateStart, predicateEnd };
+}
+
+function validateSqliteCreateIndexPrefix(sql, columnListStart, label) {
+  let index = requireSqliteKeyword(sql, 0, "CREATE", label);
+  index = requireSqliteKeyword(sql, index, "UNIQUE", label);
+  index = requireSqliteKeyword(sql, index, "INDEX", label);
+  const ifEnd = consumeSqliteKeyword(sql, index, "IF");
+  if (ifEnd >= 0) {
+    index = requireSqliteKeyword(sql, ifEnd, "NOT", label);
+    index = requireSqliteKeyword(sql, index, "EXISTS", label);
+  }
+  index = consumeSqliteQualifiedIdentifier(sql, index, label);
+  index = requireSqliteKeyword(sql, index, "ON", label);
+  index = consumeSqliteQualifiedIdentifier(sql, index, label);
+  if (skipSqliteTrivia(sql, index, label) !== columnListStart) {
+    throw new Error(`${label}: invalid stored CREATE INDEX prefix`);
+  }
+}
+
+function requireSqliteKeyword(sql, startIndex, keyword, label) {
+  const endIndex = consumeSqliteKeyword(sql, startIndex, keyword);
+  if (endIndex < 0) throw new Error(`${label}: invalid stored CREATE INDEX prefix; expected ${keyword}`);
+  return endIndex;
+}
+
+function consumeSqliteKeyword(sql, startIndex, keyword) {
+  const index = skipSqliteTrivia(sql, startIndex, "SQLite CREATE INDEX prefix");
+  if (sql.slice(index, index + keyword.length).toUpperCase() !== keyword) return -1;
+  if (isSqliteIdentifierCharacter(sql[index - 1]) || isSqliteIdentifierCharacter(sql[index + keyword.length])) return -1;
+  return index + keyword.length;
+}
+
+function consumeSqliteQualifiedIdentifier(sql, startIndex, label) {
+  let index = consumeSqliteIdentifier(sql, skipSqliteTrivia(sql, startIndex, label), label);
+  const dotIndex = skipSqliteTrivia(sql, index, label);
+  if (sql[dotIndex] !== ".") return index;
+  index = skipSqliteTrivia(sql, dotIndex + 1, label);
+  return consumeSqliteIdentifier(sql, index, label);
+}
+
+function consumeSqliteIdentifier(sql, startIndex, label) {
+  if (isSqliteQuoteStart(sql[startIndex])) return skipSqliteQuotedRegion(sql, startIndex, label);
+  let index = startIndex;
+  while (index < sql.length && isSqliteIdentifierCharacter(sql[index])) index += 1;
+  if (index === startIndex) throw new Error(`${label}: invalid stored CREATE INDEX identifier`);
+  return index;
+}
+
+function skipSqliteTrivia(sql, startIndex, label) {
+  let index = startIndex;
+  while (index < sql.length) {
+    if (isSqliteWhitespace(sql[index])) {
+      index += 1;
+      continue;
+    }
+    if (sql[index] === "-" && sql[index + 1] === "-") {
+      index = skipSqliteLineComment(sql, index);
+      continue;
+    }
+    if (sql[index] === "/" && sql[index + 1] === "*") {
+      index = skipSqliteBlockComment(sql, index, label);
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+function stripSqliteComments(sql, label) {
+  let result = "";
+  for (let index = 0; index < sql.length;) {
+    if (isSqliteQuoteStart(sql[index])) {
+      const nextIndex = skipSqliteQuotedRegion(sql, index, label);
+      result += sql.slice(index, nextIndex);
+      index = nextIndex;
+      continue;
+    }
+    if (sql[index] === "-" && sql[index + 1] === "-") {
+      result += " ";
+      index = skipSqliteLineComment(sql, index);
+      continue;
+    }
+    if (sql[index] === "/" && sql[index + 1] === "*") {
+      result += " ";
+      index = skipSqliteBlockComment(sql, index, label);
+      continue;
+    }
+    result += sql[index];
+    index += 1;
+  }
+  return result;
+}
+
+function skipSqliteQuotedRegion(sql, startIndex, label) {
+  const opening = sql[startIndex];
+  const closing = opening === "[" ? "]" : opening;
+  for (let index = startIndex + 1; index < sql.length; index += 1) {
+    if (sql[index] !== closing) continue;
+    if (sql[index + 1] === closing) {
+      index += 1;
+      continue;
+    }
+    return index + 1;
+  }
+  throw new Error(`${label}: unterminated SQLite quoted region`);
+}
+
+function skipSqliteLineComment(sql, startIndex) {
+  let index = startIndex + 2;
+  while (index < sql.length && sql[index] !== "\r" && sql[index] !== "\n") index += 1;
+  return index;
+}
+
+function skipSqliteBlockComment(sql, startIndex, label) {
+  const endIndex = sql.indexOf("*/", startIndex + 2);
+  if (endIndex < 0) throw new Error(`${label}: unterminated SQLite block comment`);
+  return endIndex + 2;
+}
+
+function isSqliteQuoteStart(character) {
+  return character === "'" || character === '"' || character === "`" || character === "[";
+}
+
+function isSqliteWhitespace(character) {
+  return typeof character === "string" && /\s/u.test(character);
+}
+
+function isSqliteWhereTokenAt(sql, index) {
+  if (sql.slice(index, index + "WHERE".length).toUpperCase() !== "WHERE") return false;
+  return !isSqliteIdentifierCharacter(sql[index - 1])
+    && !isSqliteIdentifierCharacter(sql[index + "WHERE".length]);
+}
+
+function isSqliteIdentifierCharacter(character) {
+  if (typeof character !== "string") return false;
+  const code = character.charCodeAt(0);
+  return (code >= 48 && code <= 57)
+    || (code >= 65 && code <= 90)
+    || (code >= 97 && code <= 122)
+    || character === "_"
+    || character === "$"
+    || code >= 128;
+}
+
+function compareCodeUnits(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function parseJsonFile(filePath, label) {
@@ -653,9 +1080,13 @@ function assertStringArray(value, label) {
 
 function assertStringArrayEqual(actual, expected, label) {
   assertStringArray(actual, label);
-  if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
+  if (!sameStringArray(actual, expected)) {
     throw new Error(`${label} does not match the recovery contract`);
   }
+}
+
+function sameStringArray(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function assertExactKeys(value, expectedKeys, label) {

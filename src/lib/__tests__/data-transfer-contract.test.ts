@@ -6,10 +6,15 @@ import postgres from "postgres";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DATA_EXPORT_SCHEMA_VERSION,
+  LEGACY_DATA_EXPORT_SCHEMA_VERSION,
+  LEGACY_SCHEMA_3_TABLE_CONTRACTS,
   TABLE_CONTRACTS,
   TABLE_NAMES,
   authReferenceColumns,
+  encodeRowIdentity,
   historicalRowsRequireRestore,
+  loadSqliteUniqueKeyMetadata,
   sha256,
   targetColumn,
   validateTenantIntegrity,
@@ -17,6 +22,7 @@ import {
 } from "../../../scripts/data-transfer-contract.mjs";
 import { exportSqliteData } from "../../../scripts/export-sqlite-data.mjs";
 import { digestRows, importSupabaseData, normalizeValue, validateAuthReferences, validateTargetSchema } from "../../../scripts/import-supabase-data.mjs";
+import { verifySqliteDatabase } from "../../../scripts/verify-data-recovery.mjs";
 import { SCHEMA_SQL } from "../db/schema";
 import { prepareSqliteCompatibilityBackfill } from "../tenancy/compatibility-backfill";
 
@@ -33,8 +39,10 @@ describe("data recovery contract", () => {
     const { dbPath, outDir } = createSyntheticSqliteDatabase();
     const manifest = exportSqliteData({ dbPath, outDir });
     const validated = validateDataExportDirectory(outDir);
-    const settingsManifest = (manifest.tables as Record<string, { columns: string[] }>).settings;
+    const tableManifests = manifest.tables as Record<string, Record<string, unknown>>;
+    const settingsManifest = tableManifests.settings as { columns: string[] };
 
+    expect(manifest.schemaVersion).toBe(DATA_EXPORT_SCHEMA_VERSION);
     expect(manifest.tableOrder).toEqual(TABLE_NAMES);
     expect(validated.tables.size).toBe(TABLE_NAMES.length);
     expect(validated.tables.get("settings")!.rows[0]).toMatchObject({ id: 1 });
@@ -45,6 +53,34 @@ describe("data recovery contract", () => {
       place_cache: ["raw_json:strip_google_reviews"],
       place_observations: ["raw_json:strip_google_reviews"],
     });
+    expect(tableManifests.user_market_access).toMatchObject({
+      physicalPrimaryKey: [],
+      rowIdentity: ["tenant_id", "workspace_id", "user_id", "market_id"],
+      nullableIdentityColumns: ["workspace_id"],
+      uniqueKeys: expect.arrayContaining([
+        {
+          name: "g006r_user_market_access_null_identity",
+          columns: ["tenant_id", "user_id", "market_id"],
+          predicate: "workspace_id IS NULL",
+          nullsNotDistinct: false,
+        },
+        {
+          name: "g006r_user_market_access_workspace_identity",
+          columns: ["tenant_id", "workspace_id", "user_id", "market_id"],
+          predicate: "workspace_id IS NOT NULL",
+          nullsNotDistinct: false,
+        },
+      ]),
+    });
+    expect(tableManifests.place_cache).toMatchObject({
+      physicalPrimaryKey: ["place_id"],
+      rowIdentity: ["tenant_id", "source_card_id", "place_id"],
+      nullableIdentityColumns: [],
+    });
+    const changedIdentities = new Set(["user_market_access", "place_cache", "places_master", "place_observations", "api_usage_events"]);
+    for (const contract of TABLE_CONTRACTS) {
+      if (!changedIdentities.has(contract.name)) expect(contract.rowIdentity).toEqual(contract.physicalPrimaryKey);
+    }
 
     for (const table of ["place_cache", "place_observations"]) {
       const [row] = validated.tables.get(table)!.rows;
@@ -55,6 +91,161 @@ describe("data recovery contract", () => {
       expect(raw.editorialSummary).toEqual({ text: "Safe summary" });
       expect(raw.__nositeCache?.reviewInsights?.keywords).toEqual(["responsive"]);
     }
+    assertLocaleIndependentUniqueKeyOrdering();
+  });
+
+  it("keeps schema 3 as a truthful legacy snapshot instead of reinterpreting it as schema 4", () => {
+    const { dbPath, outDir } = createSyntheticSqliteDatabase({ schema4: false });
+    const source = new Database(dbPath);
+    source.exec("CREATE UNIQUE INDEX g006r_user_market_access_identity ON user_market_access(tenant_id, workspace_id, user_id, market_id)");
+    source.close();
+    expect(() => exportSqliteData({ dbPath, outDir })).toThrow(/user_market_access: schema-4 row identity lacks exact SQLite unique enforcement/);
+
+    const manifest = exportSqliteData({ dbPath, outDir, schemaVersion: LEGACY_DATA_EXPORT_SCHEMA_VERSION });
+    const validated = validateDataExportDirectory(outDir);
+    const tableManifests = manifest.tables as Record<string, Record<string, unknown>>;
+    expect(manifest.schemaVersion).toBe(LEGACY_DATA_EXPORT_SCHEMA_VERSION);
+    expect(tableManifests.user_market_access).toMatchObject({ primaryKey: ["user_id", "market_id"] });
+    expect(tableManifests.user_market_access).not.toHaveProperty("rowIdentity");
+    expect(validated.contracts).toBe(LEGACY_SCHEMA_3_TABLE_CONTRACTS);
+    expect(() => validateTargetSchema(makeTargetSchema(validated), validated)).not.toThrow();
+  });
+
+  it("encodes nullable workspace identity distinctly and rejects missing or duplicate logical identities", () => {
+    const contract = TABLE_CONTRACTS.find(({ name }) => name === "user_market_access")!;
+    const base = {
+      tenant_id: "10000000-0000-4000-8000-000000000001",
+      user_id: "90000000-0000-4000-8000-000000000001",
+      market_id: "market-colorado",
+    };
+    expect(encodeRowIdentity(contract, { ...base, workspace_id: null }))
+      .not.toBe(encodeRowIdentity(contract, { ...base, workspace_id: "null" }));
+    expect(() => encodeRowIdentity(contract, base)).toThrow(/workspace_id is missing or empty/);
+    expect(() => encodeRowIdentity(contract, { ...base, workspace_id: "" })).toThrow(/workspace_id is missing or empty/);
+    const placeContract = TABLE_CONTRACTS.find(({ name }) => name === "place_cache")!;
+    expect(() => encodeRowIdentity(placeContract, { tenant_id: null, source_card_id: "google_places_legacy", place_id: "place" }))
+      .toThrow(/tenant_id is null/);
+
+    const { dbPath, outDir } = createSyntheticSqliteDatabase();
+    const db = new Database(dbPath);
+    try {
+      db.prepare("INSERT INTO location_markets (id, name, country_code, admin_area1) VALUES (?, ?, 'US', ?)")
+        .run(base.market_id, "Colorado", "CO");
+      db.prepare("INSERT INTO location_markets (id, name, country_code, admin_area1) VALUES (?, ?, 'US', ?)")
+        .run("market-utah", "Utah", "UT");
+      db.prepare("INSERT INTO user_market_access (tenant_id, workspace_id, user_id, market_id) VALUES (?, NULL, ?, ?)")
+        .run(base.tenant_id, base.user_id, base.market_id);
+      db.prepare("INSERT INTO user_market_access (tenant_id, workspace_id, user_id, market_id) VALUES (?, ?, ?, ?)")
+        .run(base.tenant_id, "20000000-0000-4000-8000-000000000001", base.user_id, "market-utah");
+      expect(() => db.prepare("INSERT INTO user_market_access (tenant_id, workspace_id, user_id, market_id) VALUES (?, NULL, ?, ?)")
+        .run(base.tenant_id, base.user_id, base.market_id)).toThrow(/UNIQUE constraint failed/);
+    } finally {
+      db.close();
+    }
+    expect(() => verifySqliteDatabase(dbPath, TABLE_CONTRACTS, DATA_EXPORT_SCHEMA_VERSION)).not.toThrow();
+    exportSqliteData({ dbPath, outDir });
+    const validated = validateDataExportDirectory(outDir);
+    expect(validated.manifest.tables.user_market_access.physicalPrimaryKey).toEqual([]);
+    expect(validated.tables.get("user_market_access")!.rows).toHaveLength(2);
+    expect(validated.tables.get("user_market_access")!.rows.some((row: Record<string, unknown>) => row.workspace_id === null)).toBe(true);
+    const manifestPath = path.join(outDir, "manifest.json");
+    const predicateManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const nullKey = predicateManifest.tables.user_market_access.uniqueKeys.find(
+      (key: { predicate: string | null }) => key.predicate === "workspace_id IS NULL",
+    );
+    nullKey.predicate = "workspace_id IS NULL AND tenant_id <> ''";
+    fs.writeFileSync(manifestPath, JSON.stringify(predicateManifest));
+    expect(() => validateDataExportDirectory(outDir)).toThrow(/user_market_access: rowIdentity is not backed by an exact physical primary or unique key/);
+
+    exportSqliteData({ dbPath, outDir });
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.tables.place_cache.rowIdentity = ["place_id"];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    expect(() => validateDataExportDirectory(outDir)).toThrow(/place_cache: rowIdentity does not match the recovery contract/);
+
+    exportSqliteData({ dbPath, outDir });
+    const duplicateManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const userMarketPath = path.join(outDir, "user_market_access.json");
+    const userMarketRows = JSON.parse(fs.readFileSync(userMarketPath, "utf8"));
+    const nullWorkspaceRow = userMarketRows.find((row: Record<string, unknown>) => row.workspace_id === null);
+    userMarketRows.push({ ...nullWorkspaceRow });
+    fs.writeFileSync(userMarketPath, `${JSON.stringify(userMarketRows, null, 2)}\n`);
+    refreshManifestEntry(duplicateManifest, "user_market_access", userMarketPath, userMarketRows);
+    fs.writeFileSync(manifestPath, JSON.stringify(duplicateManifest));
+    expect(() => validateDataExportDirectory(outDir)).toThrow(/user_market_access: duplicate row identity/);
+
+    exportSqliteData({ dbPath, outDir });
+    const missingManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const placeCachePath = path.join(outDir, "place_cache.json");
+    const missingRows = JSON.parse(fs.readFileSync(placeCachePath, "utf8"));
+    missingRows[0].source_card_id = null;
+    fs.writeFileSync(placeCachePath, `${JSON.stringify(missingRows, null, 2)}\n`);
+    refreshManifestEntry(missingManifest, "place_cache", placeCachePath, missingRows);
+    fs.writeFileSync(manifestPath, JSON.stringify(missingManifest));
+    expect(() => validateDataExportDirectory(outDir)).toThrow(/place_cache\[0\]: row identity column source_card_id is null/);
+
+    installAdversarialSqliteIndexDefinitions(dbPath);
+    expect(() => verifySqliteDatabase(dbPath, TABLE_CONTRACTS, DATA_EXPORT_SCHEMA_VERSION)).not.toThrow();
+    const adversarialManifest = exportSqliteData({ dbPath, outDir });
+    const adversarialTables = adversarialManifest.tables as Record<string, { uniqueKeys: Array<{ name: string; predicate: string | null }> }>;
+    expect(adversarialTables.user_market_access.uniqueKeys).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "null \"WHERE\" decoy", predicate: "workspace_id IS NULL" }),
+      expect.objectContaining({ name: "where", predicate: "workspace_id IS NOT NULL" }),
+      expect.objectContaining({ name: "bracket WHERE decoy", predicate: "market_id IS NOT NULL" }),
+      expect.objectContaining({ name: "single 'WHERE' decoy", predicate: "tenant_id IS NOT NULL" }),
+    ]));
+    assertPersistedSqliteIndexStatementRegressions();
+    driftAdversarialSqliteNullIndex(dbPath);
+    expect(() => exportSqliteData({ dbPath, outDir }))
+      .toThrow(/user_market_access: schema-4 row identity lacks exact SQLite unique enforcement/);
+    expect(() => verifySqliteDatabase(dbPath, TABLE_CONTRACTS, DATA_EXPORT_SCHEMA_VERSION))
+      .toThrow(/user_market_access: schema-4 row identity lacks exact SQLite unique enforcement/);
+  }, 10_000);
+
+  it.each([
+    [
+      "a missing nullable-family member",
+      "DROP INDEX g006r_user_market_access_null_identity",
+    ],
+    [
+      "an ordinary four-column nullable index",
+      `DROP INDEX g006r_user_market_access_null_identity;
+       DROP INDEX g006r_user_market_access_workspace_identity;
+       CREATE UNIQUE INDEX invalid_user_market_identity
+         ON user_market_access(tenant_id, workspace_id, user_id, market_id)`,
+    ],
+    [
+      "an expression member",
+      `DROP INDEX g006r_user_market_access_null_identity;
+       CREATE UNIQUE INDEX invalid_user_market_null_identity
+         ON user_market_access(tenant_id, lower(user_id), market_id)
+         WHERE workspace_id IS NULL`,
+    ],
+    [
+      "reordered columns",
+      `DROP INDEX g006r_user_market_access_null_identity;
+       CREATE UNIQUE INDEX invalid_user_market_null_identity
+         ON user_market_access(user_id, tenant_id, market_id)
+         WHERE workspace_id IS NULL`,
+    ],
+    [
+      "predicate drift",
+      `DROP INDEX g006r_user_market_access_null_identity;
+       CREATE UNIQUE INDEX invalid_user_market_null_identity
+         ON user_market_access(tenant_id, user_id, market_id)
+         WHERE workspace_id IS NULL AND tenant_id <> ''`,
+    ],
+  ])("rejects schema-4 SQLite identity enforcement with %s", (_label, mutationSql) => {
+    const { dbPath, outDir } = createSyntheticSqliteDatabase();
+    const db = new Database(dbPath);
+    try {
+      db.exec(mutationSql);
+    } finally {
+      db.close();
+    }
+    expect(() => exportSqliteData({ dbPath, outDir })).toThrow(/user_market_access: schema-4 row identity lacks exact SQLite unique enforcement/);
+    expect(() => verifySqliteDatabase(dbPath, TABLE_CONTRACTS, DATA_EXPORT_SCHEMA_VERSION))
+      .toThrow(/user_market_access: schema-4 row identity lacks exact SQLite unique enforcement/);
   });
 
   it("rejects a missing table and a tampered data file", () => {
@@ -190,17 +381,22 @@ describe("data recovery contract", () => {
     const { dbPath, outDir } = createSyntheticSqliteDatabase();
     exportSqliteData({ dbPath, outDir });
     const validated = validateDataExportDirectory(outDir);
-    const targetSchema = new Map(TABLE_CONTRACTS.map((contract) => {
-      const exported = validated.tables.get(contract.name)!;
-      const columns = new Map([
-        ...exported.columns.map((column: string) => [targetColumn(contract, column), contract.jsonbColumns.includes(column) ? "jsonb" : "text"]),
-        ...contract.excludedColumns.map((column: string) => [column, "text"]),
-        ...contract.jsonbColumns.map((column: string) => [targetColumn(contract, column), "jsonb"]),
-      ]);
-      return [contract.name, { columns, primaryKey: [...contract.primaryKey] }];
-    }));
+    const targetSchema = makeTargetSchema(validated);
 
     expect(() => validateTargetSchema(targetSchema, validated)).not.toThrow();
+    expect(targetSchema.get("user_market_access")).toMatchObject({
+      physicalPrimaryKey: [],
+      uniqueKeys: [{
+        columns: ["tenant_id", "workspace_id", "user_id", "market_id"],
+        nullsNotDistinct: true,
+      }],
+    });
+    targetSchema.get("user_market_access")!.uniqueKeys[0].nullsNotDistinct = false;
+    expect(() => validateTargetSchema(targetSchema, validated)).toThrow(/user_market_access: target lacks the exact unique rowIdentity/);
+    targetSchema.get("user_market_access")!.uniqueKeys[0].nullsNotDistinct = true;
+    targetSchema.get("place_cache")!.uniqueKeys[0].columns = ["tenant_id", "place_id", "source_card_id"];
+    expect(() => validateTargetSchema(targetSchema, validated)).toThrow(/place_cache: target lacks the exact unique rowIdentity/);
+    targetSchema.get("place_cache")!.uniqueKeys[0].columns = ["tenant_id", "source_card_id", "place_id"];
     const settings = validated.tables.get("settings")!;
     const settingsContract = TABLE_CONTRACTS.find(({ name }) => name === "settings")!;
     expect(digestRows(settingsContract, settings.rows)).toBe(digestRows(settingsContract, settings.rows));
@@ -257,6 +453,33 @@ describe("data recovery contract", () => {
       const sql = postgres(databaseUrl!, { ssl: false, prepare: false, max: 1 });
       try {
         await prepareDisposablePostgres(sql);
+        await sql.unsafe(`
+          ALTER TABLE public.user_market_access
+            DROP CONSTRAINT user_market_access_tenant_workspace_user_market_unique;
+          ALTER TABLE public.user_market_access
+            ADD CONSTRAINT user_market_access_tenant_workspace_user_market_unique
+            UNIQUE NULLS NOT DISTINCT (tenant_id, workspace_id, user_id, market_id)
+            DEFERRABLE INITIALLY IMMEDIATE;
+        `);
+        const [deferrableArbiter] = await sql.unsafe(`
+          SELECT constraint_record.condeferrable,
+                 index_record.indimmediate
+            FROM pg_catalog.pg_constraint AS constraint_record
+            JOIN pg_catalog.pg_index AS index_record
+              ON index_record.indexrelid = constraint_record.conindid
+           WHERE constraint_record.conrelid = 'public.user_market_access'::pg_catalog.regclass
+             AND constraint_record.conname = 'user_market_access_tenant_workspace_user_market_unique'
+        `);
+        expect(deferrableArbiter).toEqual({ condeferrable: true, indimmediate: false });
+        await expect(importSupabaseData({ dir: outDir, databaseUrl, restoreHistorical: true }))
+          .rejects.toThrow(/user_market_access: target lacks the exact unique rowIdentity required by schema 4/);
+        await sql.unsafe(`
+          ALTER TABLE public.user_market_access
+            DROP CONSTRAINT user_market_access_tenant_workspace_user_market_unique;
+          ALTER TABLE public.user_market_access
+            ADD CONSTRAINT user_market_access_tenant_workspace_user_market_unique
+            UNIQUE NULLS NOT DISTINCT (tenant_id, workspace_id, user_id, market_id);
+        `);
         await installAdversarialSearchPath(sql);
         const beforeAttempt = await snapshotDisposableTarget(sql, validated);
         const shadowBefore = await snapshotAdversarialShadow(sql);
@@ -291,7 +514,204 @@ describe("data recovery contract", () => {
   );
 });
 
-function createSyntheticSqliteDatabase() {
+function assertLocaleIndependentUniqueKeyOrdering() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nosite-key-order-"));
+  temporaryDirectories.push(root);
+  const db = new Database(path.join(root, "order.db"));
+  try {
+    db.exec(`
+      CREATE TABLE ordering_probe (id TEXT, alternate TEXT);
+      CREATE UNIQUE INDEX "a_key" ON ordering_probe(alternate);
+      CREATE UNIQUE INDEX "Z_key" ON ordering_probe(id);
+    `);
+    const localeCompareDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "localeCompare")!;
+    Object.defineProperty(String.prototype, "localeCompare", {
+      ...localeCompareDescriptor,
+      value: () => { throw new Error("localeCompare must not order recovery metadata"); },
+    });
+    try {
+      expect(loadSqliteUniqueKeyMetadata(db, "ordering_probe").map(({ name }: { name: string }) => name))
+        .toEqual(["Z_key", "a_key"]);
+    } finally {
+      Object.defineProperty(String.prototype, "localeCompare", localeCompareDescriptor);
+    }
+  } finally {
+    db.close();
+  }
+}
+
+function installAdversarialSqliteIndexDefinitions(dbPath: string) {
+  const db = new Database(dbPath);
+  try {
+    db.exec(`
+      DROP INDEX g006r_user_market_access_null_identity;
+      DROP INDEX g006r_user_market_access_workspace_identity;
+      CREATE UNIQUE INDEX "null ""WHERE"" decoy"
+        ON user_market_access(tenant_id, user_id, market_id)
+        /* WHERE block-comment decoy */
+        WHERE workspace_id /* 'WHERE' predicate decoy */ IS NULL;
+      CREATE UNIQUE INDEX \`where\`
+        ON user_market_access(tenant_id, workspace_id, user_id, market_id)
+        -- WHERE line-comment decoy
+        WHERE "workspace_id" IS /* \`WHERE\` predicate decoy */ NOT NULL;
+      CREATE UNIQUE INDEX [bracket WHERE decoy]
+        ON user_market_access(user_id, market_id)
+        WHERE market_id IS NOT NULL;
+      CREATE UNIQUE INDEX 'single ''WHERE'' decoy'
+        ON user_market_access(workspace_id, market_id)
+        WHERE tenant_id IS NOT NULL;
+    `);
+  } finally {
+    db.close();
+  }
+}
+
+function driftAdversarialSqliteNullIndex(dbPath: string) {
+  const db = new Database(dbPath);
+  try {
+    db.exec(`
+      DROP INDEX "null ""WHERE"" decoy";
+      CREATE UNIQUE INDEX "null ""WHERE"" decoy"
+        ON user_market_access(tenant_id, user_id, market_id)
+        /* WHERE block-comment decoy */
+        WHERE workspace_id /* 'WHERE' predicate decoy */ IS NULL
+          AND tenant_id <> '';
+    `);
+  } finally {
+    db.close();
+  }
+}
+
+function assertPersistedSqliteIndexStatementRegressions() {
+  const terminal = createSyntheticSqliteDatabase();
+  appendStoredIndexSql(
+    terminal.dbPath,
+    "g006r_user_market_access_null_identity",
+    "; /* terminal WHERE decoy */ -- WHERE line-comment decoy\n",
+  );
+  expect(readOnlyIntegrityCheck(terminal.dbPath)).toBe("ok");
+  expect(() => verifySqliteDatabase(terminal.dbPath, TABLE_CONTRACTS, DATA_EXPORT_SCHEMA_VERSION)).not.toThrow();
+  const terminalManifest = exportSqliteData(terminal);
+  expect((terminalManifest.tables as Record<string, { uniqueKeys: Array<{ predicate: string | null }> }>)
+    .user_market_access.uniqueKeys).toEqual(expect.arrayContaining([
+      expect.objectContaining({ predicate: "workspace_id IS NULL" }),
+    ]));
+
+  const malformedSuffixes: Array<[string, RegExp]> = [
+    [")", /stored CREATE INDEX has parenthesis underflow/],
+    ["(", /stored CREATE INDEX has unbalanced parentheses/],
+    [" WHERE workspace_id IS NULL", /stored CREATE INDEX must contain exactly one top-level WHERE/],
+    ["; SELECT 1", /stored CREATE INDEX has tokens after its terminal semicolon/],
+  ];
+  for (const [suffix, expectedError] of malformedSuffixes) {
+    const createSql = `CREATE UNIQUE INDEX structural_probe
+      ON user_market_access(tenant_id, user_id, market_id)
+      WHERE workspace_id IS NULL${suffix}`;
+    expect(() => loadSqliteUniqueKeyMetadata(storedIndexMetadataProbe(createSql), "user_market_access"))
+      .toThrow(expectedError);
+  }
+
+  const forged = createPersistedWrongIndexForgery();
+  expect(readOnlyIntegrityCheck(forged.dbPath)).toBe("ok");
+  expect(readOnlyNullWorkspaceGrantCount(forged.dbPath)).toBe(2);
+  expect(() => exportSqliteData(forged)).toThrow(/stored CREATE INDEX has tokens after its terminal semicolon/);
+  expect(() => verifySqliteDatabase(forged.dbPath, TABLE_CONTRACTS, DATA_EXPORT_SCHEMA_VERSION))
+    .toThrow(/stored CREATE INDEX has tokens after its terminal semicolon/);
+}
+
+function createPersistedWrongIndexForgery() {
+  const result = createSyntheticSqliteDatabase();
+  const db = new Database(result.dbPath);
+  const tenantId = "10000000-0000-4000-8000-000000000001";
+  const userId = "90000000-0000-4000-8000-000000000099";
+  const marketId = "market-forged-index";
+  try {
+    db.exec(`
+      DROP INDEX g006r_user_market_access_null_identity;
+      CREATE UNIQUE INDEX g006r_user_market_access_null_identity
+        ON user_market_access(tenant_id, user_id, market_id)
+        WHERE workspace_id IS NOT NULL;
+    `);
+    db.prepare("INSERT INTO location_markets (id, name, country_code, admin_area1) VALUES (?, ?, 'US', ?)")
+      .run(marketId, "Forged Index Market", "CO");
+    const insertGrant = db.prepare(
+      "INSERT INTO user_market_access (tenant_id, workspace_id, user_id, market_id) VALUES (?, NULL, ?, ?)",
+    );
+    insertGrant.run(tenantId, userId, marketId);
+    insertGrant.run(tenantId, userId, marketId);
+  } finally {
+    db.close();
+  }
+  appendStoredIndexSql(
+    result.dbPath,
+    "g006r_user_market_access_null_identity",
+    "; WHERE workspace_id IS NULL",
+  );
+  return result;
+}
+
+function appendStoredIndexSql(dbPath: string, indexName: string, suffix: string) {
+  const db = new Database(dbPath);
+  try {
+    db.unsafeMode(true);
+    db.pragma("writable_schema = ON");
+    const update = db.prepare(`
+      UPDATE sqlite_schema
+      SET sql = sql || ?
+      WHERE type = 'index' AND name = ? AND sql IS NOT NULL
+    `).run(suffix, indexName);
+    if (update.changes !== 1) throw new Error(`expected one stored index definition for ${indexName}`);
+    db.pragma("writable_schema = OFF");
+    db.unsafeMode(false);
+  } finally {
+    db.close();
+  }
+}
+
+function storedIndexMetadataProbe(createSql: string) {
+  return {
+    prepare(statement: string) {
+      if (statement.startsWith("PRAGMA index_list")) {
+        return { all: () => [{ name: "structural_probe", unique: 1, origin: "c", partial: 1 }] };
+      }
+      if (statement === "SELECT * FROM pragma_index_xinfo(?)") {
+        return {
+          all: () => [
+            { seqno: 0, cid: 0, name: "tenant_id", key: 1 },
+            { seqno: 1, cid: 1, name: "user_id", key: 1 },
+            { seqno: 2, cid: 2, name: "market_id", key: 1 },
+          ],
+        };
+      }
+      if (statement.startsWith("SELECT sql FROM sqlite_schema")) return { get: () => ({ sql: createSql }) };
+      throw new Error(`unexpected metadata probe statement: ${statement}`);
+    },
+  } as unknown as Database.Database;
+}
+
+function readOnlyIntegrityCheck(dbPath: string) {
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    return String((db.pragma("integrity_check") as Array<{ integrity_check: string }>)[0]?.integrity_check);
+  } finally {
+    db.close();
+  }
+}
+
+function readOnlyNullWorkspaceGrantCount(dbPath: string) {
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    return Number((db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM user_market_access
+      WHERE workspace_id IS NULL AND market_id = 'market-forged-index'
+    `).get() as { count: number }).count);
+  } finally {
+    db.close();
+  }
+}
+
+function createSyntheticSqliteDatabase({ schema4 = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nosite-data-recovery-"));
   temporaryDirectories.push(root);
   const dbPath = path.join(root, "source.db");
@@ -301,6 +721,7 @@ function createSyntheticSqliteDatabase() {
     db.pragma("foreign_keys = ON");
     db.exec(SCHEMA_SQL);
     prepareSqliteCompatibilityBackfill(sqliteAdapter(db));
+    if (schema4) installSchema4RecoveryFixture(db);
     db.prepare("INSERT INTO tenants (id, slug, name, status) VALUES (?, ?, ?, 'active')").run("10000000-0000-4000-8000-000000000001", "synthetic-tenant", "Synthetic Tenant");
     db.prepare("INSERT INTO workspaces (id, tenant_id, slug, name, status) VALUES (?, ?, ?, ?, 'active')").run("20000000-0000-4000-8000-000000000001", "10000000-0000-4000-8000-000000000001", "synthetic-workspace", "Synthetic Workspace");
     db.prepare("INSERT INTO tenant_memberships (id, tenant_id, auth_identity_id, workspace_id, status) VALUES (?, ?, ?, ?, 'active')").run("30000000-0000-4000-8000-000000000001", "10000000-0000-4000-8000-000000000001", "90000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000001");
@@ -318,12 +739,54 @@ function createSyntheticSqliteDatabase() {
         reviewInsights: { keywords: ["responsive"], painPoints: [], sentimentRatio: 1, totalReviews: 1 },
       },
     });
-    db.prepare("INSERT INTO place_cache (place_id, raw_json) VALUES (?, ?)").run("place-legacy", legacyRawJson);
-    db.prepare("INSERT INTO place_observations (id, place_id, endpoint, sku, raw_json) VALUES (?, ?, ?, ?, ?)").run("observation-legacy", "place-legacy", "places.details", "details", legacyRawJson);
+    const scopedColumns = schema4 ? "tenant_id, " : "";
+    const scopedValues = schema4 ? "?, " : "";
+    const tenantArgs = schema4 ? ["10000000-0000-4000-8000-000000000001"] : [];
+    db.prepare(`INSERT INTO place_cache (${scopedColumns}place_id, raw_json) VALUES (${scopedValues}?, ?)`)
+      .run(...tenantArgs, "place-legacy", legacyRawJson);
+    if (schema4) {
+      db.prepare("INSERT INTO places_master (tenant_id, place_id, name) VALUES (?, ?, ?)")
+        .run(tenantArgs[0], "place-legacy", "Legacy Place");
+    }
+    db.prepare(`INSERT INTO place_observations (id, ${scopedColumns}place_id, endpoint, sku, raw_json) VALUES (?, ${scopedValues}?, ?, ?, ?)`)
+      .run("observation-legacy", ...tenantArgs, "place-legacy", "places.details", "details", legacyRawJson);
   } finally {
     db.close();
   }
   return { dbPath, outDir };
+}
+
+function installSchema4RecoveryFixture(db: Database.Database) {
+  db.exec(`
+    DROP TABLE user_market_access;
+    CREATE TABLE user_market_access (
+      user_id TEXT NOT NULL,
+      market_id TEXT NOT NULL REFERENCES location_markets(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_by_user_id TEXT,
+      tenant_id TEXT,
+      workspace_id TEXT
+    );
+  `);
+  for (const table of ["place_cache", "places_master", "place_observations", "api_usage_events"]) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN source_card_id TEXT NOT NULL DEFAULT 'google_places_legacy'`);
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX g006r_user_market_access_null_identity
+      ON user_market_access(tenant_id, user_id, market_id)
+      WHERE workspace_id IS NULL;
+    CREATE UNIQUE INDEX g006r_user_market_access_workspace_identity
+      ON user_market_access(tenant_id, workspace_id, user_id, market_id)
+      WHERE workspace_id IS NOT NULL;
+    CREATE UNIQUE INDEX g006r_place_cache_identity
+      ON place_cache(tenant_id, source_card_id, place_id);
+    CREATE UNIQUE INDEX g006r_places_master_identity
+      ON places_master(tenant_id, source_card_id, place_id);
+    CREATE UNIQUE INDEX g006r_place_observations_identity
+      ON place_observations(tenant_id, source_card_id, id);
+    CREATE UNIQUE INDEX g006r_api_usage_events_identity
+      ON api_usage_events(tenant_id, source_card_id, id);
+  `);
 }
 
 function createRehearsalSqliteDatabase() {
@@ -346,6 +809,9 @@ function createRehearsalSqliteDatabase() {
     db.exec("DROP TRIGGER IF EXISTS trg_novatrade_tenant_policies_guard");
     db.prepare("UPDATE tenant_policies SET compatibility_policy_hash = ?, ai_processing_enabled = 1, require_knowledge_review = 0 WHERE id = ?").run(policyHash, "50000000-0000-4000-8000-000000000001");
     db.exec(SCHEMA_SQL);
+    insertRow(db, "location_markets", { id: "market-colorado", name: "Colorado", country_code: "US", admin_area1: "CO", created_at: fixedCreatedAt, updated_at: fixedCreatedAt });
+    insertRow(db, "tenant_memberships", { id: "30000000-0000-4000-8000-000000000003", tenant_id: tenantA, auth_identity_id: supportAuth, workspace_id: null, status: "active", created_at: fixedCreatedAt, updated_at: fixedCreatedAt });
+    insertRow(db, "user_market_access", { tenant_id: tenantA, workspace_id: null, user_id: supportAuth, market_id: "market-colorado", created_at: fixedCreatedAt });
     insertRow(db, "tenants", { id: tenantB, slug: "synthetic-tenant-b", name: "Synthetic Tenant B", status: "active", created_at: fixedCreatedAt, updated_at: fixedCreatedAt });
     insertRow(db, "workspaces", { id: workspaceB, tenant_id: tenantB, slug: "synthetic-workspace-b", name: "Synthetic Workspace B", status: "active", created_at: fixedCreatedAt, updated_at: fixedCreatedAt });
     insertRow(db, "tenant_memberships", { id: membershipB, tenant_id: tenantB, auth_identity_id: authB, workspace_id: workspaceB, status: "active", created_at: fixedCreatedAt, updated_at: fixedCreatedAt });
@@ -541,6 +1007,13 @@ async function assertDisposableRestore(sql: ReturnType<typeof postgres>, validat
     { tenant_id: "10000000-0000-4000-8000-000000000001", ai_processing_enabled: true, require_knowledge_review: false },
     { tenant_id: "10000000-0000-4000-8000-000000000002", ai_processing_enabled: false, require_knowledge_review: true },
   ]);
+  const grants = await sql.unsafe("SELECT tenant_id::text, workspace_id::text, user_id, market_id FROM public.user_market_access ORDER BY tenant_id, workspace_id NULLS FIRST, user_id, market_id");
+  expect(grants).toContainEqual({
+    tenant_id: "10000000-0000-4000-8000-000000000001",
+    workspace_id: null,
+    user_id: "90000000-0000-4000-8000-000000000003",
+    market_id: "market-colorado",
+  });
   for (const table of validated.manifest.tableOrder) {
     const rows = await sql.unsafe(`SELECT count(*)::integer AS count FROM public.\"${table}\"`);
     const expectedRows = validated.manifest.tables[table].rows;
@@ -639,6 +1112,32 @@ function sqliteAdapter(db: Database.Database): SqliteAdapter {
       }
     },
   };
+}
+
+function makeTargetSchema(validated: ReturnType<typeof validateDataExportDirectory>) {
+  return new Map(validated.contracts.map((contract) => {
+    const exported = validated.tables.get(contract.name)!;
+    const columns = new Map([
+      ...exported.columns.map((column: string) => [targetColumn(contract, column), contract.jsonbColumns.includes(column) ? "jsonb" : "text"]),
+      ...contract.excludedColumns.map((column: string) => [column, "text"]),
+      ...contract.jsonbColumns.map((column: string) => [targetColumn(contract, column), "jsonb"]),
+    ]);
+    const tableManifest = validated.manifest.tables[contract.name];
+    const physicalPrimaryKey = validated.manifest.schemaVersion === LEGACY_DATA_EXPORT_SCHEMA_VERSION
+      ? [...contract.physicalPrimaryKey]
+      : [...tableManifest.physicalPrimaryKey];
+    const uniqueKeys = sameStringArray(physicalPrimaryKey, contract.rowIdentity)
+      ? []
+      : [{
+        columns: [...contract.rowIdentity],
+        nullsNotDistinct: contract.nullableIdentityColumns.length > 0,
+      }];
+    return [contract.name, { columns, physicalPrimaryKey, uniqueKeys }];
+  }));
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function refreshManifestEntry(manifest: { tables: Record<string, { rows: number; bytes: number; sha256: string }> }, table: string, filePath: string, rows: unknown[]) {

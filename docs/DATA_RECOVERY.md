@@ -1,7 +1,7 @@
 # Data recovery contract
 
 This runbook covers the application-owned SQLite/PostgreSQL data contract. The
-current manifest schema is version **3** and the versioned tenant-integrity
+current manifest schema is version **4** and the versioned tenant-integrity
 contract is **1**. The contract contains exactly **37 tables** in this restore
 order:
 
@@ -34,6 +34,74 @@ created by the operator uses `sourceEngine=postgres` and
 `checksumAlgorithm=novatrade-postgres-jsonb-text-v1`; generic `sha256` labels
 are not accepted as the binding.
 
+## Archive identity and schema versions
+
+Schema 4 separates a row's logical archive identity from its database primary
+key. Every table manifest entry reports `physicalPrimaryKey`, all usable
+column-only `uniqueKeys` (including index name, ordered columns, normalized
+partial predicate, and null-distinct behavior), `rowIdentity`, and
+`nullableIdentityColumns`. Physical key metadata is evidence about the source
+schema; it does not redefine the archive identity. A table without a physical
+primary key reports an empty list; logical-identity validation still applies,
+but no synthetic empty physical key is compared across rows.
+
+Only these logical identities changed from schema 3:
+
+```text
+user_market_access: tenant_id, workspace_id, user_id, market_id
+place_cache: tenant_id, source_card_id, place_id
+places_master: tenant_id, source_card_id, place_id
+place_observations: tenant_id, source_card_id, id
+api_usage_events: tenant_id, source_card_id, id
+```
+
+All other row identities remain the exact schema-3 source identity. Identity
+encoding is type-tagged and canonical. Missing values, empty values, duplicate
+identities, and nulls fail closed. The only nullable identity component is
+`user_market_access.workspace_id`; its null token is distinct from every string,
+including the literal string `"null"`.
+
+Schema-4 export requires every identity column and exact SQLite uniqueness. A
+non-nullable identity uses the matching primary key or a non-partial unique
+index over the ordered identity. SQLite cannot make nulls equal in an ordinary
+four-column unique index, so `user_market_access` requires this exact partial
+index family:
+
+```text
+UNIQUE (tenant_id, user_id, market_id) WHERE workspace_id IS NULL
+UNIQUE (tenant_id, workspace_id, user_id, market_id) WHERE workspace_id IS NOT NULL
+```
+
+Both members must be column-only, in the stated order, with the normalized
+predicate shown. A missing member, expression, reordered column, predicate
+drift, or ordinary four-column index fails both export and read-only recovery
+verification.
+
+Import requires an exact, valid, ready, immediate PostgreSQL primary or unique
+arbiter over the ordered identity. Deferrable unique constraints are rejected
+before import because PostgreSQL `ON CONFLICT` cannot use them as arbiters. The
+nullable `user_market_access` identity additionally requires `NULLS NOT
+DISTINCT`, so null workspace conflicts are deterministic. Import conflict
+targets, preserved-reference matching, and post-import ordering all use
+`rowIdentity`, not the physical primary key.
+
+Schema 3 remains a frozen recovery format for a pre-G-006 SQLite snapshot. It
+keeps its original manifest shape and original physical-primary identities; it
+is selected from `manifest.schemaVersion` and is never interpreted using the
+schema-4 identities. Before applying the G-006 SQLite schema migration, create
+and verify the backup explicitly:
+
+```bash
+npm run db:export:sqlite -- --schema-version 3 --db nosite-leads.db --out data-export-schema3
+npm run db:verify:recovery -- --schema-version 3 --db nosite-leads.db --dir data-export-schema3
+```
+
+A schema-3 restore requires a target with the matching legacy physical primary
+keys. It is not silently upgraded or restored into a schema-4 target. Until the
+G-006 SQLite migration supplies the tenant/source columns and logical unique
+keys, the default schema-4 export intentionally fails and the explicit schema-3
+command above is the recoverable pre-migration snapshot path.
+
 ## Export and exclusions
 
 Run against a stopped or quiesced SQLite writer:
@@ -44,9 +112,10 @@ npm run db:verify:recovery -- --db nosite-leads.db --dir data-export
 npm run db:import:supabase -- --dir data-export --dry-run
 ```
 
-The manifest records the exact columns, primary keys, row counts, file bytes,
-SHA-256 checksums, exclusions, and sanitizations. Encrypted settings columns
-are never exported:
+The schema-4 manifest records the exact columns, physical primary key, usable
+unique-key metadata, logical row identity, row counts, file bytes, SHA-256
+checksums, exclusions, and sanitizations. Encrypted settings columns are never
+exported:
 
 ```text
 settings.openai_api_key_encrypted
@@ -66,7 +135,8 @@ as database metadata. Supabase Storage, Vault, environment variables, and Auth
 credentials/users are outside this archive.
 
 Offline validation is fail-closed for missing or unexpected tables/columns,
-empty or duplicate keys, row/file/checksum mismatch, protected fields,
+empty or duplicate logical identities, invalid physical/unique-key metadata,
+row/file/checksum mismatch, protected fields,
 missing tenant/workspace/policy/membership/grant/job/checkpoint parents,
 cross-tenant composite relationships, unmapped tenant/workspace IDs on scoped
 legacy rows, malformed receipt scope/policy/engine/checksum bindings, and
@@ -164,22 +234,33 @@ database `t029_tenant_foundation_rehearsal` in a stock PostgreSQL16 container.
 It applies the accepted portable T-027 baseline in lexicographic order:
 
 ```text
-applied: 39 migrations
+discovered: 45 migrations
+applied: 43 migrations
 skipped: 2
 20260514161714_supabase_ai_verification_cron.sql  (pg_net/pg_cron/Vault runtime)
 20260514163203_scheduler_v2_sales_ready_pipeline.sql (pg_net/pg_cron/Vault runtime)
 ```
 
-The fixture-only baseline supplies the minimal `worker_runs` shape required by
-the downstream stale-cleanup index and the five scheduler/feedback columns
-normally added by the skipped runtime migration. This is portability
+The fixture-only SQLite source supplies the schema-4 tenant/source columns and
+logical unique keys without changing application SQLite schema. Its
+`user_market_access` table intentionally has no physical primary key and uses
+the exact two-member partial index family above. The focused matrix proves two
+distinct logical grants, including a null workspace, export and validate while
+a duplicate null-workspace identity fails. This is a recovery-contract test
+adapter only; G-006 still owns the actual SQLite schema migration. The fixture
+also includes a matching source-scoped place parent/observation.
+
+The fixture-only PostgreSQL baseline supplies the minimal `worker_runs` shape
+required by the downstream stale-cleanup index and the five scheduler/feedback
+columns normally added by the skipped runtime migration. This is portability
 scaffolding, not an application schema workaround. `pgcrypto`, `pg_net`, and
 `pg_cron` remain absent. The rehearsal uses two tenants, an approved grant
 whose historical approver binding is later revoked, a completed deletion job
 retaining its tombstone, earlier and latest checkpoint events, the T-028
 receipt, exact checksums/counts, policy booleans, JSONB object types, sequence
-proof, trigger cleanup, and negative rollback. It never uses `nosite-leads.db`,
-customer data, Supabase, a remote database, or external writes.
+proof, trigger cleanup, deferrable-arbiter preflight rejection, and negative
+rollback. It never uses `nosite-leads.db`, customer data, Supabase, a remote
+database, or external writes.
 
 Before final validation, reread
 `supabase/migrations/202607270010_add_compatibility_tenant_backfill.sql` so the

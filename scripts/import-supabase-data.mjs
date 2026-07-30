@@ -4,10 +4,11 @@ import { pathToFileURL } from "node:url";
 import postgres from "postgres";
 
 import {
-  TABLE_CONTRACTS,
+  LEGACY_DATA_EXPORT_SCHEMA_VERSION,
   TABLE_NAMES,
   RESTORE_TRIGGER_PLAN,
   authReferenceColumns,
+  encodeRowIdentity,
   historicalRowsRequireRestore,
   parseCliArgs,
   quoteIdent,
@@ -59,7 +60,7 @@ export async function importSupabaseData({ dir: inputDir, databaseUrl, restoreHi
         if (historicalTables.length > 0) {
           await disableRestoreTriggers(transaction, historicalTables, disabledTriggers);
         }
-        for (const contract of TABLE_CONTRACTS) {
+        for (const contract of validated.contracts) {
           const table = validated.tables.get(contract.name);
           if (!table) throw new Error(`Validated export is missing ${contract.name}`);
           if (table.rows.length === 0) continue;
@@ -97,7 +98,8 @@ export async function importSupabaseData({ dir: inputDir, databaseUrl, restoreHi
 }
 
 export function validateTargetSchema(targetSchema, validated) {
-  for (const contract of TABLE_CONTRACTS) {
+  const legacySchema3 = validated.manifest.schemaVersion === LEGACY_DATA_EXPORT_SCHEMA_VERSION;
+  for (const contract of validated.contracts) {
     const target = targetSchema.get(contract.name);
     if (!target) {
       throw new Error(`${contract.name}: target table is missing; reconcile and apply migrations before importing`);
@@ -105,8 +107,12 @@ export function validateTargetSchema(targetSchema, validated) {
     const exported = validated.tables.get(contract.name);
     if (!exported) throw new Error(`${contract.name}: validated export entry is missing`);
 
-    if (!sameStringArray(target.primaryKey, contract.primaryKey)) {
-      throw new Error(`${contract.name}: target primary key does not match the recovery contract`);
+    if (legacySchema3) {
+      if (!sameStringArray(target.physicalPrimaryKey, contract.physicalPrimaryKey)) {
+        throw new Error(`${contract.name}: target physical primary key does not match the schema-3 recovery contract`);
+      }
+    } else if (!targetSupportsRowIdentity(target, contract)) {
+      throw new Error(`${contract.name}: target lacks the exact unique rowIdentity required by schema 4`);
     }
     for (const column of [...exported.columns, ...contract.excludedColumns]) {
       const targetName = targetColumn(contract, column);
@@ -154,29 +160,47 @@ async function loadTargetSchema(sql) {
       ORDER BY table_name, ordinal_position`,
     [...TABLE_NAMES],
   );
-  const primaryKeyRows = await sql.unsafe(
-    `SELECT tc.table_name, kcu.column_name, kcu.ordinal_position
-       FROM information_schema.table_constraints tc
-       JOIN information_schema.key_column_usage kcu
-         ON kcu.constraint_name = tc.constraint_name
-        AND kcu.constraint_schema = tc.constraint_schema
-        AND kcu.table_name = tc.table_name
-      WHERE tc.table_schema = 'public'
-        AND tc.constraint_type = 'PRIMARY KEY'
-        AND tc.table_name IN (${tablePlaceholders})
-      ORDER BY tc.table_name, kcu.ordinal_position`,
+  const uniqueKeyRows = await sql.unsafe(
+    `SELECT table_class.relname AS table_name,
+            index_record.indisprimary,
+            index_record.indnullsnotdistinct,
+            pg_catalog.array_agg(attribute.attname ORDER BY key_column.ordinality) AS columns
+       FROM pg_catalog.pg_index index_record
+       JOIN pg_catalog.pg_class table_class ON table_class.oid = index_record.indrelid
+       JOIN pg_catalog.pg_namespace namespace_record ON namespace_record.oid = table_class.relnamespace
+       CROSS JOIN LATERAL pg_catalog.unnest(index_record.indkey::smallint[]) WITH ORDINALITY AS key_column(attnum, ordinality)
+       JOIN pg_catalog.pg_attribute attribute
+         ON attribute.attrelid = table_class.oid
+        AND attribute.attnum = key_column.attnum
+      WHERE namespace_record.nspname = 'public'
+        AND table_class.relname IN (${tablePlaceholders})
+        AND index_record.indisunique
+        AND index_record.indimmediate
+        AND index_record.indisvalid
+        AND index_record.indisready
+        AND index_record.indpred IS NULL
+        AND index_record.indexprs IS NULL
+        AND key_column.ordinality <= index_record.indnkeyatts
+      GROUP BY table_class.relname, index_record.indexrelid, index_record.indisprimary, index_record.indnullsnotdistinct
+      ORDER BY table_class.relname, index_record.indisprimary DESC, index_record.indexrelid`,
     [...TABLE_NAMES],
   );
 
   const result = new Map();
   for (const row of columnRows) {
-    const table = result.get(row.table_name) ?? { columns: new Map(), primaryKey: [] };
+    const table = result.get(row.table_name) ?? { columns: new Map(), physicalPrimaryKey: [], uniqueKeys: [] };
     table.columns.set(String(row.column_name), { dataType: String(row.data_type), udtName: String(row.udt_name) });
     result.set(String(row.table_name), table);
   }
-  for (const row of primaryKeyRows) {
+  for (const row of uniqueKeyRows) {
     const table = result.get(row.table_name);
-    if (table) table.primaryKey.push(String(row.column_name));
+    if (!table) continue;
+    const key = {
+      columns: row.columns.map(String),
+      nullsNotDistinct: row.indnullsnotdistinct === true,
+    };
+    if (row.indisprimary === true) table.physicalPrimaryKey = key.columns;
+    else table.uniqueKeys.push(key);
   }
   return result;
 }
@@ -232,15 +256,15 @@ async function importTable(sql, contract, columns, rows, targetSchema) {
     }
 
     const destinationColumns = targetColumns(contract, columns);
-    const destinationPrimaryKey = targetColumns(contract, contract.primaryKey);
-    const updateColumns = destinationColumns.filter((column) => !destinationPrimaryKey.includes(column));
+    const destinationRowIdentity = targetColumns(contract, contract.rowIdentity);
+    const updateColumns = destinationColumns.filter((column) => !destinationRowIdentity.includes(column));
     const updateSql = updateColumns.length > 0
       ? `DO UPDATE SET ${updateColumns.map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`).join(", ")}`
       : "DO NOTHING";
     const query = `
       INSERT INTO ${publicIdent(contract.name)} (${destinationColumns.map(quoteIdent).join(", ")})${contract.name === "tenant_deletion_checkpoint_events" ? " OVERRIDING SYSTEM VALUE" : ""}
       VALUES ${tuples.join(", ")}
-      ON CONFLICT (${destinationPrimaryKey.map(quoteIdent).join(", ")}) ${updateSql}
+      ON CONFLICT (${destinationRowIdentity.map(quoteIdent).join(", ")}) ${updateSql}
     `;
     const result = await sql.unsafe(query, values);
     if (Number.isInteger(result.count) && result.count !== batch.length) {
@@ -336,7 +360,7 @@ async function assertRestoreTriggersEnabled(sql) {
 }
 
 async function verifyImportedRows(sql, validated, targetSchema) {
-  for (const contract of TABLE_CONTRACTS) {
+  for (const contract of validated.contracts) {
     const table = validated.tables.get(contract.name);
     const countRows = await sql.unsafe(`SELECT count(*)::integer AS count FROM ${publicIdent(contract.name)}`);
     const targetCount = Number(countRows[0].count);
@@ -350,7 +374,10 @@ async function verifyImportedRows(sql, validated, targetSchema) {
     const columnTypes = targetRows.get(contract.name).columnTypes;
     const archiveDigest = digestRows(contract, table.rows, columnTypes);
     const targetRowsForComparison = PRESERVED_REFERENCE_TABLES.has(contract.name)
-      ? targetRows.get(contract.name).rows.filter((row) => table.rows.some((archiveRow) => contract.primaryKey.every((column) => String(row[column]) === String(archiveRow[column]))))
+      ? targetRows.get(contract.name).rows.filter((row) => {
+        const targetIdentity = encodeRowIdentity(contract, row);
+        return table.rows.some((archiveRow) => encodeRowIdentity(contract, archiveRow) === targetIdentity);
+      })
       : targetRows.get(contract.name).rows;
     const targetDigest = digestRows(contract, targetRowsForComparison, columnTypes);
     if (archiveDigest !== targetDigest) {
@@ -372,12 +399,12 @@ function findSingleRowDigestMismatch(contract, archiveRows, targetRows, columnTy
 
 async function loadTargetRows(sql, validated, targetSchema, onlyTable) {
   const result = new Map();
-  for (const contract of TABLE_CONTRACTS) {
+  for (const contract of validated.contracts) {
     if (onlyTable && contract.name !== onlyTable) continue;
     const table = validated.tables.get(contract.name);
     const columns = table.columns;
     const selected = columns.map((column) => `${quoteIdent(targetColumn(contract, column))} AS ${quoteIdent(column)}`).join(", ");
-    const order = contract.primaryKey.map((column) => quoteIdent(targetColumn(contract, column))).join(", ");
+    const order = contract.rowIdentity.map((column) => quoteIdent(targetColumn(contract, column))).join(", ");
     const rows = await sql.unsafe(`SELECT ${selected} FROM ${publicIdent(contract.name)} ORDER BY ${order}`);
     const columnTypes = new Map(columns.map((column) => [column, targetSchema.get(contract.name).columns.get(targetColumn(contract, column))]));
     result.set(contract.name, { rows, columnTypes });
@@ -437,6 +464,13 @@ function stableCanonicalize(value) {
 
 function sameStringArray(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function targetSupportsRowIdentity(target, contract) {
+  if (contract.nullableIdentityColumns.length === 0
+    && sameStringArray(target.physicalPrimaryKey, contract.rowIdentity)) return true;
+  return target.uniqueKeys.some((key) => sameStringArray(key.columns, contract.rowIdentity)
+    && (contract.nullableIdentityColumns.length === 0 || key.nullsNotDistinct === true));
 }
 
 async function main() {
