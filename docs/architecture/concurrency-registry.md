@@ -1195,3 +1195,8 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   failures, the closed restart-state table, semantic sidecar/artifact tampering,
   and accurate receipt evidence. Source acceptance still requires fresh reviews;
   merged acceptance still requires the complete release check.
+- The existing Terra-medium Platform producer is now executing this one-commit
+  repair delta from `07a2129`. The parent source commit remains immutable and
+  attributable; amendment, rebase, history rewrite, fifth-path expansion,
+  contract waiver, journal transition/checkpoint, startup, merge, external
+  activity and self-acceptance remain forbidden.
