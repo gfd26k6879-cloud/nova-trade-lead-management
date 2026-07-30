@@ -418,3 +418,28 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   local workflow. A bounded G-006C compatibility adapter is therefore under
   Sol reconciliation; tenant defaults, inferred scope, and early startup wiring
   remain forbidden.
+
+## G-006 activation sequencing reconciliation
+
+- G-006A first stages a new final-schema/catalog artifact, version coordinator,
+  focused fault/restart tests, and validation receipt without changing
+  `getDb()` or the frozen legacy `SCHEMA_SQL`. This is a reviewed preparation
+  milestone only: G-006A stays open and cannot unlock downstream cards.
+- G-006B then creates a verified recovery backup, consumes one explicit T-028
+  manifest, provisions/validates the named compatibility identity, backfills
+  nullable scope columns, and records the immutable completed receipt. This is
+  also an internal milestone; G-006B stays open before final constraints.
+- G-006C adds the bounded SQLite compatibility adapter. It selects the exact
+  configured completed receipt or explicit fresh binding, validates the named
+  tenant/workspace relationships, and makes every legacy compatibility writer
+  bind scope explicitly. It is storage scope only and grants no authentication
+  or authorization.
+- After G-006C writer coverage passes, G-006B may atomically rebuild/finalize
+  the seventeen non-audit tables against the staged catalog, and G-006A may wire
+  the coordinator into startup. Parent G-006 closes only after both upgraded
+  and explicitly provisioned fresh fixtures pass the merged release gate.
+- Hardcoded identities, first/only-row selection, active-browser or request
+  tenant inference, SQL defaults/triggers/UDF fill, statement rewriting,
+  nullable final ownership, early startup activation, and treating a receipt as
+  access authority are forbidden. G-009 through G-022 later replace the bounded
+  adapter with ordinary required request/worker scope.
