@@ -886,3 +886,8 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   writer rollback/close, capability lease cleanup, exact-open cleanup, and
   partial file-lease cleanup. Cleanup-only failures remain primary, while
   coexisting cleanup failures are attached in deterministic phase order.
+- The independent immutable preflight is also complete with no file changes or
+  residue. Its closed test contract requires real rollback or close first,
+  followed by a deterministic test-only sentinel: precommit sentinels attach to
+  the original constraint failure, while a cleanup-only postcommit close maps
+  to committed-unverified and leaves the final database replayable.
