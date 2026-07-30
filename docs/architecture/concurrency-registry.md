@@ -18,7 +18,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-006A staged artifact is accepted through `f340752`; G-006A-P source `c7d6e8e` completed producer gates and is under fresh dual review. G-006B B1 remains blocked until independent acceptance. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-006A staged artifact is accepted through `f340752`; G-006A-P source `c7d6e8e` passed fresh dual review and is authorized for Sol's local merge and merged release gate. G-006B B1 remains blocked until that gate passes. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-004A source `c0892a06325b33657e5b73813635fec6a4081012` is accepted through integration `8383fa70a2bac8de71413ae135918bbaedf907b4`; runtime G-004B remains preserved and blocked for co-delivery with G-013/G-014. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
@@ -60,7 +60,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 | `G-006` | Parent split open | Preserve every success criterion through serialized G-006R recovery identity, staged G-006A fresh schema/coordinator, G-006B receipt-bound finalization, and the G-006C compatibility-adapter sequence. Accept only after all children independently pass and startup activation is proven. |
 | `G-006R` | Accepted | Repaired source `3443816` passed fresh domain/security and independent Quality review, merged at `43a2387`, and passed the full merged release gate. |
 | `G-006A` | Accepted staged-artifact milestone; child remains open | Round-6 source `87795a7` passed fresh dual review, merged at `f340752`, and passed the full merged release gate. Startup activation remains blocked until G-006B and G-006C0-C6 complete. |
-| `G-006A-P` | Source `c7d6e8e` awaiting fresh dual review | Recognize only the exact `prepared-legacy` catalog at `user_version=6000` with pinned application, internal, and physical digests and 31/32 target columns. Do not mutate, mint finalizer authority, wire startup, or implement B1. |
+| `G-006A-P` | Fresh dual review passed; ready for local merge | Source `c7d6e8e` has no P0-P3 findings. Sol must merge locally and pass the full merged release gate before acceptance or lock release. |
 | `G-006B` | Blocked on accepted G-006A-P | B1 remains legacy-only: verified backup/schema-3 archive and source binding, four nullable source columns, exact backfill, durable prepared/committed evidence, and restart proof. Final constraints, `location_mode`, and startup remain later work. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
@@ -993,11 +993,22 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   leaves the Platform worktree clean. Producer gates passed focused Vitest
   37/37, typecheck, full ESLint, the 37-table recovery verifier, diff/scope,
   and zero-residue checks. This evidence does not authorize integration.
-- Fresh domain/security and independent catalog/Quality reviews are active
-  against immutable `c7d6e8e`. In addition to the complete prepared-state and
-  regression matrix, domain/security must probe an allowed capability minted
-  before the same database becomes exact prepared state and prove locked
+- Fresh domain/security and independent catalog/Quality reviews ran against
+  immutable `c7d6e8e`. In addition to the complete prepared-state and
+  regression matrix, domain/security probed an allowed capability minted
+  before the same database became exact prepared state and required locked
   rejection before plan execution with deterministic terminal cleanup.
+- Both fresh reviews passed immutable `c7d6e8e` with no P0-P3 findings. Each
+  reran focused Vitest 37/37, typecheck, full lint, the 37-table recovery
+  verifier, exact scope, and zero-residue checks. Independent Quality
+  recomputed all three pins and the 31/32 catalog. Domain/security added a
+  38th transition probe: an allowed capability minted on accepted legacy was
+  followed by an exact same-file prepared transition; locked reclassification
+  rejected before plan execution, wrote no sentinel row, terminalized the
+  capability, and closed the writer and retained root leases.
+- Sol authorizes only the local no-fast-forward merge and merged release gate.
+  B1, lock release, prerequisite acceptance, startup, and external activity
+  remain unauthorized until that gate passes.
 - After that prerequisite is accepted, B1 owns its separate `BEGIN IMMEDIATE`
   pre-finalization transaction and exact intermediate verifier. B1 will retain
   T-028's historical checksum unchanged, use a separately versioned full-row
