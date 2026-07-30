@@ -2207,3 +2207,25 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   reruns focused and mandatory regression/static gates, validates JSONL and
   residue/process state, and records the acceptance boundary. C2B/C and every
   parent remain open.
+
+## G-006C2A accepted storage-operation milestone
+
+- Sol locally merged reviewed source `05d2e2a` with non-fast-forward merge
+  `69ef626`, whose first parent is exact source-review control `dc779a3`. The
+  first-parent delta is exactly the four authorized C2A paths and every merged
+  blob is byte-identical to the independently reviewed source.
+- On merged control, focused C2A passes 36/36; C0 passes 12/12; C1 passes 53/53
+  with its intentional parent-only worker skip; G006A passes 37/37; and
+  PostgreSQL client/session passes 27/27. Typecheck and full-repository ESLint
+  with zero warnings pass. The slow C0 replay remains within its known bound.
+- Final audits pass: 592 pre-acceptance JSONL records parse, protected source
+  mismatches and unexpected C2A call sites are zero, C2A/C0/C1 temp roots are
+  zero, worktree-bound processes are zero, and both integration and producer
+  worktrees are clean. The package-registry preparation and 14 dependency
+  findings remain truthfully recorded without remediation.
+- G006C2A is accepted only as an unwired, fieldless, one-shot SQLite storage-
+  operation narrowing primitive. It proves no current database state and grants
+  no authentication, authorization, worker or provider execution. C2B/C must
+  perform atomic current file/schema/scope/parent/location revalidation, and
+  G009/G010/G013 retain runtime request/worker authority. G006C2, G006C, G006B,
+  G006A and parent G006 remain open; the next serialized packet is G006C2B.
