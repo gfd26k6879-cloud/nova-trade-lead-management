@@ -4,76 +4,88 @@ Date: 2026-07-30
 
 Branch: `codex/nova-platform-tenancy`
 
-Authorized baseline: `99d3227a874bd9ed137924d1aaa981ab0f4e6012`
+Repair parent: `07a21296e5a5fb3758165415ba94355da874a77f`
 
-Authority: local legacy-only B1 preparation; no startup activation, provider use, external activity, restore, deployment, or final schema upgrade.
+Binding integration-control revision: `b55b19a`
+
+Authority: local legacy-only B1 preparation. No startup activation, journal-mode transition, WAL checkpoint, provider use, external activity, restore, deployment, or final schema upgrade is authorized.
 
 ## Result
 
-Implemented a fail-closed, restart-reconcilable B1 operation for the exact accepted T-028 legacy SQLite state. The sole database mutation is one owned `BEGIN IMMEDIATE` transaction which:
+The B1 boundary is closed and restart-reconcilable for the exact accepted T-028 legacy SQLite state. Its only database mutation is one `BEGIN IMMEDIATE` transaction that adds nullable `source_card_id TEXT` to `place_cache`, `places_master`, `place_observations`, and `api_usage_events`, fills only null values with `google_places_legacy`, and sets `user_version` to `6000`.
 
-1. adds nullable `source_card_id TEXT` to `place_cache`, `places_master`, `place_observations`, and `api_usage_events`;
-2. updates only null values to the literal `google_places_legacy`; and
-3. sets `PRAGMA user_version = 6000`.
+The public input is an exact discriminated union:
 
-The operation does not grant provider execution and cannot perform caller-supplied SQL.
+- `execute` accepts the database plus explicit final backup/archive/PREPARED/COMMITTED destinations and all evidence pins;
+- `resume` additionally requires the exact expected PREPARED handoff ID; and
+- `replay` additionally requires the exact expected COMMITTED handoff ID.
 
-## Durable evidence order
+The caller cannot supply the PowerShell executable, helper path/hash, lock path, temporary paths, or archive staging path. Validation accepts only enumerable data properties, recursively validates manifest/seed content, snapshots it with `structuredClone`, derives private resource names, and deep-freezes the internal authority record before the first asynchronous boundary. Results are deep-frozen mode/status unions.
 
-Before mutation, the implementation requires the exact selected database/native identity, T-028 manifest and immutable receipt, accepted G-023 legacy play binding, all-37-table type-tagged preservation digest, health checks, and the accepted legacy catalog/physical state. While an independent writer owns `BEGIN IMMEDIATE`, a separate SQLite online backup is produced and then verified after reopen.
+## Transaction and evidence order
 
-The verified backup is exported as the frozen schema-3 recovery contract: exactly 37 table JSON files plus `manifest.json`, with no extra entries. Every final archive file, the backup, and both sidecars cross the native no-replace publisher. Mutation is not reachable until a strict canonical PREPARED record is reopened and verified.
+The operation acquires a native retained FileId lease and create-new database lock before opening SQLite. For execute/resume mutation, one writer remains in `BEGIN IMMEDIATE` across exact prechecks, the SQLite online backup, archive publication, PREPARED publication, both native FileId rechecks, all four DDL/backfill steps, and `COMMIT` invocation. PREPARED is therefore durable before mutation becomes reachable.
 
-Prepared and committed envelopes have the exact outer keys `format`, `schemaVersion`, `phase`, `handoffId`, `recordSha256`, and `payload`. They use:
+The backup is reopened and checked against the accepted catalog, T-028 receipt, and all-37-table type-tagged preservation evidence. The schema-3 archive is exactly 37 table JSON files plus `manifest.json`. Backup, archive entries, PREPARED, and COMMITTED use a native no-replace/write-through publisher. Owned staging cleanup is handle-identity-bound; caller-selected cleanup targets do not exist in the API.
 
-- format `novatrade.sqlite-g006b-preparation` and schema version `1`;
-- recursive UTF-16 code-unit key ordering and UTF-8 without BOM;
-- safe-integer-only outer numbers, with undefined, nonfinite values, `-0`, proxies, cycles, decorated/sparse arrays, hidden/symbol keys, and lone surrogates rejected;
-- exact domains `NOVATRADE\0G006B\0B1\0PREPARED\0V1\0`, `NOVATRADE\0G006B\0B1\0COMMITTED\0V1\0`, and `NOVATRADE\0G006B\0B1\0BINDING\0V1\0`;
-- `handoffId = "g006b:v1:" + recordSha256`.
+Once `COMMIT` is invoked, the writer is closed before settled main-file bytes are captured. Any commit error is reconciled against a fresh post-state; any unresolved commit, verification, publication, lease-release, or cleanup failure is reported as `G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED` with the original failure and ordered cleanup diagnostics.
 
-The exact G-023 seed and binding contain the accepted decimal `0.55`; therefore each is retained as canonical JSON text plus its exact UTF-8 SHA-256. Replay parses the text, requires canonical byte equality, reruns `parseLegacyWebsiteLeadPlayJson` and `bindLegacyWebsiteLeadPlay`, and compares the full accepted binding.
+Fresh post verification uses one read transaction and a same-connection `data_version` bracket. After that connection closes, the retained settled native lease must report the same main-file FileId and SHA-256 before COMMITTED publication.
 
-## Windows durability boundary
+## DELETE and WAL behavior
 
-`scripts/g006b-windows-durable-publish.ps1` is invoked with static argv via `powershell.exe -NoProfile -NonInteractive -File`. Its embedded C# uses direct Windows APIs for:
+The operation accepts only the already-persisted `delete/normal` or `wal/normal` boundary. It reads `PRAGMA journal_mode`; it never assigns journal mode and never issues `wal_checkpoint`.
 
-- `CreateFileW` with read/write/delete sharing and `FILE_FLAG_OPEN_REPARSE_POINT`;
-- `GetFileInformationByHandleEx` file ID, volume serial, size, and hard-link count;
-- SHA-256 through the retained native handle;
-- `FlushFileBuffers` on files and directories;
-- `MoveFileExW` with `MOVEFILE_WRITE_THROUGH`, without replace or copy flags;
-- `CfGetSyncRootInfoByPath` fail-closed cloud-root detection; and
-- `DeleteFileW` only for an owned, byte-identical sibling temporary during idempotent replay.
+On this pinned Windows host (Node 24.13.1, better-sqlite3 12.9.0, SQLite 3.53.0), last-writer close in WAL mode can checkpoint engine-owned frames, keep FileId, change main-file SHA-256, and remove WAL/SHM. For that reason no pre-close main SHA is claimed as the committed physical identity. The writer closes while the original no-delete FileId lease remains held. A second main-file handle with share-read only then denies write transactions while allowing the read-only verifier.
 
-The publisher accepts only canonical drive-letter paths on a fixed local NTFS volume. It rejects UNC/device/ADS/traversal aliases, reparse/offline/cloud-recall paths, Cloud Files sync roots, non-files, hard links, a non-sibling or wrongly named temporary, an existing nonidentical destination, untrusted parent ownership, and broad Everyone/Authenticated Users/Users/Guests write or delete ACLs. It retains the source handle across the write-through rename, flushes it again after rename, flushes the parent directory, and reopens/revalidates destination and parent identity, size, and SHA-256. A post-move verification failure is reported as published-unverified/recovery-required; the visible destination is never deleted.
+Before the settled lease is acquired, any nonzero WAL is rejected. A read-only verification connection may leave an exact zero-byte WAL and a validated local NTFS/non-cloud SHM; this is accepted, while any nonzero WAL/frame is rejected. The final receipt records the preserved journal mode and the settled post-close main identity. The contract does not claim no engine-owned page movement or fixed pre-close main bytes.
 
-This is a fail-closed Windows/NTFS API durability protocol and restart reconciliation contract. It does not claim cross-file ACID atomicity or prove physical-media survival across every controller or storage-device power-loss mode.
+## Native Windows boundary
 
-## Restart and failure behavior
+The internal helper is invoked only through absolute `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` with `shell: false`. Its repository-relative canonical path and normalized UTF-8/no-BOM SHA-256 are pinned and rechecked around native calls.
 
-- No valid PREPARED record: resume rejects before mutation.
-- Valid PREPARED plus exact accepted legacy state: artifacts are reverified, then the one B1 transaction may run.
-- Valid PREPARED plus exact prepared-legacy state: no mutation is replayed; fresh read-only verification produces COMMITTED.
-- Valid COMMITTED plus exact prepared-legacy state: exact replay result.
-- Any other record/state pairing: recovery-required, with no automatic restore or stale-lock break.
-- A database-specific lock is create-new only. The operation removes only a lock it owns; an existing lock is never broken.
-- Cleanup failures are ordered diagnostics on the primary error. Once the database commit succeeds, later failures are classified committed-unverified/recovery-required.
+The helper uses retained native handles and direct Windows APIs for FileId/volume/attributes/final-path inspection, hashing, `FlushFileBuffers`, no-replace `MoveFileExW(..., MOVEFILE_WRITE_THROUGH)`, handle disposition cleanup, fixed-local-NTFS checks, and Cloud Files rejection. It rejects UNC/device/ADS/traversal aliases, reparse/offline/cloud-recall paths, hard-linked files, noncanonical final paths, broad parent ACLs, untrusted ownership, mismatched destination races, and unexpected native outcomes. Once the no-replace move succeeds, all later uncertainty exits as published-unverified; visible final destinations are not deleted.
+
+The long-lived lease protocol retains the database and parent handles, owns the exact derived lock, supports handle-derived identity rechecks, adds the settled share-read-only handle after writer close, and deletes only its own lock by handle on normal release or protocol failure/EOF.
+
+## Restart rules
+
+- `execute` requires both handoff records absent.
+- `resume` requires PREPARED present, COMMITTED absent, and an exact expected PREPARED handoff ID.
+- `replay` requires both records and both exact expected handoff IDs.
+- Resume with accepted pre-state performs the one mutation; resume with exact prepared post-state does not repeat it.
+- Replay performs no mutation and compares COMMITTED with a newly reopened stable snapshot.
+- Any other sidecar/state pairing is rejected as state/recovery-required. No stale lock is broken and no automatic restore occurs.
+
+## B1 mandatory matrix
+
+| ID | Proof |
+| --- | --- |
+| B1-01 | Exact descriptor-safe public union rejects accessors, proxies, symbols, extra authority, and malformed mode-specific handoff fields. |
+| B1-02 | Caller-supplied helper/temp/lock authority is rejected; a nominated victim file remains byte-exact. |
+| B1-03 | Raw nested input mutated immediately after invocation cannot alter the validated immutable snapshot. |
+| B1-04 | Native create-new lock refusal and missing-PREPARED resume both occur before mutation. |
+| B1-05 | Crash boundary after durable PREPARED leaves the database in exact accepted pre-state. |
+| B1-06 | Wrong expected PREPARED/COMMITTED handoff IDs fail closed. |
+| B1-07 | Precommit writer primary error preserves ordered rollback/cleanup diagnostics. |
+| B1-08 | Post-commit verifier failure is committed-unverified, never an ordinary failure. |
+| B1-09 | Post-commit lease-release/cleanup failure is committed-unverified and retains published evidence. |
+| B1-10 | WAL mode survives B1; source contains no checkpoint pragma or journal-mode assignment. |
+| B1-11 | Post-close stable lease keeps main FileId/SHA exact across read verification, rejects nonzero WAL, and denies write transactions. |
+| B1-12 | Explicit pinned replay returns a deep-frozen `mode: replay`, `status: replayed` result. |
 
 ## Validation evidence
 
-Passed during implementation:
+Current repair validation:
 
-- `npm run typecheck` — exit 0.
-- `npx eslint src/lib/db/sqlite-g006b-pre-finalization.ts src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts` — exit 0, zero warnings.
-- `npx vitest run src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts --reporter=verbose` — final run 3/3 passed in 86.93 seconds.
-- `npx vitest run src/lib/__tests__/compatibility-tenant-backfill.test.ts src/lib/__tests__/compatibility-play.test.ts src/lib/__tests__/data-transfer-contract.test.ts src/lib/__tests__/sqlite-schema-coordinator.test.ts --reporter=verbose` — 76 passed, 2 environment-gated PostgreSQL tests skipped, exit 0.
-- `npm run db:verify:recovery` — exact 37-table recovery contract passed, exit 0.
-- PowerShell parser plus native API static check — passed, exit 0.
-- Native host proof, dedicated worktree: `FlushDirectory` exit 0 on local NTFS.
-- Native host negative proof, OneDrive repository: `CfGetSyncRootInfoByPath` rejection, exit 10.
-- Native inspect proof: exact NTFS volume/file identity, link count 1, byte count, and lowercase SHA-256 returned, exit 0.
+- `npm run typecheck` - exit 0.
+- `npm run lint` - exit 0, zero warnings.
+- `npm run build` - Next.js 16.2.6 production build passed, exit 0.
+- `npm test -- --run src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts` - 5/5 passed in 86.32 seconds after final cleanup hardening.
+- Related compatibility/play/transfer/schema regression set - 76 passed, 2 environment-gated PostgreSQL tests skipped, exit 0.
+- `npm run db:verify:recovery` - exact 37-table recovery contract passed, exit 0.
+- PowerShell parser, `InspectFile`, `FlushDirectory`, lease inspect/settle/release, exact-existing publication, and fresh no-replace publication probes - exit 0 with zero probe residue.
+- Independent WAL host proof - retained writer preserved main/WAL bytes across backup/read close; last-writer close preserved FileId but could change main SHA; mode remained `wal`; trace contained no checkpoint or journal-mode assignment.
+- Independent settled-lease proof - readonly snapshot succeeded with stable main FileId/SHA; write transaction failed `SQLITE_READONLY`; verifier could leave zero-byte WAL plus SHM.
 
-The focused test proves strict canonical grammar, PREPARED-before-mutation, prepared/pre restart, prepared/post restart, COMMITTED replay, backup and sidecar tamper rejection, stale-lock refusal, no-PREPARED/no-mutation refusal, exact prepared catalog pins, source counts, rollback diagnostic precedence, schema-3 archive publication, and zero fixture residue.
-
-Repository/scope closeout: exactly the four authorized new paths, no tracked baseline edits, no test fixture residue, and no external activity.
+The native protocol is a fail-closed Windows/NTFS durability and restart-reconciliation boundary. It does not claim cross-file ACID atomicity or physical-media survival across every controller/storage power-loss mode.

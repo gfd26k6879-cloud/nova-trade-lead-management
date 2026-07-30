@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, join } from "node:path";
 
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import {
   createSqliteG006bTestBoundary,
   inspectSqliteG006bPreFinalizationEvidence,
   runSqliteG006bPreFinalization,
+  type SqliteG006bExecuteInput,
   type SqliteG006bPreFinalizationInput,
 } from "@/lib/db/sqlite-g006b-pre-finalization";
 import { classifySqliteSchemaV1 } from "@/lib/db/sqlite-schema-coordinator";
@@ -36,7 +37,6 @@ const OWNER_AUTH_ID = "20000000-0000-4000-8000-000000000101";
 const RESEARCHER_AUTH_ID = "20000000-0000-4000-8000-000000000102";
 const DISABLED_AUTH_ID = "20000000-0000-4000-8000-000000000103";
 const POLICY_HASH = "b".repeat(64);
-const PUBLISHER = resolve("scripts/g006b-windows-durable-publish.ps1");
 
 const roots: string[] = [];
 afterEach(() => {
@@ -153,11 +153,10 @@ function previewArchiveTree(root: string, databasePath: string, backupPath: stri
   return hash;
 }
 
-function operationInput(fixture: ReturnType<typeof createAcceptedFixture>): SqliteG006bPreFinalizationInput {
+function operationInput(fixture: ReturnType<typeof createAcceptedFixture>): SqliteG006bExecuteInput {
   const seed = createLegacyWebsiteLeadPlaySeed();
   const inspection = inspectSqliteG006bPreFinalizationEvidence({
     databasePath: fixture.databasePath,
-    publisherScriptPath: PUBLISHER,
     manifest: fixture.manifest,
     seed,
   });
@@ -167,17 +166,10 @@ function operationInput(fixture: ReturnType<typeof createAcceptedFixture>): Sqli
     mode: "execute",
     operationId: "synthetic-b1",
     databasePath: fixture.databasePath,
-    lockPath: `${fixture.databasePath}.g006b.lock`,
-    backupTemporaryPath: `${backupPath}.g006b.tmp.synthetic-b1`,
     backupPath,
-    archiveStagingDirectory: join(fixture.root, "archive-staging"),
     archiveDirectory: join(fixture.root, treeHash),
-    preparedTemporaryPath: join(fixture.root, "prepared.json.g006b.tmp.synthetic-b1"),
     preparedPath: join(fixture.root, "prepared.json"),
-    committedTemporaryPath: join(fixture.root, "committed.json.g006b.tmp.synthetic-b1"),
     committedPath: join(fixture.root, "committed.json"),
-    publisherScriptPath: PUBLISHER,
-    publisherSha256: inspection.publisherSha256,
     manifest: fixture.manifest,
     seed,
     expectedSourceIdentity: inspection.sourceIdentity,
@@ -186,6 +178,28 @@ function operationInput(fixture: ReturnType<typeof createAcceptedFixture>): Sqli
     expectedBindingId: inspection.bindingId,
     expectedConfigurationHash: inspection.configurationHash,
     expectedPreservationAggregateSha256: inspection.preservationAggregateSha256,
+  };
+}
+
+function handoffId(path: string): string {
+  return (JSON.parse(readFileSync(path, "utf8")) as { handoffId: string }).handoffId;
+}
+
+function resumeInput(base: SqliteG006bExecuteInput, testBoundary?: ReturnType<typeof createSqliteG006bTestBoundary>): SqliteG006bPreFinalizationInput {
+  return {
+    ...base,
+    mode: "resume",
+    expectedPreparedHandoffId: handoffId(base.preparedPath),
+    ...(testBoundary ? { testBoundary } : {}),
+  };
+}
+
+function replayInput(base: SqliteG006bExecuteInput): SqliteG006bPreFinalizationInput {
+  return {
+    ...base,
+    mode: "replay",
+    expectedPreparedHandoffId: handoffId(base.preparedPath),
+    expectedCommittedHandoffId: handoffId(base.committedPath),
   };
 }
 
@@ -203,49 +217,58 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     expect(() => canonicalizeSqliteG006bRecord({ missing: undefined })).toThrow(/canonical JSON/);
   });
 
-  it("publishes PREPARED before mutation, resumes exact pre-state, and replays exact committed post-state", async () => {
+  it("B1-03/B1-05/B1-06/B1-07/B1-08/B1-09/B1-12 snapshots input and enforces durable handoff recovery", async () => {
     const fixture = createAcceptedFixture();
     const base = operationInput(fixture);
     const interrupted = { ...base, testBoundary: createSqliteG006bTestBoundary("after-prepared-publish") };
-    await expect(runSqliteG006bPreFinalization(interrupted)).rejects.toThrow(/simulated crash after prepared publication/);
+    const originalTenantName = base.manifest.tenantName;
+    const firstRun = runSqliteG006bPreFinalization(interrupted);
+    (base.manifest as { tenantName: string }).tenantName = "caller-mutated-after-validation";
+    await expect(firstRun).rejects.toThrow(/simulated crash after prepared publication/);
+    (base.manifest as { tenantName: string }).tenantName = originalTenantName;
 
     const beforeResume = new Database(fixture.databasePath, { readonly: true });
     expect(classifySqliteSchemaV1(beforeResume).kind).toBe("accepted-legacy");
     beforeResume.close();
 
+    await expect(runSqliteG006bPreFinalization({
+      ...base,
+      mode: "resume",
+      expectedPreparedHandoffId: `g006b:v1:${"0".repeat(64)}`,
+    })).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
+
     const exactPreparedBytes = readFileSync(base.preparedPath);
     writeFileSync(base.preparedPath, Buffer.concat([exactPreparedBytes, Buffer.from("\n")]));
-    await expect(runSqliteG006bPreFinalization({ ...base, mode: "resume" })).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    await expect(runSqliteG006bPreFinalization(resumeInput(base))).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
     writeFileSync(base.preparedPath, exactPreparedBytes);
 
     const exactBackupBytes = readFileSync(base.backupPath);
     writeFileSync(base.backupPath, Buffer.concat([exactBackupBytes, Buffer.from([0])]));
-    await expect(runSqliteG006bPreFinalization({ ...base, mode: "resume" })).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    await expect(runSqliteG006bPreFinalization(resumeInput(base))).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
     writeFileSync(base.backupPath, exactBackupBytes);
 
-    const writerFault = {
-      ...base,
-      mode: "resume" as const,
-      testBoundary: createSqliteG006bTestBoundary("writer-primary-and-rollback-sentinel"),
-    };
+    const writerFault = resumeInput(base, createSqliteG006bTestBoundary("writer-primary-and-rollback-sentinel"));
     await expect(runSqliteG006bPreFinalization(writerFault)).rejects.toMatchObject({
       code: "G006B_EVIDENCE_DRIFT",
       cleanupFailures: ["writer rollback: simulated cleanup sentinel"],
     });
 
-    const committedFault = {
-      ...base,
-      mode: "resume" as const,
-      testBoundary: createSqliteG006bTestBoundary("after-database-commit"),
-    };
+    const committedFault = resumeInput(base, createSqliteG006bTestBoundary("after-database-commit"));
     await expect(runSqliteG006bPreFinalization(committedFault)).rejects.toMatchObject({
       code: "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
       committed: true,
     });
     expect(() => readFileSync(base.committedPath)).toThrow();
 
-    const resumed = await runSqliteG006bPreFinalization({ ...base, mode: "resume" });
-    expect(resumed.status).toBe("committed");
+    await expect(runSqliteG006bPreFinalization(resumeInput(base, createSqliteG006bTestBoundary("post-commit-verifier")))).rejects.toMatchObject({
+      code: "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
+      committed: true,
+    });
+    await expect(runSqliteG006bPreFinalization(resumeInput(base, createSqliteG006bTestBoundary("post-commit-release")))).rejects.toMatchObject({
+      code: "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
+      committed: true,
+      cleanupFailures: [expect.stringMatching(/simulated post-commit release failure/)],
+    });
     const post = new Database(fixture.databasePath, { readonly: true });
     expect(classifySqliteSchemaV1(post)).toMatchObject({ kind: "prepared-legacy", userVersion: 6000, applicationTableCount: 37, targetColumnCount: 31, expectedTargetColumnCount: 32 });
     for (const table of ["place_cache", "places_master", "place_observations", "api_usage_events"]) {
@@ -255,21 +278,66 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     }
     post.close();
 
-    const replay = await runSqliteG006bPreFinalization({ ...base, mode: "resume" });
-    expect(replay).toEqual({ ...resumed, status: "replayed" });
+    const replay = await runSqliteG006bPreFinalization(replayInput(base));
+    expect(replay).toMatchObject({ mode: "replay", status: "replayed" });
+    expect(Object.isFrozen(replay)).toBe(true);
     expect(readFileSync(base.preparedPath)[0]).not.toBe(0xef);
     expect(readFileSync(base.committedPath)[0]).not.toBe(0xef);
   }, 120_000);
 
-  it("rejects resume without a valid PREPARED record before any database mutation", async () => {
+  it("B1-04 rejects a held native lock and resume without PREPARED before mutation", async () => {
     const fixture = createAcceptedFixture();
     const input = operationInput(fixture);
-    writeFileSync(input.lockPath, "operator-owned-stale-lock");
-    await expect(runSqliteG006bPreFinalization({ ...input, mode: "resume" })).rejects.toMatchObject({ code: "G006B_LOCK_HELD" });
-    rmSync(input.lockPath);
-    await expect(runSqliteG006bPreFinalization({ ...input, mode: "resume" })).rejects.toMatchObject({ code: "G006B_PREPARED_RECORD_REQUIRED" });
+    const lockPath = `${input.databasePath}.g006b.lock`;
+    const resume = { ...input, mode: "resume" as const, expectedPreparedHandoffId: `g006b:v1:${"0".repeat(64)}` };
+    writeFileSync(lockPath, "operator-owned-stale-lock");
+    await expect(runSqliteG006bPreFinalization(resume)).rejects.toMatchObject({ code: "G006B_LOCK_HELD" });
+    rmSync(lockPath);
+    await expect(runSqliteG006bPreFinalization(resume)).rejects.toMatchObject({ code: "G006B_PREPARED_RECORD_REQUIRED" });
     const db = new Database(fixture.databasePath, { readonly: true });
     expect(classifySqliteSchemaV1(db).kind).toBe("accepted-legacy");
     db.close();
   });
+
+  it("B1-01/B1-02 rejects caller executable/temp authority and accessor-backed input without deleting a victim", async () => {
+    const fixture = createAcceptedFixture();
+    const base = operationInput(fixture);
+    const victim = join(fixture.root, "victim.txt");
+    writeFileSync(victim, "must-survive");
+    await expect(runSqliteG006bPreFinalization({
+      ...base,
+      publisherScriptPath: victim,
+      backupTemporaryPath: victim,
+    } as unknown as SqliteG006bPreFinalizationInput)).rejects.toMatchObject({ code: "G006B_INPUT_REJECTED" });
+    expect(readFileSync(victim, "utf8")).toBe("must-survive");
+
+    let getterCalls = 0;
+    const accessor = { ...base } as Record<string, unknown>;
+    Object.defineProperty(accessor, "mode", { enumerable: true, get: () => { getterCalls += 1; return "execute"; } });
+    await expect(runSqliteG006bPreFinalization(accessor as unknown as SqliteG006bPreFinalizationInput)).rejects.toMatchObject({ code: "G006B_INPUT_REJECTED" });
+    expect(getterCalls).toBe(0);
+  });
+
+  it("B1-10/B1-11 preserves WAL mode, emits no checkpoint pragma, and records post-close native bytes", async () => {
+    const fixture = createAcceptedFixture();
+    const journal = new Database(fixture.databasePath);
+    expect(String(journal.pragma("journal_mode = WAL", { simple: true })).toLowerCase()).toBe("wal");
+    journal.close();
+    const base = operationInput(fixture);
+    const committed = await runSqliteG006bPreFinalization(base);
+    expect(committed).toMatchObject({ mode: "execute", status: "committed" });
+
+    const reopened = new Database(fixture.databasePath, { readonly: true });
+    expect(String(reopened.pragma("journal_mode", { simple: true })).toLowerCase()).toBe("wal");
+    expect(classifySqliteSchemaV1(reopened).kind).toBe("prepared-legacy");
+    reopened.close();
+    const walPath = `${fixture.databasePath}-wal`;
+    if (existsSync(walPath)) expect(statSync(walPath).size).toBe(0);
+    const committedRecord = JSON.parse(readFileSync(base.committedPath, "utf8")) as { payload: { database: { journalMode: string } } };
+    expect(committedRecord.payload.database.journalMode).toBe("wal");
+    const implementation = readFileSync(join(process.cwd(), "src/lib/db/sqlite-g006b-pre-finalization.ts"), "utf8");
+    const helper = readFileSync(join(process.cwd(), "scripts/g006b-windows-durable-publish.ps1"), "utf8");
+    expect(`${implementation}\n${helper}`).not.toMatch(/wal_checkpoint/iu);
+    expect(`${implementation}\n${helper}`).not.toMatch(/journal_mode\s*=/iu);
+  }, 120_000);
 });

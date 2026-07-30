@@ -8,13 +8,13 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  rmSync,
   statSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createInterface, type Interface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import { isProxy } from "node:util/types";
 
 import Database from "better-sqlite3";
@@ -96,7 +96,12 @@ const MANIFEST_KEYS = Object.freeze([
 ] as const);
 
 type CanonicalValue = null | boolean | string | number | readonly CanonicalValue[] | { readonly [key: string]: CanonicalValue };
-type TestFault = "after-prepared-publish" | "after-database-commit" | "writer-primary-and-rollback-sentinel";
+type TestFault =
+  | "after-prepared-publish"
+  | "after-database-commit"
+  | "writer-primary-and-rollback-sentinel"
+  | "post-commit-verifier"
+  | "post-commit-release";
 
 export interface SqliteG006bTestBoundary {
   readonly __opaqueSqliteG006bTestBoundary: never;
@@ -111,21 +116,13 @@ export interface SqliteG006bNativeIdentity {
   readonly fileSystem: "NTFS";
 }
 
-export interface SqliteG006bPreFinalizationInput {
-  readonly mode: "execute" | "resume";
+interface SqliteG006bPreFinalizationCommonInput {
   readonly operationId: string;
   readonly databasePath: string;
-  readonly lockPath: string;
-  readonly backupTemporaryPath: string;
   readonly backupPath: string;
-  readonly archiveStagingDirectory: string;
   readonly archiveDirectory: string;
-  readonly preparedTemporaryPath: string;
   readonly preparedPath: string;
-  readonly committedTemporaryPath: string;
   readonly committedPath: string;
-  readonly publisherScriptPath: string;
-  readonly publisherSha256: string;
   readonly manifest: CompatibilityBackfillManifest;
   readonly seed: LegacyWebsiteLeadPlaySeed;
   readonly expectedSourceIdentity: SqliteG006bNativeIdentity;
@@ -137,16 +134,36 @@ export interface SqliteG006bPreFinalizationInput {
   readonly testBoundary?: SqliteG006bTestBoundary;
 }
 
-export interface SqliteG006bPreFinalizationResult {
+export interface SqliteG006bExecuteInput extends SqliteG006bPreFinalizationCommonInput {
+  readonly mode: "execute";
+}
+
+export interface SqliteG006bResumeInput extends SqliteG006bPreFinalizationCommonInput {
+  readonly mode: "resume";
+  readonly expectedPreparedHandoffId: string;
+}
+
+export interface SqliteG006bReplayInput extends SqliteG006bPreFinalizationCommonInput {
+  readonly mode: "replay";
+  readonly expectedPreparedHandoffId: string;
+  readonly expectedCommittedHandoffId: string;
+}
+
+export type SqliteG006bPreFinalizationInput =
+  | SqliteG006bExecuteInput
+  | SqliteG006bResumeInput
+  | SqliteG006bReplayInput;
+
+export type SqliteG006bPreFinalizationResult = Readonly<{
+  readonly mode: "execute" | "resume" | "replay";
   readonly status: "committed" | "replayed";
   readonly preparedHandoffId: string;
   readonly committedHandoffId: string;
   readonly bindingHash: string;
-}
+}>;
 
 export interface SqliteG006bInspectionInput {
   readonly databasePath: string;
-  readonly publisherScriptPath: string;
   readonly manifest: CompatibilityBackfillManifest;
   readonly seed: LegacyWebsiteLeadPlaySeed;
 }
@@ -158,7 +175,6 @@ export interface SqliteG006bInspectionResult {
   readonly bindingId: string;
   readonly configurationHash: string;
   readonly preservationAggregateSha256: string;
-  readonly publisherSha256: string;
 }
 
 export type SqliteG006bErrorCode =
@@ -238,6 +254,8 @@ export function createSqliteG006bTestBoundary(fault: TestFault): SqliteG006bTest
     "after-prepared-publish",
     "after-database-commit",
     "writer-primary-and-rollback-sentinel",
+    "post-commit-verifier",
+    "post-commit-release",
   ].includes(fault)) {
     throw new SqliteG006bError("G006B_TEST_BOUNDARY_REJECTED");
   }
@@ -436,53 +454,127 @@ function canonicalDirectoryTarget(value: string, label: string): string {
   return canonicalTarget(value, label, true);
 }
 
-function validateInput(input: SqliteG006bPreFinalizationInput): SqliteG006bPreFinalizationInput {
+const POWERSHELL_EXE = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+const PUBLISHER_SCRIPT_PATH = fileURLToPath(new URL("../../../scripts/g006b-windows-durable-publish.ps1", import.meta.url));
+const PUBLISHER_NORMALIZED_SHA256 = "67aaf286fe3fdc1aa7f5d6f6f27eea032d5e037bd5082e81241aa02ea10be84c";
+
+interface ValidatedInput extends SqliteG006bPreFinalizationCommonInput {
+  readonly mode: "execute" | "resume" | "replay";
+  readonly expectedPreparedHandoffId?: string;
+  readonly expectedCommittedHandoffId?: string;
+  readonly lockPath: string;
+  readonly backupTemporaryPath: string;
+  readonly archiveStagingDirectory: string;
+  readonly preparedTemporaryPath: string;
+  readonly committedTemporaryPath: string;
+  readonly privateToken: string;
+  readonly fault?: TestFault;
+}
+
+function deepFreeze<T>(value: T, seen = new Set<object>()): T {
+  if (!value || typeof value !== "object" || seen.has(value as object)) return value;
+  seen.add(value as object);
+  for (const entry of Object.values(value as Record<string, unknown>)) deepFreeze(entry, seen);
+  return Object.freeze(value);
+}
+
+function jsonSnapshot<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function helperNormalizedSha256(): string {
+  const bytes = readFileSync(PUBLISHER_SCRIPT_PATH);
+  const text = bytes.toString("utf8");
+  if (text.charCodeAt(0) === 0xfeff) fail("G006B_EVIDENCE_DRIFT", "publisher script BOM");
+  return sha256Bytes(text.replaceAll("\r\n", "\n"));
+}
+
+function assertInternalPublisher(): void {
+  if (realpathSync.native(PUBLISHER_SCRIPT_PATH) !== PUBLISHER_SCRIPT_PATH
+      || helperNormalizedSha256() !== PUBLISHER_NORMALIZED_SHA256) {
+    fail("G006B_EVIDENCE_DRIFT", "internal publisher script identity");
+  }
+}
+
+function validateInput(input: SqliteG006bPreFinalizationInput): ValidatedInput {
   if (!input || typeof input !== "object" || isProxy(input)) fail("G006B_INPUT_REJECTED", "input must be a non-proxy record");
   const hasTestBoundary = Object.hasOwn(input as object, "testBoundary");
+  const modeDescriptor = Object.getOwnPropertyDescriptor(input, "mode");
+  if (!modeDescriptor || !("value" in modeDescriptor)) fail("G006B_INPUT_REJECTED", "mode must be a data property");
+  const mode = modeDescriptor.value;
+  const modeKeys = mode === "resume" ? ["expectedPreparedHandoffId"]
+    : mode === "replay" ? ["expectedPreparedHandoffId", "expectedCommittedHandoffId"] : [];
   const keys = [
-    "mode", "operationId", "databasePath", "lockPath", "backupTemporaryPath", "backupPath",
-    "archiveStagingDirectory", "archiveDirectory", "preparedTemporaryPath", "preparedPath",
-    "committedTemporaryPath", "committedPath", "publisherScriptPath", "publisherSha256", "manifest", "seed",
+    "mode", "operationId", "databasePath", "backupPath", "archiveDirectory", "preparedPath", "committedPath", "manifest", "seed",
     "expectedSourceIdentity", "expectedAcceptedPhysicalManifestDigest", "expectedReceiptRowSha256",
     "expectedBindingId", "expectedConfigurationHash", "expectedPreservationAggregateSha256",
+    ...modeKeys,
     ...(hasTestBoundary ? ["testBoundary"] : []),
   ];
   exactKeys(input, keys, "input");
-  if (input.mode !== "execute" && input.mode !== "resume") fail("G006B_INPUT_REJECTED", "mode");
+  if (input.mode !== "execute" && input.mode !== "resume" && input.mode !== "replay") fail("G006B_INPUT_REJECTED", "mode");
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(input.operationId)) fail("G006B_INPUT_REJECTED", "operationId");
   canonicalExistingFile(input.databasePath, "databasePath");
-  canonicalTarget(input.lockPath, "lockPath");
-  if (input.lockPath !== `${input.databasePath}.g006b.lock`) fail("G006B_INPUT_REJECTED", "lockPath is not database-specific");
   for (const [pathValue, label] of [
-    [input.backupTemporaryPath, "backupTemporaryPath"], [input.backupPath, "backupPath"],
-    [input.preparedTemporaryPath, "preparedTemporaryPath"], [input.preparedPath, "preparedPath"],
-    [input.committedTemporaryPath, "committedTemporaryPath"], [input.committedPath, "committedPath"],
+    [input.backupPath, "backupPath"], [input.preparedPath, "preparedPath"], [input.committedPath, "committedPath"],
   ] as const) canonicalTarget(pathValue, label);
-  canonicalDirectoryTarget(input.archiveStagingDirectory, "archiveStagingDirectory");
   canonicalDirectoryTarget(input.archiveDirectory, "archiveDirectory");
-  canonicalExistingFile(input.publisherScriptPath, "publisherScriptPath");
-  for (const [temporary, destination, label] of [
-    [input.backupTemporaryPath, input.backupPath, "backup"],
-    [input.preparedTemporaryPath, input.preparedPath, "prepared"],
-    [input.committedTemporaryPath, input.committedPath, "committed"],
-  ] as const) {
-    if (dirname(temporary) !== dirname(destination)
-        || !basename(temporary).startsWith(`${basename(destination)}.g006b.tmp.`)) {
-      fail("G006B_INPUT_REJECTED", `${label} temp must be destination-bound sibling`);
-    }
+  const authorityPaths = [input.databasePath, input.backupPath, input.archiveDirectory, input.preparedPath, input.committedPath];
+  if (new Set(authorityPaths).size !== authorityPaths.length) fail("G006B_INPUT_REJECTED", "explicit authority paths must be distinct");
+  if (input.mode !== "execute") {
+    if (!/^g006b:v1:[0-9a-f]{64}$/u.test(input.expectedPreparedHandoffId)) fail("G006B_INPUT_REJECTED", "expectedPreparedHandoffId");
+    if (input.mode === "replay" && !/^g006b:v1:[0-9a-f]{64}$/u.test(input.expectedCommittedHandoffId)) fail("G006B_INPUT_REJECTED", "expectedCommittedHandoffId");
   }
-  assertSha(input.publisherSha256, "publisherSha256");
   assertSha(input.expectedAcceptedPhysicalManifestDigest, "expectedAcceptedPhysicalManifestDigest");
   assertSha(input.expectedReceiptRowSha256, "expectedReceiptRowSha256");
   assertSha(input.expectedConfigurationHash, "expectedConfigurationHash");
   assertSha(input.expectedPreservationAggregateSha256, "expectedPreservationAggregateSha256");
   exactKeys(input.expectedSourceIdentity, ["volumeSerialNumber", "fileId", "size", "numberOfLinks", "sha256", "fileSystem"], "expectedSourceIdentity");
   assertNativeIdentity(input.expectedSourceIdentity, "expectedSourceIdentity");
-  if (sha256Bytes(readFileSync(input.publisherScriptPath)) !== input.publisherSha256) fail("G006B_EVIDENCE_DRIFT", "publisher script hash");
   if (hasTestBoundary && (input.testBoundary === undefined || !testBoundaryStates.has(input.testBoundary as object))) fail("G006B_TEST_BOUNDARY_REJECTED", "unrecognized boundary");
   assertManifestRecursiveShape(input.manifest, "manifest");
   validateEmbeddedJsonValue(input.seed, "seed");
-  return input;
+  assertInternalPublisher();
+  const token = sha256Bytes(canonicalizeSqliteG006bRecord({
+    operationId: input.operationId,
+    databasePath: input.databasePath,
+    backupPath: input.backupPath,
+    archiveDirectory: input.archiveDirectory,
+    preparedPath: input.preparedPath,
+    committedPath: input.committedPath,
+  })).slice(0, 24);
+  const snapshot: ValidatedInput = {
+    mode: input.mode,
+    operationId: input.operationId,
+    databasePath: input.databasePath,
+    backupPath: input.backupPath,
+    archiveDirectory: input.archiveDirectory,
+    preparedPath: input.preparedPath,
+    committedPath: input.committedPath,
+    manifest: jsonSnapshot(input.manifest),
+    seed: jsonSnapshot(input.seed),
+    expectedSourceIdentity: jsonSnapshot(input.expectedSourceIdentity),
+    expectedAcceptedPhysicalManifestDigest: input.expectedAcceptedPhysicalManifestDigest,
+    expectedReceiptRowSha256: input.expectedReceiptRowSha256,
+    expectedBindingId: input.expectedBindingId,
+    expectedConfigurationHash: input.expectedConfigurationHash,
+    expectedPreservationAggregateSha256: input.expectedPreservationAggregateSha256,
+    ...(input.mode === "resume" || input.mode === "replay" ? { expectedPreparedHandoffId: input.expectedPreparedHandoffId } : {}),
+    ...(input.mode === "replay" ? { expectedCommittedHandoffId: input.expectedCommittedHandoffId } : {}),
+    lockPath: `${input.databasePath}.g006b.lock`,
+    backupTemporaryPath: `${input.backupPath}.g006b.tmp.${token}`,
+    archiveStagingDirectory: `${input.archiveDirectory}.g006b.staging.${token}`,
+    preparedTemporaryPath: `${input.preparedPath}.g006b.tmp.${token}`,
+    committedTemporaryPath: `${input.committedPath}.g006b.tmp.${token}`,
+    privateToken: token,
+    ...(hasTestBoundary ? { fault: testBoundaryStates.get(input.testBoundary as object)! } : {}),
+  };
+  for (const [pathValue, label] of [
+    [snapshot.lockPath, "derived lock"], [snapshot.backupTemporaryPath, "derived backup temp"],
+    [snapshot.preparedTemporaryPath, "derived prepared temp"], [snapshot.committedTemporaryPath, "derived committed temp"],
+  ] as const) canonicalTarget(pathValue, label);
+  canonicalDirectoryTarget(snapshot.archiveStagingDirectory, "derived archive staging");
+  return deepFreeze(snapshot);
 }
 
 function assertNativeIdentity(value: unknown, label: string): asserts value is SqliteG006bNativeIdentity {
@@ -497,17 +589,17 @@ function sameCanonical(left: unknown, right: unknown): boolean {
   return canonicalizeSqliteG006bRecord(left) === canonicalizeSqliteG006bRecord(right);
 }
 
-type PublisherInput = Pick<SqliteG006bPreFinalizationInput, "publisherScriptPath">;
-
-function nativeCommand(input: PublisherInput, args: readonly string[]): Record<string, unknown> {
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-File", input.publisherScriptPath, ...args], {
+function nativeCommand(args: readonly string[]): Record<string, unknown> {
+  assertInternalPublisher();
+  const result = spawnSync(POWERSHELL_EXE, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PUBLISHER_SCRIPT_PATH, ...args], {
     encoding: "utf8",
     shell: false,
     windowsHide: true,
   });
+  assertInternalPublisher();
   if (result.status !== 0) {
     const detail = `${String(result.stderr).trim()} (exit ${String(result.status)})`;
-    if (result.status === 14) throw new SqliteG006bCommittedUnverifiedError(`native publication visible but unverified: ${detail}`);
+    if (result.status === 16) fail("G006B_LOCK_HELD", detail);
     fail("G006B_PUBLISH_FAILED", detail);
   }
   let parsed: unknown;
@@ -520,8 +612,7 @@ function nativeCommand(input: PublisherInput, args: readonly string[]): Record<s
   return parsed as Record<string, unknown>;
 }
 
-function inspectNative(input: PublisherInput, path: string): SqliteG006bNativeIdentity {
-  const value = nativeCommand(input, ["-Mode", "Inspect", "-Path", path]);
+function identityFromNativeResult(value: Record<string, unknown>, label: string): SqliteG006bNativeIdentity {
   const identity = {
     volumeSerialNumber: value.volumeSerialNumber,
     fileId: value.fileId,
@@ -530,25 +621,54 @@ function inspectNative(input: PublisherInput, path: string): SqliteG006bNativeId
     sha256: value.sha256,
     fileSystem: value.fileSystem,
   };
-  assertNativeIdentity(identity, "native inspection");
+  assertNativeIdentity(identity, label);
   return identity;
 }
 
-function flushDirectory(input: SqliteG006bPreFinalizationInput, path: string): void {
-  nativeCommand(input, ["-Mode", "FlushDirectory", "-Path", path]);
+function inspectNative(path: string): SqliteG006bNativeIdentity {
+  return identityFromNativeResult(nativeCommand(["-Mode", "InspectFile", "-Path", path]), "native inspection");
 }
 
-function publish(input: SqliteG006bPreFinalizationInput, source: string, destination: string): SqliteG006bNativeIdentity {
+function flushDirectory(path: string): void {
+  nativeCommand(["-Mode", "FlushDirectory", "-Path", path]);
+}
+
+function publish(source: string, destination: string): SqliteG006bNativeIdentity {
   const bytes = statSync(source).size;
   if (!Number.isSafeInteger(bytes)) fail("G006B_PUBLISH_FAILED", "unsafe file size");
   const sha = sha256Bytes(readFileSync(source));
-  nativeCommand(input, [
-    "-Mode", "Publish", "-SourcePath", source, "-DestinationPath", destination,
+  const value = nativeCommand([
+    "-Mode", "PublishFile", "-SourcePath", source, "-DestinationPath", destination,
     "-ExpectedSha256", sha, "-ExpectedBytes", String(bytes),
   ]);
-  const identity = inspectNative(input, destination);
+  const identity = identityFromNativeResult(value, "native publication");
   if (identity.size !== bytes || identity.sha256 !== sha) fail("G006B_PUBLISH_FAILED", "post-publication bytes");
   return identity;
+}
+
+interface OwnedIdentity { readonly volumeSerialNumber: string; readonly fileId: string }
+
+function inspectOwned(path: string, kind: "file" | "directory"): OwnedIdentity {
+  const value = nativeCommand(["-Mode", "InspectFile", "-Path", path, "-Kind", kind]);
+  if (typeof value.volumeSerialNumber !== "string" || !/^[0-9]+$/u.test(value.volumeSerialNumber)
+      || typeof value.fileId !== "string" || !/^[0-9a-f]{32}$/u.test(value.fileId)) {
+    fail("G006B_PUBLISH_FAILED", "owned identity inspection shape");
+  }
+  return Object.freeze({ volumeSerialNumber: value.volumeSerialNumber, fileId: value.fileId });
+}
+
+function cleanupOwned(path: string, kind: "file" | "directory", identity: OwnedIdentity): void {
+  nativeCommand([
+    "-Mode", "CleanupOwned", "-Path", path, "-Kind", kind,
+    "-ExpectedVolumeSerialNumber", identity.volumeSerialNumber, "-ExpectedFileId", identity.fileId,
+  ]);
+}
+
+function cleanupOwnedTree(path: string, identity: OwnedIdentity): void {
+  nativeCommand([
+    "-Mode", "CleanupOwnedTree", "-Path", path,
+    "-ExpectedVolumeSerialNumber", identity.volumeSerialNumber, "-ExpectedFileId", identity.fileId,
+  ]);
 }
 
 function writeExclusiveDurable(path: string, bytes: Buffer): void {
@@ -561,34 +681,78 @@ function writeExclusiveDurable(path: string, bytes: Buffer): void {
   }
 }
 
-function createLock(input: SqliteG006bPreFinalizationInput): number {
-  let descriptor: number;
-  try {
-    descriptor = openSync(input.lockPath, "wx", 0o600);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") fail("G006B_LOCK_HELD", input.lockPath);
-    throw error;
-  }
-  try {
-    const bytes = Buffer.from(canonicalizeSqliteG006bRecord({
-      format: SQLITE_G006B_RECORD_FORMAT,
-      operationId: input.operationId,
-    }), "utf8");
-    writeFileSync(descriptor, bytes);
-    fsyncSync(descriptor);
-    flushDirectory(input, dirname(input.lockPath));
-    return descriptor;
-  } catch (error) {
-    closeSync(descriptor);
-    try { unlinkSync(input.lockPath); } catch { /* surfaced by the primary create failure */ }
-    throw error;
-  }
-}
+class NativeDatabaseLease {
+  readonly #child: ChildProcessWithoutNullStreams;
+  readonly #lines: AsyncIterator<string>;
+  readonly #reader: Interface;
+  #stderr = "";
 
-function closeOwnedLock(input: SqliteG006bPreFinalizationInput, descriptor: number, cleanup: string[]): void {
-  try { closeSync(descriptor); } catch (error) { cleanup.push(`lock close: ${message(error)}`); }
-  try { unlinkSync(input.lockPath); } catch (error) { cleanup.push(`lock unlink: ${message(error)}`); }
-  try { flushDirectory(input, dirname(input.lockPath)); } catch (error) { cleanup.push(`lock parent flush: ${message(error)}`); }
+  private constructor(child: ChildProcessWithoutNullStreams) {
+    this.#child = child;
+    this.#reader = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    this.#lines = this.#reader[Symbol.asyncIterator]();
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => { this.#stderr += chunk; });
+  }
+
+  public static async acquire(input: ValidatedInput): Promise<{ lease: NativeDatabaseLease; identity: SqliteG006bNativeIdentity }> {
+    assertInternalPublisher();
+    const child = spawn(POWERSHELL_EXE, [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PUBLISHER_SCRIPT_PATH,
+      "-Mode", "LeaseDatabase", "-Path", input.databasePath, "-LockPath", input.lockPath,
+    ], { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    const lease = new NativeDatabaseLease(child);
+    try {
+      return { lease, identity: await lease.#next("lease-ready") };
+    } catch (error) {
+      child.kill();
+      throw error;
+    }
+  }
+
+  async #next(expectedStatus: string): Promise<SqliteG006bNativeIdentity> {
+    const line = await this.#lines.next();
+    if (line.done) {
+      const detail = this.#stderr.trim() || "native lease ended without response";
+      if (detail.includes("database lock held")) fail("G006B_LOCK_HELD", detail);
+      fail("G006B_PUBLISH_FAILED", detail);
+    }
+    let parsed: unknown;
+    try { parsed = JSON.parse(line.value); } catch { return fail("G006B_PUBLISH_FAILED", "native lease returned invalid JSON"); }
+    exactKeys(parsed, ["status", "volumeSerialNumber", "fileId", "size", "numberOfLinks", "attributes", "finalPath", "sha256", "fileSystem"], "native lease response");
+    if (parsed.status !== expectedStatus) fail("G006B_PUBLISH_FAILED", `native lease status ${String(parsed.status)}`);
+    const identity = {
+      volumeSerialNumber: parsed.volumeSerialNumber,
+      fileId: parsed.fileId,
+      size: parsed.size,
+      numberOfLinks: parsed.numberOfLinks,
+      sha256: parsed.sha256,
+      fileSystem: parsed.fileSystem,
+    };
+    assertNativeIdentity(identity, "native lease identity");
+    return identity;
+  }
+
+  private async command(command: "inspect" | "settle", expected: string): Promise<SqliteG006bNativeIdentity> {
+    assertInternalPublisher();
+    if (!this.#child.stdin.write(`${command}\n`, "utf8")) await new Promise<void>((resolveWrite) => this.#child.stdin.once("drain", resolveWrite));
+    const result = await this.#next(expected);
+    assertInternalPublisher();
+    return result;
+  }
+
+  public inspect(): Promise<SqliteG006bNativeIdentity> { return this.command("inspect", "lease-inspected"); }
+  public settle(): Promise<SqliteG006bNativeIdentity> { return this.command("settle", "lease-settled"); }
+
+  public async release(): Promise<SqliteG006bNativeIdentity> {
+    this.#child.stdin.end("release\n", "utf8");
+    const identity = await this.#next("lease-released");
+    const exitCode = this.#child.exitCode ?? await new Promise<number | null>((resolveExit) => this.#child.once("exit", resolveExit));
+    this.#reader.close();
+    assertInternalPublisher();
+    if (exitCode !== 0) fail("G006B_PUBLISH_FAILED", this.#stderr.trim() || `native lease exit ${String(exitCode)}`);
+    return identity;
+  }
 }
 
 function canonicalRow(columns: readonly string[], row: Record<string, unknown>): string {
@@ -702,7 +866,7 @@ function readonlyBackfillAdapter(db: Database.Database): SqliteBackfillDb {
   return adapter;
 }
 
-function verifyT028Pre(db: Database.Database, input: SqliteG006bPreFinalizationInput): { receipt: CompatibilityBackfillReceipt; receiptRowSha256: string } {
+function verifyT028Pre(db: Database.Database, input: ValidatedInput): { receipt: CompatibilityBackfillReceipt; receiptRowSha256: string } {
   const manifestHash = compatibilityManifestHash(input.manifest);
   const expectedId = `compatibility-backfill-${manifestHash.slice(0, 24)}`;
   const row = receiptRow(db, input.manifest);
@@ -715,7 +879,7 @@ function verifyT028Pre(db: Database.Database, input: SqliteG006bPreFinalizationI
   return { receipt, receiptRowSha256: rowHash };
 }
 
-function g023Evidence(input: SqliteG006bPreFinalizationInput, receipt: CompatibilityBackfillReceipt): G023Evidence {
+function g023Evidence(input: Pick<ValidatedInput, "manifest" | "seed" | "expectedBindingId" | "expectedConfigurationHash">, receipt: CompatibilityBackfillReceipt): G023Evidence {
   const seedCanonicalJson = canonicalizeCompatibilityConfiguration(input.seed);
   const parsedSeed = parseLegacyWebsiteLeadPlayJson(seedCanonicalJson);
   if (!parsedSeed.ok) fail("G006B_EVIDENCE_DRIFT", `G023 seed ${parsedSeed.reasonCode}`);
@@ -751,7 +915,7 @@ function g023Evidence(input: SqliteG006bPreFinalizationInput, receipt: Compatibi
   });
 }
 
-function verifyG023Stored(input: SqliteG006bPreFinalizationInput, value: unknown, receipt: CompatibilityBackfillReceipt): G023Evidence {
+function verifyG023Stored(input: ValidatedInput, value: unknown, receipt: CompatibilityBackfillReceipt): G023Evidence {
   exactKeys(value, ["playId", "playVersion", "configurationHash", "bindingId", "seedCanonicalJson", "seedSha256", "bindingCanonicalJson", "bindingSha256"], "g023");
   const stored = value as unknown as G023Evidence;
   if (typeof stored.seedCanonicalJson !== "string" || typeof stored.bindingCanonicalJson !== "string") fail("G006B_EVIDENCE_DRIFT", "G023 canonical JSON text");
@@ -792,7 +956,7 @@ function assertPreparedState(db: Database.Database): ReturnType<typeof classifyS
   return state;
 }
 
-function assertDatabaseConnectionBoundary(db: Database.Database): void {
+function assertDatabaseConnectionBoundary(db: Database.Database): "delete" | "wal" {
   const databases = db.pragma("database_list") as Array<{ name: string; file: string }>;
   if (databases.some((entry) => entry.name !== "main" && entry.name !== "temp")
       || databases.filter((entry) => entry.name === "main").length !== 1
@@ -803,7 +967,8 @@ function assertDatabaseConnectionBoundary(db: Database.Database): void {
   if (Number(tempObjects.count) !== 0 || Number(db.pragma("writable_schema", { simple: true })) !== 0) fail("G006B_STATE_REJECTED", "temp or writable_schema boundary");
   const journalMode = String(db.pragma("journal_mode", { simple: true })).toLowerCase();
   const lockingMode = String(db.pragma("locking_mode", { simple: true })).toLowerCase();
-  if (journalMode !== "delete" || lockingMode !== "normal") fail("G006B_STATE_REJECTED", `journal/locking mode ${journalMode}/${lockingMode}`);
+  if ((journalMode !== "delete" && journalMode !== "wal") || lockingMode !== "normal") fail("G006B_STATE_REJECTED", `journal/locking mode ${journalMode}/${lockingMode}`);
+  return journalMode;
 }
 
 function sourceCounts(db: Database.Database): readonly Record<string, CanonicalValue>[] {
@@ -825,7 +990,7 @@ function healthEvidence(db: Database.Database): Record<string, CanonicalValue> {
   return { integrityCheck: integrity.length === 1 ? integrity[0]!.integrity_check : "invalid", foreignKeyFailureCount: foreignKeys.length, orphanCount: relationshipOrphanCount(db) };
 }
 
-function databaseEvidence(path: string, native: SqliteG006bNativeIdentity, state: ReturnType<typeof classifySqliteSchemaV1>, physical: string, preservation: PreservationEvidence, manifest: CompatibilityBackfillManifest, dataVersion: number): Record<string, CanonicalValue> {
+function databaseEvidence(path: string, native: SqliteG006bNativeIdentity, state: ReturnType<typeof classifySqliteSchemaV1>, physical: string, preservation: PreservationEvidence, manifest: CompatibilityBackfillManifest, dataVersion: number, journalMode: "delete" | "wal"): Record<string, CanonicalValue> {
   return {
     path,
     native: native as unknown as Record<string, CanonicalValue>,
@@ -839,6 +1004,7 @@ function databaseEvidence(path: string, native: SqliteG006bNativeIdentity, state
     tableIdentities: preservation.tables as unknown as readonly CanonicalValue[],
     sourceSnapshotFingerprint: manifest.sourceSnapshotFingerprint,
     dataVersion,
+    journalMode,
   };
 }
 
@@ -880,13 +1046,13 @@ function createEnvelope(phase: "prepared" | "committed", payload: Record<string,
   });
 }
 
-function publishEnvelope(input: SqliteG006bPreFinalizationInput, phase: "prepared" | "committed", payload: Record<string, unknown>): RecordEnvelope {
+function publishEnvelope(input: ValidatedInput, phase: "prepared" | "committed", payload: Record<string, unknown>): RecordEnvelope {
   const envelope = createEnvelope(phase, payload);
   const temporary = phase === "prepared" ? input.preparedTemporaryPath : input.committedTemporaryPath;
   const destination = phase === "prepared" ? input.preparedPath : input.committedPath;
   if (existsSync(temporary)) fail("G006B_PUBLISH_FAILED", `${phase} temp already exists`);
   writeExclusiveDurable(temporary, Buffer.from(canonicalizeSqliteG006bRecord(envelope), "utf8"));
-  publish(input, temporary, destination);
+  publish(temporary, destination);
   return readEnvelope(destination, phase);
 }
 
@@ -928,7 +1094,7 @@ export function computeSqliteG006bArchiveTreeHash(directory: string): string {
   return archiveTreeHash(archiveEntries(directory));
 }
 
-function verifyArchive(input: SqliteG006bPreFinalizationInput, archive: Record<string, unknown>): void {
+function verifyArchive(input: ValidatedInput, archive: Record<string, unknown>): void {
   exactKeys(archive, ["path", "schemaVersion", "manifestSha256", "entries", "treeHash"], "archive evidence");
   if (archive.path !== input.archiveDirectory || archive.schemaVersion !== 3) fail("G006B_EVIDENCE_DRIFT", "archive path/schema");
   validateDataExportDirectory(input.archiveDirectory);
@@ -938,41 +1104,40 @@ function verifyArchive(input: SqliteG006bPreFinalizationInput, archive: Record<s
   if (treeHash !== archive.treeHash || basename(input.archiveDirectory) !== treeHash || manifestEntry?.sha256 !== archive.manifestSha256 || !sameCanonical(entries, archive.entries)) fail("G006B_EVIDENCE_DRIFT", "archive identity");
 }
 
-async function makeBackupAndArchive(input: SqliteG006bPreFinalizationInput, prePreservation: PreservationEvidence): Promise<{ backup: Record<string, CanonicalValue>; archive: Record<string, CanonicalValue> }> {
+async function makeBackupAndArchive(
+  input: ValidatedInput,
+  prePreservation: PreservationEvidence,
+  writer: Database.Database,
+  lease: NativeDatabaseLease,
+): Promise<{ backup: Record<string, CanonicalValue>; archive: Record<string, CanonicalValue> }> {
   if (existsSync(input.backupTemporaryPath) || existsSync(input.archiveStagingDirectory)) fail("G006B_PUBLISH_FAILED", "backup/archive staging residue exists");
-  let writer: Database.Database | undefined;
   let snapshot: Database.Database | undefined;
   try {
-    writer = new Database(input.databasePath, { fileMustExist: true });
-    writer.pragma("foreign_keys = ON");
-    writer.exec("BEGIN IMMEDIATE");
     assertAcceptedState(writer, input.expectedAcceptedPhysicalManifestDigest);
-    const lockedNative = inspectNative(input, input.databasePath);
+    const lockedNative = await lease.inspect();
     if (lockedNative.fileId !== input.expectedSourceIdentity.fileId || lockedNative.volumeSerialNumber !== input.expectedSourceIdentity.volumeSerialNumber) fail("G006B_EVIDENCE_DRIFT", "source file identity under backup lock");
     snapshot = new Database(input.databasePath, { readonly: true, fileMustExist: true });
     await snapshot.backup(input.backupTemporaryPath);
     snapshot.close();
     snapshot = undefined;
-    writer.exec("ROLLBACK");
-    writer.close();
-    writer = undefined;
   } catch (error) {
     if (snapshot?.open) snapshot.close();
-    if (writer?.open) {
-      if (writer.inTransaction) writer.exec("ROLLBACK");
-      writer.close();
-    }
     throw error;
   }
-  const backupIdentity = publish(input, input.backupTemporaryPath, input.backupPath);
+  const backupIdentity = publish(input.backupTemporaryPath, input.backupPath);
   const backupDb = new Database(input.backupPath, { readonly: true, fileMustExist: true });
   backupDb.pragma("foreign_keys = ON");
+  let stagingIdentity: OwnedIdentity | undefined;
+  let primary: unknown;
+  let output: { backup: Record<string, CanonicalValue>; archive: Record<string, CanonicalValue> } | undefined;
+  const cleanup: string[] = [];
   try {
     const state = assertAcceptedState(backupDb, input.expectedAcceptedPhysicalManifestDigest);
     const preservation = capturePreservation(backupDb);
     if (!samePreservation(prePreservation, preservation)) fail("G006B_EVIDENCE_DRIFT", "backup rowsets differ from source");
     verifyT028Pre(backupDb, input);
     mkdirSync(input.archiveStagingDirectory);
+    stagingIdentity = inspectOwned(input.archiveStagingDirectory, "directory");
     exportSqliteData({ dbPath: input.backupPath, outDir: input.archiveStagingDirectory, schemaVersion: LEGACY_DATA_EXPORT_SCHEMA_VERSION });
     const manifestPath = join(input.archiveStagingDirectory, "manifest.json");
     const exportManifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
@@ -984,18 +1149,18 @@ async function makeBackupAndArchive(input: SqliteG006bPreFinalizationInput, preP
     if (basename(input.archiveDirectory) !== treeHash) fail("G006B_INPUT_REJECTED", "archiveDirectory must end in exact content tree hash");
     if (!existsSync(input.archiveDirectory)) {
       mkdirSync(input.archiveDirectory);
-      flushDirectory(input, dirname(input.archiveDirectory));
+      flushDirectory(dirname(input.archiveDirectory));
     }
     const existing = readdirSync(input.archiveDirectory);
     if (existing.some((name) => !stagedEntries.some((entry) => entry.name === name))) fail("G006B_EVIDENCE_DRIFT", "unexpected existing archive entry");
     for (const entry of stagedEntries) {
       const destination = join(input.archiveDirectory, String(entry.name));
-      const temporary = `${destination}.g006b.tmp.${input.operationId}`;
+      const temporary = `${destination}.g006b.tmp.${input.privateToken}`;
       if (!existsSync(destination)) writeExclusiveDurable(temporary, readFileSync(join(input.archiveStagingDirectory, String(entry.name))));
       else if (!existsSync(temporary)) writeExclusiveDurable(temporary, readFileSync(join(input.archiveStagingDirectory, String(entry.name))));
-      publish(input, temporary, destination);
+      publish(temporary, destination);
     }
-    flushDirectory(input, input.archiveDirectory);
+    flushDirectory(input.archiveDirectory);
     validateDataExportDirectory(input.archiveDirectory);
     const finalEntries = archiveEntries(input.archiveDirectory);
     if (!sameCanonical(finalEntries, stagedEntries)) fail("G006B_EVIDENCE_DRIFT", "published archive differs from staging");
@@ -1016,17 +1181,26 @@ async function makeBackupAndArchive(input: SqliteG006bPreFinalizationInput, preP
       entries: finalEntries,
       treeHash,
     };
-    return { backup, archive };
+    output = { backup, archive };
+  } catch (error) {
+    primary = error;
   } finally {
-    backupDb.close();
-    if (existsSync(input.archiveStagingDirectory)) rmSync(input.archiveStagingDirectory, { recursive: true });
+    try { backupDb.close(); } catch (error) { cleanup.push(`backup close: ${message(error)}`); }
+    if (stagingIdentity && existsSync(input.archiveStagingDirectory)) {
+      try { cleanupOwnedTree(input.archiveStagingDirectory, stagingIdentity); }
+      catch (error) { cleanup.push(`archive staging cleanup: ${message(error)}`); }
+    }
   }
+  if (primary instanceof SqliteG006bError) throw new SqliteG006bError(primary.code, primary.message, [...primary.cleanupFailures, ...cleanup]);
+  if (primary !== undefined) throw new SqliteG006bError("G006B_PUBLISH_FAILED", message(primary), cleanup);
+  if (cleanup.length !== 0) throw new SqliteG006bError("G006B_PUBLISH_FAILED", "artifact cleanup failed", cleanup);
+  return output!;
 }
 
-function verifyBackup(input: SqliteG006bPreFinalizationInput, value: Record<string, unknown>, preservation: PreservationEvidence): void {
+function verifyBackup(input: ValidatedInput, value: Record<string, unknown>, preservation: PreservationEvidence): void {
   exactKeys(value, ["path", "native", "userVersion", "catalogDigest", "internalCatalogDigest", "physicalManifestDigest", "rowsets"], "backup evidence");
   if (value.path !== input.backupPath) fail("G006B_EVIDENCE_DRIFT", "backup path");
-  const native = inspectNative(input, input.backupPath);
+  const native = inspectNative(input.backupPath);
   if (!sameCanonical(native, value.native)) fail("G006B_EVIDENCE_DRIFT", "backup native identity");
   const db = new Database(input.backupPath, { readonly: true, fileMustExist: true });
   db.pragma("foreign_keys = ON");
@@ -1038,7 +1212,7 @@ function verifyBackup(input: SqliteG006bPreFinalizationInput, value: Record<stri
   } finally { db.close(); }
 }
 
-function verifyPostT028(db: Database.Database, input: SqliteG006bPreFinalizationInput, receipt: CompatibilityBackfillReceipt): void {
+function verifyPostT028(db: Database.Database, input: ValidatedInput, receipt: CompatibilityBackfillReceipt): void {
   const row = receiptRow(db, input.manifest);
   if (receiptRowSha256(row) !== input.expectedReceiptRowSha256 || !sameCanonical(parseReceipt(row), receipt)) fail("G006B_EVIDENCE_DRIFT", "post T028 receipt row");
   for (const table of COMPATIBILITY_TENANT_TABLES) {
@@ -1057,10 +1231,31 @@ function verifyPostT028(db: Database.Database, input: SqliteG006bPreFinalization
   }
 }
 
-function verifyPostDatabase(input: SqliteG006bPreFinalizationInput, preparedPayload: Record<string, unknown>, receipt: CompatibilityBackfillReceipt): { database: Record<string, CanonicalValue>; verification: Record<string, unknown> } {
+function assertNoWalFrames(databasePath: string): void {
+  const walPath = `${databasePath}-wal`;
+  if (existsSync(walPath)) {
+    const size = statSync(walPath).size;
+    inspectNative(walPath);
+    if (size !== 0) fail("G006B_RECOVERY_REQUIRED", `nonzero WAL remains (${String(size)} bytes)`);
+  }
+  const shmPath = `${databasePath}-shm`;
+  if (existsSync(shmPath)) inspectNative(shmPath);
+}
+
+async function verifyPostDatabase(
+  input: ValidatedInput,
+  preparedPayload: Record<string, unknown>,
+  receipt: CompatibilityBackfillReceipt,
+  lease: NativeDatabaseLease,
+  settledNative: SqliteG006bNativeIdentity,
+): Promise<{ database: Record<string, CanonicalValue>; verification: Record<string, unknown> }> {
   const db = new Database(input.databasePath, { readonly: true, fileMustExist: true });
   db.pragma("foreign_keys = ON");
+  let result: { state: ReturnType<typeof classifySqliteSchemaV1>; preservation: PreservationEvidence; counts: readonly Record<string, CanonicalValue>[]; health: Record<string, CanonicalValue>; storedG023: G023Evidence; dataVersion: number; journalMode: "delete" | "wal" };
   try {
+    db.exec("BEGIN");
+    const dataVersion = Number(db.pragma("data_version", { simple: true }));
+    const journalMode = assertDatabaseConnectionBoundary(db);
     const state = assertPreparedState(db);
     const baseline = preparedPayload.preservation as unknown as PreservationEvidence;
     const preservation = capturePreservation(db, baseline);
@@ -1070,78 +1265,65 @@ function verifyPostDatabase(input: SqliteG006bPreFinalizationInput, preparedPayl
     verifyPostT028(db, input, receipt);
     const storedG023 = verifyG023Stored(input, preparedPayload.g023, receipt);
     const health = healthEvidence(db);
-    const native = inspectNative(input, input.databasePath);
-    const expectedNative = (preparedPayload.database as Record<string, unknown>).native as SqliteG006bNativeIdentity;
-    if (native.fileId !== expectedNative.fileId || native.volumeSerialNumber !== expectedNative.volumeSerialNumber) fail("G006B_EVIDENCE_DRIFT", "post database file identity");
-    const database = databaseEvidence(input.databasePath, native, state, SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST, preservation, input.manifest, Number(db.pragma("data_version", { simple: true })));
-    const verification = {
-      state: expectedPostState(preservation, counts, health),
-      preservation,
-      audit: preservation.audit,
-      receiptRowSha256: input.expectedReceiptRowSha256,
-      manifestHash: compatibilityManifestHash(input.manifest),
-      foundation: { tenantId: input.manifest.tenantId, workspaceId: input.manifest.workspaceId, ownerAuthIdentityId: input.manifest.ownerAuthIdentityId, policyId: input.manifest.policyId, policyVersion: input.manifest.policyVersion, status: "exact" },
-      source: { cardId: SQLITE_G006B_SOURCE_CARD_ID, counts },
-      g023: { bindingId: storedG023.bindingId, configurationHash: storedG023.configurationHash, bindingSha256: storedG023.bindingSha256 },
-      health,
-      relationshipOrphanCount: 0,
-    };
-    return { database, verification };
-  } finally { db.close(); }
-}
-
-function mutate(input: SqliteG006bPreFinalizationInput, preparedPayload: Record<string, unknown>): void {
-  let db: Database.Database | undefined;
-  let committed = false;
-  let failure: unknown;
-  const cleanup: string[] = [];
-  try {
-    db = new Database(input.databasePath, { fileMustExist: true });
-    db.pragma("foreign_keys = ON");
-    db.exec("BEGIN IMMEDIATE");
-    const fault = input.testBoundary ? testBoundaryStates.get(input.testBoundary as object) : undefined;
-    if (fault === "writer-primary-and-rollback-sentinel") fail("G006B_EVIDENCE_DRIFT", "simulated writer primary failure");
-    assertAcceptedState(db, input.expectedAcceptedPhysicalManifestDigest);
-    const baseline = preparedPayload.preservation as unknown as PreservationEvidence;
-    if (!samePreservation(baseline, capturePreservation(db))) fail("G006B_EVIDENCE_DRIFT", "pre-mutation preservation drift");
-    for (const table of SOURCE_TABLES) {
-      const columns = (db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as Array<{ name: string }>).map((row) => row.name);
-      if (columns.includes("source_card_id")) fail("G006B_STATE_REJECTED", `${table}.source_card_id already present in pre-state`);
-      db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN source_card_id TEXT`);
-      const result = db.prepare(`UPDATE ${quoteIdentifier(table)} SET source_card_id=? WHERE source_card_id IS NULL`).run(SQLITE_G006B_SOURCE_CARD_ID);
-      const count = Number((db.prepare(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)}`).get() as { count: number | bigint }).count);
-      if (Number(result.changes) !== count) fail("G006B_EVIDENCE_DRIFT", `${table} source backfill changes`);
-    }
-    db.pragma(`user_version = ${SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION}`);
-    assertPreparedState(db);
-    const projected = capturePreservation(db, baseline);
-    if (!samePreservation(baseline, projected)) fail("G006B_EVIDENCE_DRIFT", "in-transaction preservation");
-    const counts = sourceCounts(db);
-    if (counts.some((count) => count.matching !== count.total || count.nulls !== 0 || count.other !== 0)) fail("G006B_EVIDENCE_DRIFT", "in-transaction source counts");
+    const afterDataVersion = Number(db.pragma("data_version", { simple: true }));
+    if (dataVersion !== afterDataVersion) fail("G006B_EVIDENCE_DRIFT", "post verification data_version changed");
+    result = { state, preservation, counts, health, storedG023, dataVersion, journalMode };
     db.exec("COMMIT");
-    committed = true;
   } catch (error) {
-    failure = error;
-    if (db?.open && db.inTransaction) {
-      try { db.exec("ROLLBACK"); } catch (rollbackError) { cleanup.push(`writer rollback: ${message(rollbackError)}`); }
-      if (input.testBoundary && testBoundaryStates.get(input.testBoundary as object) === "writer-primary-and-rollback-sentinel") cleanup.push("writer rollback: simulated cleanup sentinel");
-    }
-  } finally {
-    if (db?.open) {
-      try { db.close(); } catch (closeError) { cleanup.push(`writer close: ${message(closeError)}`); }
-    }
-  }
-  if (failure !== undefined) {
-    if (committed) throw new SqliteG006bCommittedUnverifiedError(message(failure), cleanup);
-    if (failure instanceof SqliteG006bError) throw new SqliteG006bError(failure.code, failure.message, cleanup);
-    throw failure;
-  }
+    if (db.open && db.inTransaction) { try { db.exec("ROLLBACK"); } catch { /* primary is preserved */ } }
+    throw error;
+  } finally { db.close(); }
+  if (input.fault === "post-commit-verifier") throw new Error("simulated post-commit verifier failure");
+  assertNoWalFrames(input.databasePath);
+  const native = await lease.inspect();
+  if (!sameCanonical(native, settledNative)) fail("G006B_EVIDENCE_DRIFT", "post snapshot changed settled main bytes");
+  const expectedNative = (preparedPayload.database as Record<string, unknown>).native as SqliteG006bNativeIdentity;
+  if (native.fileId !== expectedNative.fileId || native.volumeSerialNumber !== expectedNative.volumeSerialNumber) fail("G006B_EVIDENCE_DRIFT", "post database file identity");
+  const database = databaseEvidence(input.databasePath, native, result.state, SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST, result.preservation, input.manifest, result.dataVersion, result.journalMode);
+  const verification = {
+    state: expectedPostState(result.preservation, result.counts, result.health),
+    preservation: result.preservation,
+    audit: result.preservation.audit,
+    receiptRowSha256: input.expectedReceiptRowSha256,
+    manifestHash: compatibilityManifestHash(input.manifest),
+    foundation: { tenantId: input.manifest.tenantId, workspaceId: input.manifest.workspaceId, ownerAuthIdentityId: input.manifest.ownerAuthIdentityId, policyId: input.manifest.policyId, policyVersion: input.manifest.policyVersion, status: "exact" },
+    source: { cardId: SQLITE_G006B_SOURCE_CARD_ID, counts: result.counts },
+    g023: { bindingId: result.storedG023.bindingId, configurationHash: result.storedG023.configurationHash, bindingSha256: result.storedG023.bindingSha256 },
+    health: result.health,
+    relationshipOrphanCount: 0,
+  };
+  return { database, verification };
 }
 
-function assertPreparedPayload(input: SqliteG006bPreFinalizationInput, payload: Record<string, unknown>): { receipt: CompatibilityBackfillReceipt; g023: G023Evidence } {
+async function applyMutation(input: ValidatedInput, preparedPayload: Record<string, unknown>, db: Database.Database, lease: NativeDatabaseLease): Promise<void> {
+  if (input.fault === "writer-primary-and-rollback-sentinel") fail("G006B_EVIDENCE_DRIFT", "simulated writer primary failure");
+  assertAcceptedState(db, input.expectedAcceptedPhysicalManifestDigest);
+  const baseline = preparedPayload.preservation as unknown as PreservationEvidence;
+  if (!samePreservation(baseline, capturePreservation(db))) fail("G006B_EVIDENCE_DRIFT", "pre-mutation preservation drift");
+  const beforeDdl = await lease.inspect();
+  if (beforeDdl.fileId !== input.expectedSourceIdentity.fileId || beforeDdl.volumeSerialNumber !== input.expectedSourceIdentity.volumeSerialNumber) fail("G006B_EVIDENCE_DRIFT", "database FileId changed before DDL");
+  for (const table of SOURCE_TABLES) {
+    const columns = (db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as Array<{ name: string }>).map((row) => row.name);
+    if (columns.includes("source_card_id")) fail("G006B_STATE_REJECTED", `${table}.source_card_id already present in pre-state`);
+    db.exec(`ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN source_card_id TEXT`);
+    const result = db.prepare(`UPDATE ${quoteIdentifier(table)} SET source_card_id=? WHERE source_card_id IS NULL`).run(SQLITE_G006B_SOURCE_CARD_ID);
+    const count = Number((db.prepare(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table)}`).get() as { count: number | bigint }).count);
+    if (Number(result.changes) !== count) fail("G006B_EVIDENCE_DRIFT", `${table} source backfill changes`);
+  }
+  db.pragma(`user_version = ${SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION}`);
+  assertPreparedState(db);
+  const projected = capturePreservation(db, baseline);
+  if (!samePreservation(baseline, projected)) fail("G006B_EVIDENCE_DRIFT", "in-transaction preservation");
+  const counts = sourceCounts(db);
+  if (counts.some((count) => count.matching !== count.total || count.nulls !== 0 || count.other !== 0)) fail("G006B_EVIDENCE_DRIFT", "in-transaction source counts");
+  const beforeCommit = await lease.inspect();
+  if (beforeCommit.fileId !== beforeDdl.fileId || beforeCommit.volumeSerialNumber !== beforeDdl.volumeSerialNumber) fail("G006B_EVIDENCE_DRIFT", "database FileId changed before COMMIT");
+}
+
+function assertPreparedPayload(input: ValidatedInput, payload: Record<string, unknown>): { receipt: CompatibilityBackfillReceipt; g023: G023Evidence } {
   exactKeys(payload, ["operationId", "basis", "source", "database", "t028", "g023", "backup", "archive", "preservation", "mutation", "expectedPostState"], "prepared payload");
   if (payload.operationId !== input.operationId || !sameCanonical(payload.basis, { kind: "legacy-t028" }) || !sameCanonical(payload.source, { cardId: SQLITE_G006B_SOURCE_CARD_ID, authority: "identity-only", grantsProviderExecution: false }) || !sameCanonical(payload.mutation, mutationEvidence())) fail("G006B_EVIDENCE_DRIFT", "prepared fixed binding");
-  exactKeys(payload.database, ["path", "native", "userVersion", "catalogDigest", "internalCatalogDigest", "physicalManifestDigest", "applicationTableCount", "targetColumnCount", "expectedTargetColumnCount", "tableIdentities", "sourceSnapshotFingerprint", "dataVersion"], "prepared database");
+  exactKeys(payload.database, ["path", "native", "userVersion", "catalogDigest", "internalCatalogDigest", "physicalManifestDigest", "applicationTableCount", "targetColumnCount", "expectedTargetColumnCount", "tableIdentities", "sourceSnapshotFingerprint", "dataVersion", "journalMode"], "prepared database");
   const database = payload.database as Record<string, unknown>;
   if (database.path !== input.databasePath || !sameCanonical(database.native, input.expectedSourceIdentity)
       || database.userVersion !== 0 || database.catalogDigest !== ACCEPTED_LEGACY_SQLITE_CATALOG_DIGEST
@@ -1149,6 +1331,7 @@ function assertPreparedPayload(input: SqliteG006bPreFinalizationInput, payload: 
       || database.physicalManifestDigest !== input.expectedAcceptedPhysicalManifestDigest
       || database.applicationTableCount !== 37 || database.targetColumnCount !== 27 || database.expectedTargetColumnCount !== 32
       || database.sourceSnapshotFingerprint !== input.manifest.sourceSnapshotFingerprint
+      || (database.journalMode !== "delete" && database.journalMode !== "wal")
       || !Number.isSafeInteger(database.dataVersion)) fail("G006B_EVIDENCE_DRIFT", "prepared database evidence");
   exactKeys(payload.t028, ["manifest", "manifestHash", "receipt", "receiptRowSha256"], "prepared t028");
   const t028 = payload.t028 as Record<string, unknown>;
@@ -1176,31 +1359,10 @@ function assertPreparedPayload(input: SqliteG006bPreFinalizationInput, payload: 
   return { receipt, g023 };
 }
 
-function removeTransient(path: string, cleanup: string[]): void {
+function cleanupDerivedTransient(path: string, cleanup: string[]): void {
   if (!existsSync(path)) return;
-  try { unlinkSync(path); } catch (error) { cleanup.push(`temporary cleanup ${path}: ${message(error)}`); }
-}
-
-function removeArchiveTemporaries(input: SqliteG006bPreFinalizationInput, cleanup: string[]): void {
-  try {
-    if (!existsSync(input.archiveDirectory) || !statSync(input.archiveDirectory).isDirectory()) return;
-    const suffix = `.g006b.tmp.${input.operationId}`;
-    let removed = false;
-    for (const name of readdirSync(input.archiveDirectory)) {
-      if (!name.endsWith(suffix)) continue;
-      try {
-        unlinkSync(join(input.archiveDirectory, name));
-        removed = true;
-      } catch (error) {
-        cleanup.push(`archive temporary cleanup ${name}: ${message(error)}`);
-      }
-    }
-    if (removed) {
-      try { flushDirectory(input, input.archiveDirectory); } catch (error) { cleanup.push(`archive temporary parent flush: ${message(error)}`); }
-    }
-  } catch (error) {
-    cleanup.push(`archive temporary enumeration: ${message(error)}`);
-  }
+  try { cleanupOwned(path, "file", inspectOwned(path, "file")); }
+  catch (error) { cleanup.push(`temporary cleanup ${path}: ${message(error)}`); }
 }
 
 function message(error: unknown): string {
@@ -1208,11 +1370,11 @@ function message(error: unknown): string {
 }
 
 export function inspectSqliteG006bPreFinalizationEvidence(input: SqliteG006bInspectionInput): SqliteG006bInspectionResult {
-  exactKeys(input, ["databasePath", "publisherScriptPath", "manifest", "seed"], "inspection input");
+  exactKeys(input, ["databasePath", "manifest", "seed"], "inspection input");
   canonicalExistingFile(input.databasePath, "inspection databasePath");
-  canonicalExistingFile(input.publisherScriptPath, "inspection publisherScriptPath");
+  assertInternalPublisher();
   exactKeys(input.manifest, MANIFEST_KEYS, "inspection manifest");
-  const sourceIdentity = inspectNative(input, input.databasePath);
+  const sourceIdentity = inspectNative(input.databasePath);
   const db = new Database(input.databasePath, { readonly: true, fileMustExist: true });
   db.pragma("foreign_keys = ON");
   try {
@@ -1242,113 +1404,146 @@ export function inspectSqliteG006bPreFinalizationEvidence(input: SqliteG006bInsp
       bindingId: binding.binding.bindingId,
       configurationHash: binding.binding.configurationHash,
       preservationAggregateSha256: preservation.aggregateSha256,
-      publisherSha256: sha256Bytes(readFileSync(input.publisherScriptPath)),
     });
   } finally { db.close(); }
 }
 
 export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFinalizationInput): Promise<SqliteG006bPreFinalizationResult> {
   const input = validateInput(rawInput);
-  const lockDescriptor = createLock(input);
   const cleanup: string[] = [];
   let primary: unknown;
+  let lease: NativeDatabaseLease | undefined;
+  let writer: Database.Database | undefined;
+  let commitInvoked = false;
+  let result: SqliteG006bPreFinalizationResult | undefined;
+  let commitError: unknown;
   try {
+    const acquired = await NativeDatabaseLease.acquire(input);
+    lease = acquired.lease;
+    if (acquired.identity.fileId !== input.expectedSourceIdentity.fileId
+        || acquired.identity.volumeSerialNumber !== input.expectedSourceIdentity.volumeSerialNumber
+        || (input.mode === "execute" && !sameCanonical(acquired.identity, input.expectedSourceIdentity))) {
+      fail("G006B_EVIDENCE_DRIFT", "source native identity at lease acquisition");
+    }
     let prepared: RecordEnvelope;
     let receipt: CompatibilityBackfillReceipt;
-    if (existsSync(input.committedPath)) {
-      if (!existsSync(input.preparedPath)) fail("G006B_RECOVERY_REQUIRED", "committed record exists without prepared record");
+    const preparedExists = existsSync(input.preparedPath);
+    const committedExists = existsSync(input.committedPath);
+    if (input.mode === "execute" && (preparedExists || committedExists)) fail("G006B_STATE_REJECTED", "execute requires absent handoff records");
+    if (input.mode === "resume" && (!preparedExists || committedExists)) fail("G006B_PREPARED_RECORD_REQUIRED", "resume requires PREPARED and absent COMMITTED");
+    if (input.mode === "replay" && (!preparedExists || !committedExists)) fail("G006B_RECOVERY_REQUIRED", "replay requires PREPARED and COMMITTED");
+
+    if (input.mode === "replay") {
       prepared = readEnvelope(input.preparedPath, "prepared");
+      if (prepared.handoffId !== input.expectedPreparedHandoffId) fail("G006B_RECOVERY_REQUIRED", "prepared handoff pin");
       ({ receipt } = assertPreparedPayload(input, prepared.payload));
       const committed = readEnvelope(input.committedPath, "committed");
+      if (committed.handoffId !== input.expectedCommittedHandoffId) fail("G006B_RECOVERY_REQUIRED", "committed handoff pin");
       exactKeys(committed.payload, ["operationId", "preparedHandoffId", "preparedRecordSha256", "bindingHash", "database", "verification"], "committed payload");
       if (committed.payload.operationId !== input.operationId || committed.payload.preparedHandoffId !== prepared.handoffId || committed.payload.preparedRecordSha256 !== prepared.recordSha256) fail("G006B_RECOVERY_REQUIRED", "committed/prepared link");
-      const verified = verifyPostDatabase(input, prepared.payload, receipt);
+      assertNoWalFrames(input.databasePath);
+      const settled = await lease.settle();
+      const verified = await verifyPostDatabase(input, prepared.payload, receipt, lease, settled);
       if (!sameCanonical(committed.payload.database, verified.database) || !sameCanonical(committed.payload.verification, verified.verification)) fail("G006B_RECOVERY_REQUIRED", "committed record differs from reopened post-state");
       const bindingHash = hashSqliteG006bDomain(SQLITE_G006B_BINDING_DOMAIN, prepared.payload);
       if (committed.payload.bindingHash !== bindingHash) fail("G006B_RECOVERY_REQUIRED", "committed binding hash");
-      return { status: "replayed", preparedHandoffId: prepared.handoffId, committedHandoffId: committed.handoffId, bindingHash };
-    }
-
-    if (existsSync(input.preparedPath)) {
+      result = deepFreeze({ mode: "replay", status: "replayed", preparedHandoffId: prepared.handoffId, committedHandoffId: committed.handoffId, bindingHash });
+    } else if (input.mode === "resume") {
       prepared = readEnvelope(input.preparedPath, "prepared");
+      if (prepared.handoffId !== input.expectedPreparedHandoffId) fail("G006B_RECOVERY_REQUIRED", "prepared handoff pin");
       ({ receipt } = assertPreparedPayload(input, prepared.payload));
     } else {
-      if (input.mode === "resume") fail("G006B_PREPARED_RECORD_REQUIRED", "resume requires a valid prepared record");
-      const native = inspectNative(input, input.databasePath);
-      if (!sameCanonical(native, input.expectedSourceIdentity)) fail("G006B_EVIDENCE_DRIFT", "source native identity");
-      const db = new Database(input.databasePath, { readonly: true, fileMustExist: true });
-      db.pragma("foreign_keys = ON");
-      let state: ReturnType<typeof classifySqliteSchemaV1>;
-      let preservation: PreservationEvidence;
-      let evidence: ReturnType<typeof verifyT028Pre>;
-      let g023: G023Evidence;
-      let database: Record<string, CanonicalValue>;
-      try {
-        state = assertAcceptedState(db, input.expectedAcceptedPhysicalManifestDigest);
-        preservation = capturePreservation(db);
-        if (preservation.aggregateSha256 !== input.expectedPreservationAggregateSha256) fail("G006B_EVIDENCE_DRIFT", "source preservation pin");
-        evidence = verifyT028Pre(db, input);
-        g023 = g023Evidence(input, evidence.receipt);
-        database = databaseEvidence(input.databasePath, native, state, input.expectedAcceptedPhysicalManifestDigest, preservation, input.manifest, Number(db.pragma("data_version", { simple: true })));
-      } finally { db.close(); }
-      const artifacts = await makeBackupAndArchive(input, preservation!);
-      const live = new Database(input.databasePath, { readonly: true, fileMustExist: true });
-      live.pragma("foreign_keys = ON");
-      try {
-        assertAcceptedState(live, input.expectedAcceptedPhysicalManifestDigest);
-        if (!sameCanonical(inspectNative(input, input.databasePath), input.expectedSourceIdentity)) fail("G006B_EVIDENCE_DRIFT", "live source native identity changed after backup/archive");
-        if (!samePreservation(preservation!, capturePreservation(live))) fail("G006B_EVIDENCE_DRIFT", "live source changed after backup/archive");
-        verifyT028Pre(live, input);
-      } finally { live.close(); }
-      const zeroSourceCounts = SOURCE_TABLES.map((table) => ({ table, total: preservation!.tables.find((entry) => entry.name === table)!.rowCount, matching: preservation!.tables.find((entry) => entry.name === table)!.rowCount, nulls: 0, other: 0 }));
-      const preparedPayload = {
-        operationId: input.operationId,
-        basis: { kind: "legacy-t028" },
-        source: { cardId: SQLITE_G006B_SOURCE_CARD_ID, authority: "identity-only", grantsProviderExecution: false },
-        database: database!,
-        t028: { manifest: input.manifest, manifestHash: compatibilityManifestHash(input.manifest), receipt: evidence!.receipt, receiptRowSha256: evidence!.receiptRowSha256 },
-        g023: g023!,
-        backup: artifacts.backup,
-        archive: artifacts.archive,
-        preservation: preservation!,
-        mutation: mutationEvidence(),
-        expectedPostState: expectedPostState(preservation!, zeroSourceCounts, { integrityCheck: "ok", foreignKeyFailureCount: 0, orphanCount: 0 }),
-      };
-      prepared = publishEnvelope(input, "prepared", preparedPayload);
-      receipt = evidence!.receipt;
-      if (input.testBoundary && testBoundaryStates.get(input.testBoundary as object) === "after-prepared-publish") fail("G006B_STATE_REJECTED", "simulated crash after prepared publication");
+      prepared = undefined as never;
+      receipt = undefined as never;
     }
 
-    const current = new Database(input.databasePath, { readonly: true, fileMustExist: true });
-    let kind: ReturnType<typeof classifySqliteSchemaV1>["kind"];
-    try { kind = classifySqliteSchemaV1(current).kind; } finally { current.close(); }
-    if (kind === "accepted-legacy") {
-      mutate(input, prepared.payload);
-      if (input.testBoundary && testBoundaryStates.get(input.testBoundary as object) === "after-database-commit") throw new SqliteG006bCommittedUnverifiedError("simulated crash after database commit");
-    } else if (kind !== "prepared-legacy") {
-      fail("G006B_RECOVERY_REQUIRED", `prepared record with ambiguous database state ${kind}`);
+    if (input.mode !== "replay") {
+      writer = new Database(input.databasePath, { fileMustExist: true });
+      writer.pragma("foreign_keys = ON");
+      writer.exec("BEGIN IMMEDIATE");
+      const journalMode = assertDatabaseConnectionBoundary(writer);
+      let kind = classifySqliteSchemaV1(writer).kind;
+      if (input.mode === "execute") {
+        const state = assertAcceptedState(writer, input.expectedAcceptedPhysicalManifestDigest);
+        const preservation = capturePreservation(writer);
+        if (preservation.aggregateSha256 !== input.expectedPreservationAggregateSha256) fail("G006B_EVIDENCE_DRIFT", "source preservation pin");
+        const evidence = verifyT028Pre(writer, input);
+        const g023 = g023Evidence(input, evidence.receipt);
+        const database = databaseEvidence(input.databasePath, input.expectedSourceIdentity, state, input.expectedAcceptedPhysicalManifestDigest, preservation, input.manifest, Number(writer.pragma("data_version", { simple: true })), journalMode);
+        const artifacts = await makeBackupAndArchive(input, preservation, writer, lease);
+        const liveNative = await lease.inspect();
+        if (liveNative.fileId !== input.expectedSourceIdentity.fileId || liveNative.volumeSerialNumber !== input.expectedSourceIdentity.volumeSerialNumber) fail("G006B_EVIDENCE_DRIFT", "live source FileId changed after backup/archive");
+        if (!samePreservation(preservation, capturePreservation(writer))) fail("G006B_EVIDENCE_DRIFT", "live source changed after backup/archive");
+        verifyT028Pre(writer, input);
+        const zeroSourceCounts = SOURCE_TABLES.map((table) => ({ table, total: preservation.tables.find((entry) => entry.name === table)!.rowCount, matching: preservation.tables.find((entry) => entry.name === table)!.rowCount, nulls: 0, other: 0 }));
+        const preparedPayload = {
+          operationId: input.operationId,
+          basis: { kind: "legacy-t028" },
+          source: { cardId: SQLITE_G006B_SOURCE_CARD_ID, authority: "identity-only", grantsProviderExecution: false },
+          database,
+          t028: { manifest: input.manifest, manifestHash: compatibilityManifestHash(input.manifest), receipt: evidence.receipt, receiptRowSha256: evidence.receiptRowSha256 },
+          g023,
+          backup: artifacts.backup,
+          archive: artifacts.archive,
+          preservation,
+          mutation: mutationEvidence(),
+          expectedPostState: expectedPostState(preservation, zeroSourceCounts, { integrityCheck: "ok", foreignKeyFailureCount: 0, orphanCount: 0 }),
+        };
+        prepared = publishEnvelope(input, "prepared", preparedPayload);
+        receipt = evidence.receipt;
+        if (input.fault === "after-prepared-publish") fail("G006B_STATE_REJECTED", "simulated crash after prepared publication");
+        kind = "accepted-legacy";
+      }
+
+      if (kind === "accepted-legacy") {
+        await applyMutation(input, prepared.payload, writer, lease);
+        commitInvoked = true;
+        try { writer.exec("COMMIT"); } catch (error) { commitError = error; }
+      } else if (kind === "prepared-legacy") {
+        commitInvoked = true;
+        writer.exec("ROLLBACK");
+      } else {
+        fail("G006B_RECOVERY_REQUIRED", `prepared record with ambiguous database state ${kind}`);
+      }
+      writer.close();
+      writer = undefined;
+      if (input.fault === "after-database-commit") throw new Error("simulated crash after database commit");
+      assertNoWalFrames(input.databasePath);
+      const settled = await lease.settle();
+      const verified = await verifyPostDatabase(input, prepared.payload, receipt!, lease, settled);
+      const bindingHash = hashSqliteG006bDomain(SQLITE_G006B_BINDING_DOMAIN, prepared.payload);
+      const committedPayload = {
+        operationId: input.operationId,
+        preparedHandoffId: prepared.handoffId,
+        preparedRecordSha256: prepared.recordSha256,
+        bindingHash,
+        database: verified.database,
+        verification: verified.verification,
+      };
+      const committed = publishEnvelope(input, "committed", committedPayload);
+      result = deepFreeze({ mode: input.mode, status: "committed", preparedHandoffId: prepared.handoffId, committedHandoffId: committed.handoffId, bindingHash });
     }
-    const verified = verifyPostDatabase(input, prepared.payload, receipt!);
-    const bindingHash = hashSqliteG006bDomain(SQLITE_G006B_BINDING_DOMAIN, prepared.payload);
-    const committedPayload = {
-      operationId: input.operationId,
-      preparedHandoffId: prepared.handoffId,
-      preparedRecordSha256: prepared.recordSha256,
-      bindingHash,
-      database: verified.database,
-      verification: verified.verification,
-    };
-    const committed = publishEnvelope(input, "committed", committedPayload);
-    return { status: "committed", preparedHandoffId: prepared.handoffId, committedHandoffId: committed.handoffId, bindingHash };
   } catch (error) {
     primary = error;
   } finally {
-    removeTransient(input.backupTemporaryPath, cleanup);
-    removeTransient(input.preparedTemporaryPath, cleanup);
-    removeTransient(input.committedTemporaryPath, cleanup);
-    removeArchiveTemporaries(input, cleanup);
-    closeOwnedLock(input, lockDescriptor, cleanup);
+    if (writer?.open && writer.inTransaction && !commitInvoked) {
+      try { writer.exec("ROLLBACK"); } catch (error) { cleanup.push(`writer rollback: ${message(error)}`); }
+      if (input.fault === "writer-primary-and-rollback-sentinel") cleanup.push("writer rollback: simulated cleanup sentinel");
+    }
+    if (writer?.open) { try { writer.close(); } catch (error) { cleanup.push(`writer close: ${message(error)}`); } }
+    cleanupDerivedTransient(input.backupTemporaryPath, cleanup);
+    cleanupDerivedTransient(input.preparedTemporaryPath, cleanup);
+    cleanupDerivedTransient(input.committedTemporaryPath, cleanup);
+    if (lease) {
+      try {
+        await lease.release();
+        if (input.fault === "post-commit-release" && commitInvoked) throw new Error("simulated post-commit release failure");
+      } catch (error) { cleanup.push(`native lease release: ${message(error)}`); }
+    }
   }
+  if (!primary && cleanup.length === 0 && result) return result;
+  const detail = [commitError === undefined ? undefined : `COMMIT returned: ${message(commitError)}`, primary === undefined ? undefined : message(primary)].filter(Boolean).join("; ") || "post-commit cleanup failed";
+  if (commitInvoked) throw new SqliteG006bCommittedUnverifiedError(detail, cleanup);
   if (primary instanceof SqliteG006bCommittedUnverifiedError) throw new SqliteG006bCommittedUnverifiedError(primary.message, [...primary.cleanupFailures, ...cleanup]);
   if (primary instanceof SqliteG006bError) throw new SqliteG006bError(primary.code, primary.message, [...primary.cleanupFailures, ...cleanup]);
   throw new SqliteG006bError("G006B_STATE_REJECTED", message(primary), cleanup);
