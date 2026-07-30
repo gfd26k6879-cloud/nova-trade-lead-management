@@ -78,6 +78,12 @@ The constructor accepts only the repository's exact frozen `SCHEMA_SQL`:
   `07091889ff9806c20356f092d3812ff325f22537c63a56149eea7dab0a529ade`
 - accepted T-028-prepared legacy SQLite-internal catalog digest (53 rows):
   `eb29b4dec23fa7311cd93c298515b871b94fe109d00a3d9db149ef6726f1637c`
+- exact G-006B prepared-legacy application-catalog digest:
+  `11db5719be3e6d3b0bb9a11111d867235f2837ed02a23b3af4901fd7690e3cbb`
+- exact G-006B prepared-legacy SQLite-internal catalog digest (53 rows):
+  `eb29b4dec23fa7311cd93c298515b871b94fe109d00a3d9db149ef6726f1637c`
+- exact G-006B prepared-legacy physical-manifest digest:
+  `90117968b064e6bded92dbf82c18fffa31951c0998c727f662eee56e78721ba6`
 - exact staged/final SQLite-internal catalog digest (57 rows):
   `2d866e21e5a30454bcfb7ea709aac96cdda17a1e7ab813b7e161265c0a060844`
 
@@ -125,6 +131,12 @@ for optional references while retaining the required tenant component.
   `user_version=6001`.
 - `accepted-legacy`: exact T-028-prepared legacy catalog at `user_version=0`.
   G-006A does not migrate or rebuild it by itself.
+- `prepared-legacy`: exact G-006B-prepared legacy catalog at
+  `user_version=6000`, with nullable `source_card_id TEXT` on only
+  `place_cache`, `places_master`, `place_observations`, and
+  `api_usage_events`; `crawl_units.location_mode` remains absent. Recognition
+  requires the exact application, internal, and physical pins and reports the
+  exact 31/32 target-column shape.
 - `staged`: exact final catalog at `user_version=6001`.
 - `final`: exact final catalog at `user_version=6002`.
 - `unknown`, `partial`, and `drift`: rejected closed with no mutation.
@@ -204,6 +216,12 @@ The compatibility receipt remains evidence bound by later work; its presence
 does not authorize a tenant choice or catalog transition. The coordinator does
 not interpret it as authority.
 
+Prepared-legacy recognition is classification only. Fresh construction,
+later-finalizer capability minting, and the current whole-upgrade coordinator
+all reject it without mutation. Capability state remains restricted to
+`accepted-legacy` and `staged`; no writer predicate, handoff, backup, sidecar,
+transaction, startup, recovery, or runtime activation path was added.
+
 At capability minting, the coordinator snapshots all 37 application
 tables. For every table it records the complete source-column order, row
 count, and deterministic type-tagged canonical row-payload digest. This
@@ -262,7 +280,7 @@ an ordinary noncommitted error. In-memory finalization fails closed.
 ## Local validation evidence
 
 - `npm exec vitest run src/lib/__tests__/sqlite-schema-coordinator.test.ts`
-  - PASS: 1 file, 34/34 tests, final round-6 run 14.54 s.
+  - PASS: 1 file, 37/37 tests, final G-006A-P run 22.60 s.
   - Covers deterministic fresh construction, exact catalog metadata, tenant
     and source key enforcement, both nullable-workspace unique identities,
     cross-tenant and invalid-source rejection, all coordinator classifications,
@@ -293,14 +311,20 @@ an ordinary noncommitted error. In-memory finalization fails closed.
     options/path/lease work, writer-open/rollback/close primary-failure
     precedence, ordered cleanup diagnostics, real-cleanup sentinel boundaries,
     exact-once writer close, and committed writer-close recovery by later
-    read-only replay.
+    read-only replay, exact G-006B prepared-legacy recognition at version
+    6000 with 31/32 target columns, exact application/internal/physical pins,
+    nullable source-column type/default/nullability and table placement,
+    `location_mode` absence, cross-catalog and wrong-version rejection,
+    missing/wrong/additional column/index/trigger/check rejection, isolated
+    ANALYZE internal-catalog and physical index-xinfo spoof rejection, and
+    mutation-free fresh/mint/whole-upgrade rejection with exact lease cleanup.
 - `npm run typecheck`
-  - PASS: `tsc --noEmit --pretty false`, final run 5.0 s.
+  - PASS: `tsc --noEmit --pretty false`, final run 4.7 s.
 - `npm run lint`
-  - PASS: full repository ESLint, final run 20.9 s.
+  - PASS: full repository ESLint, final run 95.3 s.
 - `npm run db:verify:recovery`
   - PASS: all 37 application tables match SQLite schema and tracked
-    migrations, 2.4 s.
+    migrations, 1.7 s.
 - `git diff --cached --check`
   - PASS: no whitespace errors.
 - `git diff --cached --name-only` plus `git diff --name-only`
@@ -442,6 +466,34 @@ unchanged. A cleanup-only writer-close sentinel after a successful commit is
 reported committed-unverified, leaves the database final, and permits later
 read-only replay. The first expanded round-6 matrix passed 34/34; no production
 guard was weakened to obtain that result.
+
+## G-006A-P prepared-state recognition notes
+
+Immutable source `87795a7ade9eb8ce51ee249d8adc7ac3e3d34341` did not
+recognize the externally prepared G-006B state. G-006A-P adds only the exact
+`prepared-legacy` classifier prerequisite at `user_version=6000`. Its catalog
+is the accepted T-028 legacy shape plus nullable `source_card_id TEXT` on the
+four named source tables and no `crawl_units.location_mode`, producing exactly
+37 application tables and 31/32 target columns.
+
+The application, complete 53-row SQLite-internal catalog, and physical manifest
+are independently literal-pinned. The hostile matrix rejects missing, wrong-
+typed, non-null/defaulted, checked, misplaced, and additional columns;
+additional indexes/triggers; the otherwise missing location-mode column;
+wrong and cross-catalog versions; ANALYZE statistics; and a catalog-spoofed
+index whose physical xinfo differs. Fresh creation, capability minting, and
+whole-upgrade rejection leave the recognized file unchanged and close every
+coordinator-owned descriptor and connection in the expected order. All prior
+34 focused tests remain green. No mutation or activation authority was added.
+
+The initial pin-derivation run intentionally compared the canonical fixture
+against placeholder literals, exposing all three actual digests. That run also
+showed that the existing final-schema partial-index spoof helper did not apply
+to the accepted legacy catalog. The prepared-state physical-only adversary now
+rebuilds the existing `idx_leads_score` with a different index column while
+restoring its catalog SQL, so the application and internal pins remain exact
+and only index xinfo changes. The targeted prepared matrix and subsequent full
+37-test matrix passed.
 
 All database exercises used in-memory or task-owned temporary file-backed
 SQLite instances with synthetic rows. Every temporary directory and verifier

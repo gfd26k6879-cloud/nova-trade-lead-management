@@ -22,6 +22,9 @@ import {
   SQLITE_SCHEMA_V1_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
   SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST,
+  SQLITE_SCHEMA_V1_PREPARED_LEGACY_CATALOG_DIGEST,
+  SQLITE_SCHEMA_V1_PREPARED_LEGACY_INTERNAL_CATALOG_DIGEST,
+  SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION,
   SQLITE_SCHEMA_V1_PRIMARY_SCHEMA,
   SQLITE_SCHEMA_V1_SQL,
   SQLITE_SCHEMA_V1_STAGED_USER_VERSION,
@@ -29,11 +32,13 @@ import {
 } from "./sqlite-schema-v1";
 
 export const ACCEPTED_LEGACY_SQLITE_CATALOG_DIGEST = "07091889ff9806c20356f092d3812ff325f22537c63a56149eea7dab0a529ade" as const;
+export const SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST = "90117968b064e6bded92dbf82c18fffa31951c0998c727f662eee56e78721ba6" as const;
 export const SQLITE_SCHEMA_V1_PHYSICAL_MANIFEST_DIGEST = "07e10bb5c43d98d6f561d3c0b0f9f39a9ad2d579ed1a73b9e2a7a455367fdf79" as const;
 
 export type SqliteSchemaV1StateKind =
   | "fresh"
   | "accepted-legacy"
+  | "prepared-legacy"
   | "staged"
   | "final"
   | "unknown"
@@ -272,6 +277,8 @@ const leaseAuditEvents: Array<Readonly<{
   purpose: FileLeaseState["purpose"];
 }>> = [];
 const ACCEPTED_LEGACY_TARGET_COLUMN_COUNT = 27;
+const PREPARED_LEGACY_TARGET_COLUMN_COUNT = 31;
+const PREPARED_LEGACY_EXPECTED_TARGET_COLUMN_COUNT = 32;
 const BIGINT_ZERO = BigInt(0);
 const SQLITE_INTEGER_MAX = BigInt("9223372036854775807");
 const SQLITE_WAL_TEST_ZIP = "g006a-wal-preserved";
@@ -487,11 +494,33 @@ export function classifySqliteSchemaV1(db: Database.Database): SqliteSchemaV1Sta
   if (applicationTableCount === 0 && readApplicationObjectCount(db) === 0 && userVersion === 0) {
     return { kind: "fresh", ...base, reason: "empty SQLite catalog at user_version 0" };
   }
-  if (![0, SQLITE_SCHEMA_V1_STAGED_USER_VERSION, SQLITE_SCHEMA_V1_FINAL_USER_VERSION].includes(userVersion)) {
+  if (![
+    0,
+    SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION,
+    SQLITE_SCHEMA_V1_STAGED_USER_VERSION,
+    SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
+  ].includes(userVersion)) {
     return { kind: "unknown", ...base, reason: `unsupported user_version ${userVersion}` };
   }
   if (userVersion === 0 && catalogDigest === ACCEPTED_LEGACY_SQLITE_CATALOG_DIGEST) {
     return { kind: "accepted-legacy", ...base, reason: "exact accepted legacy catalog" };
+  }
+  if (userVersion === SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION
+      && catalogDigest === SQLITE_SCHEMA_V1_PREPARED_LEGACY_CATALOG_DIGEST) {
+    if (applicationTableCount !== SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT
+        || actual !== PREPARED_LEGACY_TARGET_COLUMN_COUNT
+        || expected !== PREPARED_LEGACY_EXPECTED_TARGET_COLUMN_COUNT) {
+      return { kind: "drift", ...base, reason: "prepared legacy target shape is incomplete" };
+    }
+    const internalCatalogDigest = sqliteInternalCatalogDigest(db);
+    if (internalCatalogDigest !== SQLITE_SCHEMA_V1_PREPARED_LEGACY_INTERNAL_CATALOG_DIGEST) {
+      return { kind: "drift", ...base, reason: "prepared legacy internal catalog is noncanonical" };
+    }
+    const physicalManifestDigest = sqliteSchemaV1PhysicalManifestDigest(db);
+    if (physicalManifestDigest !== SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST) {
+      return { kind: "drift", ...base, reason: "prepared legacy physical manifest is noncanonical" };
+    }
+    return { kind: "prepared-legacy", ...base, reason: "exact prepared legacy catalog" };
   }
   if (catalogDigest === SQLITE_SCHEMA_V1_CATALOG_DIGEST) {
     if (userVersion === SQLITE_SCHEMA_V1_STAGED_USER_VERSION) {
@@ -509,6 +538,7 @@ export function classifySqliteSchemaV1(db: Database.Database): SqliteSchemaV1Sta
     return { kind: "partial", ...base, reason: `only ${actual}/${expected} target columns are present` };
   }
   if (applicationTableCount === SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT
+      || userVersion === SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION
       || userVersion === SQLITE_SCHEMA_V1_STAGED_USER_VERSION
       || userVersion === SQLITE_SCHEMA_V1_FINAL_USER_VERSION
       || actual === expected) {
