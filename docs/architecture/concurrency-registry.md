@@ -904,3 +904,14 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   file-lease lifecycle, and all prior round-1 through round-5 invariants. No
   merge or acceptance is authorized until both pass and Sol validates the
   merged integration branch.
+- Both fresh rereviews passed immutable `87795a7` with no P0-P3 findings. Each
+  independently confirmed focused Vitest 34/34, typecheck, full lint, the
+  37-table recovery verifier, exact three-file scope, clean worktree, and zero
+  reviewer residue. Adversarial probes also confirmed exact falsey semantics,
+  ordered primary-error retention across every repaired cleanup family, real
+  cleanup before sentinels, and committed-unverified replay behavior.
+- Sol integration is now authorized for this reviewed preparation artifact.
+  G-006A remains open after merge: startup activation is deliberately deferred
+  until the parent G-006 closing sequence after G-006B and G-006C0-C6. No
+  runtime activation, later-card work, remote action, or external action is
+  authorized by either review.
