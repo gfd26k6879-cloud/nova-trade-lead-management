@@ -14,6 +14,7 @@ import {
   authReferenceColumns,
   encodeRowIdentity,
   historicalRowsRequireRestore,
+  loadSqliteUniqueKeyMetadata,
   sha256,
   targetColumn,
   validateTenantIntegrity,
@@ -90,6 +91,7 @@ describe("data recovery contract", () => {
       expect(raw.editorialSummary).toEqual({ text: "Safe summary" });
       expect(raw.__nositeCache?.reviewInsights?.keywords).toEqual(["responsive"]);
     }
+    assertLocaleIndependentUniqueKeyOrdering();
   });
 
   it("keeps schema 3 as a truthful legacy snapshot instead of reinterpreting it as schema 4", () => {
@@ -181,6 +183,22 @@ describe("data recovery contract", () => {
     refreshManifestEntry(missingManifest, "place_cache", placeCachePath, missingRows);
     fs.writeFileSync(manifestPath, JSON.stringify(missingManifest));
     expect(() => validateDataExportDirectory(outDir)).toThrow(/place_cache\[0\]: row identity column source_card_id is null/);
+
+    installAdversarialSqliteIndexDefinitions(dbPath);
+    expect(() => verifySqliteDatabase(dbPath, TABLE_CONTRACTS, DATA_EXPORT_SCHEMA_VERSION)).not.toThrow();
+    const adversarialManifest = exportSqliteData({ dbPath, outDir });
+    const adversarialTables = adversarialManifest.tables as Record<string, { uniqueKeys: Array<{ name: string; predicate: string | null }> }>;
+    expect(adversarialTables.user_market_access.uniqueKeys).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "null \"WHERE\" decoy", predicate: "workspace_id IS NULL" }),
+      expect.objectContaining({ name: "where", predicate: "workspace_id IS NOT NULL" }),
+      expect.objectContaining({ name: "bracket WHERE decoy", predicate: "market_id IS NOT NULL" }),
+      expect.objectContaining({ name: "single 'WHERE' decoy", predicate: "tenant_id IS NOT NULL" }),
+    ]));
+    driftAdversarialSqliteNullIndex(dbPath);
+    expect(() => exportSqliteData({ dbPath, outDir }))
+      .toThrow(/user_market_access: schema-4 row identity lacks exact SQLite unique enforcement/);
+    expect(() => verifySqliteDatabase(dbPath, TABLE_CONTRACTS, DATA_EXPORT_SCHEMA_VERSION))
+      .toThrow(/user_market_access: schema-4 row identity lacks exact SQLite unique enforcement/);
   });
 
   it.each([
@@ -494,6 +512,74 @@ describe("data recovery contract", () => {
     120_000,
   );
 });
+
+function assertLocaleIndependentUniqueKeyOrdering() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nosite-key-order-"));
+  temporaryDirectories.push(root);
+  const db = new Database(path.join(root, "order.db"));
+  try {
+    db.exec(`
+      CREATE TABLE ordering_probe (id TEXT, alternate TEXT);
+      CREATE UNIQUE INDEX "a_key" ON ordering_probe(alternate);
+      CREATE UNIQUE INDEX "Z_key" ON ordering_probe(id);
+    `);
+    const localeCompareDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "localeCompare")!;
+    Object.defineProperty(String.prototype, "localeCompare", {
+      ...localeCompareDescriptor,
+      value: () => { throw new Error("localeCompare must not order recovery metadata"); },
+    });
+    try {
+      expect(loadSqliteUniqueKeyMetadata(db, "ordering_probe").map(({ name }: { name: string }) => name))
+        .toEqual(["Z_key", "a_key"]);
+    } finally {
+      Object.defineProperty(String.prototype, "localeCompare", localeCompareDescriptor);
+    }
+  } finally {
+    db.close();
+  }
+}
+
+function installAdversarialSqliteIndexDefinitions(dbPath: string) {
+  const db = new Database(dbPath);
+  try {
+    db.exec(`
+      DROP INDEX g006r_user_market_access_null_identity;
+      DROP INDEX g006r_user_market_access_workspace_identity;
+      CREATE UNIQUE INDEX "null ""WHERE"" decoy"
+        ON user_market_access(tenant_id, user_id, market_id)
+        /* WHERE block-comment decoy */
+        WHERE workspace_id /* 'WHERE' predicate decoy */ IS NULL;
+      CREATE UNIQUE INDEX \`where\`
+        ON user_market_access(tenant_id, workspace_id, user_id, market_id)
+        -- WHERE line-comment decoy
+        WHERE "workspace_id" IS /* \`WHERE\` predicate decoy */ NOT NULL;
+      CREATE UNIQUE INDEX [bracket WHERE decoy]
+        ON user_market_access(user_id, market_id)
+        WHERE market_id IS NOT NULL;
+      CREATE UNIQUE INDEX 'single ''WHERE'' decoy'
+        ON user_market_access(workspace_id, market_id)
+        WHERE tenant_id IS NOT NULL;
+    `);
+  } finally {
+    db.close();
+  }
+}
+
+function driftAdversarialSqliteNullIndex(dbPath: string) {
+  const db = new Database(dbPath);
+  try {
+    db.exec(`
+      DROP INDEX "null ""WHERE"" decoy";
+      CREATE UNIQUE INDEX "null ""WHERE"" decoy"
+        ON user_market_access(tenant_id, user_id, market_id)
+        /* WHERE block-comment decoy */
+        WHERE workspace_id /* 'WHERE' predicate decoy */ IS NULL
+          AND tenant_id <> '';
+    `);
+  } finally {
+    db.close();
+  }
+}
 
 function createSyntheticSqliteDatabase({ schema4 = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nosite-data-recovery-"));

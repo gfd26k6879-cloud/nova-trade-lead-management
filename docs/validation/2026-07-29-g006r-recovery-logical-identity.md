@@ -120,3 +120,63 @@ The first combined final-check run exposed one test-only implicit `any` in the
 new multi-row assertion. The row parameter was typed explicitly; the complete
 fresh focused, recovery, typecheck, lint, syntax, and diff-check set then passed
 as recorded above.
+
+## Repair round 2: deterministic metadata parsing
+
+Rejected source: `f11cb1abcb6b36734b8dee637bc832aad82811f5`
+
+Unique-key metadata now sorts its canonical JSON with explicit JavaScript
+code-unit `<`/`>` comparison. It does not use `localeCompare`, ICU, or the host
+default locale. The focused regression temporarily replaces
+`String.prototype.localeCompare` with a throwing function and proves valid
+SQLite indexes `Z_key` and `a_key` remain ordered exactly `Z_key`, `a_key`.
+
+Partial-index predicate extraction now uses a small deterministic scanner over
+SQLite's stored index DDL. It tracks parenthesis depth, skips final/top-level
+`WHERE` decoys inside single, double, backtick, and bracket quoted regions,
+honors doubled quote escapes, and skips line and block comments. Predicate
+normalization uses the same quote-aware comment handling. No SQL-parser
+dependency was added.
+
+The adversarial source uses an exact required index named with escaped double
+quotes, an exact required index whose quoted identifier is `where`, additional
+single/bracket-quoted decoys, both comment forms, and predicate-internal decoys.
+Export and read-only verification preserve the exact canonical predicates and
+accept the complete family. Replacing the null member with a decoy-rich drifted
+predicate fails both paths closed. Metadata lookup uses the parameterized
+SQLite `pragma_index_xinfo(?)` table-valued form so valid quoted index names do
+not pass through an identifier-string interpolator.
+
+Round-2 command evidence:
+
+- `npx vitest run src/lib/__tests__/data-transfer-contract.test.ts --reporter=verbose`
+  - PASS: 18 passed; one PostgreSQL opt-in skipped; final run 25.76 s.
+- `T029_RUN_DISPOSABLE_PG_TESTS=1 T029_DATABASE_URL=[unique loopback database] npx vitest run src/lib/__tests__/data-transfer-contract.test.ts --reporter=verbose`
+  - PASS: 19/19, 30.50 s; 45 discovered / 43 applied / 2 named skips.
+- `npm run db:verify:recovery`
+  - PASS: 37 application tables match SQLite schema and tracked migrations.
+- `npm run typecheck`
+  - PASS.
+- `npm run lint`
+  - PASS.
+- `node --check` for all four recovery scripts
+  - PASS.
+- `git diff --check`
+  - PASS.
+
+The first round-2 focused run passed 17 tests and failed only when the existing
+identifier-string interpolation rejected a valid single-quoted index name
+before predicate scanning. The lookup was changed to parameter binding; the
+fresh focused and PostgreSQL matrices above then passed. All round-2 activity
+was local and synthetic. No remote/provider/customer/paid system was accessed
+or mutated, and the disposable PostgreSQL resources were removed.
+
+The first combined round-2 final check found two test-only TypeScript inference
+gaps on values returned by JavaScript modules. Explicit manifest-key and index
+name types were added; the fresh focused, recovery, typecheck, full lint,
+four-script syntax, and diff-check run then passed as recorded above.
+
+The final cleanup audit found one stale synthetic `source.db` under an earlier
+`nosite-data-recovery-*` temporary directory. Its exact temp-root path and sole
+fixture file were verified and removed; no matching recovery/key-order fixture
+directories or task-owned Docker container, volume, or network remained.

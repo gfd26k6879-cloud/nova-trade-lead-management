@@ -769,7 +769,7 @@ export function loadSqliteUniqueKeyMetadata(db, tableName) {
     .filter((index) => Number(index.unique) === 1 && String(index.origin) !== "pk")
     .map((index) => {
       const name = String(index.name);
-      const columns = db.prepare(`PRAGMA index_xinfo(${quoteIdent(name)})`).all()
+      const columns = db.prepare("SELECT * FROM pragma_index_xinfo(?)").all(name)
         .filter((column) => Number(column.key) === 1)
         .sort((left, right) => Number(left.seqno) - Number(right.seqno));
       if (columns.length === 0 || columns.some((column) => Number(column.cid) < 0 || typeof column.name !== "string")) return null;
@@ -784,7 +784,7 @@ export function loadSqliteUniqueKeyMetadata(db, tableName) {
       };
     })
     .filter(Boolean)
-    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+    .sort((left, right) => compareCodeUnits(JSON.stringify(left), JSON.stringify(right)));
 }
 
 export function sqliteKeyMetadataSupportsIdentity(physicalPrimaryKey, uniqueKeys, contract) {
@@ -804,14 +804,17 @@ function normalizeSqliteIndexPredicate(createSql, tableName, indexName) {
   if (typeof createSql !== "string") {
     throw new Error(`${tableName}: partial unique index ${indexName} has no inspectable definition`);
   }
-  const match = /\bWHERE\b([\s\S]+?)\s*;?\s*$/i.exec(createSql);
-  if (!match) throw new Error(`${tableName}: partial unique index ${indexName} has no predicate`);
-  return normalizeSqlitePredicate(match[1]);
+  const whereIndex = findFinalTopLevelWhere(createSql, `${tableName}: partial unique index ${indexName}`);
+  if (whereIndex < 0) throw new Error(`${tableName}: partial unique index ${indexName} has no predicate`);
+  return normalizeSqlitePredicate(createSql.slice(whereIndex + "WHERE".length));
 }
 
 function normalizeSqlitePredicate(value) {
   if (typeof value !== "string") return value;
-  let normalized = value.trim().replace(/;\s*$/, "").replace(/\s+/g, " ");
+  let normalized = stripSqliteComments(value, "SQLite index predicate")
+    .trim()
+    .replace(/;\s*$/, "")
+    .replace(/\s+/g, " ");
   while (normalized.startsWith("(") && normalized.endsWith(")") && hasSingleOuterParenthesisPair(normalized)) {
     normalized = normalized.slice(1, -1).trim();
   }
@@ -822,13 +825,130 @@ function normalizeSqlitePredicate(value) {
 
 function hasSingleOuterParenthesisPair(value) {
   let depth = 0;
-  for (let index = 0; index < value.length; index += 1) {
+  for (let index = 0; index < value.length;) {
+    if (isSqliteQuoteStart(value[index])) {
+      index = skipSqliteQuotedRegion(value, index, "SQLite index predicate");
+      continue;
+    }
     if (value[index] === "(") depth += 1;
     else if (value[index] === ")") depth -= 1;
     if (depth === 0 && index < value.length - 1) return false;
     if (depth < 0) return false;
+    index += 1;
   }
   return depth === 0;
+}
+
+function findFinalTopLevelWhere(sql, label) {
+  let depth = 0;
+  let finalWhereIndex = -1;
+  for (let index = 0; index < sql.length;) {
+    if (isSqliteQuoteStart(sql[index])) {
+      index = skipSqliteQuotedRegion(sql, index, label);
+      continue;
+    }
+    if (sql[index] === "-" && sql[index + 1] === "-") {
+      index = skipSqliteLineComment(sql, index);
+      continue;
+    }
+    if (sql[index] === "/" && sql[index + 1] === "*") {
+      index = skipSqliteBlockComment(sql, index, label);
+      continue;
+    }
+    if (sql[index] === "(") {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (sql[index] === ")") {
+      if (depth > 0) depth -= 1;
+      index += 1;
+      continue;
+    }
+    if (depth === 0 && isSqliteWhereTokenAt(sql, index)) {
+      finalWhereIndex = index;
+      index += "WHERE".length;
+      continue;
+    }
+    index += 1;
+  }
+  return finalWhereIndex;
+}
+
+function stripSqliteComments(sql, label) {
+  let result = "";
+  for (let index = 0; index < sql.length;) {
+    if (isSqliteQuoteStart(sql[index])) {
+      const nextIndex = skipSqliteQuotedRegion(sql, index, label);
+      result += sql.slice(index, nextIndex);
+      index = nextIndex;
+      continue;
+    }
+    if (sql[index] === "-" && sql[index + 1] === "-") {
+      result += " ";
+      index = skipSqliteLineComment(sql, index);
+      continue;
+    }
+    if (sql[index] === "/" && sql[index + 1] === "*") {
+      result += " ";
+      index = skipSqliteBlockComment(sql, index, label);
+      continue;
+    }
+    result += sql[index];
+    index += 1;
+  }
+  return result;
+}
+
+function skipSqliteQuotedRegion(sql, startIndex, label) {
+  const opening = sql[startIndex];
+  const closing = opening === "[" ? "]" : opening;
+  for (let index = startIndex + 1; index < sql.length; index += 1) {
+    if (sql[index] !== closing) continue;
+    if (sql[index + 1] === closing) {
+      index += 1;
+      continue;
+    }
+    return index + 1;
+  }
+  throw new Error(`${label}: unterminated SQLite quoted region`);
+}
+
+function skipSqliteLineComment(sql, startIndex) {
+  let index = startIndex + 2;
+  while (index < sql.length && sql[index] !== "\r" && sql[index] !== "\n") index += 1;
+  return index;
+}
+
+function skipSqliteBlockComment(sql, startIndex, label) {
+  const endIndex = sql.indexOf("*/", startIndex + 2);
+  if (endIndex < 0) throw new Error(`${label}: unterminated SQLite block comment`);
+  return endIndex + 2;
+}
+
+function isSqliteQuoteStart(character) {
+  return character === "'" || character === '"' || character === "`" || character === "[";
+}
+
+function isSqliteWhereTokenAt(sql, index) {
+  if (sql.slice(index, index + "WHERE".length).toUpperCase() !== "WHERE") return false;
+  return !isSqliteIdentifierCharacter(sql[index - 1])
+    && !isSqliteIdentifierCharacter(sql[index + "WHERE".length]);
+}
+
+function isSqliteIdentifierCharacter(character) {
+  if (typeof character !== "string") return false;
+  const code = character.charCodeAt(0);
+  return (code >= 48 && code <= 57)
+    || (code >= 65 && code <= 90)
+    || (code >= 97 && code <= 122)
+    || character === "_"
+    || character === "$"
+    || code >= 128;
+}
+
+function compareCodeUnits(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function parseJsonFile(filePath, label) {
