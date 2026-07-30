@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("InspectFile", "PublishFile", "FlushDirectory", "LeaseDatabase", "CleanupOwned", "CleanupOwnedTree")]
+  [ValidateSet("InspectFile", "FlushDirectory", "LeaseDatabase", "CleanupOwned")]
   [string]$Mode,
 
   [string]$Path,
@@ -71,9 +71,15 @@ public static class G006BNativeFile
     private const uint CREATE_NEW = 1;
     private const uint OPEN_EXISTING = 3;
     private const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
+    private const uint FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
     private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
     private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
-    private const uint MOVEFILE_WRITE_THROUGH = 0x00000008;
+    private const uint SYNCHRONIZE = 0x00100000;
+    private const uint OBJ_CASE_INSENSITIVE = 0x00000040;
+    private const uint FILE_CREATE = 2;
+    private const uint FILE_DIRECTORY_FILE = 0x00000001;
+    private const uint FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020;
+    private const uint FILE_OPEN_REPARSE_POINT = 0x00200000;
     private const int FileBasicInfo = 0;
     private const int FileStandardInfo = 1;
     private const int FileDispositionInfo = 4;
@@ -129,10 +135,40 @@ public static class G006BNativeFile
         public long SyncRootFileId;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UNICODE_STRING
+    {
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct OBJECT_ATTRIBUTES
+    {
+        public int Length;
+        public IntPtr RootDirectory;
+        public IntPtr ObjectName;
+        public uint Attributes;
+        public IntPtr SecurityDescriptor;
+        public IntPtr SecurityQualityOfService;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IO_STATUS_BLOCK
+    {
+        public IntPtr Status;
+        public IntPtr Information;
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFileW(
         string fileName, uint desiredAccess, uint shareMode, IntPtr securityAttributes,
         uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeFileHandle ReOpenFile(
+        SafeFileHandle originalFile, uint desiredAccess, uint shareMode, uint flagsAndAttributes);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -148,9 +184,19 @@ public static class G006BNativeFile
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool FlushFileBuffers(SafeFileHandle file);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool MoveFileExW(string existingName, string newName, uint flags);
+    [DllImport("ntdll.dll")]
+    private static extern int NtCreateFile(
+        out IntPtr fileHandle, uint desiredAccess, ref OBJECT_ATTRIBUTES objectAttributes,
+        out IO_STATUS_BLOCK ioStatusBlock, IntPtr allocationSize, uint fileAttributes,
+        uint shareAccess, uint createDisposition, uint createOptions, IntPtr eaBuffer, uint eaLength);
+
+    [DllImport("ntdll.dll")]
+    private static extern uint RtlNtStatusToDosError(int status);
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtSetInformationFile(
+        SafeFileHandle fileHandle, out IO_STATUS_BLOCK ioStatusBlock,
+        IntPtr fileInformation, uint length, int fileInformationClass);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandleW(
@@ -215,19 +261,85 @@ public static class G006BNativeFile
         return Open(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, false, OPEN_EXISTING);
     }
 
-    public static G006BNativeLease OpenPublisherSource(string path)
-    {
-        return Open(path, GENERIC_READ | GENERIC_WRITE | DELETE, FILE_SHARE_READ | FILE_SHARE_DELETE, false, OPEN_EXISTING);
-    }
-
     public static G006BNativeLease OpenParent(string path)
     {
-        return Open(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, true, OPEN_EXISTING);
+        return Open(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, true, OPEN_EXISTING);
     }
 
     public static G006BNativeLease CreateLock(string path)
     {
         return Open(path, GENERIC_READ | GENERIC_WRITE | DELETE, 0, false, CREATE_NEW);
+    }
+
+    public static G006BNativeLease CreateOwnedFile(string path)
+    {
+        return Open(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, false, CREATE_NEW);
+    }
+
+    public static G006BNativeLease ReopenOwnedForDelete(G006BNativeLease original)
+    {
+        uint flags = FILE_FLAG_OPEN_REPARSE_POINT | (original.Directory ? FILE_FLAG_BACKUP_SEMANTICS : 0);
+        SafeFileHandle handle = ReOpenFile(
+            original.Handle, GENERIC_READ | GENERIC_WRITE | DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            flags);
+        if (handle.IsInvalid)
+        {
+            int error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new Win32Exception(error, "ReOpenFile failed error " + error + " for " + original.OpenedPath);
+        }
+        return new G006BNativeLease(handle, original.Directory, original.OpenedPath);
+    }
+
+    public static G006BNativeLease CreateOwnedDirectory(G006BNativeLease parent, string path)
+    {
+        string leaf = Path.GetFileName(path);
+        if (String.IsNullOrWhiteSpace(leaf) || leaf.IndexOfAny(new char[] { '\\', '/', '\0' }) >= 0)
+            throw new InvalidOperationException("owned directory leaf rejected");
+        IntPtr nameBuffer = Marshal.StringToHGlobalUni(leaf);
+        IntPtr unicodeBuffer = IntPtr.Zero;
+        IntPtr rawHandle = IntPtr.Zero;
+        try
+        {
+            int byteLength = Encoding.Unicode.GetByteCount(leaf);
+            UNICODE_STRING unicode = new UNICODE_STRING {
+                Length = checked((ushort)byteLength),
+                MaximumLength = checked((ushort)(byteLength + 2)),
+                Buffer = nameBuffer
+            };
+            unicodeBuffer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UNICODE_STRING)));
+            Marshal.StructureToPtr(unicode, unicodeBuffer, false);
+            OBJECT_ATTRIBUTES attributes = new OBJECT_ATTRIBUTES {
+                Length = Marshal.SizeOf(typeof(OBJECT_ATTRIBUTES)),
+                RootDirectory = parent.Handle.DangerousGetHandle(),
+                ObjectName = unicodeBuffer,
+                Attributes = OBJ_CASE_INSENSITIVE,
+                SecurityDescriptor = IntPtr.Zero,
+                SecurityQualityOfService = IntPtr.Zero
+            };
+            IO_STATUS_BLOCK ioStatus;
+            int status = NtCreateFile(
+                out rawHandle, GENERIC_READ | GENERIC_WRITE | DELETE | SYNCHRONIZE,
+                ref attributes, out ioStatus, IntPtr.Zero, FILE_ATTRIBUTE_DIRECTORY,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_CREATE,
+                FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT,
+                IntPtr.Zero, 0);
+            if (status < 0)
+            {
+                int error = unchecked((int)RtlNtStatusToDosError(status));
+                throw new Win32Exception(error, "NtCreateFile directory failed error " + error + " for " + path);
+            }
+            SafeFileHandle handle = new SafeFileHandle(rawHandle, true);
+            rawHandle = IntPtr.Zero;
+            return new G006BNativeLease(handle, true, path);
+        }
+        finally
+        {
+            if (rawHandle != IntPtr.Zero) new SafeFileHandle(rawHandle, true).Dispose();
+            if (unicodeBuffer != IntPtr.Zero) Marshal.FreeHGlobal(unicodeBuffer);
+            Marshal.FreeHGlobal(nameBuffer);
+        }
     }
 
     public static G006BNativeLease OpenOwnedForDelete(string path, bool directory)
@@ -324,12 +436,6 @@ public static class G006BNativeFile
             throw new Win32Exception(Marshal.GetLastWin32Error(), "FlushFileBuffers failed");
     }
 
-    public static int MoveNoReplaceWriteThrough(string source, string destination)
-    {
-        if (MoveFileExW(source, destination, MOVEFILE_WRITE_THROUGH)) return 0;
-        return Marshal.GetLastWin32Error();
-    }
-
     public static void MarkDelete(G006BNativeLease lease)
     {
         FILE_DISPOSITION_INFO info = new FILE_DISPOSITION_INFO { DeleteFile = true };
@@ -340,6 +446,36 @@ public static class G006BNativeFile
             Marshal.StructureToPtr(info, buffer, false);
             if (!SetFileInformationByHandle(lease.Handle, FileDispositionInfo, buffer, (uint)size))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "identity-safe delete disposition failed");
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    public static void RenameNoReplace(G006BNativeLease source, G006BNativeLease destinationParent, string destinationPath)
+    {
+        if (String.IsNullOrWhiteSpace(destinationPath) || !Path.IsPathRooted(destinationPath) || destinationPath.IndexOf('\0') >= 0)
+            throw new InvalidOperationException("absolute destination path rejected");
+        string destinationName = Path.GetFileName(destinationPath);
+        if (String.IsNullOrWhiteSpace(destinationName) || destinationName.IndexOfAny(new char[] { '\\', '/', '\0' }) >= 0)
+            throw new InvalidOperationException("destination leaf name rejected");
+        byte[] name = Encoding.Unicode.GetBytes(destinationName);
+        int rootOffset = IntPtr.Size == 8 ? 8 : 4;
+        int lengthOffset = rootOffset + IntPtr.Size;
+        int nameOffset = lengthOffset + 4;
+        IntPtr buffer = Marshal.AllocHGlobal(nameOffset + name.Length);
+        try
+        {
+            for (int index = 0; index < nameOffset + name.Length; index++) Marshal.WriteByte(buffer, index, 0);
+            Marshal.WriteByte(buffer, 0, 0);
+            Marshal.WriteIntPtr(buffer, rootOffset, destinationParent.Handle.DangerousGetHandle());
+            Marshal.WriteInt32(buffer, lengthOffset, name.Length);
+            Marshal.Copy(name, 0, IntPtr.Add(buffer, nameOffset), name.Length);
+            IO_STATUS_BLOCK ioStatus;
+            int status = NtSetInformationFile(source.Handle, out ioStatus, buffer, (uint)(nameOffset + name.Length), 10);
+            if (status < 0)
+            {
+                int error = unchecked((int)RtlNtStatusToDosError(status));
+                throw new Win32Exception(error, "identity-retained rename failed error " + error + " for " + destinationPath);
+            }
         }
         finally { Marshal.FreeHGlobal(buffer); }
     }
@@ -449,6 +585,7 @@ function Assert-IdentityExpectation {
 }
 
 $moved = $false
+$publicationReady = $false
 $primary = $null
 $cleanup = [Collections.Generic.List[string]]::new()
 $leases = [Collections.Generic.List[IDisposable]]::new()
@@ -497,9 +634,128 @@ try {
     if ($ready.finalPath -cne $canonical) { Throw-G006BError 10 'database lease final path mismatch' }
     ($ready | ConvertTo-Json -Compress); [Console]::Out.Flush()
     $settledLease = $null
+    $ownedResources = @{}
+    $publication = $null
     while ($true) {
       $command = [Console]::In.ReadLine()
       if ($null -eq $command) { Throw-G006BError 15 'lease protocol EOF' }
+      if ($null -ne $publication) {
+        if ($command -ceq 'publication-inspect') {
+          $current = Convert-Identity ([G006BNativeFile]::Inspect($publication.Lease)) 'publication-inspected'
+          if ($current.finalPath -cne $publication.Destination -or $current.fileId -cne $publication.Identity.fileId -or
+              $current.volumeSerialNumber -cne $publication.Identity.volumeSerialNumber -or
+              $current.sha256 -cne $publication.Sha256 -or $current.size -ne $publication.Bytes) { Throw-G006BError 14 'retained publication challenge drift' }
+          ($current | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
+        }
+        if ($command -ceq 'publication-release') {
+          $released = Convert-Identity ([G006BNativeFile]::Inspect($publication.Lease)) 'publication-released'
+          $publication.Lease.Dispose(); $leases.Remove($publication.Lease) | Out-Null
+          $publication = $null
+          ($released | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
+        }
+        Throw-G006BError 14 'publication challenge/release required'
+      }
+      if ($command.StartsWith('resource-create-file' + "`t", [StringComparison]::Ordinal) -or
+          $command.StartsWith('resource-create-directory' + "`t", [StringComparison]::Ordinal)) {
+        $parts = $command -split "`t", 2
+        $directory = $parts[0] -ceq 'resource-create-directory'
+        $resourcePath = Assert-CanonicalPath $parts[1] $false $directory
+        if ($ownedResources.ContainsKey($resourcePath) -or (Test-Path -LiteralPath $resourcePath)) { Throw-G006BError 12 'owned resource already exists' }
+        $resourceParentPath = [IO.Path]::GetDirectoryName($resourcePath)
+        Assert-PathChain $resourceParentPath; Assert-TrustedParentAcl $resourceParentPath
+        if ($ownedResources.ContainsKey($resourceParentPath) -and $ownedResources[$resourceParentPath].Directory) {
+          $resourceParentLease = $ownedResources[$resourceParentPath].Lease
+        } else {
+          $resourceParentLease = [G006BNativeFile]::OpenParent($resourceParentPath); $leases.Add($resourceParentLease)
+        }
+        $resourceLease = if ($directory) { [G006BNativeFile]::CreateOwnedDirectory($resourceParentLease, $resourcePath) } else { [G006BNativeFile]::CreateOwnedFile($resourcePath) }
+        $leases.Add($resourceLease)
+        $resourceIdentity = Convert-Identity ([G006BNativeFile]::Inspect($resourceLease)) 'resource-created' $directory
+        if ($resourceIdentity.finalPath -cne $resourcePath) { Throw-G006BError 11 'created resource final path mismatch' }
+        [G006BNativeFile]::Flush($resourceParentLease)
+        $ownedResources[$resourcePath] = [pscustomobject]@{Lease=$resourceLease;Parent=$resourceParentLease;Directory=$directory;Identity=$resourceIdentity}
+        ($resourceIdentity | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
+      }
+      if ($command.StartsWith('resource-inspect' + "`t", [StringComparison]::Ordinal)) {
+        $parts = $command -split "`t", 2; $resourcePath = $parts[1]
+        if (-not $ownedResources.ContainsKey($resourcePath)) { Throw-G006BError 11 'resource is not broker-owned' }
+        $resource = $ownedResources[$resourcePath]
+        $current = Convert-Identity ([G006BNativeFile]::Inspect($resource.Lease)) 'resource-inspected' $resource.Directory
+        Assert-IdentityExpectation $current $resource.Identity.volumeSerialNumber $resource.Identity.fileId
+        ($current | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
+      }
+      if ($command.StartsWith('resource-cleanup' + "`t", [StringComparison]::Ordinal)) {
+        $parts = $command -split "`t", 2; $resourcePath = $parts[1]
+        if (-not $ownedResources.ContainsKey($resourcePath)) { Throw-G006BError 11 'resource is not broker-owned' }
+        $resource = $ownedResources[$resourcePath]
+        $current = Convert-Identity ([G006BNativeFile]::Inspect($resource.Lease)) 'resource-cleanup' $resource.Directory
+        Assert-IdentityExpectation $current $resource.Identity.volumeSerialNumber $resource.Identity.fileId
+        $deletionLease = if ($resource.Directory) { $resource.Lease } else { [G006BNativeFile]::ReopenOwnedForDelete($resource.Lease) }
+        if (-not $resource.Directory) { $leases.Add($deletionLease); $deletionIdentity = Convert-Identity ([G006BNativeFile]::Inspect($deletionLease)) 'resource-cleanup-delete'; Assert-IdentityExpectation $deletionIdentity $resource.Identity.volumeSerialNumber $resource.Identity.fileId }
+        [G006BNativeFile]::MarkDelete($deletionLease); $deletionLease.Dispose(); $leases.Remove($deletionLease) | Out-Null
+        if (-not $resource.Directory) { $resource.Lease.Dispose(); $leases.Remove($resource.Lease) | Out-Null }
+        [G006BNativeFile]::Flush($resource.Parent)
+        $ownedResources.Remove($resourcePath)
+        ($current | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
+      }
+      if ($command.StartsWith('resource-release' + "`t", [StringComparison]::Ordinal)) {
+        $parts = $command -split "`t", 2; $resourcePath = $parts[1]
+        if (-not $ownedResources.ContainsKey($resourcePath)) { Throw-G006BError 11 'resource is not broker-owned' }
+        $resource = $ownedResources[$resourcePath]
+        $current = Convert-Identity ([G006BNativeFile]::Inspect($resource.Lease)) 'resource-released' $resource.Directory
+        Assert-IdentityExpectation $current $resource.Identity.volumeSerialNumber $resource.Identity.fileId
+        $resource.Lease.Dispose(); $leases.Remove($resource.Lease) | Out-Null
+        [G006BNativeFile]::Flush($resource.Parent)
+        $ownedResources.Remove($resourcePath)
+        ($current | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
+      }
+      if ($command.StartsWith('resource-publish' + "`t", [StringComparison]::Ordinal)) {
+        $parts = $command -split "`t", 5
+        if ($parts.Count -ne 5) { Throw-G006BError 13 'resource publish protocol shape' }
+        $resourcePath = $parts[1]; $destination = Assert-CanonicalPath $parts[2] $false $false
+        $resourceSha = $parts[3]; $resourceBytes = [long]$parts[4]
+        if ($resourceSha -cnotmatch '^[0-9a-f]{64}$' -or $resourceBytes -lt 0 -or -not $ownedResources.ContainsKey($resourcePath)) { Throw-G006BError 13 'resource publish authority rejected' }
+        $resource = $ownedResources[$resourcePath]
+        if ($resource.Directory -or [IO.Path]::GetDirectoryName($destination) -cne [IO.Path]::GetDirectoryName($resourcePath) -or
+            -not [IO.Path]::GetFileName($resourcePath).StartsWith([IO.Path]::GetFileName($destination) + '.g006b.tmp.', [StringComparison]::Ordinal)) { Throw-G006BError 13 'resource publish sibling binding rejected' }
+        $publisherLease = [G006BNativeFile]::ReopenOwnedForDelete($resource.Lease); $leases.Add($publisherLease)
+        $sourceIdentity = Convert-Identity ([G006BNativeFile]::Inspect($publisherLease)) 'resource-publish-source'
+        Assert-IdentityExpectation $sourceIdentity $resource.Identity.volumeSerialNumber $resource.Identity.fileId
+        if ($sourceIdentity.sha256 -cne $resourceSha -or $sourceIdentity.size -ne $resourceBytes) { Throw-G006BError 13 'resource publish bytes drift' }
+        [G006BNativeFile]::Flush($publisherLease)
+        $destinationLease = $null
+        if (Test-Path -LiteralPath $destination) {
+          $destinationLease = [G006BNativeFile]::OpenSettledRead($destination); $leases.Add($destinationLease)
+          $published = Convert-Identity ([G006BNativeFile]::Inspect($destinationLease)) 'publication-ready'
+          if ($published.sha256 -cne $resourceSha -or $published.size -ne $resourceBytes -or $published.finalPath -cne $destination) { Throw-G006BError 13 'existing destination differs' }
+          [G006BNativeFile]::MarkDelete($publisherLease); $publisherLease.Dispose(); $leases.Remove($publisherLease) | Out-Null
+          $resource.Lease.Dispose(); $leases.Remove($resource.Lease) | Out-Null
+        } else {
+          try {
+            [G006BNativeFile]::RenameNoReplace($publisherLease, $resource.Parent, $destination)
+            $moved = $true
+            $retainedMoved = Convert-Identity ([G006BNativeFile]::Inspect($publisherLease)) 'publication-moved'
+            $publisherLease.Dispose(); $leases.Remove($publisherLease) | Out-Null
+            $destinationLease = [G006BNativeFile]::OpenSettledRead($destination); $leases.Add($destinationLease)
+            $published = Convert-Identity ([G006BNativeFile]::Inspect($destinationLease)) 'publication-ready'
+            if ($published.fileId -cne $retainedMoved.fileId -or $published.volumeSerialNumber -cne $retainedMoved.volumeSerialNumber) { Throw-G006BError 14 'published resource replaced before settled lease' }
+            $resource.Lease.Dispose(); $leases.Remove($resource.Lease) | Out-Null
+          } catch {
+            if ($_.Exception.Message -notmatch 'error 80|error 183') { throw }
+            $destinationLease = [G006BNativeFile]::OpenSettledRead($destination); $leases.Add($destinationLease)
+            $published = Convert-Identity ([G006BNativeFile]::Inspect($destinationLease)) 'publication-ready'
+            if ($published.sha256 -cne $resourceSha -or $published.size -ne $resourceBytes -or $published.finalPath -cne $destination) { Throw-G006BError 13 'raced destination differs' }
+            [G006BNativeFile]::MarkDelete($publisherLease); $publisherLease.Dispose(); $leases.Remove($publisherLease) | Out-Null
+            $resource.Lease.Dispose(); $leases.Remove($resource.Lease) | Out-Null
+          }
+        }
+        [G006BNativeFile]::Flush($resource.Parent)
+        if ($published.sha256 -cne $resourceSha -or $published.size -ne $resourceBytes -or $published.finalPath -cne $destination) { Throw-G006BError 14 'published resource verification failed' }
+        $ownedResources.Remove($resourcePath)
+        $publicationReady = $true
+        $publication = [pscustomobject]@{Lease=$destinationLease;Destination=$destination;Identity=$published;Sha256=$resourceSha;Bytes=$resourceBytes}
+        ($published | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
+      }
       if ($command -ceq 'inspect') {
         $activeLease = if ($null -ne $settledLease) { $settledLease } else { $databaseLease }
         $current = Convert-Identity ([G006BNativeFile]::Inspect($activeLease)) 'lease-inspected'
@@ -515,6 +771,7 @@ try {
         ($settled | ConvertTo-Json -Compress); [Console]::Out.Flush(); continue
       }
       if ($command -ceq 'release') {
+        if ($ownedResources.Count -ne 0 -or $null -ne $publication) { Throw-G006BError 15 'owned resources remain at database lease release' }
         $activeLease = if ($null -ne $settledLease) { $settledLease } else { $databaseLease }
         $final = Convert-Identity ([G006BNativeFile]::Inspect($activeLease)) 'lease-released'
         [G006BNativeFile]::MarkDelete($lockLease); $lockLease.Dispose(); $leases.Remove($lockLease) | Out-Null
@@ -542,79 +799,6 @@ try {
     exit 0
   }
 
-  if ($Mode -ceq 'CleanupOwnedTree') {
-    $canonical = Assert-CanonicalPath $Path $true $true
-    $parent = [IO.Path]::GetDirectoryName($canonical)
-    Assert-PathChain $parent; Assert-TrustedParentAcl $parent
-    $parentLease = [G006BNativeFile]::OpenParent($parent); $leases.Add($parentLease)
-    $ownedDirectory = [G006BNativeFile]::OpenOwnedForDelete($canonical, $true); $leases.Add($ownedDirectory)
-    $directoryIdentity = Convert-Identity ([G006BNativeFile]::Inspect($ownedDirectory)) 'cleanup-owned-tree' $true
-    Assert-IdentityExpectation $directoryIdentity $ExpectedVolumeSerialNumber $ExpectedFileId
-    foreach ($item in Get-ChildItem -LiteralPath $canonical -Force) {
-      if ($item.PSIsContainer -or [IO.Path]::GetDirectoryName($item.FullName) -cne $canonical) { Throw-G006BError 11 'owned tree child rejected' }
-      $child = [G006BNativeFile]::OpenOwnedForDelete($item.FullName, $false); $leases.Add($child)
-      $childIdentity = Convert-Identity ([G006BNativeFile]::Inspect($child)) 'cleanup-owned-tree-child'
-      if ([IO.Path]::GetDirectoryName($childIdentity.finalPath) -cne $canonical) { Throw-G006BError 11 'owned tree child final path escaped' }
-      [G006BNativeFile]::MarkDelete($child); $child.Dispose(); $leases.Remove($child) | Out-Null
-    }
-    [G006BNativeFile]::MarkDelete($ownedDirectory); $ownedDirectory.Dispose(); $leases.Remove($ownedDirectory) | Out-Null
-    [G006BNativeFile]::Flush($parentLease)
-    ([ordered]@{status='cleaned-owned-tree';path=$canonical;volumeSerialNumber=$directoryIdentity.volumeSerialNumber;fileId=$directoryIdentity.fileId} | ConvertTo-Json -Compress)
-    exit 0
-  }
-
-  if ($ExpectedSha256 -cnotmatch '^[0-9a-f]{64}$' -or $ExpectedBytes -lt 0) { Throw-G006BError 10 'expected hash/bytes required' }
-  $source = Assert-CanonicalPath $SourcePath $true $false
-  $destination = Assert-CanonicalPath $DestinationPath $false $false
-  $parent = [IO.Path]::GetDirectoryName($source)
-  if ([IO.Path]::GetDirectoryName($destination) -cne $parent -or
-      -not [IO.Path]::GetFileName($source).StartsWith([IO.Path]::GetFileName($destination) + '.g006b.tmp.', [StringComparison]::Ordinal)) {
-    Throw-G006BError 10 'destination-bound sibling temporary required'
-  }
-  Assert-PathChain $parent; Assert-TrustedParentAcl $parent
-  $parentLease = [G006BNativeFile]::OpenParent($parent); $leases.Add($parentLease)
-  $sourceLease = [G006BNativeFile]::OpenPublisherSource($source); $leases.Add($sourceLease)
-  $sourceIdentity = Convert-Identity ([G006BNativeFile]::Inspect($sourceLease)) 'source'
-  if ($sourceIdentity.finalPath -cne $source -or $sourceIdentity.sha256 -cne $ExpectedSha256 -or $sourceIdentity.size -ne $ExpectedBytes) { Throw-G006BError 11 'source identity/bytes mismatch' }
-
-  $existing = $null
-  if (Test-Path -LiteralPath $destination) {
-    $existingLease = [G006BNativeFile]::OpenStableRead($destination, $false); $leases.Add($existingLease)
-    $existing = Convert-Identity ([G006BNativeFile]::Inspect($existingLease)) 'existing'
-    if ($existing.finalPath -cne $destination -or $existing.sha256 -cne $ExpectedSha256 -or $existing.size -ne $ExpectedBytes) { Throw-G006BError 11 'existing destination differs' }
-    [G006BNativeFile]::MarkDelete($sourceLease); $sourceLease.Dispose(); $leases.Remove($sourceLease) | Out-Null
-    [G006BNativeFile]::Flush($parentLease)
-    ($existing | ConvertTo-Json -Compress); exit 0
-  }
-
-  [G006BNativeFile]::Flush($sourceLease)
-  $sourceLease.Dispose(); $leases.Remove($sourceLease) | Out-Null
-  $sourceLease = [G006BNativeFile]::OpenStableRead($source, $false); $leases.Add($sourceLease)
-  $stableSource = Convert-Identity ([G006BNativeFile]::Inspect($sourceLease)) 'stable-source'
-  if ($stableSource.fileId -cne $sourceIdentity.fileId -or $stableSource.volumeSerialNumber -cne $sourceIdentity.volumeSerialNumber -or
-      $stableSource.sha256 -cne $ExpectedSha256 -or $stableSource.size -ne $ExpectedBytes) { Throw-G006BError 11 'source changed before move' }
-  $moveError = [G006BNativeFile]::MoveNoReplaceWriteThrough($source, $destination)
-  if ($moveError -eq 0) { $moved = $true }
-  elseif ($moveError -eq 80 -or $moveError -eq 183) {
-    $raceLease = [G006BNativeFile]::OpenStableRead($destination, $false); $leases.Add($raceLease)
-    $race = Convert-Identity ([G006BNativeFile]::Inspect($raceLease)) 'existing-race'
-    if ($race.finalPath -cne $destination -or $race.sha256 -cne $ExpectedSha256 -or $race.size -ne $ExpectedBytes) { Throw-G006BError 13 'destination race differs' }
-    [G006BNativeFile]::MarkDelete($sourceLease); $sourceLease.Dispose(); $leases.Remove($sourceLease) | Out-Null
-    [G006BNativeFile]::Flush($parentLease)
-    ($race | ConvertTo-Json -Compress); exit 0
-  } else { Throw-G006BError 13 ('MoveFileExW failed error ' + $moveError) }
-
-  $retained = Convert-Identity ([G006BNativeFile]::Inspect($sourceLease)) 'retained-published'
-  if ($retained.finalPath -cne $destination -or $retained.fileId -cne $sourceIdentity.fileId -or $retained.volumeSerialNumber -cne $sourceIdentity.volumeSerialNumber) { Throw-G006BError 14 'retained published identity drift' }
-  [G006BNativeFile]::Flush($parentLease)
-  Assert-PathChain $parent
-  $reopen = [G006BNativeFile]::OpenStableRead($destination, $false); $leases.Add($reopen)
-  $published = Convert-Identity ([G006BNativeFile]::Inspect($reopen)) 'published'
-  if ($published.finalPath -cne $destination -or $published.fileId -cne $sourceIdentity.fileId -or
-      $published.volumeSerialNumber -cne $sourceIdentity.volumeSerialNumber -or
-      $published.sha256 -cne $ExpectedSha256 -or $published.size -ne $ExpectedBytes) { Throw-G006BError 14 'published reopen verification failed' }
-  ($published | ConvertTo-Json -Compress)
-  exit 0
 } catch {
   $primary = $_.Exception
 } finally {
@@ -629,8 +813,8 @@ try {
   }
 }
 
-$exitCode = if ($moved) { 14 } elseif ($null -ne $primary -and $primary.Data.Contains('G006BExitCode')) { [int]$primary.Data['G006BExitCode'] } else { 15 }
-$prefix = if ($moved) { 'G006B_PUBLISHED_UNVERIFIED_RECOVERY_REQUIRED: ' } else { '' }
+$exitCode = if ($moved -or $publicationReady) { 14 } elseif ($null -ne $primary -and $primary.Data.Contains('G006BExitCode')) { [int]$primary.Data['G006BExitCode'] } else { 15 }
+$prefix = if ($moved -or $publicationReady) { 'G006B_PUBLISHED_UNVERIFIED_RECOVERY_REQUIRED: ' } else { '' }
 $details = if ($cleanup.Count -gt 0) { ' cleanup=[' + ($cleanup -join ' | ') + ']' } else { '' }
 [Console]::Error.WriteLine($prefix + $primary.Message + $details)
 exit $exitCode

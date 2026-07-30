@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
   existsSync,
   fsyncSync,
-  mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -19,10 +18,16 @@ import { isProxy } from "node:util/types";
 
 import Database from "better-sqlite3";
 
-import { exportSqliteData } from "../../../scripts/export-sqlite-data.mjs";
 import {
+  DATA_EXPORT_FORMAT,
+  DATA_EXPORT_SANITIZED_COLUMNS,
   LEGACY_DATA_EXPORT_SCHEMA_VERSION,
   TABLE_NAMES,
+  TENANT_INTEGRITY_CONTRACT_VERSION,
+  encodeRowIdentity,
+  quoteIdent,
+  sanitizeRawGoogleReviewJson,
+  tableContractsForSchemaVersion,
   validateDataExportDirectory,
 } from "../../../scripts/data-transfer-contract.mjs";
 import {
@@ -96,17 +101,6 @@ const MANIFEST_KEYS = Object.freeze([
 ] as const);
 
 type CanonicalValue = null | boolean | string | number | readonly CanonicalValue[] | { readonly [key: string]: CanonicalValue };
-type TestFault =
-  | "after-prepared-publish"
-  | "after-database-commit"
-  | "writer-primary-and-rollback-sentinel"
-  | "post-commit-verifier"
-  | "post-commit-release";
-
-export interface SqliteG006bTestBoundary {
-  readonly __opaqueSqliteG006bTestBoundary: never;
-}
-
 export interface SqliteG006bNativeIdentity {
   readonly volumeSerialNumber: string;
   readonly fileId: string;
@@ -131,7 +125,7 @@ interface SqliteG006bPreFinalizationCommonInput {
   readonly expectedBindingId: string;
   readonly expectedConfigurationHash: string;
   readonly expectedPreservationAggregateSha256: string;
-  readonly testBoundary?: SqliteG006bTestBoundary;
+  readonly expectedJournalMode: "delete" | "wal";
 }
 
 export interface SqliteG006bExecuteInput extends SqliteG006bPreFinalizationCommonInput {
@@ -175,6 +169,7 @@ export interface SqliteG006bInspectionResult {
   readonly bindingId: string;
   readonly configurationHash: string;
   readonly preservationAggregateSha256: string;
+  readonly journalMode: "delete" | "wal";
 }
 
 export type SqliteG006bErrorCode =
@@ -183,10 +178,10 @@ export type SqliteG006bErrorCode =
   | "G006B_STATE_REJECTED"
   | "G006B_EVIDENCE_DRIFT"
   | "G006B_PUBLISH_FAILED"
+  | "G006B_PUBLISHED_UNVERIFIED_RECOVERY_REQUIRED"
   | "G006B_PREPARED_RECORD_REQUIRED"
   | "G006B_RECOVERY_REQUIRED"
-  | "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED"
-  | "G006B_TEST_BOUNDARY_REJECTED";
+  | "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED";
 
 export class SqliteG006bError extends Error {
   public readonly code: SqliteG006bErrorCode;
@@ -207,6 +202,16 @@ export class SqliteG006bCommittedUnverifiedError extends SqliteG006bError {
   public constructor(detail: string, cleanupFailures: readonly string[] = []) {
     super("G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED", detail, cleanupFailures);
     this.name = "SqliteG006bCommittedUnverifiedError";
+  }
+}
+
+export class SqliteG006bPublishedUnverifiedError extends SqliteG006bError {
+  public readonly published = true as const;
+  public readonly status = "published-unverified-recovery-required" as const;
+
+  public constructor(detail: string, cleanupFailures: readonly string[] = []) {
+    super("G006B_PUBLISHED_UNVERIFIED_RECOVERY_REQUIRED", detail, cleanupFailures);
+    this.name = "SqliteG006bPublishedUnverifiedError";
   }
 }
 
@@ -245,23 +250,6 @@ interface RecordEnvelope {
   readonly handoffId: string;
   readonly recordSha256: string;
   readonly payload: Record<string, unknown>;
-}
-
-const testBoundaryStates = new WeakMap<object, TestFault>();
-
-export function createSqliteG006bTestBoundary(fault: TestFault): SqliteG006bTestBoundary {
-  if (process.env.NODE_ENV !== "test" || ![
-    "after-prepared-publish",
-    "after-database-commit",
-    "writer-primary-and-rollback-sentinel",
-    "post-commit-verifier",
-    "post-commit-release",
-  ].includes(fault)) {
-    throw new SqliteG006bError("G006B_TEST_BOUNDARY_REJECTED");
-  }
-  const boundary = Object.freeze(Object.create(null)) as SqliteG006bTestBoundary;
-  testBoundaryStates.set(boundary as object, fault);
-  return boundary;
 }
 
 function compareCodeUnits(left: string, right: string): number {
@@ -428,7 +416,7 @@ function assertSha(value: unknown, label: string): asserts value is string {
 }
 
 function canonicalExistingFile(value: string, label: string): string {
-  if (typeof value !== "string" || !isAbsolute(value) || resolve(value) !== value || value.includes("\0")) fail("G006B_INPUT_REJECTED", `${label} must be an exact absolute path`);
+  if (typeof value !== "string" || !isAbsolute(value) || resolve(value) !== value || /[\0\t\r\n]/u.test(value)) fail("G006B_INPUT_REJECTED", `${label} must be an exact absolute path`);
   let canonical: string;
   try {
     canonical = realpathSync.native(value);
@@ -440,7 +428,7 @@ function canonicalExistingFile(value: string, label: string): string {
 }
 
 function canonicalTarget(value: string, label: string, directory = false): string {
-  if (typeof value !== "string" || !isAbsolute(value) || resolve(value) !== value || value.includes("\0")) fail("G006B_INPUT_REJECTED", `${label} must be an exact absolute path`);
+  if (typeof value !== "string" || !isAbsolute(value) || resolve(value) !== value || /[\0\t\r\n]/u.test(value)) fail("G006B_INPUT_REJECTED", `${label} must be an exact absolute path`);
   const parent = dirname(value);
   if (realpathSync.native(parent) !== parent || !statSync(parent).isDirectory()) fail("G006B_INPUT_REJECTED", `${label} parent is aliased or absent`);
   if (existsSync(value)) {
@@ -456,7 +444,7 @@ function canonicalDirectoryTarget(value: string, label: string): string {
 
 const POWERSHELL_EXE = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 const PUBLISHER_SCRIPT_PATH = fileURLToPath(new URL("../../../scripts/g006b-windows-durable-publish.ps1", import.meta.url));
-const PUBLISHER_NORMALIZED_SHA256 = "67aaf286fe3fdc1aa7f5d6f6f27eea032d5e037bd5082e81241aa02ea10be84c";
+const PUBLISHER_NORMALIZED_SHA256 = "ea20039471215830d3b6fe12be233aabccd8fb947fe78016f51815f0fed73cda";
 
 interface ValidatedInput extends SqliteG006bPreFinalizationCommonInput {
   readonly mode: "execute" | "resume" | "replay";
@@ -468,7 +456,6 @@ interface ValidatedInput extends SqliteG006bPreFinalizationCommonInput {
   readonly preparedTemporaryPath: string;
   readonly committedTemporaryPath: string;
   readonly privateToken: string;
-  readonly fault?: TestFault;
 }
 
 function deepFreeze<T>(value: T, seen = new Set<object>()): T {
@@ -498,7 +485,6 @@ function assertInternalPublisher(): void {
 
 function validateInput(input: SqliteG006bPreFinalizationInput): ValidatedInput {
   if (!input || typeof input !== "object" || isProxy(input)) fail("G006B_INPUT_REJECTED", "input must be a non-proxy record");
-  const hasTestBoundary = Object.hasOwn(input as object, "testBoundary");
   const modeDescriptor = Object.getOwnPropertyDescriptor(input, "mode");
   if (!modeDescriptor || !("value" in modeDescriptor)) fail("G006B_INPUT_REJECTED", "mode must be a data property");
   const mode = modeDescriptor.value;
@@ -507,9 +493,8 @@ function validateInput(input: SqliteG006bPreFinalizationInput): ValidatedInput {
   const keys = [
     "mode", "operationId", "databasePath", "backupPath", "archiveDirectory", "preparedPath", "committedPath", "manifest", "seed",
     "expectedSourceIdentity", "expectedAcceptedPhysicalManifestDigest", "expectedReceiptRowSha256",
-    "expectedBindingId", "expectedConfigurationHash", "expectedPreservationAggregateSha256",
+    "expectedBindingId", "expectedConfigurationHash", "expectedPreservationAggregateSha256", "expectedJournalMode",
     ...modeKeys,
-    ...(hasTestBoundary ? ["testBoundary"] : []),
   ];
   exactKeys(input, keys, "input");
   if (input.mode !== "execute" && input.mode !== "resume" && input.mode !== "replay") fail("G006B_INPUT_REJECTED", "mode");
@@ -529,20 +514,14 @@ function validateInput(input: SqliteG006bPreFinalizationInput): ValidatedInput {
   assertSha(input.expectedReceiptRowSha256, "expectedReceiptRowSha256");
   assertSha(input.expectedConfigurationHash, "expectedConfigurationHash");
   assertSha(input.expectedPreservationAggregateSha256, "expectedPreservationAggregateSha256");
+  if (input.expectedJournalMode !== "delete" && input.expectedJournalMode !== "wal") fail("G006B_INPUT_REJECTED", "expectedJournalMode");
   exactKeys(input.expectedSourceIdentity, ["volumeSerialNumber", "fileId", "size", "numberOfLinks", "sha256", "fileSystem"], "expectedSourceIdentity");
   assertNativeIdentity(input.expectedSourceIdentity, "expectedSourceIdentity");
-  if (hasTestBoundary && (input.testBoundary === undefined || !testBoundaryStates.has(input.testBoundary as object))) fail("G006B_TEST_BOUNDARY_REJECTED", "unrecognized boundary");
+  validateEmbeddedJsonValue(input.manifest, "manifest");
   assertManifestRecursiveShape(input.manifest, "manifest");
   validateEmbeddedJsonValue(input.seed, "seed");
   assertInternalPublisher();
-  const token = sha256Bytes(canonicalizeSqliteG006bRecord({
-    operationId: input.operationId,
-    databasePath: input.databasePath,
-    backupPath: input.backupPath,
-    archiveDirectory: input.archiveDirectory,
-    preparedPath: input.preparedPath,
-    committedPath: input.committedPath,
-  })).slice(0, 24);
+  const token = randomBytes(24).toString("hex");
   const snapshot: ValidatedInput = {
     mode: input.mode,
     operationId: input.operationId,
@@ -559,6 +538,7 @@ function validateInput(input: SqliteG006bPreFinalizationInput): ValidatedInput {
     expectedBindingId: input.expectedBindingId,
     expectedConfigurationHash: input.expectedConfigurationHash,
     expectedPreservationAggregateSha256: input.expectedPreservationAggregateSha256,
+    expectedJournalMode: input.expectedJournalMode,
     ...(input.mode === "resume" || input.mode === "replay" ? { expectedPreparedHandoffId: input.expectedPreparedHandoffId } : {}),
     ...(input.mode === "replay" ? { expectedCommittedHandoffId: input.expectedCommittedHandoffId } : {}),
     lockPath: `${input.databasePath}.g006b.lock`,
@@ -567,7 +547,6 @@ function validateInput(input: SqliteG006bPreFinalizationInput): ValidatedInput {
     preparedTemporaryPath: `${input.preparedPath}.g006b.tmp.${token}`,
     committedTemporaryPath: `${input.committedPath}.g006b.tmp.${token}`,
     privateToken: token,
-    ...(hasTestBoundary ? { fault: testBoundaryStates.get(input.testBoundary as object)! } : {}),
   };
   for (const [pathValue, label] of [
     [snapshot.lockPath, "derived lock"], [snapshot.backupTemporaryPath, "derived backup temp"],
@@ -600,6 +579,7 @@ function nativeCommand(args: readonly string[]): Record<string, unknown> {
   if (result.status !== 0) {
     const detail = `${String(result.stderr).trim()} (exit ${String(result.status)})`;
     if (result.status === 16) fail("G006B_LOCK_HELD", detail);
+    if (result.status === 14) throw new SqliteG006bPublishedUnverifiedError(detail);
     fail("G006B_PUBLISH_FAILED", detail);
   }
   let parsed: unknown;
@@ -633,28 +613,22 @@ function flushDirectory(path: string): void {
   nativeCommand(["-Mode", "FlushDirectory", "-Path", path]);
 }
 
-function publish(source: string, destination: string): SqliteG006bNativeIdentity {
+async function publish(source: string, destination: string, ledger: OwnershipLedger): Promise<SqliteG006bNativeIdentity> {
+  ledger.require(source, "file");
   const bytes = statSync(source).size;
   if (!Number.isSafeInteger(bytes)) fail("G006B_PUBLISH_FAILED", "unsafe file size");
   const sha = sha256Bytes(readFileSync(source));
-  const value = nativeCommand([
-    "-Mode", "PublishFile", "-SourcePath", source, "-DestinationPath", destination,
-    "-ExpectedSha256", sha, "-ExpectedBytes", String(bytes),
-  ]);
-  const identity = identityFromNativeResult(value, "native publication");
+  const identity = await ledger.publish(source, destination, sha, bytes);
   if (identity.size !== bytes || identity.sha256 !== sha) fail("G006B_PUBLISH_FAILED", "post-publication bytes");
   return identity;
 }
 
 interface OwnedIdentity { readonly volumeSerialNumber: string; readonly fileId: string }
-
-function inspectOwned(path: string, kind: "file" | "directory"): OwnedIdentity {
-  const value = nativeCommand(["-Mode", "InspectFile", "-Path", path, "-Kind", kind]);
-  if (typeof value.volumeSerialNumber !== "string" || !/^[0-9]+$/u.test(value.volumeSerialNumber)
-      || typeof value.fileId !== "string" || !/^[0-9a-f]{32}$/u.test(value.fileId)) {
-    fail("G006B_PUBLISH_FAILED", "owned identity inspection shape");
-  }
-  return Object.freeze({ volumeSerialNumber: value.volumeSerialNumber, fileId: value.fileId });
+interface OwnedResource {
+  readonly path: string;
+  readonly kind: "file" | "directory";
+  readonly identity: OwnedIdentity;
+  readonly disposition: "cleanup" | "release";
 }
 
 function cleanupOwned(path: string, kind: "file" | "directory", identity: OwnedIdentity): void {
@@ -664,15 +638,68 @@ function cleanupOwned(path: string, kind: "file" | "directory", identity: OwnedI
   ]);
 }
 
-function cleanupOwnedTree(path: string, identity: OwnedIdentity): void {
-  nativeCommand([
-    "-Mode", "CleanupOwnedTree", "-Path", path,
-    "-ExpectedVolumeSerialNumber", identity.volumeSerialNumber, "-ExpectedFileId", identity.fileId,
-  ]);
+class OwnershipLedger {
+  readonly #resources = new Map<string, OwnedResource>();
+  readonly #lease: NativeDatabaseLease;
+
+  public constructor(lease: NativeDatabaseLease) { this.#lease = lease; }
+
+  public async create(path: string, kind: "file" | "directory", disposition: "cleanup" | "release" = "cleanup"): Promise<OwnedResource> {
+    if (this.#resources.has(path)) fail("G006B_PUBLISH_FAILED", `duplicate owned resource ${path}`);
+    const identity = await this.#lease.createResource(path, kind);
+    const resource = Object.freeze({ path, kind, identity, disposition });
+    this.#resources.set(path, resource);
+    return resource;
+  }
+
+  public require(path: string, kind: "file" | "directory"): OwnedResource {
+    const resource = this.#resources.get(path);
+    if (!resource || resource.kind !== kind) fail("G006B_PUBLISH_FAILED", `resource is not invocation-owned: ${path}`);
+    return resource;
+  }
+
+  public async publish(path: string, destination: string, sha256: string, bytes: number): Promise<SqliteG006bNativeIdentity> {
+    this.require(path, "file");
+    const identity = await this.#lease.publishResource(path, destination, sha256, bytes);
+    this.#resources.delete(path);
+    return identity;
+  }
+
+  public async releasePersistent(path: string): Promise<void> {
+    const resource = this.require(path, "directory");
+    if (resource.disposition !== "release") fail("G006B_PUBLISH_FAILED", `resource is not persistent: ${path}`);
+    await this.#lease.releaseResource(path);
+    this.#resources.delete(path);
+  }
+
+  public async cleanupAll(cleanup: string[]): Promise<SqliteG006bPublishedUnverifiedError | undefined> {
+    let publishedUnverified: SqliteG006bPublishedUnverifiedError | undefined;
+    for (const resource of [...this.#resources.values()].reverse()) {
+      try {
+        if (resource.disposition === "release") await this.#lease.releaseResource(resource.path);
+        else await this.#lease.cleanupResource(resource.path);
+        this.#resources.delete(resource.path);
+      } catch (brokerError) {
+        if (brokerError instanceof SqliteG006bPublishedUnverifiedError) publishedUnverified ??= brokerError;
+        if (resource.disposition === "release") {
+          cleanup.push(`owned release ${resource.path}: ${message(brokerError)}`);
+          continue;
+        }
+        try {
+          cleanupOwned(resource.path, resource.kind, resource.identity);
+          this.#resources.delete(resource.path);
+        } catch (fallbackError) {
+          cleanup.push(`owned cleanup ${resource.path}: broker=${message(brokerError)} fallback=${message(fallbackError)}`);
+        }
+      }
+    }
+    return publishedUnverified;
+  }
 }
 
-function writeExclusiveDurable(path: string, bytes: Buffer): void {
-  const descriptor = openSync(path, "wx", 0o600);
+async function writeOwnedDurable(path: string, bytes: Buffer, ledger: OwnershipLedger): Promise<void> {
+  await ledger.create(path, "file");
+  const descriptor = openSync(path, "r+", 0o600);
   try {
     writeFileSync(descriptor, bytes);
     fsyncSync(descriptor);
@@ -681,11 +708,112 @@ function writeExclusiveDurable(path: string, bytes: Buffer): void {
   }
 }
 
+interface Schema3ExportFile { readonly name: string; readonly bytes: Buffer }
+
+function buildSchema3Export(databasePath: string): readonly Schema3ExportFile[] {
+  const contracts = tableContractsForSchemaVersion(LEGACY_DATA_EXPORT_SCHEMA_VERSION);
+  const db = new Database(databasePath, { readonly: true, fileMustExist: true });
+  const files: Schema3ExportFile[] = [];
+  const tables: Record<string, Record<string, unknown>> = {};
+  const manifest = {
+    format: DATA_EXPORT_FORMAT,
+    schemaVersion: LEGACY_DATA_EXPORT_SCHEMA_VERSION,
+    integrityContract: {
+      version: TENANT_INTEGRITY_CONTRACT_VERSION,
+      rules: [
+        "foundation-parent-closure",
+        "composite-tenant-relationships",
+        "legacy-scope-mappings",
+        "compatibility-receipt-bindings",
+        "immutable-state-facts",
+      ],
+    },
+    exportedAt: ARCHIVE_EXPORTED_AT,
+    source: { kind: "sqlite", file: basename(databasePath) },
+    tableOrder: contracts.map(({ name }) => name),
+    excludedColumns: Object.fromEntries(
+      contracts
+        .filter(({ excludedColumns }) => excludedColumns.length > 0)
+        .map(({ name, excludedColumns }) => [name, [...excludedColumns]]),
+    ),
+    sanitizedColumns: Object.fromEntries(
+      Object.entries(DATA_EXPORT_SANITIZED_COLUMNS).map(([name, columns]) => [name, [...columns]]),
+    ),
+    tables,
+  };
+  try {
+    db.exec("BEGIN");
+    for (const contract of contracts) {
+      const schema = db.prepare(`PRAGMA table_info(${quoteIdent(contract.name)})`).all() as Array<{ name: string; pk: number | bigint }>;
+      if (schema.length === 0) fail("G006B_EVIDENCE_DRIFT", `${contract.name}: expected schema-3 table is missing`);
+      const actualPrimaryKey = schema
+        .filter(({ pk }) => Number(pk) > 0)
+        .sort((left, right) => Number(left.pk) - Number(right.pk))
+        .map(({ name }) => String(name));
+      if (actualPrimaryKey.length !== contract.physicalPrimaryKey.length
+          || actualPrimaryKey.some((column, index) => column !== contract.physicalPrimaryKey[index])) {
+        fail("G006B_EVIDENCE_DRIFT", `${contract.name}: SQLite primary key does not match the recovery contract`);
+      }
+      const sourceColumns = schema.map(({ name }) => String(name));
+      for (const protectedColumn of contract.excludedColumns) {
+        if (!sourceColumns.includes(protectedColumn)) fail("G006B_EVIDENCE_DRIFT", `${contract.name}: protected column ${protectedColumn} is missing`);
+      }
+      const excluded = new Set<string>(contract.excludedColumns);
+      const columns = sourceColumns.filter((column) => !excluded.has(column));
+      for (const identityColumn of contract.rowIdentity) {
+        if (!columns.includes(identityColumn)) fail("G006B_EVIDENCE_DRIFT", `${contract.name}: schema-3 row identity column ${identityColumn} is missing`);
+      }
+      const rawCredentialColumns = columns.filter((column) => /(?:^|_)(?:password|secret|credential|access_token|refresh_token|api_key)(?:_|$)/iu.test(column));
+      if (rawCredentialColumns.length !== 0) fail("G006B_EVIDENCE_DRIFT", `${contract.name}: raw credential columns are not explicitly excluded`);
+      const sourceRows = db.prepare(`SELECT ${columns.map(quoteIdent).join(", ")} FROM ${quoteIdent(contract.name)}`).all() as Array<Record<string, unknown>>;
+      const rows = sourceRows.map((row, rowIndex) => Object.hasOwn(DATA_EXPORT_SANITIZED_COLUMNS, contract.name)
+        ? { ...row, raw_json: sanitizeRawGoogleReviewJson(row.raw_json, `${contract.name}[${rowIndex}].raw_json`) }
+        : row);
+      const identities = new Set<string>();
+      for (const [rowIndex, row] of rows.entries()) {
+        const identity = encodeRowIdentity(contract, row, `${contract.name}[${rowIndex}]`);
+        if (identities.has(identity)) fail("G006B_EVIDENCE_DRIFT", `${contract.name}: duplicate row identity at row ${rowIndex}`);
+        identities.add(identity);
+      }
+      const fileName = `${contract.name}.json`;
+      const payload = `${JSON.stringify(rows, null, 2)}\n`;
+      files.push(Object.freeze({ name: fileName, bytes: Buffer.from(payload, "utf8") }));
+      tables[contract.name] = {
+        file: fileName,
+        rows: rows.length,
+        columns,
+        primaryKey: [...actualPrimaryKey],
+        bytes: Buffer.byteLength(payload),
+        sha256: sha256Bytes(payload),
+      };
+    }
+    db.exec("COMMIT");
+    files.push(Object.freeze({ name: "manifest.json", bytes: Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8") }));
+  } catch (error) {
+    if (db.inTransaction) db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    db.close();
+  }
+  return Object.freeze(files);
+}
+
+async function exportSchema3IntoOwnedDirectory(
+  databasePath: string,
+  outputDirectory: string,
+  ledger: OwnershipLedger,
+): Promise<void> {
+  for (const file of buildSchema3Export(databasePath)) {
+    await writeOwnedDurable(join(outputDirectory, file.name), file.bytes, ledger);
+  }
+}
+
 class NativeDatabaseLease {
   readonly #child: ChildProcessWithoutNullStreams;
   readonly #lines: AsyncIterator<string>;
   readonly #reader: Interface;
   #stderr = "";
+  #publicationEver = false;
 
   private constructor(child: ChildProcessWithoutNullStreams) {
     this.#child = child;
@@ -695,11 +823,11 @@ class NativeDatabaseLease {
     child.stderr.on("data", (chunk: string) => { this.#stderr += chunk; });
   }
 
-  public static async acquire(input: ValidatedInput): Promise<{ lease: NativeDatabaseLease; identity: SqliteG006bNativeIdentity }> {
+  public static async acquire(databasePath: string, lockPath: string): Promise<{ lease: NativeDatabaseLease; identity: SqliteG006bNativeIdentity }> {
     assertInternalPublisher();
     const child = spawn(POWERSHELL_EXE, [
       "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PUBLISHER_SCRIPT_PATH,
-      "-Mode", "LeaseDatabase", "-Path", input.databasePath, "-LockPath", input.lockPath,
+      "-Mode", "LeaseDatabase", "-Path", databasePath, "-LockPath", lockPath,
     ], { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     const lease = new NativeDatabaseLease(child);
     try {
@@ -710,15 +838,24 @@ class NativeDatabaseLease {
     }
   }
 
-  async #next(expectedStatus: string): Promise<SqliteG006bNativeIdentity> {
+  async #readLine(label: string): Promise<string> {
     const line = await this.#lines.next();
     if (line.done) {
-      const detail = this.#stderr.trim() || "native lease ended without response";
+      const exitCode = this.#child.exitCode ?? await new Promise<number | null>((resolveExit) => this.#child.once("exit", resolveExit));
+      const detail = this.#stderr.trim() || `native lease ended during ${label} (exit ${String(exitCode)})`;
       if (detail.includes("database lock held")) fail("G006B_LOCK_HELD", detail);
+      if (exitCode === 14 || this.#publicationEver || detail.includes("G006B_PUBLISHED_UNVERIFIED_RECOVERY_REQUIRED")) {
+        throw new SqliteG006bPublishedUnverifiedError(detail);
+      }
       fail("G006B_PUBLISH_FAILED", detail);
     }
+    return line.value;
+  }
+
+  async #next(expectedStatus: string): Promise<SqliteG006bNativeIdentity> {
+    const raw = await this.#readLine(expectedStatus);
     let parsed: unknown;
-    try { parsed = JSON.parse(line.value); } catch { return fail("G006B_PUBLISH_FAILED", "native lease returned invalid JSON"); }
+    try { parsed = JSON.parse(raw); } catch { return fail("G006B_PUBLISH_FAILED", "native lease returned invalid JSON"); }
     exactKeys(parsed, ["status", "volumeSerialNumber", "fileId", "size", "numberOfLinks", "attributes", "finalPath", "sha256", "fileSystem"], "native lease response");
     if (parsed.status !== expectedStatus) fail("G006B_PUBLISH_FAILED", `native lease status ${String(parsed.status)}`);
     const identity = {
@@ -733,9 +870,20 @@ class NativeDatabaseLease {
     return identity;
   }
 
+  private async writeCommand(command: string): Promise<void> {
+    try {
+      await new Promise<void>((resolveWrite, rejectWrite) => {
+        this.#child.stdin.write(`${command}\n`, "utf8", (error) => error ? rejectWrite(error) : resolveWrite());
+      });
+    } catch (error) {
+      if (this.#publicationEver) throw new SqliteG006bPublishedUnverifiedError(`publication broker transport: ${message(error)}`);
+      throw error;
+    }
+  }
+
   private async command(command: "inspect" | "settle", expected: string): Promise<SqliteG006bNativeIdentity> {
     assertInternalPublisher();
-    if (!this.#child.stdin.write(`${command}\n`, "utf8")) await new Promise<void>((resolveWrite) => this.#child.stdin.once("drain", resolveWrite));
+    await this.writeCommand(command);
     const result = await this.#next(expected);
     assertInternalPublisher();
     return result;
@@ -743,6 +891,60 @@ class NativeDatabaseLease {
 
   public inspect(): Promise<SqliteG006bNativeIdentity> { return this.command("inspect", "lease-inspected"); }
   public settle(): Promise<SqliteG006bNativeIdentity> { return this.command("settle", "lease-settled"); }
+
+  public async createResource(path: string, kind: "file" | "directory"): Promise<OwnedIdentity> {
+    assertInternalPublisher();
+    await this.writeCommand(`resource-create-${kind}\t${path}`);
+    const raw = await this.#readLine("resource create");
+    let value: unknown;
+    try { value = JSON.parse(raw); } catch { return fail("G006B_PUBLISH_FAILED", "resource create returned invalid JSON"); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) fail("G006B_PUBLISH_FAILED", "resource create shape");
+    const record = value as Record<string, unknown>;
+    if (record.status !== "resource-created" || typeof record.volumeSerialNumber !== "string" || !/^[0-9]+$/u.test(record.volumeSerialNumber)
+        || typeof record.fileId !== "string" || !/^[0-9a-f]{32}$/u.test(record.fileId)) fail("G006B_PUBLISH_FAILED", "resource create identity");
+    assertInternalPublisher();
+    return Object.freeze({ volumeSerialNumber: record.volumeSerialNumber, fileId: record.fileId });
+  }
+
+  public async cleanupResource(path: string): Promise<void> {
+    await this.writeCommand(`resource-cleanup\t${path}`);
+    const raw = await this.#readLine("resource cleanup");
+    let value: unknown;
+    try { value = JSON.parse(raw); } catch { return fail("G006B_PUBLISH_FAILED", "resource cleanup returned invalid JSON"); }
+    if (!value || typeof value !== "object" || (value as Record<string, unknown>).status !== "resource-cleanup") fail("G006B_PUBLISH_FAILED", "resource cleanup status");
+  }
+
+  public async releaseResource(path: string): Promise<void> {
+    await this.writeCommand(`resource-release\t${path}`);
+    const raw = await this.#readLine("resource release");
+    let value: unknown;
+    try { value = JSON.parse(raw); } catch { return fail("G006B_PUBLISH_FAILED", "resource release returned invalid JSON"); }
+    if (!value || typeof value !== "object" || (value as Record<string, unknown>).status !== "resource-released") fail("G006B_PUBLISH_FAILED", "resource release status");
+  }
+
+  public async publishResource(path: string, destination: string, sha256: string, bytes: number): Promise<SqliteG006bNativeIdentity> {
+    let ready = false;
+    try {
+      assertInternalPublisher();
+      await this.writeCommand(`resource-publish\t${path}\t${destination}\t${sha256}\t${String(bytes)}`);
+      const published = await this.#next("publication-ready");
+      this.#publicationEver = true;
+      ready = true;
+      await this.writeCommand("publication-inspect");
+      const inspected = await this.#next("publication-inspected");
+      if (!sameCanonical(published, inspected)) throw new SqliteG006bPublishedUnverifiedError("publication challenge identity drift");
+      assertInternalPublisher();
+      await this.writeCommand("publication-release");
+      const released = await this.#next("publication-released");
+      if (!sameCanonical(inspected, released)) throw new SqliteG006bPublishedUnverifiedError("publication release identity drift");
+      assertInternalPublisher();
+      return released;
+    } catch (error) {
+      if (error instanceof SqliteG006bPublishedUnverifiedError) throw error;
+      if (ready || this.#publicationEver || this.#stderr.includes("G006B_PUBLISHED_UNVERIFIED")) throw new SqliteG006bPublishedUnverifiedError(message(error));
+      throw error;
+    }
+  }
 
   public async release(): Promise<SqliteG006bNativeIdentity> {
     this.#child.stdin.end("release\n", "utf8");
@@ -1046,13 +1248,13 @@ function createEnvelope(phase: "prepared" | "committed", payload: Record<string,
   });
 }
 
-function publishEnvelope(input: ValidatedInput, phase: "prepared" | "committed", payload: Record<string, unknown>): RecordEnvelope {
+async function publishEnvelope(input: ValidatedInput, phase: "prepared" | "committed", payload: Record<string, unknown>, ledger: OwnershipLedger): Promise<RecordEnvelope> {
   const envelope = createEnvelope(phase, payload);
   const temporary = phase === "prepared" ? input.preparedTemporaryPath : input.committedTemporaryPath;
   const destination = phase === "prepared" ? input.preparedPath : input.committedPath;
   if (existsSync(temporary)) fail("G006B_PUBLISH_FAILED", `${phase} temp already exists`);
-  writeExclusiveDurable(temporary, Buffer.from(canonicalizeSqliteG006bRecord(envelope), "utf8"));
-  publish(temporary, destination);
+  await writeOwnedDurable(temporary, Buffer.from(canonicalizeSqliteG006bRecord(envelope), "utf8"), ledger);
+  await publish(temporary, destination, ledger);
   return readEnvelope(destination, phase);
 }
 
@@ -1097,7 +1299,16 @@ export function computeSqliteG006bArchiveTreeHash(directory: string): string {
 function verifyArchive(input: ValidatedInput, archive: Record<string, unknown>): void {
   exactKeys(archive, ["path", "schemaVersion", "manifestSha256", "entries", "treeHash"], "archive evidence");
   if (archive.path !== input.archiveDirectory || archive.schemaVersion !== 3) fail("G006B_EVIDENCE_DRIFT", "archive path/schema");
-  validateDataExportDirectory(input.archiveDirectory);
+  try {
+    validateDataExportDirectory(input.archiveDirectory);
+  } catch (error) {
+    fail("G006B_EVIDENCE_DRIFT", `archive contract: ${message(error)}`);
+  }
+  for (const expected of buildSchema3Export(input.backupPath)) {
+    if (!readFileSync(join(input.archiveDirectory, expected.name)).equals(expected.bytes)) {
+      fail("G006B_EVIDENCE_DRIFT", `archive entry ${expected.name} differs from pinned backup export`);
+    }
+  }
   const entries = archiveEntries(input.archiveDirectory);
   const treeHash = archiveTreeHash(entries);
   const manifestEntry = entries.find((entry) => entry.name === "manifest.json");
@@ -1109,6 +1320,7 @@ async function makeBackupAndArchive(
   prePreservation: PreservationEvidence,
   writer: Database.Database,
   lease: NativeDatabaseLease,
+  ledger: OwnershipLedger,
 ): Promise<{ backup: Record<string, CanonicalValue>; archive: Record<string, CanonicalValue> }> {
   if (existsSync(input.backupTemporaryPath) || existsSync(input.archiveStagingDirectory)) fail("G006B_PUBLISH_FAILED", "backup/archive staging residue exists");
   let snapshot: Database.Database | undefined;
@@ -1116,6 +1328,7 @@ async function makeBackupAndArchive(
     assertAcceptedState(writer, input.expectedAcceptedPhysicalManifestDigest);
     const lockedNative = await lease.inspect();
     if (lockedNative.fileId !== input.expectedSourceIdentity.fileId || lockedNative.volumeSerialNumber !== input.expectedSourceIdentity.volumeSerialNumber) fail("G006B_EVIDENCE_DRIFT", "source file identity under backup lock");
+    await ledger.create(input.backupTemporaryPath, "file");
     snapshot = new Database(input.databasePath, { readonly: true, fileMustExist: true });
     await snapshot.backup(input.backupTemporaryPath);
     snapshot.close();
@@ -1124,10 +1337,9 @@ async function makeBackupAndArchive(
     if (snapshot?.open) snapshot.close();
     throw error;
   }
-  const backupIdentity = publish(input.backupTemporaryPath, input.backupPath);
+  const backupIdentity = await publish(input.backupTemporaryPath, input.backupPath, ledger);
   const backupDb = new Database(input.backupPath, { readonly: true, fileMustExist: true });
   backupDb.pragma("foreign_keys = ON");
-  let stagingIdentity: OwnedIdentity | undefined;
   let primary: unknown;
   let output: { backup: Record<string, CanonicalValue>; archive: Record<string, CanonicalValue> } | undefined;
   const cleanup: string[] = [];
@@ -1136,29 +1348,23 @@ async function makeBackupAndArchive(
     const preservation = capturePreservation(backupDb);
     if (!samePreservation(prePreservation, preservation)) fail("G006B_EVIDENCE_DRIFT", "backup rowsets differ from source");
     verifyT028Pre(backupDb, input);
-    mkdirSync(input.archiveStagingDirectory);
-    stagingIdentity = inspectOwned(input.archiveStagingDirectory, "directory");
-    exportSqliteData({ dbPath: input.backupPath, outDir: input.archiveStagingDirectory, schemaVersion: LEGACY_DATA_EXPORT_SCHEMA_VERSION });
-    const manifestPath = join(input.archiveStagingDirectory, "manifest.json");
-    const exportManifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
-    exportManifest.exportedAt = ARCHIVE_EXPORTED_AT;
-    writeFileSync(manifestPath, `${JSON.stringify(exportManifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await ledger.create(input.archiveStagingDirectory, "directory");
+    await exportSchema3IntoOwnedDirectory(input.backupPath, input.archiveStagingDirectory, ledger);
     validateDataExportDirectory(input.archiveStagingDirectory);
     const stagedEntries = archiveEntries(input.archiveStagingDirectory);
     const treeHash = archiveTreeHash(stagedEntries);
     if (basename(input.archiveDirectory) !== treeHash) fail("G006B_INPUT_REJECTED", "archiveDirectory must end in exact content tree hash");
     if (!existsSync(input.archiveDirectory)) {
-      mkdirSync(input.archiveDirectory);
-      flushDirectory(dirname(input.archiveDirectory));
+      await ledger.create(input.archiveDirectory, "directory", "release");
+      await ledger.releasePersistent(input.archiveDirectory);
     }
     const existing = readdirSync(input.archiveDirectory);
     if (existing.some((name) => !stagedEntries.some((entry) => entry.name === name))) fail("G006B_EVIDENCE_DRIFT", "unexpected existing archive entry");
     for (const entry of stagedEntries) {
       const destination = join(input.archiveDirectory, String(entry.name));
       const temporary = `${destination}.g006b.tmp.${input.privateToken}`;
-      if (!existsSync(destination)) writeExclusiveDurable(temporary, readFileSync(join(input.archiveStagingDirectory, String(entry.name))));
-      else if (!existsSync(temporary)) writeExclusiveDurable(temporary, readFileSync(join(input.archiveStagingDirectory, String(entry.name))));
-      publish(temporary, destination);
+      await writeOwnedDurable(temporary, readFileSync(join(input.archiveStagingDirectory, String(entry.name))), ledger);
+      await publish(temporary, destination, ledger);
     }
     flushDirectory(input.archiveDirectory);
     validateDataExportDirectory(input.archiveDirectory);
@@ -1186,10 +1392,6 @@ async function makeBackupAndArchive(
     primary = error;
   } finally {
     try { backupDb.close(); } catch (error) { cleanup.push(`backup close: ${message(error)}`); }
-    if (stagingIdentity && existsSync(input.archiveStagingDirectory)) {
-      try { cleanupOwnedTree(input.archiveStagingDirectory, stagingIdentity); }
-      catch (error) { cleanup.push(`archive staging cleanup: ${message(error)}`); }
-    }
   }
   if (primary instanceof SqliteG006bError) throw new SqliteG006bError(primary.code, primary.message, [...primary.cleanupFailures, ...cleanup]);
   if (primary !== undefined) throw new SqliteG006bError("G006B_PUBLISH_FAILED", message(primary), cleanup);
@@ -1273,12 +1475,15 @@ async function verifyPostDatabase(
     if (db.open && db.inTransaction) { try { db.exec("ROLLBACK"); } catch { /* primary is preserved */ } }
     throw error;
   } finally { db.close(); }
-  if (input.fault === "post-commit-verifier") throw new Error("simulated post-commit verifier failure");
   assertNoWalFrames(input.databasePath);
   const native = await lease.inspect();
   if (!sameCanonical(native, settledNative)) fail("G006B_EVIDENCE_DRIFT", "post snapshot changed settled main bytes");
-  const expectedNative = (preparedPayload.database as Record<string, unknown>).native as SqliteG006bNativeIdentity;
+  const preparedDatabase = preparedPayload.database as Record<string, unknown>;
+  const expectedNative = preparedDatabase.native as SqliteG006bNativeIdentity;
   if (native.fileId !== expectedNative.fileId || native.volumeSerialNumber !== expectedNative.volumeSerialNumber) fail("G006B_EVIDENCE_DRIFT", "post database file identity");
+  if (result.journalMode !== input.expectedJournalMode || result.journalMode !== preparedDatabase.journalMode) {
+    fail("G006B_EVIDENCE_DRIFT", "post journal mode differs from input/PREPARED pin");
+  }
   const database = databaseEvidence(input.databasePath, native, result.state, SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST, result.preservation, input.manifest, result.dataVersion, result.journalMode);
   const verification = {
     state: expectedPostState(result.preservation, result.counts, result.health),
@@ -1296,7 +1501,6 @@ async function verifyPostDatabase(
 }
 
 async function applyMutation(input: ValidatedInput, preparedPayload: Record<string, unknown>, db: Database.Database, lease: NativeDatabaseLease): Promise<void> {
-  if (input.fault === "writer-primary-and-rollback-sentinel") fail("G006B_EVIDENCE_DRIFT", "simulated writer primary failure");
   assertAcceptedState(db, input.expectedAcceptedPhysicalManifestDigest);
   const baseline = preparedPayload.preservation as unknown as PreservationEvidence;
   if (!samePreservation(baseline, capturePreservation(db))) fail("G006B_EVIDENCE_DRIFT", "pre-mutation preservation drift");
@@ -1331,7 +1535,7 @@ function assertPreparedPayload(input: ValidatedInput, payload: Record<string, un
       || database.physicalManifestDigest !== input.expectedAcceptedPhysicalManifestDigest
       || database.applicationTableCount !== 37 || database.targetColumnCount !== 27 || database.expectedTargetColumnCount !== 32
       || database.sourceSnapshotFingerprint !== input.manifest.sourceSnapshotFingerprint
-      || (database.journalMode !== "delete" && database.journalMode !== "wal")
+      || database.journalMode !== input.expectedJournalMode
       || !Number.isSafeInteger(database.dataVersion)) fail("G006B_EVIDENCE_DRIFT", "prepared database evidence");
   exactKeys(payload.t028, ["manifest", "manifestHash", "receipt", "receiptRowSha256"], "prepared t028");
   const t028 = payload.t028 as Record<string, unknown>;
@@ -1359,53 +1563,80 @@ function assertPreparedPayload(input: ValidatedInput, payload: Record<string, un
   return { receipt, g023 };
 }
 
-function cleanupDerivedTransient(path: string, cleanup: string[]): void {
-  if (!existsSync(path)) return;
-  try { cleanupOwned(path, "file", inspectOwned(path, "file")); }
-  catch (error) { cleanup.push(`temporary cleanup ${path}: ${message(error)}`); }
-}
-
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function inspectSqliteG006bPreFinalizationEvidence(input: SqliteG006bInspectionInput): SqliteG006bInspectionResult {
+export async function inspectSqliteG006bPreFinalizationEvidence(input: SqliteG006bInspectionInput): Promise<SqliteG006bInspectionResult> {
   exactKeys(input, ["databasePath", "manifest", "seed"], "inspection input");
   canonicalExistingFile(input.databasePath, "inspection databasePath");
-  assertInternalPublisher();
+  validateEmbeddedJsonValue(input.manifest, "inspection manifest");
   exactKeys(input.manifest, MANIFEST_KEYS, "inspection manifest");
-  const sourceIdentity = inspectNative(input.databasePath);
-  const db = new Database(input.databasePath, { readonly: true, fileMustExist: true });
-  db.pragma("foreign_keys = ON");
+  assertManifestRecursiveShape(input.manifest, "inspection manifest");
+  validateEmbeddedJsonValue(input.seed, "inspection seed");
+  const snapshot = deepFreeze({
+    databasePath: input.databasePath,
+    manifest: jsonSnapshot(input.manifest),
+    seed: jsonSnapshot(input.seed),
+  });
+  assertInternalPublisher();
+  const acquired = await NativeDatabaseLease.acquire(snapshot.databasePath, `${snapshot.databasePath}.g006b.lock`);
+  let db: Database.Database | undefined;
+  let result: SqliteG006bInspectionResult | undefined;
+  let primary: unknown;
+  const cleanup: string[] = [];
   try {
+    assertNoWalFrames(snapshot.databasePath);
+    db = new Database(snapshot.databasePath, { fileMustExist: true });
+    db.pragma("foreign_keys = ON");
+    db.exec("BEGIN IMMEDIATE");
+    const journalMode = assertDatabaseConnectionBoundary(db);
+    const dataVersion = Number(db.pragma("data_version", { simple: true }));
     const physical = sqliteSchemaV1PhysicalManifestDigest(db);
     assertAcceptedState(db, physical);
     const preservation = capturePreservation(db);
-    const row = receiptRow(db, input.manifest);
+    const row = receiptRow(db, snapshot.manifest);
     const receipt = parseReceipt(row);
-    const manifestHash = compatibilityManifestHash(input.manifest);
-    const replay = runSqliteCompatibilityBackfill(readonlyBackfillAdapter(db), input.manifest);
+    const manifestHash = compatibilityManifestHash(snapshot.manifest);
+    const replay = runSqliteCompatibilityBackfill(readonlyBackfillAdapter(db), snapshot.manifest);
     if (!sameCanonical(replay, receipt)) fail("G006B_EVIDENCE_DRIFT", "inspection T028 replay");
-    const seedCanonicalJson = canonicalizeCompatibilityConfiguration(input.seed);
+    const seedCanonicalJson = canonicalizeCompatibilityConfiguration(snapshot.seed);
     const parsedSeed = parseLegacyWebsiteLeadPlayJson(seedCanonicalJson);
     if (!parsedSeed.ok) fail("G006B_EVIDENCE_DRIFT", `inspection G023 seed ${parsedSeed.reasonCode}`);
     const binding = bindLegacyWebsiteLeadPlay({
-      tenantId: input.manifest.tenantId,
-      workspaceId: input.manifest.workspaceId,
-      manifest: input.manifest,
+      tenantId: snapshot.manifest.tenantId,
+      workspaceId: snapshot.manifest.workspaceId,
+      manifest: snapshot.manifest,
       receipt,
       seed: parsedSeed.seed,
     });
     if (!binding.ok || receipt.receiptId !== `compatibility-backfill-${manifestHash.slice(0, 24)}`) fail("G006B_EVIDENCE_DRIFT", "inspection G023/T028 binding");
-    return Object.freeze({
+    if (Number(db.pragma("data_version", { simple: true })) !== dataVersion) fail("G006B_EVIDENCE_DRIFT", "inspection data_version changed");
+    db.exec("ROLLBACK");
+    db.close();
+    db = undefined;
+    assertNoWalFrames(snapshot.databasePath);
+    const sourceIdentity = await acquired.lease.settle();
+    if (!sameCanonical(sourceIdentity, acquired.identity)) fail("G006B_EVIDENCE_DRIFT", "inspection main bytes changed across snapshot close");
+    result = deepFreeze({
       sourceIdentity,
       acceptedPhysicalManifestDigest: physical,
       receiptRowSha256: receiptRowSha256(row),
       bindingId: binding.binding.bindingId,
       configurationHash: binding.binding.configurationHash,
       preservationAggregateSha256: preservation.aggregateSha256,
+      journalMode,
     });
-  } finally { db.close(); }
+  } catch (error) {
+    primary = error;
+  } finally {
+    if (db?.open && db.inTransaction) { try { db.exec("ROLLBACK"); } catch (error) { cleanup.push(`inspection rollback: ${message(error)}`); } }
+    if (db?.open) { try { db.close(); } catch (error) { cleanup.push(`inspection close: ${message(error)}`); } }
+    try { await acquired.lease.release(); } catch (error) { cleanup.push(`inspection lease release: ${message(error)}`); }
+  }
+  if (!primary && cleanup.length === 0 && result) return result;
+  if (primary instanceof SqliteG006bError) throw new SqliteG006bError(primary.code, primary.message, [...primary.cleanupFailures, ...cleanup]);
+  throw new SqliteG006bError("G006B_STATE_REJECTED", message(primary ?? "inspection cleanup failed"), cleanup);
 }
 
 export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFinalizationInput): Promise<SqliteG006bPreFinalizationResult> {
@@ -1417,9 +1648,12 @@ export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFina
   let commitInvoked = false;
   let result: SqliteG006bPreFinalizationResult | undefined;
   let commitError: unknown;
+  let cleanupPublishedUnverified: SqliteG006bPublishedUnverifiedError | undefined;
+  let ledger: OwnershipLedger | undefined;
   try {
-    const acquired = await NativeDatabaseLease.acquire(input);
+    const acquired = await NativeDatabaseLease.acquire(input.databasePath, input.lockPath);
     lease = acquired.lease;
+    ledger = new OwnershipLedger(lease);
     if (acquired.identity.fileId !== input.expectedSourceIdentity.fileId
         || acquired.identity.volumeSerialNumber !== input.expectedSourceIdentity.volumeSerialNumber
         || (input.mode === "execute" && !sameCanonical(acquired.identity, input.expectedSourceIdentity))) {
@@ -1462,6 +1696,7 @@ export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFina
       writer.pragma("foreign_keys = ON");
       writer.exec("BEGIN IMMEDIATE");
       const journalMode = assertDatabaseConnectionBoundary(writer);
+      if (journalMode !== input.expectedJournalMode) fail("G006B_EVIDENCE_DRIFT", `journal mode pin ${journalMode}/${input.expectedJournalMode}`);
       let kind = classifySqliteSchemaV1(writer).kind;
       if (input.mode === "execute") {
         const state = assertAcceptedState(writer, input.expectedAcceptedPhysicalManifestDigest);
@@ -1470,7 +1705,7 @@ export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFina
         const evidence = verifyT028Pre(writer, input);
         const g023 = g023Evidence(input, evidence.receipt);
         const database = databaseEvidence(input.databasePath, input.expectedSourceIdentity, state, input.expectedAcceptedPhysicalManifestDigest, preservation, input.manifest, Number(writer.pragma("data_version", { simple: true })), journalMode);
-        const artifacts = await makeBackupAndArchive(input, preservation, writer, lease);
+        const artifacts = await makeBackupAndArchive(input, preservation, writer, lease, ledger);
         const liveNative = await lease.inspect();
         if (liveNative.fileId !== input.expectedSourceIdentity.fileId || liveNative.volumeSerialNumber !== input.expectedSourceIdentity.volumeSerialNumber) fail("G006B_EVIDENCE_DRIFT", "live source FileId changed after backup/archive");
         if (!samePreservation(preservation, capturePreservation(writer))) fail("G006B_EVIDENCE_DRIFT", "live source changed after backup/archive");
@@ -1489,9 +1724,8 @@ export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFina
           mutation: mutationEvidence(),
           expectedPostState: expectedPostState(preservation, zeroSourceCounts, { integrityCheck: "ok", foreignKeyFailureCount: 0, orphanCount: 0 }),
         };
-        prepared = publishEnvelope(input, "prepared", preparedPayload);
+        prepared = await publishEnvelope(input, "prepared", preparedPayload, ledger);
         receipt = evidence.receipt;
-        if (input.fault === "after-prepared-publish") fail("G006B_STATE_REJECTED", "simulated crash after prepared publication");
         kind = "accepted-legacy";
       }
 
@@ -1507,7 +1741,6 @@ export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFina
       }
       writer.close();
       writer = undefined;
-      if (input.fault === "after-database-commit") throw new Error("simulated crash after database commit");
       assertNoWalFrames(input.databasePath);
       const settled = await lease.settle();
       const verified = await verifyPostDatabase(input, prepared.payload, receipt!, lease, settled);
@@ -1520,7 +1753,7 @@ export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFina
         database: verified.database,
         verification: verified.verification,
       };
-      const committed = publishEnvelope(input, "committed", committedPayload);
+      const committed = await publishEnvelope(input, "committed", committedPayload, ledger);
       result = deepFreeze({ mode: input.mode, status: "committed", preparedHandoffId: prepared.handoffId, committedHandoffId: committed.handoffId, bindingHash });
     }
   } catch (error) {
@@ -1528,23 +1761,33 @@ export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFina
   } finally {
     if (writer?.open && writer.inTransaction && !commitInvoked) {
       try { writer.exec("ROLLBACK"); } catch (error) { cleanup.push(`writer rollback: ${message(error)}`); }
-      if (input.fault === "writer-primary-and-rollback-sentinel") cleanup.push("writer rollback: simulated cleanup sentinel");
     }
     if (writer?.open) { try { writer.close(); } catch (error) { cleanup.push(`writer close: ${message(error)}`); } }
-    cleanupDerivedTransient(input.backupTemporaryPath, cleanup);
-    cleanupDerivedTransient(input.preparedTemporaryPath, cleanup);
-    cleanupDerivedTransient(input.committedTemporaryPath, cleanup);
+    if (ledger) cleanupPublishedUnverified = await ledger.cleanupAll(cleanup);
     if (lease) {
       try {
         await lease.release();
-        if (input.fault === "post-commit-release" && commitInvoked) throw new Error("simulated post-commit release failure");
-      } catch (error) { cleanup.push(`native lease release: ${message(error)}`); }
+      } catch (error) {
+        if (error instanceof SqliteG006bPublishedUnverifiedError) cleanupPublishedUnverified ??= error;
+        cleanup.push(`native lease release: ${message(error)}`);
+      }
     }
   }
   if (!primary && cleanup.length === 0 && result) return result;
   const detail = [commitError === undefined ? undefined : `COMMIT returned: ${message(commitError)}`, primary === undefined ? undefined : message(primary)].filter(Boolean).join("; ") || "post-commit cleanup failed";
-  if (commitInvoked) throw new SqliteG006bCommittedUnverifiedError(detail, cleanup);
+  if (commitInvoked || (result?.status === "replayed")) throw new SqliteG006bCommittedUnverifiedError(detail, cleanup);
   if (primary instanceof SqliteG006bCommittedUnverifiedError) throw new SqliteG006bCommittedUnverifiedError(primary.message, [...primary.cleanupFailures, ...cleanup]);
+  if (primary instanceof SqliteG006bPublishedUnverifiedError || cleanupPublishedUnverified) {
+    const published = primary instanceof SqliteG006bPublishedUnverifiedError ? primary : cleanupPublishedUnverified!;
+    throw new SqliteG006bPublishedUnverifiedError(
+      primary && primary !== published ? `${message(primary)}; ${published.message}` : published.message,
+      [...published.cleanupFailures, ...cleanup],
+    );
+  }
   if (primary instanceof SqliteG006bError) throw new SqliteG006bError(primary.code, primary.message, [...primary.cleanupFailures, ...cleanup]);
-  throw new SqliteG006bError("G006B_STATE_REJECTED", message(primary), cleanup);
+  throw new SqliteG006bError(
+    input.mode === "replay" ? "G006B_RECOVERY_REQUIRED" : "G006B_STATE_REJECTED",
+    primary === undefined ? `${input.mode} cleanup failed` : message(primary),
+    cleanup,
+  );
 }

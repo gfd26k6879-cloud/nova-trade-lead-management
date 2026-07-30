@@ -4,9 +4,9 @@ Date: 2026-07-30
 
 Branch: `codex/nova-platform-tenancy`
 
-Repair parent: `07a21296e5a5fb3758165415ba94355da874a77f`
+Repair parent: `6c8c2dcbb6ca4cee0f575471ede8e3ffc9dde218`
 
-Binding integration-control revision: `b55b19a`
+Binding controls: `2f42e50cbbc5ecdea783b637e263fb9e5a89b8a9`, `b48d0bcf3680d564300416a237e72d5b1c781aa6`
 
 Authority: local legacy-only B1 preparation. No startup activation, journal-mode transition, WAL checkpoint, provider use, external activity, restore, deployment, or final schema upgrade is authorized.
 
@@ -20,13 +20,13 @@ The public input is an exact discriminated union:
 - `resume` additionally requires the exact expected PREPARED handoff ID; and
 - `replay` additionally requires the exact expected COMMITTED handoff ID.
 
-The caller cannot supply the PowerShell executable, helper path/hash, lock path, temporary paths, or archive staging path. Validation accepts only enumerable data properties, recursively validates manifest/seed content, snapshots it with `structuredClone`, derives private resource names, and deep-freezes the internal authority record before the first asynchronous boundary. Results are deep-frozen mode/status unions.
+The caller cannot supply the PowerShell executable, helper path/hash, lock path, temporary paths, or archive staging path. Validation is descriptor-first and rejects accessors, proxies, symbols, sparse arrays, malformed paths, and extra authority before reading nested values. It snapshots the validated manifest/seed with `structuredClone`, derives unpredictable names from a fresh 24-byte token per invocation, and deep-freezes the internal authority record before the first asynchronous boundary. Results are deep-frozen mode/status unions.
 
 ## Transaction and evidence order
 
 The operation acquires a native retained FileId lease and create-new database lock before opening SQLite. For execute/resume mutation, one writer remains in `BEGIN IMMEDIATE` across exact prechecks, the SQLite online backup, archive publication, PREPARED publication, both native FileId rechecks, all four DDL/backfill steps, and `COMMIT` invocation. PREPARED is therefore durable before mutation becomes reachable.
 
-The backup is reopened and checked against the accepted catalog, T-028 receipt, and all-37-table type-tagged preservation evidence. The schema-3 archive is exactly 37 table JSON files plus `manifest.json`. Backup, archive entries, PREPARED, and COMMITTED use a native no-replace/write-through publisher. Owned staging cleanup is handle-identity-bound; caller-selected cleanup targets do not exist in the API.
+The backup is reopened and checked against the accepted catalog, T-028 receipt, and all-37-table type-tagged preservation evidence. The schema-3 archive is exactly 37 table JSON files plus `manifest.json`. Replay regenerates every expected schema-3 byte sequence from the pinned backup, so a semantically altered archive is rejected even if an attacker recomputes its file hashes, manifest, tree hash, PREPARED envelope, COMMITTED link, and binding hash. Backup, every archive entry, PREPARED, and COMMITTED use the retained native no-replace/write-through publisher. Owned staging cleanup is create-time handle/FileId-bound; caller-selected cleanup targets do not exist in the API, and a swapped path occupant is never treated as owned.
 
 Once `COMMIT` is invoked, the writer is closed before settled main-file bytes are captured. Any commit error is reconciled against a fresh post-state; any unresolved commit, verification, publication, lease-release, or cleanup failure is reported as `G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED` with the original failure and ordered cleanup diagnostics.
 
@@ -42,11 +42,13 @@ Before the settled lease is acquired, any nonzero WAL is rejected. A read-only v
 
 ## Native Windows boundary
 
-The internal helper is invoked only through absolute `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` with `shell: false`. Its repository-relative canonical path and normalized UTF-8/no-BOM SHA-256 are pinned and rechecked around native calls.
+The internal helper is invoked only through absolute `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` with `shell: false`. Its repository-relative canonical path and normalized UTF-8/no-BOM SHA-256 (`ea20039471215830d3b6fe12be233aabccd8fb947fe78016f51815f0fed73cda`) are pinned and rechecked around native calls. Hostile `PATH` content and a modified helper copy cannot redirect execution.
 
-The helper uses retained native handles and direct Windows APIs for FileId/volume/attributes/final-path inspection, hashing, `FlushFileBuffers`, no-replace `MoveFileExW(..., MOVEFILE_WRITE_THROUGH)`, handle disposition cleanup, fixed-local-NTFS checks, and Cloud Files rejection. It rejects UNC/device/ADS/traversal aliases, reparse/offline/cloud-recall paths, hard-linked files, noncanonical final paths, broad parent ACLs, untrusted ownership, mismatched destination races, and unexpected native outcomes. Once the no-replace move succeeds, all later uncertainty exits as published-unverified; visible final destinations are not deleted.
+The helper uses retained native handles and direct Windows APIs for FileId/volume/attributes/final-path inspection, hashing, `FlushFileBuffers`, rooted no-replace `NtSetInformationFile(FileRenameInformation)`, handle disposition cleanup, fixed-local-NTFS checks, and Cloud Files rejection. Files and directories are created atomically with native create-new semantics and recorded in a create-time identity ledger. It rejects UNC/device/ADS/traversal aliases, reparse/offline/cloud-recall paths, hard-linked files, noncanonical final paths, broad parent ACLs, untrusted ownership, mismatched destination races, and unexpected native outcomes. Exact-existing races reconcile only byte-identical destinations; differing bytes fail closed. Once a no-replace move succeeds, all later uncertainty exits as published-unverified (native exit 14); visible final destinations are retained and never deleted.
 
-The long-lived lease protocol retains the database and parent handles, owns the exact derived lock, supports handle-derived identity rechecks, adds the settled share-read-only handle after writer close, and deletes only its own lock by handle on normal release or protocol failure/EOF.
+The long-lived broker protocol retains the database, lock, parent, created-resource, and published-destination handles through Node challenge/inspect/release. It supports handle-derived identity rechecks, adds the settled share-read-only database handle after writer close, and deletes only identities recorded as owned on normal release or protocol failure/EOF. Preexisting derived names are refused, post-registration replacement occupants survive, and two-publisher identical/different-byte races reconcile deterministically.
+
+The public inspection API uses the same native database/lock lease, rejects nonzero WAL before and after inspection, opens one read-write connection, enters `BEGIN IMMEDIATE`, captures T-028/G-023/all-row evidence and `data_version` inside that stable snapshot, rolls back and closes, settles the main-file identity, and only then returns deep-frozen pins including `journalMode`.
 
 ## Restart rules
 
@@ -55,7 +57,7 @@ The long-lived lease protocol retains the database and parent handles, owns the 
 - `replay` requires both records and both exact expected handoff IDs.
 - Resume with accepted pre-state performs the one mutation; resume with exact prepared post-state does not repeat it.
 - Replay performs no mutation and compares COMMITTED with a newly reopened stable snapshot.
-- Any other sidecar/state pairing is rejected as state/recovery-required. No stale lock is broken and no automatic restore occurs.
+- Any other closed sidecar/database pairing is rejected as evidence/state/recovery-required before mutation. Missing COMMITTED with valid PREPARED plus exact prepared database state resumes idempotently; missing PREPARED never reconstructs authority. No stale lock is broken and no automatic restore occurs.
 
 ## B1 mandatory matrix
 
@@ -74,6 +76,8 @@ The long-lived lease protocol retains the database and parent handles, owns the 
 | B1-11 | Post-close stable lease keeps main FileId/SHA exact across read verification, rejects nonzero WAL, and denies write transactions. |
 | B1-12 | Explicit pinned replay returns a deep-frozen `mode: replay`, `status: replayed` result. |
 
+Additional adversarial coverage binds every source/T-028/G-023/preservation/journal evidence pin; rejects byte-identical database replacement with a different FileId; covers every preexisting and swapped derived resource; exercises identical and different-byte two-publisher races; enumerates closed restart combinations; and rejects raw plus self-rehashed PREPARED, COMMITTED, and archive tampering.
+
 ## Validation evidence
 
 Current repair validation:
@@ -81,10 +85,10 @@ Current repair validation:
 - `npm run typecheck` - exit 0.
 - `npm run lint` - exit 0, zero warnings.
 - `npm run build` - Next.js 16.2.6 production build passed, exit 0.
-- `npm test -- --run src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts` - 5/5 passed in 86.32 seconds after final cleanup hardening.
+- `npx vitest run src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts` - 36/36 passed in 174.69 seconds (173.80 seconds test time).
 - Related compatibility/play/transfer/schema regression set - 76 passed, 2 environment-gated PostgreSQL tests skipped, exit 0.
 - `npm run db:verify:recovery` - exact 37-table recovery contract passed, exit 0.
-- PowerShell parser, `InspectFile`, `FlushDirectory`, lease inspect/settle/release, exact-existing publication, and fresh no-replace publication probes - exit 0 with zero probe residue.
+- PowerShell parser and normalized helper hash/pin comparison - exit 0. Host-level broker tests cover native create refusal, retained cleanup, post-registration swaps, exact-existing publication, fresh no-replace publication, publication challenge/release, exit-14 EOF, and replacement-safe fallback cleanup.
 - Independent WAL host proof - retained writer preserved main/WAL bytes across backup/read close; last-writer close preserved FileId but could change main SHA; mode remained `wal`; trace contained no checkpoint or journal-mode assignment.
 - Independent settled-lease proof - readonly snapshot succeeded with stable main FileId/SHA; write transaction failed `SQLITE_READONLY`; verifier could leave zero-byte WAL plus SHM.
 
