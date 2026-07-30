@@ -474,3 +474,25 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   SQL rewriting. Its implementation must use serialized compile-safe slices,
   unchanged PostgreSQL SQL, an opaque G-006B finalizer handoff containing exact
   source identity, and a fail-closed non-rewriting SQLite mutation guard.
+
+## G-006C serialized internal split
+
+- G-006C remains one parent compatibility-adapter child but is too large for
+  one honest write packet: independent source counts found 122 operational
+  tenant-table mutation starts across 91 functions plus initialization/catalog
+  writes and high-collision fixtures.
+- C0 owns the opaque binding contract/verifier and backend discriminant; C1
+  owns initialization/fresh binding with G-006A/B; C2 bridges G-002 access and
+  crawl writers; C3 bridges G-003 lead/CRM/demo writers and user cleanup; C4
+  bridges G-004 AI writers; C5 bridges G-005 source/cache/usage writers; C6
+  owns settings, explicit audit semantics, mutation coverage, and the merged
+  integration gate.
+- C0 through C6 run serially because `queries.ts`, `index.ts`, schema fixtures,
+  and the runtime-writer boundary collide. They preserve current exported
+  function signatures and the PostgreSQL SQL branch; G-009 through G-022 retain
+  generalized request/worker scope and later adapter retirement.
+- The G-006B handoff must include exact tenant, workspace, policy/owner,
+  receipt, final catalog, source-card, compatibility-play, count/checksum, and
+  zero-orphan bindings under one canonical hash. Without exact source-card
+  identity or an explicitly provisioned fresh binding, mutable SQLite startup
+  fails closed.
