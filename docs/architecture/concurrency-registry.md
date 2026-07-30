@@ -1547,3 +1547,22 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   adapter contract. The known policy-blocked `g006b-identity-cleanup-qjkSgV`
   synthetic root remains disclosed, untouched and recoverable. No remote,
   provider, production, customer, paid, push or deployment action occurred.
+
+## G-006C0 binding-verifier preflight launch
+
+- G006C0 starts from clean integration control `eba8167` after accepted G006B-B1
+  merge `f069c06`. Its only purpose is to define the fail-closed compatibility
+  binding verifier consumed by later C1-C6 writer slices. G006C0 does not wire
+  startup, modify writers, finalize schema constraints, or grant authorization.
+- Three read-only preflights may run concurrently under the four-agent ceiling.
+  Architecture owns the exact G006B handoff/API, fresh-versus-upgraded binding
+  lifecycle and smallest compile-safe path ceiling. Security owns tamper,
+  replay, TOCTOU, path/identity, no-receipt-as-authority and no-default/no-
+  inference boundaries. Quality owns call-path inventory, executable negative
+  matrix, public-signature/PostgreSQL invariance, locks, collisions and split
+  sizing.
+- Preflights hold no write locks, make no repository changes, and may create
+  only disposable local fixtures. Sol must reconcile them into one explicit
+  Terra-medium implementation packet before any producer edit. G006C1-C6,
+  final G006B/G006A activation, G007+, provider, remote, production, customer,
+  paid, push and deployment work remain unauthorized during this launch.
