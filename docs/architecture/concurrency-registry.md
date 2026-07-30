@@ -18,7 +18,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-006A repair `ff479d95ef624996b019968a489917a740ec2071` is rejected; Terra-medium repair round 2 is active on the same four paths with a private file-owned declarative coordinator boundary. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Immutable G-006A round-2 repair `868efdcda51c07da26f9b75fa0f34528126fb328`, exactly one four-path commit over rejected `ff479d9`, is under fresh dual rereview. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-004A source `c0892a06325b33657e5b73813635fec6a4081012` is accepted through integration `8383fa70a2bac8de71413ae135918bbaedf907b4`; runtime G-004B remains preserved and blocked for co-delivery with G-013/G-014. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
@@ -59,7 +59,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 | `G-005` | Accepted | Source `28005a3` passed repaired dual review, merged at `d2d6e7f`, and passed the full merged release gate. Runtime propagation and T029 reconciliation remain later cards. |
 | `G-006` | Parent split open | Preserve every success criterion through serialized G-006R recovery identity, staged G-006A fresh schema/coordinator, G-006B receipt-bound finalization, and the G-006C compatibility-adapter sequence. Accept only after all children independently pass and startup activation is proven. |
 | `G-006R` | Accepted | Repaired source `3443816` passed fresh domain/security and independent Quality review, merged at `43a2387`, and passed the full merged release gate. |
-| `G-006A` | Repair round 2 in progress | Terra-medium is replacing callbacks/shared handles with a deep-copied declarative plan, canonical file binding, mint-time all-37 snapshot, private writer, and main-schema-only enforcement. |
+| `G-006A` | Repair round 2 under fresh dual rereview | Source `868efdc` claims callback-free deep-copied plans, canonical mint snapshots, private writer ownership, main-only operations, and fresh reopen verification; producer evidence is not acceptance. |
 | `G-006B` | Blocked on accepted G-006A | Consume exactly one verified T028 SQLite receipt and verified backup to atomically finalize 17 non-audit tables with interruption/replay proof. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
@@ -681,3 +681,14 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 - The same four files and both locks remain exclusive. Every prior passing
   catalog, source-identity, preservation, digest, physical-manifest, cleanup,
   and scope invariant must remain green. Fresh dual rereview is mandatory.
+
+- Round-2 source `868efdcda51c07da26f9b75fa0f34528126fb328` is
+  exactly one commit over rejected `ff479d9`, changes the same four paths, and
+  leaves the Platform worktree clean. Producer gates are focused Vitest 18/18,
+  typecheck, full lint, 37-table recovery verification, diff/scope checks, and
+  zero temporary or task-process residue.
+- Fresh domain/security and independent Quality rereviews are active. They own
+  callback/reference absence, deep-plan validation, canonical mint-time source
+  binding, main-only/temp/attached isolation, private writer transaction,
+  all-37 preservation, physical spoof, fresh reopen, recovery-required, and all
+  prior invariant reproduction. No merge or acceptance is authorized.
