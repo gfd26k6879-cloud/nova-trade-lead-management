@@ -1215,12 +1215,23 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   snapshot while an immediate writer remained open changed none of the main or
   WAL identities. No trace contained a journal-mode assignment or checkpoint.
 - Sol therefore bound a post-commit stabilization lease. After COMMIT, B1
-  closes its writer under the original no-delete FileId lease, requires WAL/SHM
-  absence, then acquires a second native main-file lease that permits reads but
-  denies write/delete sharing. Failure or remaining WAL/SHM means external
+  closes its writer under the original no-delete FileId lease, requires a
+  settled main file with no nonzero WAL frames, then acquires a second native
+  main-file lease that permits reads but denies write/delete sharing. Failure or
+  nonzero WAL frames means external
   connection ownership is unproven and requires committed-unverified recovery.
   While the stable lease is held, B1 inspects settled main bytes, runs and closes
-  the read-only snapshot verifier, again requires no WAL/SHM and identical
+  the read-only snapshot verifier, again requires no nonzero WAL frames and exact
   FileId/SHA, publishes COMMITTED, and only then releases the lease. This proves
   settled evidence without an explicit checkpoint and blocks new writers during
   verification/publication.
+- A second independent host probe refined the stabilization claim. With the
+  share-read-only main-file handle retained, better-sqlite readonly
+  `BEGIN`/read/close succeeds and main FileId/SHA stays exact. A nominal
+  readwrite connection may open, but its `BEGIN IMMEDIATE`/insert fails
+  `SQLITE_READONLY`; B1 therefore claims write-transaction exclusion, not
+  connection-open exclusion. The readonly close may leave an empty zero-byte
+  WAL and SHM, so the binding condition is no nonzero WAL frames plus unchanged
+  settled main FileId/SHA. Auxiliary files, when present, remain subject to the
+  exact local-NTFS, non-cloud, non-reparse checks. No claim of stable auxiliary
+  absence is permitted.
