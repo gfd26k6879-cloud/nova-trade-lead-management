@@ -1200,3 +1200,12 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   attributable; amendment, rebase, history rewrite, fifth-path expansion,
   contract waiver, journal transition/checkpoint, startup, merge, external
   activity and self-acceptance remain forbidden.
+- Sol clarified the WAL boundary after the producer identified SQLite's
+  unavoidable checkpoint-on-last-close behavior. B1 must never issue a
+  checkpoint pragma or change journal mode; ordinary engine close behavior is
+  not treated as B1 authority. Inspection records native main-file identity only
+  after its final SQLite close, the operation retains a writer from immediate
+  lock through commit so backup snapshot closes are never last, and post/replay
+  record identity after their verification close. Evidence binds exact logical
+  state and the persisted journal mode without claiming invariant pre-close
+  main-file bytes or absence of SQLite-internal physical page movement.
