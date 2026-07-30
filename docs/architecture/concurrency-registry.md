@@ -541,3 +541,19 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   sidecar. If unattended database-only restore becomes a requirement, it needs
   a separate approved recovery-contract/version expansion. Fresh mode requires
   an explicit owner/foundation manifest and never fabricates a T-028 receipt.
+
+## G-006R round-3 review receipt
+
+- Fresh domain/security and independent Quality rereviews both PASS immutable
+  source `3443816f0e2dbe98c12a95aafb36ba03a3040e37` with no P1/P2.
+- Both lanes reproduced the persisted two-`WHERE` spoof after read-only reopen
+  and `integrity_check=ok`; export, metadata validation, and the verifier now
+  fail closed. Zero/multiple predicates, prefix, balance/underflow, separators,
+  trailing tokens, qualified/quoted identifiers, comments/escapes, and binary
+  ordering all passed.
+- Each lane reran 18 focused tests plus one explicit opt-in skip, the 19-case
+  PostgreSQL 16 matrix at 45 discovered/43 applied/two named skips, the
+  deferrable-arbiter negative, rollback/hostile path, 37-table recovery,
+  typecheck, lint, four syntax checks, diff/scope checks, and resource cleanup.
+- G-006R is ready for local integration and the merged release gate. It is not
+  accepted and `recovery-contract` is not released until that gate passes.
