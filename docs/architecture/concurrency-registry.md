@@ -1091,3 +1091,9 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   `99d3227` with exactly one attributable commit permitted. It must stop before
   a fifth path, accepted-contract edit, authority inference, or weakened native
   durability claim; no review, merge, or acceptance is preauthorized.
+- Two disjoint read-only feasibility preflights run concurrently at the
+  four-total-agent ceiling against immutable `99d3227`. One owns exact existing
+  API/import/process reachability under the four-file ceiling; the other owns
+  the native Windows file/directory durability semantics and hard-stop gap
+  analysis. They hold no locks, cannot inspect producer work, and cannot
+  authorize scope expansion, implementation, or acceptance.
