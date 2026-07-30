@@ -21,11 +21,13 @@ production caller.
   explicit `null` for a tenant-wide row; and
 - one fixed operation: `user_market_access`, `crawl_runs` or `crawl_units`.
 
-Creation delegates the storage proof to
+Creation narrows a genuine, previously verified binding by calling
 `requireFreshSqliteCompatibilityScope` or `requireSqliteCompatibilityScope`.
-It performs no table access or mutation. Omitted/undefined operation workspace,
-scope inference, a non-null different operation workspace, a wrong lifecycle
-map, a wrong selector, or a forged binding fails closed.
+Those calls assert the lifecycle-corresponding module-private binding state and
+exact selectors; they do not reopen or read the database. C2A performs no table
+access or mutation. Omitted/undefined operation workspace, scope inference, a
+non-null different operation workspace, a wrong lifecycle map, a wrong
+selector, or a forged binding fails closed.
 
 The resulting permit is frozen, fieldless, null-prototype and meaningful only
 through a module-private `WeakMap`. `requireSqliteG002StorageOperationPermit`
@@ -48,6 +50,21 @@ grantsProviderExecution: false
 The module exposes no actor, policy, session, worker, cron, provider, source,
 play, callback, database handle, serialization helper or persistent audit.
 
+## Trust and freshness boundary
+
+The permit carries only the selectors captured from a genuine, previously
+verified C0/C1 binding. Creation and consumption do not reopen or read the
+database, recheck its current canonical path or physical file identity, recheck
+current schema, foundation, tenant/workspace facts or rows, hold a database
+lease, or prove current database state or target-row existence.
+
+Before mutation, C2B/C must freshly open the exact bound database and
+atomically revalidate, with exact SQL predicates, the canonical path and file
+identity as applicable, current schema/foundation/tenant/workspace facts, the
+exact crawl-run parent for a unit, and persisted location-mode/reference
+integrity. The permit remains non-authority and never replaces the interactive
+or worker scope owned by G009/G010/G013.
+
 ## Exact write scope
 
 1. `src/lib/db/sqlite-g002-operation-permit.ts`
@@ -60,11 +77,12 @@ G-006C2B/C may consume it only under their later detached-writer packets.
 
 ## Fixture and adversarial matrix
 
-The focused suite creates one genuine C1 fresh binding and one genuine C0
-upgraded binding. The upgraded path performs the accepted-legacy backfill,
-G006B execute/commit and G006B replay before C0 mints its binding. Both roots
-are owned direct children of the resolved Windows temp directory with exact
-`g006c2a-fresh-` or `g006c2a-upgraded-` prefixes.
+The focused suite creates one genuine, previously verified C1 fresh binding and
+one genuine, previously verified C0 upgraded binding. The upgraded path
+performs the accepted-legacy backfill, G006B execute/commit and G006B replay
+before C0 mints its binding. Both roots are owned direct children of the
+resolved Windows temp directory with exact `g006c2a-fresh-` or
+`g006c2a-upgraded-` prefixes.
 
 Returned fixture records are frozen and registered in a private `WeakMap`.
 Cleanup accepts only an exact registered fixture, clears ownership before the
@@ -168,15 +186,54 @@ worktree, so repository clean filters are applied correctly.
 
 ## Dependency and activity record
 
-`node_modules` was already present, so this packet did not run package
-installation or make a registry request. It inherits the accepted `npm ci`
-audit result recorded by G-002: 14 findings (2 low, 1 moderate, 10 high,
-1 critical). No `npm audit fix`, dependency update or advisory remediation was
-performed inside this four-path packet.
+Before producer dispatch, root ran `npm ci` in this exact worktree as task
+environment preparation. It completed in 43.8 seconds, added 448 packages,
+audited 449 packages and accessed the package registry through normal npm
+installation traffic. The install occurred outside the producer's four-path
+source implementation, but it is part of this task environment and is not
+described as merely inherited evidence.
 
-External services, provider APIs, customer data, PostgreSQL runtimes,
-containers, production processes, deployments and remote Git hosts were not
-accessed or mutated. External activity count is zero.
+That preparation observed 14 dependency findings: 2 low, 1 moderate, 10 high
+and 1 critical. No `npm audit fix`, dependency or lockfile change, advisory
+remediation, paid service, provider API, customer-data access, production
+mutation, deployment or remote Git operation occurred. After dispatch, the
+producer implementation and this repair performed no further external or
+blocked-root activity.
+
+## Repair-1 P3 correction and validation
+
+Repair source: `db501cced3ab4be459e9f5b7caad86da43ef65c5`.
+
+Repair-1 corrects two documentation findings only:
+
+- the dependency/activity record now includes root's exact pre-dispatch
+  `npm ci` and package-registry activity instead of describing the audit result
+  as merely inherited; and
+- the source comment and receipt now delimit previously verified binding facts
+  from current database state and state the fresh atomic C2B/C revalidation
+  obligation.
+
+There is no runtime, type, API, permit, error, fixture or test behavior change.
+The repair changes exactly the production-file comment and this receipt.
+
+Repair validation:
+
+- `npm exec -- vitest run src/lib/__tests__/sqlite-g002-operation-permit.test.ts --reporter=dot`
+  - PASS: 1 file, 36/36; Vitest 14.82 seconds; shell 16.272 seconds.
+- `npm run typecheck`
+  - PASS: `tsc --noEmit --pretty false`, exit 0; 12.769 seconds.
+- `npm exec -- eslint src/lib/db/sqlite-g002-operation-permit.ts --max-warnings=0`
+  - PASS: zero warnings, exit 0; 58.372 seconds.
+- TypeScript `transpileModule` with `removeComments: true` over the source file
+  at `db501cc` and the repaired working copy produced identical output:
+  SHA-256 `6c5925c31bd831eb6415d75246762a89de284423230027bb0ea282cb89b2f997`.
+- `git diff --check`: PASS.
+- repair delta from `db501cc`: exactly 2 paths; cumulative delta from
+  `fb13a103153a970eb472d2f0b66d092940504135`: the original exact 4 paths.
+- the original fixture blob `746d2bf58a9a1b1f8eac17fbbb382252ebc9e1ca`
+  and focused-test blob `2979835a09bb7ad7982738e5cc762ef278154ee8`
+  remain byte-identical.
+- owned `g006c2a-*` temp residue: 0; worktree-bound processes: 0.
 
 ## Acceptance boundary
 

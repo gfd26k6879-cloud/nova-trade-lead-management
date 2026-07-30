@@ -203,8 +203,16 @@ function storageEvidence(
 }
 
 /**
- * Narrows a genuine lifecycle-corresponding C0/C1 binding to one exact G002
- * storage operation. This function neither authorizes nor performs the write.
+ * Narrows a genuine, previously verified lifecycle-corresponding C0/C1 binding
+ * to one exact G002 storage operation. It does not reopen or read the database,
+ * recheck current canonical file identity, schema, foundation or rows, hold a
+ * lease, or prove current state or row existence at creation or consumption.
+ * C2B/C must freshly open the exact bound database and atomically revalidate
+ * canonical path/file identity as applicable, schema/foundation/tenant/workspace
+ * facts, the exact run parent, and persisted location-mode/reference integrity
+ * with exact SQL predicates before mutation. This permit remains non-authority,
+ * never replaces G009/G010/G013 scope, and neither authorizes nor performs a
+ * write.
  */
 export function createSqliteG002StorageOperationPermit(
   inputValue: SqliteG002StorageOperationPermitInput,
