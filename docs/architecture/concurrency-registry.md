@@ -1749,3 +1749,48 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   path, signature drift, non-atomicity, unsafe cleanup, final user-version 6002,
   startup/writer/G006A/B edit, new schema/receipt, location ownership need,
   inference/defaulting, external activity or blocked-root access.
+
+## G-006C1 producer result and validation-exception disposition
+
+- Terra-medium produced exactly one clean commit, `28b04d8`, over dispatch
+  control `b38641f`. It changes only the four reconciled paths: the C0 bridge,
+  new fresh producer, focused test and validation receipt. Protected startup,
+  query, schema, G006A, G006B, PostgreSQL, package and recovery-contract blobs
+  remain unchanged.
+- The producer's C1 matrix passes 50 cases, with one internal worker case skipped
+  only in the parent and executed successfully in four child processes. Exact
+  simultaneous same-input callers serialize to one provision and one replay;
+  different-input callers serialize to one provision and one typed foundation
+  rejection while preserving the winner bytes. C0 passes 12/12, G006A 37/37,
+  PostgreSQL/readiness/session 27/27, and typecheck, zero-warning lint, build and
+  37-table recovery all pass.
+- The mandatory full inherited G006B run completed 70/71 in 934.98 seconds. Its
+  sole failure was the existing Windows two-publisher fixture receiving Win32
+  sharing violation 32; the exact failed case passed 1/1 immediately in
+  isolation. No G006B implementation, helper or test changed. Two earlier runs
+  ended only at harness bounds below the known accepted runtime and produced no
+  verdict.
+- Those two harness timeouts left exact recoverable `%TEMP%` roots
+  `g006b-b1-ZKgBDT` and `g006b-b1-Y18U0Y`. Both have no owner process, but native
+  guarded cleanup was policy-blocked and no bypass was attempted. Therefore the
+  producer truthfully does not claim a green full-G006B or zero-new-residue
+  gate. The known `g006b-identity-cleanup-qjkSgV` root remains excluded and
+  untouched.
+- Under the failure/recovery protocol, Sol authorizes the accurate bounded
+  producer commit to proceed to independent review only. G006C1 remains
+  implemented with validation exceptions, not accepted, and is not eligible to
+  merge until Sol adjudicates both exceptions after independent review.
+
+## G-006C1 immutable-source review launch
+
+- Architecture and security independently review exact immutable source
+  `28b04d8`. Architecture owns API/lifecycle minimality, G006A transaction and
+  staged-replay correctness, five-row/zero-other-table semantics, C0 and later
+  writer compatibility, and receipt/scope accuracy.
+- Security owns descriptor-safe snapshotting, canonical path/FileId and journal
+  binding, race/rollback/postcommit uncertainty, hash/source/play/policy trust,
+  capability forgery and cross-lifecycle rejection, and literal non-authority.
+- Reviewers may run focused disposable local checks but make no source edits,
+  commits, merges, acceptance claims, external calls or blocked-root access.
+  Sol remains the sole authority for repair, exception disposition, merge and
+  acceptance; C2-C6 and all parent completion remain closed.
