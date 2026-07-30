@@ -2229,3 +2229,28 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   perform atomic current file/schema/scope/parent/location revalidation, and
   G009/G010/G013 retain runtime request/worker authority. G006C2, G006C, G006B,
   G006A and parent G006 remain open; the next serialized packet is G006C2B.
+
+## G-006C2B user-market-access writer preflight launch
+
+- G006C2B begins from clean accepted C2A control `2f5ad55` and is limited to one
+  unwired SQLite `user_market_access` writer, one focused test and one validation
+  receipt. It may consume only the one-shot `user_market_access` C2A storage
+  permit. It cannot modify C2A, legacy queries/actions/callers, startup, schema,
+  migrations, PostgreSQL behavior, public barrels, audit persistence or C2C-C6.
+- Architecture maps the exact final SQLite table/triggers, database-client and
+  transaction seams, one-shot permit consumption order, current-state facts that
+  can be proven from accepted C0/C1/C2A interfaces, deterministic replacement
+  semantics and the three-path API ceiling. It must stop if safe current-state
+  verification requires an upstream API or fourth path.
+- Security maps canonical-path/file-state handling, current tenant/workspace and
+  active target/creator membership, active platform-market integrity, nullable-
+  workspace identity, transaction/TOCTOU/rollback behavior, creator non-authority,
+  audit-fact-only output and every inference/default/confused-deputy stop. No
+  policy/session/worker authorization may be invented in this storage packet.
+- Quality inventories exact schema columns/indexes/triggers and legacy behavior,
+  then defines an executable at-least-20-case fresh/upgraded, two-tenant, null/
+  named-workspace, membership, market, replace/replay, rollback, restart, DB-swap,
+  no-caller and PostgreSQL-invariance matrix with protected blobs and residue
+  gates. All three preflights are local, read-only, lock-free and cannot edit,
+  run mutable shared fixtures, commit, merge, accept, touch blocked roots or use
+  external services. Sol must reconcile one Terra-medium producer packet first.
