@@ -1307,3 +1307,64 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   quality owns substantive matrix and receipt accuracy plus repository gates.
   Sol retains sole merge and acceptance authority; B1 remains locked and
   unmerged.
+- All three independent reviewers reject source `9dc6742`; it remains local,
+  clean, unmerged and unaccepted. A real parent-EOF probe created representative
+  backup, archive staging/entry, PREPARED and COMMITTED resources, wrote
+  sensitive sentinels, and then closed the broker protocol. The helper exited
+  15 and deleted its lock, but retained all five owned resources and their
+  bytes. The checked fallback test likewise depends on an owned file surviving
+  EOF. The receipt's protocol-failure cleanup claim is therefore false.
+- Architecture additionally proved that create-time identity is not retained
+  through the actual write. Broker-created file handles share delete, while
+  Node reopens current pathnames for ordinary bytes and SQLite backup output;
+  a replacement may therefore receive sensitive bytes before later FileId
+  verification fails. A newly created final archive directory is also released
+  before its 38 entries are written. The repair must deny pathname replacement
+  for the complete write interval and retain the final archive directory through
+  child creation, validation and flush without ever treating a pre-existing
+  directory as invocation-owned.
+- A 128 MiB native probe killed the broker after the no-replace move became
+  visible but before `publication-ready`. The exact destination remained,
+  the source disappeared and the database lock remained, yet Node classified
+  the transport loss as ordinary publish failure because it had not received
+  the ready line. Broker-process death can bypass PowerShell catch/finally, so
+  Node must independently reconcile an attempted publication from the recorded
+  source identity and destination state, classify every possibly visible move
+  as published-unverified, and perform exact-identity fallback cleanup of the
+  lock and all still-owned resources. Published destinations must remain.
+- Stable-WAL evidence is also rejected. The current code reads WAL length by
+  pathname, performs a later native inspection, discards the handle-derived
+  length, and decides from the stale pathname value; inspection does not repeat
+  the WAL check after its settled lease. The repair must decide from retained
+  native identity, reject a replaced or grown WAL/SHM, recheck at the binding
+  boundary, and treat post-close native main identity as authoritative rather
+  than requiring unsupported pre-close SHA/size invariance. No checkpoint or
+  journal-mode mutation is authorized.
+- One more bounded Terra-medium delta is authorized directly on top of
+  `9dc6742`, still limited to the same four B1 paths. The broker protocol must
+  record cleanup-versus-release disposition and creation order; clean remaining
+  cleanup resources child-before-parent on EOF/protocol error by retained
+  identity; release persistent resources; retain published finals; and preserve
+  the primary error plus ordered cleanup diagnostics. Resource handles must
+  prevent delete/write substitution throughout each actual write and be used
+  for no-replace publication. The archive parent lease, lock identity and every
+  owned FileId must remain available for exact crash reconciliation. Publisher
+  sources may not share attacker write authority. Cloud/filesystem decisions
+  must be handle-bound, and native command/protocol waits require bounded
+  timeout cleanup. Error rewrapping must not duplicate code prefixes.
+- The acceptance matrix must add dynamic parent-EOF and hard-broker-death rows
+  at backup, archive staging/child, PREPARED, COMMITTED and post-move states;
+  substitution attempts before every application write; new and pre-existing
+  archive-parent retention; concurrent WAL growth/commit around inspection and
+  settle; during-run main FileId replacement; individual volume/size/SHA,
+  operation/publisher/archive/envelope/binding pins; nonidentical COMMITTED
+  conflict and real cleanup-identity failure; the complete database/sidecar/
+  artifact restart table; and independently recomputed raw/semantic tamper for
+  backup plus missing, extra and altered archive/record fields. Every row must
+  assert mutation, visible-final, exact-identity and residue outcomes. The
+  receipt must bind launch control `f4e5390`, distinguish direct operation tests
+  from host probes, remove every overclaim, and publish the final helper hash.
+  Existing conformant API, T-028, G-023, 37-table/schema-3, four-table mutation,
+  journal-mode pin, error taxonomy, exact-existing/two-publisher behavior and
+  hostile PATH protections must be retained. No merge, scope expansion,
+  history rewrite, remote action or self-acceptance is authorized.
