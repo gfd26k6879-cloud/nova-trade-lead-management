@@ -1904,3 +1904,31 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   or ordinary writers, grant authentication/authorization/provider execution,
   complete G006C/G006B/G006, or authorize external activity. The next serialized
   child is G006C2.
+
+## G-006C2 access-and-crawl writer preflight launch
+
+- G006C2 begins from clean accepted C1 control `7049d16` and is limited to the
+  accepted G002 runtime writer family: `user_market_access`, `crawl_runs` and
+  `crawl_units`. `zip_codes`, `location_markets` and `location_cells` remain
+  non-authorizing platform reference data. C2 cannot edit their ownership,
+  change PostgreSQL migrations or behavior, wire unrelated startup/writers,
+  grant authority from the C1 storage binding, or enter G003-C6 scope.
+- Architecture maps the exact current access/crawl call graph and accepted G002
+  table/parent/location-mode contract to the smallest compile-safe SQLite writer
+  slice, public-signature transition and path ceiling. It must preserve explicit
+  fresh/upgraded binding use, unchanged PostgreSQL behavior and later C3-C6
+  boundaries.
+- Security maps the required actor/request/worker authorization input separately
+  from storage scope; exact tenant and nullable-workspace agreement; access/run/
+  unit parent integrity; platform-reference non-authority; legacy ZIP versus
+  platform/generalized cell modes; idempotency/race/audit requirements; and every
+  default/inference/receipt/session/environment stop condition.
+- Quality inventories every read/write helper, action, route, worker, caller,
+  test and mutation touching the three tables; identifies shared `queries.ts` and
+  fixture collisions; defines the executable two-tenant/same-reference/parent-
+  mismatch/mode/restart/PostgreSQL-invariance matrix; and recommends a bounded
+  producer split and exact regression gates.
+- All three preflights are read-only, lock-free and local. They may inspect source
+  and run non-mutating discovery only; they cannot edit, test mutable shared
+  fixtures, commit, merge, accept, access blocked roots or perform external work.
+  Sol must reconcile one exact Terra-medium producer packet before any C2 edit.
