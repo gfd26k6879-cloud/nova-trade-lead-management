@@ -2137,3 +2137,16 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   commit, merge, accept, touch blocked roots or perform external activity. They
   must confirm both P3s are closed, behavior remains unchanged and the receipt's
   repair lineage is unambiguous. Sol alone decides merge eligibility.
+
+## G-006C2A repair rereview and lineage-only correction
+
+- Both original reviewers confirm the dependency/activity and current-state
+  trust P3s are closed, with no runtime, API, security or scope finding. One P3
+  receipt ambiguity remains: `Repair source: db501cc` identifies the pre-repair
+  parent but does not identify reviewed repair tip `27582d1`.
+- Sol authorizes one receipt-only Terra-medium correction on top of `27582d1`:
+  replace that line with the full immutable pre-repair baseline `db501cc...` and
+  full repair commit/tip `27582d1...`. No other text, code, test, fixture,
+  validation result, behavior, third cumulative path, external action or
+  self-acceptance is permitted. The same reviewers must verify the exact one-line
+  delta before merge eligibility.
