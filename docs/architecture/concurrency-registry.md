@@ -18,7 +18,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-006A-P source `c7d6e8e` is accepted through integration merge `10a46db` and its full merged release gate. G-006B B1 is ready for explicit lock acquisition; startup activation remains blocked. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Fast-forwarded cleanly to accepted integration baseline `99d3227`; G-006B B1 is authorized for one four-file Terra-medium packet. Startup activation remains blocked. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-004A source `c0892a06325b33657e5b73813635fec6a4081012` is accepted through integration `8383fa70a2bac8de71413ae135918bbaedf907b4`; runtime G-004B remains preserved and blocked for co-delivery with G-013/G-014. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
@@ -33,13 +33,13 @@ The non-OneDrive root is selected to avoid sync churn and lock contention. The a
 | `integration-ledger` | Final integration conductor | Held | Released only when final integration authority ends. |
 | `migration-sequence` | None | Available after accepted G-005 | G-006 must declare whether this PostgreSQL sequence lock is needed before acquisition. |
 | `migration-harness` | None | Available after accepted G-005 | G-006 must name any shared inventory harness before acquisition. |
-| `sqlite-schema` | None | Available after accepted G-006A-P | Source `c7d6e8e` passed fresh dual review, merged at `10a46db`, and passed the full merged release gate. |
+| `sqlite-schema` | `G-006B-B1` | Held for legacy pre-finalization | Protects the exact accepted-legacy to prepared-legacy@6000 transaction and classifier boundary. |
 | `auth-session` | None | Available | Accepted task receipt. |
 | `permissions` | None | Available | Accepted task receipt. |
 | `database-adapter` | None | Available | Accepted task receipt. |
 | `package-config` | None | Available | Accepted task receipt. |
-| `protected-shell` | None | Available | Accepted task receipt. |
-| `recovery-contract` | None | Available for explicit G-006B acquisition | G-006A edited no recovery files and its staged artifact passed the merged release gate at `f340752`. |
+| `protected-shell` | `G-006B-B1` | Held for bounded Windows durable publisher | One static PowerShell/C# helper path only; no shell interpolation, arbitrary command, or external activity. |
+| `recovery-contract` | `G-006B-B1` | Held read/freeze-only for backup and schema-3 binding | Existing recovery files and schema-3 contract may be consumed and tested but not edited or reinterpreted. |
 | `full-release-gate` | None | Available; merged G-006A-P gate passed | `npm run release:check` exited 0 in 140.5 seconds at merge `10a46dba346e3c62aff54e0785f552e04bcced72`. |
 
 No domain lane may claim a lock implicitly. Every acquisition must name the task, exhaustive protected paths, integration baseline, expected release evidence, and stop conditions in the ledger.
@@ -61,7 +61,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 | `G-006R` | Accepted | Repaired source `3443816` passed fresh domain/security and independent Quality review, merged at `43a2387`, and passed the full merged release gate. |
 | `G-006A` | Accepted staged-artifact milestone; child remains open | Round-6 source `87795a7` passed fresh dual review, merged at `f340752`, and passed the full merged release gate. Startup activation remains blocked until G-006B and G-006C0-C6 complete. |
 | `G-006A-P` | Accepted recognition-only prerequisite | Source `c7d6e8e` passed fresh dual review, merged at `10a46db`, and passed the full merged release gate. It grants no prepared-state finalizer or startup authority. |
-| `G-006B` | B1 ready for explicit launch | B1 remains legacy-only: verified backup/schema-3 archive and source binding, four nullable source columns, exact backfill, durable prepared/committed evidence, and restart proof. Final constraints, `location_mode`, and startup remain later work. |
+| `G-006B` | B1 authorized; awaiting Terra-medium dispatch | B1 is legacy-only: verified backup/schema-3 archive and source binding, four nullable source columns, exact backfill, durable prepared/committed evidence, and restart proof. Final constraints, `location_mode`, and startup remain later work. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
 | `UI-000` | Ready; capacity/approval-queued | Seven-artifact design packet is ready. Terra-medium is authorized, but implementation remains capacity-queued and explicit product/design/accessibility approval is still required before task acceptance. |
@@ -1025,3 +1025,65 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   preservation digest, defer relationship-derived `location_mode`, and own a
   bounded native Windows durable publisher for no-replace, write-through
   prepared/committed evidence. Fresh/empty initialization remains G-006C1.
+
+## G-006B B1 launch receipt
+
+- The Platform branch was fast-forwarded cleanly to accepted integration
+  baseline `99d3227a874bd9ed137924d1aaa981ab0f4e6012`. One
+  Terra-medium producer may create exactly four new paths:
+  `src/lib/db/sqlite-g006b-pre-finalization.ts`,
+  `scripts/g006b-windows-durable-publish.ps1`,
+  `src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts`, and
+  `docs/validation/2026-07-30-g006b-pre-finalization.md`.
+- `sqlite-schema`, `recovery-contract`, and `protected-shell` are held. B1 may
+  consume existing T-028, G-023, G-006R, and G-006A contracts but must not edit
+  them, `schema.ts`, startup, application adapters/writers/queries, package
+  configuration, PostgreSQL migrations, or G-006C surfaces. A fifth path is a
+  hard stop.
+- Inputs must be explicit canonical absolute paths and exact IDs/hashes. B1
+  accepts only exact T-028-completed accepted legacy at `user_version=0`, one
+  exact receipt/manifest/foundation/policy/owner/workspace binding, exact G-023
+  play/configuration identity, and source literal `google_places_legacy` as
+  identity evidence only. It rejects fresh, empty, prepared, staged, final,
+  partial, drifted, inferred, ambiguous, aliased, or cross-database inputs.
+- Before mutation B1 must create and independently verify a lossless online
+  SQLite backup, export and verify the frozen schema-3 archive from that backup,
+  recompare the live source across all 37 tables, and durably publish an exact
+  immutable prepared record. T-028's accepted checksum and receipt remain
+  unchanged; B1 uses a separate versioned, type-tagged full-row preservation
+  digest that includes tenant/workspace values and excludes only columns absent
+  before B1.
+- The sole database transaction uses `BEGIN IMMEDIATE`, revalidates the exact
+  bound prestate and file identity, adds nullable `source_card_id TEXT` to only
+  `place_cache`, `places_master`, `place_observations`, and `api_usage_events`,
+  fills only nulls with `google_places_legacy`, verifies counts/preservation,
+  sets `user_version=6000`, and commits. It must not add defaults, checks,
+  indexes, keys, `location_mode`, final constraints, `6001`/`6002`, or modify
+  audit history, the T-028 receipt, tenant/workspace values, or unrelated rows.
+- A fresh read-only reopen must prove the exact accepted G-006A-P pins, 37
+  tables, 31/32 target columns, exact source values, all-table preservation,
+  unchanged audit/receipt authority, integrity, foreign keys, relationships,
+  and zero tenant/source/orphan violations before a separate immutable
+  committed record is durably published.
+- The native publisher is a static PowerShell file with closed embedded C#
+  P/Invoke, invoked by an argv array with `-NoProfile -NonInteractive -File`.
+  It must require explicit same-volume local NTFS temp/final paths, reject
+  UNC/device/ADS/traversal/reparse/cloud/offline/non-regular/hard-linked or
+  untrusted-parent inputs, pin volume and file identity, flush the temp, call
+  `MoveFileExW` with `MOVEFILE_WRITE_THROUGH` and no replace/copy flags, reopen
+  and verify the same file ID/size/SHA-256, preserve the first error plus ordered
+  cleanup diagnostics, and treat an existing target as idempotent only for
+  exact bytes/hash. Hard links are test oracles only, not durability proof.
+- Restart states are closed: without a valid prepared record mutation is
+  forbidden; prepared plus exact prestate may retry; prepared plus exact
+  poststate may verify and publish committed without remutation; exact committed
+  plus exact poststate replays; ambiguous state, artifact drift, or commit
+  uncertainty outside exact pre/post requires operator recovery. Restore,
+  stale-lock breaking, provider authority, and production actions are never
+  inferred or automatic.
+- Producer gates include the complete B1 fault/restart/tamper/concurrency matrix,
+  focused G-006B plus T-028/G-023/G-006R/G-006A regression tests, native helper
+  syntax and real Windows no-replace/write-through probes, typecheck, full lint,
+  37-table recovery verification, exact diff/scope checks, and zero residue.
+  Producer evidence cannot self-authorize review, merge, acceptance, lock
+  release, B1 final constraints, G-006C, startup, or external action.
