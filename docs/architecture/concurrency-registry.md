@@ -2189,3 +2189,21 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 - Architecture and security now perform the final exact-delta closure check on
   immutable source `05d2e2a`. No edits, tests, commits, merge, acceptance,
   blocked-root access or external activity are authorized.
+
+## G-006C2A final source review and merge eligibility
+
+- Architecture and security both ACCEPT exact clean source tip `05d2e2a` with
+  no remaining P0-P3 finding. They verify the one-path/one-hunk final delta,
+  self-reference-safe receipt lineage, preserved dependency/current-state facts,
+  unchanged behavior and exact four-path cumulative scope.
+- Sol's cumulative audit confirms dispatch baseline `fb13a10`, implementation
+  `db501cc`, trust/receipt repair `27582d1`, intermediate lineage correction
+  `3cba1d0` and final receipt correction `05d2e2a`. Previously tracked blobs and
+  protected surfaces remain unchanged; the source worktree is clean. The extra
+  commits are attributable documentation repairs required by independent review,
+  not hidden implementation expansion.
+- Source is eligible for a non-fast-forward local merge. G006C2A remains
+  unaccepted until Sol verifies merged first-parent scope/source-blob equality,
+  reruns focused and mandatory regression/static gates, validates JSONL and
+  residue/process state, and records the acceptance boundary. C2B/C and every
+  parent remain open.
