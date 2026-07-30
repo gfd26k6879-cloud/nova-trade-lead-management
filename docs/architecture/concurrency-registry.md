@@ -1993,3 +1993,30 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   mandatory. A fifth path, writer/query/caller/startup/schema/auth implementation
   edit, PostgreSQL change, plain authority object, receipt authority, inferred
   selector, persistent audit, external activity or self-acceptance is a stop.
+
+## G-006C2A API-checkpoint stop and contract reconciliation
+
+- Terra-medium returns STOP before editing. The fieldless permit and consumer
+  seam are technically feasible, but all three proposed interactive permissions
+  require conditional domain policy for at least the owner/admin roles that need
+  them. `requireTenantPermission` correctly fails with `POLICY_BLOCKED` when a
+  conditional decision has no evaluator, and the repository contains no trusted
+  production evaluator for membership grants, source execution or queue control.
+  A caller-supplied allow callback, fabricated session or partial worker-only
+  implementation is forbidden. The producer worktree remains clean at dispatch
+  control `5bb4633`; it made no edit, fixture, test, temporary root or commit.
+- Sol does not resolve that stop by inventing or pulling forward a broad policy
+  engine. The previously accepted G006 activation contract says G006C is a
+  storage-scope compatibility adapter that grants no authentication or
+  authorization, while G009-G022 later replace it with generalized request and
+  worker scope. The stopped packet may therefore have crossed its parent contract
+  by trying to make a G006 storage adapter own later domain authorization.
+- Architecture and security now perform a local read-only reconciliation against
+  the exact accepted G006 activation decision, G006C0/C1 APIs, T012 authorization
+  boundary and G009/G010/G013 successors. They must decide whether C2A should be
+  rewritten as an explicitly non-authorizing storage-operation capability for
+  detached writers, or whether all C2 writer implementation must pause until a
+  named later authority dependency exists. They cannot edit, test mutable
+  fixtures, acquire locks, touch blocked roots, perform external activity or
+  waive the no-default/no-inference rules. Sol alone may reconcile a replacement
+  packet; the stopped packet authorizes no implementation.
