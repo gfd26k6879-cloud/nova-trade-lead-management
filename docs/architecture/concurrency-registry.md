@@ -60,7 +60,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 | `G-006` | Parent split open | Preserve every success criterion through serialized G-006R recovery identity, staged G-006A fresh schema/coordinator, G-006B receipt-bound finalization, and the G-006C compatibility-adapter sequence. Accept only after all children independently pass and startup activation is proven. |
 | `G-006R` | Accepted | Repaired source `3443816` passed fresh domain/security and independent Quality review, merged at `43a2387`, and passed the full merged release gate. |
 | `G-006A` | Accepted staged-artifact milestone; child remains open | Round-6 source `87795a7` passed fresh dual review, merged at `f340752`, and passed the full merged release gate. Startup activation remains blocked until G-006B and G-006C0-C6 complete. |
-| `G-006A-P` | Authorized; awaiting Terra-medium dispatch | Recognize only the exact `prepared-legacy` catalog at `user_version=6000` with pinned application, internal, and physical digests and 31/32 target columns. Do not mutate, mint finalizer authority, wire startup, or implement B1. |
+| `G-006A-P` | Terra-medium producer active at `87795a7` | Recognize only the exact `prepared-legacy` catalog at `user_version=6000` with pinned application, internal, and physical digests and 31/32 target columns. Do not mutate, mint finalizer authority, wire startup, or implement B1. |
 | `G-006B` | Blocked on accepted G-006A-P | B1 remains legacy-only: verified backup/schema-3 archive and source binding, four nullable source columns, exact backfill, durable prepared/committed evidence, and restart proof. Final constraints, `location_mode`, and startup remain later work. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
@@ -973,6 +973,10 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   capability minting and whole-upgrade, focused tests, typecheck, full lint,
   37-table recovery verification, diff/scope/cleanup evidence, fresh dual
   review, Sol's local merge, and the merged release gate.
+- The existing Terra-medium producer is active against immutable baseline
+  `87795a7` with exactly one attributable commit permitted. Producer evidence
+  cannot authorize merge or acceptance, and any need for a fifth path,
+  mutation authority, B1 logic, or source-of-truth decision is a hard stop.
 - After that prerequisite is accepted, B1 owns its separate `BEGIN IMMEDIATE`
   pre-finalization transaction and exact intermediate verifier. B1 will retain
   T-028's historical checksum unchanged, use a separately versioned full-row
