@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 
@@ -12,6 +12,7 @@ const leaseProcesses = vi.hoisted(() => ({
   children: [] as ChildProcessWithoutNullStreams[],
   commands: [] as string[],
   executables: [] as string[],
+  onCommand: undefined as undefined | ((child: ChildProcessWithoutNullStreams, command: string) => void),
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -26,7 +27,9 @@ vi.mock("node:child_process", async (importOriginal) => {
         leaseProcesses.executables.push(String(args[0]));
         const originalWrite = child.stdin.write.bind(child.stdin) as (...writeArgs: unknown[]) => boolean;
         child.stdin.write = ((...writeArgs: unknown[]) => {
-          leaseProcesses.commands.push(String(writeArgs[0]));
+          const command = String(writeArgs[0]);
+          leaseProcesses.commands.push(command);
+          leaseProcesses.onCommand?.(child, command);
           return originalWrite(...writeArgs);
         }) as typeof child.stdin.write;
       }
@@ -76,7 +79,7 @@ const POLICY_HASH = "b".repeat(64);
 const roots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
-  await Promise.all(leaseProcesses.children.splice(0).map((child) => child.exitCode === null
+  await Promise.all(leaseProcesses.children.splice(0).map((child) => child.exitCode === null && child.signalCode === null
     ? new Promise<void>((resolveExit) => {
       child.once("exit", () => resolveExit());
       child.kill();
@@ -84,6 +87,7 @@ afterEach(async () => {
     : Promise.resolve()));
   leaseProcesses.commands.splice(0);
   leaseProcesses.executables.splice(0);
+  leaseProcesses.onCommand = undefined;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -267,6 +271,7 @@ interface TestBroker {
   readonly child: ChildProcessWithoutNullStreams;
   send(command: string): Promise<void>;
   next(): Promise<Record<string, unknown>>;
+  write(path: string, value: string | Buffer): Promise<Record<string, unknown>>;
   exit(): Promise<number | null>;
 }
 
@@ -290,6 +295,18 @@ async function startTestBroker(root: string, label = "broker"): Promise<TestBrok
       const line = await lines.next();
       if (line.done) throw new Error(stderr || "broker EOF");
       return JSON.parse(line.value) as Record<string, unknown>;
+    },
+    write: async (path, value) => {
+      const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
+      let offset = 0;
+      while (offset < bytes.length) {
+        const chunk = bytes.subarray(offset, Math.min(offset + 48 * 1024, bytes.length));
+        await broker.send(`resource-write\t${path}\t${String(offset)}\t${chunk.toString("base64")}`);
+        expect(await broker.next()).toMatchObject({ status: "resource-written", path, bytes: offset + chunk.length });
+        offset += chunk.length;
+      }
+      await broker.send(`resource-write-complete\t${path}\t${String(bytes.length)}\t${createHash("sha256").update(bytes).digest("hex")}`);
+      return broker.next();
     },
     exit: () => child.exitCode === null
       ? new Promise<number | null>((resolveExit) => child.once("exit", resolveExit))
@@ -601,8 +618,96 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     } finally {
       writer.close();
     }
-    expect(failure).toMatchObject({ code: expect.stringMatching(/^G006B_(?:STATE_REJECTED|PUBLISH_FAILED)$/u) });
+    expect(failure).toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
   });
+
+  it("rejects a valid concurrent WAL commit at the settle boundary as committed-unverified", async () => {
+    const fixture = createAcceptedFixture();
+    const journal = new Database(fixture.databasePath);
+    expect(String(journal.pragma("journal_mode = WAL", { simple: true })).toLowerCase()).toBe("wal");
+    journal.close();
+    const base = await operationInput(fixture);
+    let attempted = false;
+    let committed = false;
+    let competitorDiagnostic = "";
+    leaseProcesses.onCommand = (_child, rawCommand) => {
+      if (attempted || rawCommand.trim() !== "settle") return;
+      attempted = true;
+      const competitor = spawnSync(process.execPath, ["-e", [
+        "const Database=require('better-sqlite3')",
+        "const db=new Database(process.argv[1])",
+        "db.exec('BEGIN IMMEDIATE')",
+        "db.prepare(\"INSERT INTO audit_logs (id, action) VALUES ('settle-race', 'settle-race')\").run()",
+        "db.exec('COMMIT')",
+        "db.close()",
+      ].join(";"), fixture.databasePath], { encoding: "utf8", shell: false, windowsHide: true });
+      competitorDiagnostic = competitor.stderr || competitor.error?.message || `exit ${String(competitor.status)}`;
+      committed = competitor.status === 0;
+    };
+    let failure: unknown;
+    try { await runSqliteG006bPreFinalization(base); } catch (error) { failure = error; }
+    expect(attempted).toBe(true);
+    expect(committed, competitorDiagnostic).toBe(true);
+    expect(failure).toMatchObject({
+      code: "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
+      committed: true,
+    });
+    const reopened = new Database(fixture.databasePath, { readonly: true });
+    expect(reopened.prepare("SELECT action FROM audit_logs WHERE id='settle-race'").pluck().get()).toBe("settle-race");
+    expect(classifySqliteSchemaV1(reopened).kind).toBe("prepared-legacy");
+    reopened.close();
+    expect(existsSync(base.committedPath)).toBe(false);
+    expect(temporaryResidue(fixture.root)).toEqual([]);
+    expect(existsSync(`${fixture.databasePath}.g006b.lock`)).toBe(false);
+  }, 120_000);
+
+  it("holds BEGIN IMMEDIATE across WAL inspection so a concurrent valid writer cannot grow the sidecar", async () => {
+    const fixture = createAcceptedFixture();
+    const journal = new Database(fixture.databasePath);
+    expect(String(journal.pragma("journal_mode = WAL", { simple: true })).toLowerCase()).toBe("wal");
+    journal.close();
+    const originalExec = Database.prototype.exec;
+    let denied = false;
+    vi.spyOn(Database.prototype, "exec").mockImplementation(function (this: Database.Database, sql: string) {
+      const result = originalExec.call(this, sql);
+      if (this.name === fixture.databasePath && sql === "BEGIN IMMEDIATE") {
+        const competitor = spawnSync(process.execPath, ["-e", [
+          "const Database=require('better-sqlite3')",
+          "const db=new Database(process.argv[1])",
+          "db.exec('BEGIN IMMEDIATE')",
+          "db.prepare(\"INSERT INTO audit_logs (id, action) VALUES ('inspection-race', 'inspection-race')\").run()",
+          "db.exec('COMMIT')",
+          "db.close()",
+        ].join(";"), fixture.databasePath], { encoding: "utf8", shell: false, windowsHide: true });
+        denied = competitor.status !== 0;
+      }
+      return result;
+    });
+    const inspection = await inspectSqliteG006bPreFinalizationEvidence({
+      databasePath: fixture.databasePath,
+      manifest: fixture.manifest,
+      seed: createLegacyWebsiteLeadPlaySeed(),
+    });
+    expect(inspection.journalMode).toBe("wal");
+    expect(denied).toBe(true);
+    const reopened = new Database(fixture.databasePath, { readonly: true });
+    expect(reopened.prepare("SELECT COUNT(*) FROM audit_logs WHERE id='inspection-race'").pluck().get()).toBe(0);
+    reopened.close();
+  }, 120_000);
+
+  it("denies during-run main FileId replacement while the database lease is retained", async () => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    let challenged = false;
+    leaseProcesses.onCommand = (_child, rawCommand) => {
+      if (challenged || !rawCommand.startsWith("resource-write\t")) return;
+      challenged = true;
+      expect(() => renameSync(fixture.databasePath, `${fixture.databasePath}.replacement`)).toThrow();
+    };
+    await runSqliteG006bPreFinalization(base);
+    expect(challenged).toBe(true);
+    expect(existsSync(`${fixture.databasePath}.replacement`)).toBe(false);
+  }, 120_000);
 
   it("B1-12 returns a deep-frozen pinned replay without mutating the database", async () => {
     const fixture = createAcceptedFixture();
@@ -615,8 +720,51 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     expect(readFileSync(fixture.databasePath)).toEqual(before);
   }, 120_000);
 
+  it("binds replay to the operation ID, archive path, envelope hashes, and committed binding hash", async () => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    await runSqliteG006bPreFinalization(base);
+    const preparedId = handoffId(base.preparedPath);
+    const committedId = handoffId(base.committedPath);
+    const committedBytes = readFileSync(base.committedPath);
+
+    await expect(runSqliteG006bPreFinalization({ ...replayInput(base), operationId: "wrong-operation" }))
+      .rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+
+    const alternateParent = join(fixture.root, "alternate-archive-parent");
+    const alternateArchive = join(alternateParent, basename(base.archiveDirectory));
+    mkdirSync(alternateParent); mkdirSync(alternateArchive);
+    for (const entry of readdirSync(base.archiveDirectory)) {
+      writeFileSync(join(alternateArchive, entry), readFileSync(join(base.archiveDirectory, entry)));
+    }
+    await expect(runSqliteG006bPreFinalization({ ...replayInput(base), archiveDirectory: alternateArchive }))
+      .rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+
+    const envelopeHashTamper = JSON.parse(committedBytes.toString("utf8")) as { recordSha256: string };
+    envelopeHashTamper.recordSha256 = `${envelopeHashTamper.recordSha256[0] === "0" ? "1" : "0"}${envelopeHashTamper.recordSha256.slice(1)}`;
+    writeFileSync(base.committedPath, canonicalizeSqliteG006bRecord(envelopeHashTamper));
+    await expect(runSqliteG006bPreFinalization({ ...base, mode: "replay", expectedPreparedHandoffId: preparedId, expectedCommittedHandoffId: committedId }))
+      .rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    writeFileSync(base.committedPath, committedBytes);
+
+    const committed = JSON.parse(committedBytes.toString("utf8")) as { payload: { bindingHash: string } };
+    committed.payload.bindingHash = `${committed.payload.bindingHash[0] === "0" ? "1" : "0"}${committed.payload.bindingHash.slice(1)}`;
+    writeFileSync(base.committedPath, canonicalizeSqliteG006bRecord(committed));
+    const rehashed = rehashEnvelope(base.committedPath, SQLITE_G006B_COMMITTED_DOMAIN);
+    await expect(runSqliteG006bPreFinalization({
+      ...base,
+      mode: "replay",
+      expectedPreparedHandoffId: preparedId,
+      expectedCommittedHandoffId: rehashed.handoffId,
+    })).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
+    expect(temporaryResidue(fixture.root)).toEqual([]);
+  }, 120_000);
+
   it.each([
-    "source FileId/bytes",
+    "source volume serial number",
+    "source FileId",
+    "source size",
+    "source SHA-256",
     "accepted physical digest",
     "T028 receipt row hash",
     "G023 binding ID",
@@ -628,9 +776,14 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const base = await operationInput(fixture);
     let input: SqliteG006bExecuteInput;
     switch (pin) {
-      case "source FileId/bytes":
+      case "source volume serial number":
+        input = { ...base, expectedSourceIdentity: { ...base.expectedSourceIdentity, volumeSerialNumber: String(BigInt(base.expectedSourceIdentity.volumeSerialNumber) + BigInt(1)) } };
+        break;
+      case "source FileId":
         input = { ...base, expectedSourceIdentity: { ...base.expectedSourceIdentity, fileId: `${base.expectedSourceIdentity.fileId[0] === "0" ? "1" : "0"}${base.expectedSourceIdentity.fileId.slice(1)}` } };
         break;
+      case "source size": input = { ...base, expectedSourceIdentity: { ...base.expectedSourceIdentity, size: base.expectedSourceIdentity.size + 1 } }; break;
+      case "source SHA-256": input = { ...base, expectedSourceIdentity: { ...base.expectedSourceIdentity, sha256: `${base.expectedSourceIdentity.sha256[0] === "0" ? "1" : "0"}${base.expectedSourceIdentity.sha256.slice(1)}` } }; break;
       case "accepted physical digest": input = { ...base, expectedAcceptedPhysicalManifestDigest: "0".repeat(64) }; break;
       case "T028 receipt row hash": input = { ...base, expectedReceiptRowSha256: "0".repeat(64) }; break;
       case "G023 binding ID": input = { ...base, expectedBindingId: "wrong-binding" }; break;
@@ -665,10 +818,55 @@ describe("G-006B B1 SQLite pre-finalization", () => {
       process.env.PATH = priorPath;
     }
     expect(leaseProcesses.executables.at(-1)).toBe(POWERSHELL);
+    const helperHash = createHash("sha256").update(readFileSync(PUBLISHER, "utf8").replaceAll("\r\n", "\n"), "utf8").digest("hex");
+    const implementation = readFileSync(join(process.cwd(), "src", "lib", "db", "sqlite-g006b-pre-finalization.ts"), "utf8");
+    expect(implementation).toContain(`const PUBLISHER_NORMALIZED_SHA256 = "${helperHash}"`);
     const base = await operationInput(fixture);
     await expect(runSqliteG006bPreFinalization({ ...base, publisherScriptPath: helperCopy } as unknown as SqliteG006bPreFinalizationInput))
       .rejects.toMatchObject({ code: "G006B_INPUT_REJECTED" });
   });
+
+  it("denies path substitution before every backup, archive, PREPARED, and COMMITTED application write", async () => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    const challenged = new Set<string>();
+    const failures: string[] = [];
+    leaseProcesses.onCommand = (_child, rawCommand) => {
+      const command = rawCommand.trimEnd();
+      if (!command.startsWith("resource-write\t")) return;
+      const [, path, offset] = command.split("\t", 4);
+      if (!path || offset !== "0" || challenged.has(path)) return;
+      challenged.add(path);
+      try { renameSync(path, `${path}.substitution`); failures.push(`rename succeeded: ${path}`); } catch { /* retained handle denied substitution */ }
+      try { writeFileSync(path, "attacker-write"); failures.push(`write succeeded: ${path}`); } catch { /* retained handle denied substitution */ }
+    };
+    await runSqliteG006bPreFinalization(base);
+    expect(failures).toEqual([]);
+    expect(challenged.size).toBe(79);
+    expect([...challenged]).toEqual(expect.arrayContaining([
+      expect.stringContaining("accepted-legacy.g006b.backup.db.g006b.tmp."),
+      expect.stringContaining("prepared.json.g006b.tmp."),
+      expect.stringContaining("committed.json.g006b.tmp."),
+    ]));
+    expect(temporaryResidue(fixture.root)).toEqual([]);
+  }, 120_000);
+
+  it.each([false, true])("retains the %s final archive parent through all child publication and validation", async (preexisting) => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    if (preexisting) mkdirSync(base.archiveDirectory);
+    let challenged = false;
+    leaseProcesses.onCommand = (_child, rawCommand) => {
+      const [verb, path] = rawCommand.trimEnd().split("\t", 3);
+      if (challenged || verb !== "resource-write" || !path || dirname(path) !== base.archiveDirectory) return;
+      challenged = true;
+      expect(() => renameSync(base.archiveDirectory, `${base.archiveDirectory}.replacement`)).toThrow();
+    };
+    await runSqliteG006bPreFinalization(base);
+    expect(challenged).toBe(true);
+    expect(readdirSync(base.archiveDirectory)).toHaveLength(38);
+    expect(computeSqliteG006bArchiveTreeHash(base.archiveDirectory)).toBe(basename(base.archiveDirectory));
+  }, 120_000);
 
   it("rejects a byte-identical database replacement with a different FileId", async () => {
     const fixture = createAcceptedFixture();
@@ -722,12 +920,81 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     })).rejects.toMatchObject({ code: "G006B_PREPARED_RECORD_REQUIRED" });
   }, 120_000);
 
+  it("dynamically closes the 3x3x3 database/PREPARED/COMMITTED restart table", async () => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    await runSqliteG006bPreFinalization(base);
+    const acceptedBytes = readFileSync(base.backupPath);
+    const preparedBytes = readFileSync(fixture.databasePath);
+    const preparedRecord = readFileSync(base.preparedPath);
+    const committedRecord = readFileSync(base.committedPath);
+    const preparedId = handoffId(base.preparedPath);
+    const committedId = handoffId(base.committedPath);
+    writeFileSync(fixture.databasePath, preparedBytes);
+    const other = new Database(fixture.databasePath);
+    other.pragma("user_version = 5999");
+    other.close();
+    const otherBytes = readFileSync(fixture.databasePath);
+    const states = { accepted: acceptedBytes, prepared: preparedBytes, other: otherBytes } as const;
+    const recordStates = ["absent", "valid", "invalid"] as const;
+    let rows = 0;
+
+    for (const [databaseState, databaseBytes] of Object.entries(states)) {
+      for (const preparedState of recordStates) {
+        for (const committedState of recordStates) {
+          rows += 1;
+          writeFileSync(fixture.databasePath, databaseBytes);
+          for (const suffix of ["-wal", "-shm"]) rmSync(`${fixture.databasePath}${suffix}`, { force: true });
+          rmSync(base.preparedPath, { force: true }); rmSync(base.committedPath, { force: true });
+          if (preparedState === "valid") writeFileSync(base.preparedPath, preparedRecord);
+          if (preparedState === "invalid") writeFileSync(base.preparedPath, "{}");
+          if (committedState === "valid") writeFileSync(base.committedPath, committedRecord);
+          if (committedState === "invalid") writeFileSync(base.committedPath, "{}");
+          const before = readFileSync(fixture.databasePath);
+          const input: SqliteG006bPreFinalizationInput = preparedState === "valid" && committedState === "absent"
+            ? { ...base, mode: "resume", expectedPreparedHandoffId: preparedId }
+            : preparedState !== "absent" || committedState !== "absent"
+              ? { ...base, mode: "replay", expectedPreparedHandoffId: preparedId, expectedCommittedHandoffId: committedId }
+              : base;
+          const shouldPass = databaseState === "accepted" && preparedState === "absent" && committedState === "absent"
+            || (databaseState === "accepted" || databaseState === "prepared") && preparedState === "valid" && committedState === "absent"
+            || databaseState === "prepared" && preparedState === "valid" && committedState === "valid";
+          let failure: unknown;
+          try { await runSqliteG006bPreFinalization(input); } catch (error) { failure = error; }
+          expect(failure === undefined, `${databaseState}/${preparedState}/${committedState}: ${failure instanceof Error ? failure.message : String(failure)}`).toBe(shouldPass);
+          if (!shouldPass) expect(readFileSync(fixture.databasePath)).toEqual(before);
+          expect(temporaryResidue(fixture.root)).toEqual([]);
+          expect(existsSync(`${fixture.databasePath}.g006b.lock`)).toBe(false);
+        }
+      }
+    }
+    expect(rows).toBe(27);
+  }, 240_000);
+
   it("rejects raw and self-rehashed semantic PREPARED/COMMITTED tampering", async () => {
     const fixture = createAcceptedFixture();
     const base = await operationInput(fixture);
     await runSqliteG006bPreFinalization(base);
     const preparedBytes = readFileSync(base.preparedPath);
     const committedBytes = readFileSync(base.committedPath);
+    const preparedId = handoffId(base.preparedPath);
+    const committedId = handoffId(base.committedPath);
+
+    for (const [path, original] of [[base.preparedPath, preparedBytes], [base.committedPath, committedBytes]] as const) {
+      for (const mutation of ["missing", "extra"] as const) {
+        const envelope = JSON.parse(original.toString("utf8")) as Record<string, unknown>;
+        if (mutation === "missing") delete envelope.format;
+        else envelope.unexpected = "tamper";
+        writeFileSync(path, canonicalizeSqliteG006bRecord(envelope));
+        await expect(runSqliteG006bPreFinalization({
+          ...base,
+          mode: "replay",
+          expectedPreparedHandoffId: preparedId,
+          expectedCommittedHandoffId: committedId,
+        })).rejects.toMatchObject({ code: expect.stringMatching(/^G006B_(?:INPUT_REJECTED|EVIDENCE_DRIFT)$/u) });
+        writeFileSync(path, original);
+      }
+    }
 
     for (const path of [base.preparedPath, base.committedPath]) {
       writeFileSync(path, Buffer.concat([readFileSync(path), Buffer.from("\n")]));
@@ -824,6 +1091,35 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     })).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
   }, 120_000);
 
+  it("rejects missing, extra, and altered archive entries plus backup byte tampering", async () => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    await runSqliteG006bPreFinalization(base);
+    const auditPath = join(base.archiveDirectory, "audit_logs.json");
+    const auditBytes = readFileSync(auditPath);
+    const detached = join(fixture.root, "audit_logs.detached");
+
+    renameSync(auditPath, detached);
+    await expect(runSqliteG006bPreFinalization(replayInput(base))).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    renameSync(detached, auditPath);
+
+    const extra = join(base.archiveDirectory, "unexpected.json");
+    writeFileSync(extra, "[]\n");
+    await expect(runSqliteG006bPreFinalization(replayInput(base))).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    rmSync(extra);
+
+    writeFileSync(auditPath, Buffer.concat([auditBytes, Buffer.from("\n")]));
+    await expect(runSqliteG006bPreFinalization(replayInput(base))).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    writeFileSync(auditPath, auditBytes);
+
+    const backupBytes = readFileSync(base.backupPath);
+    writeFileSync(base.backupPath, Buffer.concat([backupBytes, Buffer.from([0])]));
+    await expect(runSqliteG006bPreFinalization(replayInput(base))).rejects.toMatchObject({ code: "G006B_EVIDENCE_DRIFT" });
+    expect(readFileSync(base.preparedPath)).toBeTruthy();
+    expect(readFileSync(base.committedPath)).toBeTruthy();
+    expect(temporaryResidue(fixture.root)).toEqual([]);
+  }, 120_000);
+
   it("cleans every broker-owned staging identity after a partial archive export failure", async () => {
     const fixture = createAcceptedFixture();
     const base = await operationInput(fixture);
@@ -844,6 +1140,224 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     expect(existsSync(base.archiveDirectory)).toBe(false);
   }, 120_000);
 
+  it.each(["backup", "archive-child", "PREPARED", "COMMITTED"] as const)("reconciles hard broker death after the %s move but before publication-ready", async (phase) => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    let source = "";
+    let destination = "";
+    let expectedSha = "";
+    let expectedBytes = -1;
+    let triggered = false;
+    let resolveDeath!: () => void;
+    const death = new Promise<void>((resolve) => { resolveDeath = resolve; });
+    leaseProcesses.onCommand = (child, rawCommand) => {
+      const parts = rawCommand.trimEnd().split("\t");
+      if (triggered || parts[0] !== "resource-publish") return;
+      const candidate = parts[2] ?? "";
+      const matches = phase === "backup" ? candidate === base.backupPath
+        : phase === "archive-child" ? dirname(candidate) === base.archiveDirectory && basename(candidate) === "admin_requests.json"
+          : phase === "PREPARED" ? candidate === base.preparedPath : candidate === base.committedPath;
+      if (!matches) return;
+      triggered = true;
+      source = parts[1] ?? "";
+      destination = candidate;
+      expectedSha = parts[3] ?? "";
+      expectedBytes = Number(parts[4]);
+      child.stdout.pause();
+      const deadline = Date.now() + 5_000;
+      const poll = setInterval(() => {
+        if (existsSync(destination) || Date.now() >= deadline) {
+          clearInterval(poll);
+          child.kill();
+          resolveDeath();
+        }
+      }, 5);
+    };
+    const expectedCode = phase === "COMMITTED"
+      ? "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED"
+      : "G006B_PUBLISHED_UNVERIFIED_RECOVERY_REQUIRED";
+    await expect(runSqliteG006bPreFinalization(base)).rejects.toMatchObject({ code: expectedCode });
+    await death;
+    expect(triggered).toBe(true);
+    expect(existsSync(source)).toBe(false);
+    expect(existsSync(destination)).toBe(true);
+    const visible = readFileSync(destination);
+    expect(visible.length).toBe(expectedBytes);
+    expect(createHash("sha256").update(visible).digest("hex")).toBe(expectedSha);
+    const db = new Database(fixture.databasePath, { readonly: true });
+    expect(classifySqliteSchemaV1(db).kind).toBe(phase === "COMMITTED" ? "prepared-legacy" : "accepted-legacy");
+    db.close();
+    expect(existsSync(`${fixture.databasePath}.g006b.lock`)).toBe(false);
+    expect(temporaryResidue(fixture.root)).toEqual([]);
+  }, 120_000);
+
+  it("treats a pre-move hard death plus source FileId substitution as published-uncertain and preserves the replacement", async () => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    let source = "";
+    let replacementBytes = Buffer.alloc(0);
+    let triggered = false;
+    leaseProcesses.onCommand = (child, rawCommand) => {
+      const parts = rawCommand.trimEnd().split("\t");
+      if (triggered || parts[0] !== "resource-publish" || parts[2] !== base.backupPath) return;
+      triggered = true;
+      source = parts[1] ?? "";
+      child.once("exit", () => {
+        const detached = `${source}.recorded`;
+        renameSync(source, detached);
+        replacementBytes = Buffer.from("replacement-after-hard-death", "utf8");
+        writeFileSync(source, replacementBytes);
+      });
+      child.kill();
+    };
+    await expect(runSqliteG006bPreFinalization(base)).rejects.toMatchObject({
+      code: "G006B_PUBLISHED_UNVERIFIED_RECOVERY_REQUIRED",
+      published: true,
+    });
+    expect(triggered).toBe(true);
+    expect(readFileSync(source)).toEqual(replacementBytes);
+    expect(existsSync(base.backupPath)).toBe(false);
+    expect(existsSync(`${fixture.databasePath}.g006b.lock`)).toBe(false);
+  }, 120_000);
+
+  it("preserves a nonidentical COMMITTED destination conflict and reports committed-unverified", async () => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    const conflicting = Buffer.from("nonidentical-committed-conflict", "utf8");
+    let challenged = false;
+    leaseProcesses.onCommand = (_child, rawCommand) => {
+      const parts = rawCommand.trimEnd().split("\t");
+      if (challenged || parts[0] !== "resource-publish" || parts[2] !== base.committedPath) return;
+      challenged = true;
+      writeFileSync(base.committedPath, conflicting);
+    };
+    await expect(runSqliteG006bPreFinalization(base)).rejects.toMatchObject({
+      code: "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
+      committed: true,
+    });
+    expect(challenged).toBe(true);
+    expect(readFileSync(base.committedPath)).toEqual(conflicting);
+    expect(existsSync(base.preparedPath)).toBe(true);
+    expect(existsSync(base.backupPath)).toBe(true);
+    expect(existsSync(base.archiveDirectory)).toBe(true);
+    const reopened = new Database(fixture.databasePath, { readonly: true });
+    expect(classifySqliteSchemaV1(reopened).kind).toBe("prepared-legacy");
+    reopened.close();
+    expect(temporaryResidue(fixture.root)).toEqual([]);
+  }, 120_000);
+
+  it.each(["backup", "archive-staging", "archive-child", "PREPARED", "COMMITTED"] as const)("broker parent EOF at %s removes exact sentinels and lock without deleting prior finals", async (phase) => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    let sentinel = "";
+    let triggered = false;
+    leaseProcesses.onCommand = (child, rawCommand) => {
+      const parts = rawCommand.trimEnd().split("\t");
+      if (triggered || parts[0] !== "resource-write" || parts[2] !== "0") return;
+      const candidate = parts[1] ?? "";
+      const matches = phase === "backup" ? candidate.startsWith(`${base.backupPath}.g006b.tmp.`)
+        : phase === "archive-staging" ? candidate.includes(`${basename(base.archiveDirectory)}.g006b.staging.`) && basename(candidate) === "admin_requests.json"
+          : phase === "archive-child" ? dirname(candidate) === base.archiveDirectory && basename(candidate).startsWith("admin_requests.json.g006b.tmp.")
+            : phase === "PREPARED" ? candidate.startsWith(`${base.preparedPath}.g006b.tmp.`)
+              : candidate.startsWith(`${base.committedPath}.g006b.tmp.`);
+      if (!matches) return;
+      triggered = true;
+      sentinel = candidate;
+      setTimeout(() => child.stdin.end(), 0);
+    };
+    const expectedCode = phase === "COMMITTED"
+      ? "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED"
+      : phase === "backup"
+        ? "G006B_PUBLISH_FAILED"
+        : "G006B_PUBLISHED_UNVERIFIED_RECOVERY_REQUIRED";
+    await expect(runSqliteG006bPreFinalization(base)).rejects.toMatchObject({ code: expectedCode });
+    expect(triggered).toBe(true);
+    expect(existsSync(sentinel)).toBe(false);
+    expect(existsSync(`${fixture.databasePath}.g006b.lock`)).toBe(false);
+    expect(temporaryResidue(fixture.root)).toEqual([]);
+    const db = new Database(fixture.databasePath, { readonly: true });
+    expect(classifySqliteSchemaV1(db).kind).toBe(phase === "COMMITTED" ? "prepared-legacy" : "accepted-legacy");
+    db.close();
+    if (phase !== "backup") expect(existsSync(base.backupPath)).toBe(true);
+    if (phase === "PREPARED" || phase === "COMMITTED") expect(existsSync(base.archiveDirectory)).toBe(true);
+  }, 120_000);
+
+  it("broker EOF cleans cleanup-owned children before parents, releases persistent resources, and removes its exact lock", async () => {
+    const root = mkdtempSync(join(tmpdir(), "g006b-eof-ledger-"));
+    roots.push(root);
+    const broker = await startTestBroker(root);
+    const cleanupDirectory = join(root, "cleanup-directory");
+    const cleanupChild = join(cleanupDirectory, "child.tmp");
+    const persistentDirectory = join(root, "persistent-directory");
+    await broker.send(`resource-create-directory\t${cleanupDirectory}\tcleanup`); await broker.next();
+    await broker.send(`resource-create-file\t${cleanupChild}\tcleanup`); await broker.next();
+    await broker.write(cleanupChild, "eof-child-sentinel");
+    await broker.send(`resource-create-directory\t${persistentDirectory}\trelease`); await broker.next();
+    broker.child.stdin.end();
+    expect(await broker.exit()).toBe(15);
+    expect(existsSync(cleanupChild)).toBe(false);
+    expect(existsSync(cleanupDirectory)).toBe(false);
+    expect(existsSync(persistentDirectory)).toBe(true);
+    expect(existsSync(join(root, "broker.db.g006b.lock"))).toBe(false);
+  });
+
+  it("enforces exact two-broker lock exclusion and removes only the first broker lock identity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "g006b-two-locks-"));
+    roots.push(root);
+    const databasePath = join(root, "shared.db");
+    writeFileSync(databasePath, "shared-lock-database");
+    const lockPath = `${databasePath}.g006b.lock`;
+    const first = await startTestBroker(root, "shared");
+    const secondChild = spawn(POWERSHELL, [
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PUBLISHER,
+      "-Mode", "LeaseDatabase", "-Path", databasePath, "-LockPath", lockPath,
+    ], { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    expect(await new Promise<number | null>((resolveExit) => secondChild.once("exit", resolveExit))).toBe(16);
+    expect(existsSync(lockPath)).toBe(true);
+    await first.send("release"); expect(await first.next()).toMatchObject({ status: "lease-released" });
+    first.child.stdin.end(); expect(await first.exit()).toBe(0);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("retains sidecar identities so disappearance and replacement are denied until post-settle release", async () => {
+    const root = mkdtempSync(join(tmpdir(), "g006b-sidecar-retained-"));
+    roots.push(root);
+    const broker = await startTestBroker(root);
+    const databasePath = join(root, "broker.db");
+    const walPath = `${databasePath}-wal`;
+    const shmPath = `${databasePath}-shm`;
+    writeFileSync(walPath, Buffer.alloc(0));
+    writeFileSync(shmPath, Buffer.alloc(0));
+    await broker.send("settle"); expect(await broker.next()).toMatchObject({ status: "lease-settled" });
+    await broker.send(`sidecars-capture\t${walPath}\t${shmPath}`); expect(await broker.next()).toMatchObject({ status: "sidecars-captured" });
+    expect(() => renameSync(walPath, `${walPath}.replacement`)).toThrow();
+    expect(() => rmSync(shmPath)).toThrow();
+    await broker.send("sidecars-inspect"); expect(await broker.next()).toMatchObject({ status: "sidecars-inspected" });
+    await broker.send("sidecars-release"); expect(await broker.next()).toMatchObject({ status: "sidecars-released" });
+    await broker.send("release"); expect(await broker.next()).toMatchObject({ status: "lease-released" });
+    broker.child.stdin.end(); expect(await broker.exit()).toBe(0);
+  });
+
+  it.each(["captured growth", "appearance after absent capture"] as const)("rejects WAL %s at the retained post-settle boundary", async (race) => {
+    const root = mkdtempSync(join(tmpdir(), "g006b-sidecar-growth-"));
+    roots.push(root);
+    const broker = await startTestBroker(root);
+    const databasePath = join(root, "broker.db");
+    const walPath = `${databasePath}-wal`;
+    const shmPath = `${databasePath}-shm`;
+    if (race === "captured growth") {
+      writeFileSync(walPath, Buffer.alloc(0));
+      writeFileSync(shmPath, Buffer.alloc(0));
+    }
+    await broker.send("settle"); expect(await broker.next()).toMatchObject({ status: "lease-settled" });
+    await broker.send(`sidecars-capture\t${walPath}\t${shmPath}`); expect(await broker.next()).toMatchObject({ status: "sidecars-captured" });
+    writeFileSync(walPath, "concurrent-wal-growth");
+    await broker.send("sidecars-inspect");
+    expect(await broker.exit()).toBe(17);
+    expect(readFileSync(walPath, "utf8")).toBe("concurrent-wal-growth");
+    expect(existsSync(`${databasePath}.g006b.lock`)).toBe(false);
+  });
+
   it("retains exact-existing destinations across 12 replacement challenges", async () => {
     const root = mkdtempSync(join(tmpdir(), "g006b-existing-broker-"));
     roots.push(root);
@@ -855,7 +1369,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
       writeFileSync(destination, bytes);
       await broker.send(`resource-create-file\t${temporary}`);
       expect(await broker.next()).toMatchObject({ status: "resource-created" });
-      writeFileSync(temporary, bytes);
+      expect(await broker.write(temporary, bytes)).toMatchObject({ status: "resource-written", sha256: sha256(bytes) });
       await broker.send(`resource-publish\t${temporary}\t${destination}\t${sha256(bytes)}\t${Buffer.byteLength(bytes)}`);
       expect(await broker.next()).toMatchObject({ status: "publication-ready" });
       expect(() => renameSync(destination, `${destination}.attacker`)).toThrow();
@@ -896,7 +1410,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
       .toMatch(/preexisting-.*-occupant/);
   });
 
-  it("publishes and cleans only registered FileIds while post-registration replacement occupants survive", async () => {
+  it("denies post-registration file/directory substitution and acts only on retained identities", async () => {
     const root = mkdtempSync(join(tmpdir(), "g006b-swap-ledger-"));
     roots.push(root);
     const broker = await startTestBroker(root);
@@ -905,9 +1419,9 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const detached = `${source}.detached`;
     await broker.send(`resource-create-file\t${source}`);
     await broker.next();
-    writeFileSync(source, "registered-file");
-    renameSync(source, detached);
-    writeFileSync(source, "replacement-file-occupant");
+    await broker.write(source, "registered-file");
+    expect(() => renameSync(source, detached)).toThrow();
+    expect(() => writeFileSync(source, "replacement-file-occupant")).toThrow();
     await broker.send(`resource-publish\t${source}\t${destination}\t${sha256("registered-file")}\t15`);
     expect(await broker.next()).toMatchObject({ status: "publication-ready" });
     await broker.send("publication-inspect");
@@ -915,18 +1429,16 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     await broker.send("publication-release");
     await broker.next();
     expect(readFileSync(destination, "utf8")).toBe("registered-file");
-    expect(readFileSync(source, "utf8")).toBe("replacement-file-occupant");
+    expect(existsSync(source)).toBe(false);
 
     const directory = join(root, "registered-directory");
     const detachedDirectory = `${directory}.detached`;
     await broker.send(`resource-create-directory\t${directory}`);
     await broker.next();
-    renameSync(directory, detachedDirectory);
-    mkdirSync(directory);
-    writeFileSync(join(directory, "victim.txt"), "replacement-directory-occupant");
+    expect(() => renameSync(directory, detachedDirectory)).toThrow();
     await broker.send(`resource-cleanup\t${directory}`);
     expect(await broker.next()).toMatchObject({ status: "resource-cleanup" });
-    expect(readFileSync(join(directory, "victim.txt"), "utf8")).toBe("replacement-directory-occupant");
+    expect(existsSync(directory)).toBe(false);
     expect(existsSync(detachedDirectory)).toBe(false);
     await broker.send("release");
     await broker.next();
@@ -945,7 +1457,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const secondTemp = `${identicalDestination}.g006b.tmp.${randomBytes(24).toString("hex")}`;
     await first.send(`resource-create-file\t${firstTemp}`); await first.next();
     await second.send(`resource-create-file\t${secondTemp}`); await second.next();
-    writeFileSync(firstTemp, identicalBytes); writeFileSync(secondTemp, identicalBytes);
+    await first.write(firstTemp, identicalBytes); await second.write(secondTemp, identicalBytes);
     await Promise.all([
       first.send(`resource-publish\t${firstTemp}\t${identicalDestination}\t${sha256(identicalBytes)}\t${Buffer.byteLength(identicalBytes)}`),
       second.send(`resource-publish\t${secondTemp}\t${identicalDestination}\t${sha256(identicalBytes)}\t${Buffer.byteLength(identicalBytes)}`),
@@ -965,7 +1477,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const loserTemp = `${differentDestination}.g006b.tmp.${randomBytes(24).toString("hex")}`;
     await first.send(`resource-create-file\t${winnerTemp}`); await first.next();
     await loser.send(`resource-create-file\t${loserTemp}`); await loser.next();
-    writeFileSync(winnerTemp, "winner"); writeFileSync(loserTemp, "loser");
+    await first.write(winnerTemp, "winner"); await loser.write(loserTemp, "loser");
     await first.send(`resource-publish\t${winnerTemp}\t${differentDestination}\t${sha256("winner")}\t6`);
     await first.next();
     await loser.send(`resource-publish\t${loserTemp}\t${differentDestination}\t${sha256("loser")}\t5`);
@@ -985,7 +1497,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     const temporary = `${destination}.g006b.tmp.${randomBytes(24).toString("hex")}`;
     await broker.send(`resource-create-file\t${temporary}`);
     await broker.next();
-    writeFileSync(temporary, bytes);
+    await broker.write(temporary, bytes);
     await broker.send(`resource-publish\t${temporary}\t${destination}\t${sha256(bytes)}\t${Buffer.byteLength(bytes)}`);
     expect(await broker.next()).toMatchObject({ status: "publication-ready" });
     broker.child.stdin.end();
@@ -993,15 +1505,15 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     expect(readFileSync(destination, "utf8")).toBe(bytes);
   });
 
-  it("never deletes a replacement occupant when fallback cleanup sees a different FileId", async () => {
+  it("reports a real cleanup identity failure and never deletes the replacement occupant", async () => {
     const root = mkdtempSync(join(tmpdir(), "g006b-identity-cleanup-"));
     roots.push(root);
     const broker = await startTestBroker(root);
     const owned = join(root, "owned.tmp");
     await broker.send(`resource-create-file\t${owned}`);
     const created = await broker.next();
-    broker.child.stdin.end();
-    expect(await broker.exit()).toBe(15);
+    broker.child.kill();
+    expect(await broker.exit()).not.toBe(0);
     rmSync(owned);
     writeFileSync(owned, "replacement-occupant");
     const cleanup = spawnSync(POWERSHELL, [
@@ -1010,6 +1522,7 @@ describe("G-006B B1 SQLite pre-finalization", () => {
       "-ExpectedVolumeSerialNumber", String(created.volumeSerialNumber), "-ExpectedFileId", String(created.fileId),
     ], { encoding: "utf8", shell: false, windowsHide: true });
     expect(cleanup.status).toBe(11);
+    expect(cleanup.stderr).toMatch(/identity (?:mismatch|drift)/iu);
     expect(readFileSync(owned, "utf8")).toBe("replacement-occupant");
   });
 });
