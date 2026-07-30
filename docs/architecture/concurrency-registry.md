@@ -1166,3 +1166,32 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   ownership; quality owns the complete executable repair matrix. The repair
   must remain within the same four files and will be a new attributable delta,
   never an amendment or history rewrite.
+- The three repair preflights completed without edits and proved the repair is
+  feasible within the same four paths. The public API becomes an immutable
+  discriminated `execute`/`resume`/`replay` union: helper, executable, lock,
+  staging and temporary paths are removed from caller authority; resume pins
+  the expected prepared handoff and replay pins both prepared and committed.
+  Final database, backup, archive and sidecar destinations and all accepted
+  T-028/G-023/catalog/preservation values remain explicit.
+- Sol reconciled the journal proposal in favor of preserving both exact states:
+  existing `DELETE/NORMAL` and already-persisted `WAL/NORMAL` are supported and
+  recorded, but B1 may never switch journal mode or checkpoint. This preserves
+  the already-produced DELETE behavior while adding the application's actual
+  persisted WAL mode. All pre-evidence, online backup, PREPARED publication,
+  native FileId recheck and four-column mutation occur under one retained
+  database lease and one `BEGIN IMMEDIATE`; poststate is proven by a fresh
+  explicit read snapshot bracketed by same-connection `data_version` checks.
+- Native execution is internally bound to an absolute System32 PowerShell and
+  the tracked helper's canonical path plus literal normalized SHA-256. The
+  helper adds a closed database-lease protocol, per-operation handle sharing,
+  handle-derived identity/attributes/cloud checks, exact destination-race
+  reconciliation, and identity-safe cleanup. No unowned pathname may be
+  deleted. Every uncertain or successful commit promotes any later verification,
+  publication, lease or cleanup failure to committed-unverified recovery.
+- The repair acceptance matrix remains in the existing test file and covers
+  hostile PATH/helper inputs, deep caller mutation, pre-existing and swapped
+  resources, DELETE and WAL snapshots, concurrent WAL drift, database FileId
+  replacement, native publisher races, explicit handoff pins, real post-commit
+  failures, the closed restart-state table, semantic sidecar/artifact tampering,
+  and accurate receipt evidence. Source acceptance still requires fresh reviews;
+  merged acceptance still requires the complete release check.
