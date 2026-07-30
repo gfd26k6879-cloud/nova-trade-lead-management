@@ -859,3 +859,21 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   the options-claim lifecycle, malformed falsey handoffs, exhaustive schema
   partition, coherent verifier interval, all prior exploit classes, topology,
   and cleanup. No merge or acceptance is authorized yet.
+
+## G-006A repair round 6
+
+- Round-5 source `9756f93ff6d296c851539f2486ebe48ac4838d28` is rejected and must not
+  be merged or accepted. Both lanes proved that the remaining truthiness check
+  treats `null`, `false`, `0`, and an empty string as absent handoff authority;
+  on a final database each returned `replayed`. Only exact `undefined` may
+  select replay, and every other runtime value must enter handoff validation.
+- Independent Quality also proved that a rollback cleanup exception replaces
+  the primary plan failure. Round 6 must retain the primary writer failure and
+  attach rollback and close cleanup diagnostics without retrying descriptors or
+  misreporting commit state. The same rule should cover writer/open cleanup
+  paths where a primary failure already exists.
+- The exhaustive schema partition and coherent read-only `data_version`
+  verifier passed both lanes. Round 6 must preserve all 32 focused tests and all
+  prior lease, catalog, sequence, SQL, sparse, all-37, physical, rollback,
+  reopen, scope, and cleanup gates. The same four-path ceiling and both locks
+  remain; fresh dual rereview and Sol's merged release gate are still required.
