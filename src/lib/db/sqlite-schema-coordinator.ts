@@ -17,9 +17,11 @@ import Database from "better-sqlite3";
 
 import {
   SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT,
+  SQLITE_SCHEMA_V1_ACCEPTED_LEGACY_INTERNAL_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_AUTOINCREMENT_TABLES,
   SQLITE_SCHEMA_V1_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
+  SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_PRIMARY_SCHEMA,
   SQLITE_SCHEMA_V1_SQL,
   SQLITE_SCHEMA_V1_STAGED_USER_VERSION,
@@ -72,6 +74,7 @@ export type SqliteSchemaV1CoordinatorErrorCode =
   | "G006A_FILE_IDENTITY_DRIFT"
   | "G006A_FILE_IDENTITY_UNAVAILABLE"
   | "G006A_CONNECTION_BOUNDARY_REJECTED"
+  | "G006A_SQLITE_INTERNAL_CATALOG_DRIFT"
   | "G006A_SQLITE_OWNED_STATE_DRIFT"
   | "G006A_SOURCE_SNAPSHOT_DRIFT"
   | "G006A_CATALOG_DRIFT"
@@ -157,11 +160,13 @@ export interface SqliteSchemaV1WholeUpgradeResult {
 
 interface CapabilityState {
   readonly databasePath: string;
-  readonly sourceFileIdentity: PhysicalFileIdentity;
+  readonly sourceFileLease: FileLeaseState;
+  readonly leaseLifecycle: CapabilityLeaseLifecycle;
   readonly handoffBindingId: string;
   readonly sourceState: "accepted-legacy" | "staged";
   readonly sourceUserVersion: number;
   readonly sourceCatalogDigest: string;
+  readonly sourceInternalCatalogDigest: string;
   readonly sourcePhysicalManifestDigest: string;
   readonly sourcePreservation: SqliteSchemaV1PreservationSnapshot;
   readonly sourceSqliteOwnedState: SqliteOwnedStateSnapshot;
@@ -173,6 +178,10 @@ interface FreshVerifierBoundaryState {
   readonly mode:
     | "fail-verifier-open"
     | "replace-before-verifier"
+    | "replace-after-verifier-preservation"
+    | "remove-after-verifier-preservation"
+    | "replace-before-verifier-return"
+    | "remove-before-verifier-return"
     | "writer-attached-schema"
     | "writer-temp-object";
 }
@@ -199,10 +208,21 @@ interface PhysicalFileIdentity {
   readonly inode: bigint;
 }
 
-interface ConnectionLeaseState {
-  readonly descriptor: number;
+interface DescriptorLease {
+  descriptor: number | null;
+}
+
+interface FileLeaseState {
+  readonly descriptorLease: DescriptorLease;
   readonly identity: PhysicalFileIdentity;
   readonly databasePath: string;
+  readonly auditId: number;
+  readonly purpose: "capability-root" | "replay-root" | "connection";
+}
+
+interface CapabilityLeaseLifecycle {
+  status: "ready" | "consuming" | "terminal";
+  readonly unregisterToken: object;
 }
 
 interface SqliteSequenceRow {
@@ -220,7 +240,20 @@ interface SqliteOwnedStateSnapshot {
 const capabilityStates = new WeakMap<object, CapabilityState>();
 const consumedCapabilities = new WeakSet<object>();
 const freshVerifierBoundaryStates = new WeakMap<object, FreshVerifierBoundaryState>();
-const connectionLeaseStates = new WeakMap<Database.Database, ConnectionLeaseState>();
+const connectionLeaseStates = new WeakMap<Database.Database, FileLeaseState>();
+const capabilityLeaseFinalizer = new FinalizationRegistry<DescriptorLease>((lease) => {
+  try {
+    closeDescriptorLease(lease);
+  } catch {
+    // GC cleanup is a last-resort fallback; deterministic paths surface close failures.
+  }
+});
+let nextLeaseAuditId = 1;
+const leaseAuditEvents: Array<Readonly<{
+  id: number;
+  event: "open" | "close";
+  purpose: FileLeaseState["purpose"];
+}>> = [];
 const ACCEPTED_LEGACY_TARGET_COLUMN_COUNT = 27;
 const BIGINT_ZERO = BigInt(0);
 const SQLITE_INTEGER_MAX = BigInt("9223372036854775807");
@@ -259,20 +292,25 @@ export function createSqliteSchemaV1LaterFinalizerCapability(
   const plan = copyAndValidateFinalizerPlan(record.plan);
 
   let inspector: Database.Database | undefined;
-  let actual: SqliteSchemaV1State;
-  let sourceFileIdentity: PhysicalFileIdentity;
-  let sourcePhysicalManifestDigest: string;
-  let sourcePreservation: SqliteSchemaV1PreservationSnapshot;
-  let sourceSqliteOwnedState: SqliteOwnedStateSnapshot;
+  let sourceFileLease: FileLeaseState | undefined;
+  let actual: SqliteSchemaV1State | undefined;
+  let sourceInternalCatalogDigest: string | undefined;
+  let sourcePhysicalManifestDigest: string | undefined;
+  let sourcePreservation: SqliteSchemaV1PreservationSnapshot | undefined;
+  let sourceSqliteOwnedState: SqliteOwnedStateSnapshot | undefined;
+  let failure: unknown;
   try {
-    inspector = openExactDatabase(databasePath, true);
+    sourceFileLease = openFileLease(databasePath, true, "capability-root");
+    inspector = openExactDatabase(databasePath, true, sourceFileLease.identity);
+    assertFileLeaseIdentity(sourceFileLease);
     assertConnectionBoundary(inspector, databasePath);
-    sourceFileIdentity = readConnectionFileIdentity(inspector);
     assertWritableSchemaOff(inspector);
     actual = classifySqliteSchemaV1(inspector);
     if (actual.kind !== "accepted-legacy" && actual.kind !== "staged") {
       throw rejectedState(actual);
     }
+    sourceInternalCatalogDigest = expectedInternalCatalogDigest(actual.kind);
+    assertSqliteInternalCatalog(inspector, sourceInternalCatalogDigest);
     sourcePhysicalManifestDigest = sqliteSchemaV1PhysicalManifestDigest(inspector);
     if (actual.kind === "staged" && sourcePhysicalManifestDigest !== SQLITE_SCHEMA_V1_PHYSICAL_MANIFEST_DIGEST) {
       throw new SqliteSchemaV1CoordinatorError("G006A_PHYSICAL_CATALOG_DRIFT", sourcePhysicalManifestDigest);
@@ -280,32 +318,111 @@ export function createSqliteSchemaV1LaterFinalizerCapability(
     sourcePreservation = captureSqliteSchemaV1PreservationSnapshot(inspector);
     sourceSqliteOwnedState = captureSqliteOwnedState(inspector);
     assertSqliteSchemaV1DatabaseHealth(inspector);
+  } catch (error) {
+    failure = error;
   } finally {
-    if (inspector) closeExactDatabase(inspector);
+    if (inspector) {
+      try {
+        closeExactDatabase(inspector);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+  }
+  if (failure
+      || !sourceFileLease
+      || !actual
+      || !sourceInternalCatalogDigest
+      || !sourcePhysicalManifestDigest
+      || !sourcePreservation
+      || !sourceSqliteOwnedState) {
+    if (sourceFileLease) {
+      try {
+        closeFileLease(sourceFileLease);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    throw failure ?? new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "incomplete capability mint");
   }
 
   const capability = Object.freeze(Object.create(null)) as SqliteSchemaV1LaterFinalizerCapability;
+  const sourceState = actual.kind as "accepted-legacy" | "staged";
+  const leaseLifecycle: CapabilityLeaseLifecycle = {
+    status: "ready",
+    unregisterToken: Object.freeze(Object.create(null)) as object,
+  };
   capabilityStates.set(capability as object, Object.freeze({
     databasePath,
-    sourceFileIdentity,
+    sourceFileLease,
+    leaseLifecycle,
     handoffBindingId,
-    sourceState: actual.kind,
+    sourceState,
     sourceUserVersion: actual.userVersion,
     sourceCatalogDigest: actual.catalogDigest,
+    sourceInternalCatalogDigest,
     sourcePhysicalManifestDigest,
     sourcePreservation,
     sourceSqliteOwnedState,
     targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
     plan,
   }));
+  try {
+    capabilityLeaseFinalizer.register(
+      capability as object,
+      sourceFileLease.descriptorLease,
+      leaseLifecycle.unregisterToken,
+    );
+  } catch (error) {
+    capabilityStates.delete(capability as object);
+    closeFileLease(sourceFileLease);
+    throw error;
+  }
   return capability;
 }
 
+export function cancelSqliteSchemaV1LaterFinalizerCapability(
+  capability: SqliteSchemaV1LaterFinalizerCapability,
+): boolean {
+  if (!capability || typeof capability !== "object" || isProxy(capability)) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
+  }
+  const capabilityObject = capability as object;
+  const state = capabilityStates.get(capabilityObject);
+  if (!state) throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
+  if (state.leaseLifecycle.status !== "ready") return false;
+  consumedCapabilities.add(capabilityObject);
+  state.leaseLifecycle.status = "terminal";
+  if (!capabilityLeaseFinalizer.unregister(state.leaseLifecycle.unregisterToken)) {
+    closeFileLease(state.sourceFileLease);
+    throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_UNAVAILABLE", "capability lease registry invariant");
+  }
+  closeFileLease(state.sourceFileLease);
+  return true;
+}
+
 export function createSqliteSchemaV1FreshVerifierTestBoundary(
-  mode: "fail-verifier-open" | "replace-before-verifier" | "writer-attached-schema" | "writer-temp-object",
+  mode:
+    | "fail-verifier-open"
+    | "replace-before-verifier"
+    | "replace-after-verifier-preservation"
+    | "remove-after-verifier-preservation"
+    | "replace-before-verifier-return"
+    | "remove-before-verifier-return"
+    | "writer-attached-schema"
+    | "writer-temp-object",
 ): SqliteSchemaV1FreshVerifierTestBoundary {
   if (process.env.NODE_ENV !== "test"
-      || !["fail-verifier-open", "replace-before-verifier", "writer-attached-schema", "writer-temp-object"].includes(mode)) {
+      || ![
+        "fail-verifier-open",
+        "replace-before-verifier",
+        "replace-after-verifier-preservation",
+        "remove-after-verifier-preservation",
+        "replace-before-verifier-return",
+        "remove-before-verifier-return",
+        "writer-attached-schema",
+        "writer-temp-object",
+      ].includes(mode)) {
     throw new SqliteSchemaV1CoordinatorError("G006A_VERIFIER_BOUNDARY_REJECTED");
   }
   const boundary = Object.freeze(Object.create(null)) as SqliteSchemaV1FreshVerifierTestBoundary;
@@ -365,6 +482,7 @@ export function createFreshSqliteSchemaV1(db: Database.Database): SqliteSchemaV1
     if (staged.kind !== "staged") {
       throw new SqliteSchemaV1CoordinatorError("G006A_CATALOG_DRIFT", staged.reason);
     }
+    assertSqliteInternalCatalog(db, SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST);
     assertSqliteSchemaV1PhysicalManifest(db);
     assertSqliteSchemaV1DatabaseHealth(db);
     return staged;
@@ -378,73 +496,112 @@ export function coordinateSqliteSchemaV1WholeUpgrade(
   options: SqliteSchemaV1CoordinateOptions = {},
 ): SqliteSchemaV1WholeUpgradeResult {
   const testBoundary = resolveCoordinateTestBoundary(options);
-  const capabilityState = handoff ? resolveAndConsumeCapabilityHandoff(handoff) : undefined;
-  const absoluteDatabasePath = canonicalExistingDatabasePath(databasePath);
-  if (capabilityState
-      && (capabilityState.databasePath !== absoluteDatabasePath
-        || capabilityState.handoffBindingId !== extractHandoffBindingId(handoff))) {
-    throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_MISMATCH", "database path or handoff binding");
-  }
-
+  let absoluteDatabasePath: string | undefined;
+  let capabilityState: CapabilityState | undefined;
+  let retainedLease: FileLeaseState | undefined;
   let writer: Database.Database | undefined;
   let committed = false;
   let outcome: "finalized" | "replayed" | undefined;
   let preservation: SqliteSchemaV1PreservationSnapshot | undefined;
-  let fileIdentity: PhysicalFileIdentity | undefined;
   let sqliteOwnedState: SqliteOwnedStateSnapshot | undefined;
+  let result: SqliteSchemaV1WholeUpgradeResult | undefined;
   let failure: unknown;
   try {
-    writer = openExactDatabase(absoluteDatabasePath, false, capabilityState?.sourceFileIdentity);
-    fileIdentity = readConnectionFileIdentity(writer);
-    applyWriterTestFault(writer, testBoundary);
-    assertConnectionBoundary(writer, absoluteDatabasePath);
-    forceWritableSchemaOff(writer);
-    writer.exec("BEGIN IMMEDIATE");
+    const resolvedCapability = handoff ? resolveAndConsumeCapabilityHandoff(handoff) : undefined;
+    capabilityState = resolvedCapability?.state;
+    retainedLease = capabilityState?.sourceFileLease;
+    absoluteDatabasePath = canonicalExistingDatabasePath(databasePath);
+    if (capabilityState && capabilityState.databasePath !== absoluteDatabasePath) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_MISMATCH", "database path or handoff binding");
+    }
+    retainedLease ??= openFileLease(absoluteDatabasePath, true, "replay-root");
+    if (retainedLease.databasePath !== absoluteDatabasePath) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_DRIFT", "retained lease path mismatch");
+    }
+    assertFileLeaseIdentity(retainedLease);
+    if (!capabilityState) {
+      const verified = verifyCommittedSqliteSchemaV1File(
+        absoluteDatabasePath,
+        retainedLease,
+        undefined,
+        undefined,
+        testBoundary,
+      );
+      result = { status: "replayed", state: verified };
+    } else {
     try {
+      writer = openExactDatabase(absoluteDatabasePath, false, retainedLease.identity);
+      assertFileLeaseIdentity(retainedLease);
+      applyWriterTestFault(writer, testBoundary);
+      assertConnectionBoundary(writer, absoluteDatabasePath);
       forceWritableSchemaOff(writer);
-      assertConnectionBoundary(writer, absoluteDatabasePath);
-      const locked = classifySqliteSchemaV1(writer);
-      if (locked.kind === "final") {
-        if (capabilityState) {
+      writer.exec("BEGIN IMMEDIATE");
+      try {
+        forceWritableSchemaOff(writer);
+        assertFileLeaseIdentity(retainedLease);
+        assertConnectionBoundary(writer, absoluteDatabasePath);
+        const locked = classifySqliteSchemaV1(writer);
+        if (locked.kind === "final") {
           throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_MISMATCH", "final database does not accept a finalizer");
+        } else {
+          if (locked.kind !== "accepted-legacy" && locked.kind !== "staged") throw rejectedState(locked);
+          if (!capabilityState) throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
+          assertMintTimeSourceSnapshot(writer, locked, capabilityState);
+          preservation = capabilityState.sourcePreservation;
+          sqliteOwnedState = capabilityState.sourceSqliteOwnedState;
+          executeFinalizerPlan(writer, capabilityState.plan, sqliteOwnedState);
+          writer.pragma(`user_version = ${SQLITE_SCHEMA_V1_FINAL_USER_VERSION}`);
+          const after = classifySqliteSchemaV1(writer);
+          if (after.kind !== "final") {
+            throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_POSTCONDITION_FAILED", after.reason);
+          }
+          assertSqliteInternalCatalog(writer, SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST);
+          assertSqliteSchemaV1Preservation(
+            preservation,
+            captureSqliteSchemaV1PreservationSnapshot(writer, preservation),
+          );
+          assertSqliteSchemaV1PhysicalManifest(writer);
+          assertSqliteOwnedState(sqliteOwnedState, captureSqliteOwnedState(writer));
+          assertSqliteSchemaV1DatabaseHealth(writer);
+          outcome = "finalized";
         }
-        preservation = captureSqliteSchemaV1PreservationSnapshot(writer);
-        sqliteOwnedState = captureSqliteOwnedState(writer);
-        assertSqliteSchemaV1PhysicalManifest(writer);
-        assertSqliteSchemaV1DatabaseHealth(writer);
-        outcome = "replayed";
-      } else {
-        if (locked.kind !== "accepted-legacy" && locked.kind !== "staged") throw rejectedState(locked);
-        if (!capabilityState) throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
-        assertMintTimeSourceSnapshot(writer, locked, capabilityState);
-        preservation = capabilityState.sourcePreservation;
-        sqliteOwnedState = capabilityState.sourceSqliteOwnedState;
-        executeFinalizerPlan(writer, capabilityState.plan, sqliteOwnedState);
-        writer.pragma(`user_version = ${SQLITE_SCHEMA_V1_FINAL_USER_VERSION}`);
-        const after = classifySqliteSchemaV1(writer);
-        if (after.kind !== "final") {
-          throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_POSTCONDITION_FAILED", after.reason);
+        if (!sqliteOwnedState) {
+          throw new SqliteSchemaV1CoordinatorError("G006A_SQLITE_OWNED_STATE_DRIFT", "missing transaction baseline");
         }
-        assertSqliteSchemaV1Preservation(
-          preservation,
-          captureSqliteSchemaV1PreservationSnapshot(writer, preservation),
-        );
-        assertSqliteSchemaV1PhysicalManifest(writer);
+        assertSqliteInternalCatalog(writer, SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST);
         assertSqliteOwnedState(sqliteOwnedState, captureSqliteOwnedState(writer));
-        assertSqliteSchemaV1DatabaseHealth(writer);
-        outcome = "finalized";
+        assertFileLeaseIdentity(retainedLease);
+        assertConnectionBoundary(writer, absoluteDatabasePath);
+        writer.exec("COMMIT");
+        committed = true;
+        assertSqliteInternalCatalog(writer, SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST);
+        assertFileLeaseIdentity(retainedLease);
+        assertConnectionBoundary(writer, absoluteDatabasePath);
+      } catch (error) {
+        if (writer.inTransaction) writer.exec("ROLLBACK");
+        throw error;
       }
-      if (!sqliteOwnedState) {
-        throw new SqliteSchemaV1CoordinatorError("G006A_SQLITE_OWNED_STATE_DRIFT", "missing transaction baseline");
+    } finally {
+      if (writer) {
+        try {
+          closeExactDatabase(writer);
+        } finally {
+          writer = undefined;
+        }
       }
-      assertSqliteOwnedState(sqliteOwnedState, captureSqliteOwnedState(writer));
-      assertConnectionBoundary(writer, absoluteDatabasePath);
-      writer.exec("COMMIT");
-      committed = true;
-      assertConnectionBoundary(writer, absoluteDatabasePath);
-    } catch (error) {
-      if (writer.inTransaction) writer.exec("ROLLBACK");
-      throw error;
+    }
+    if (!committed || !outcome || !preservation || !sqliteOwnedState) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "writer did not reach a verified commit");
+    }
+    assertFileLeaseIdentity(retainedLease);
+    const verified = verifyCommittedSqliteSchemaV1File(
+      absoluteDatabasePath,
+      retainedLease,
+      preservation,
+      sqliteOwnedState,
+      testBoundary,
+    );
+    result = { status: outcome, state: verified };
     }
   } catch (error) {
     failure = error;
@@ -456,27 +613,26 @@ export function coordinateSqliteSchemaV1WholeUpgrade(
         failure ??= error;
       }
     }
+    if (retainedLease) {
+      try {
+        if (capabilityState) {
+          terminalizeCapabilityLease(capabilityState);
+        } else {
+          closeFileLease(retainedLease);
+        }
+      } catch (error) {
+        failure ??= error;
+      }
+    }
   }
-
   if (failure) {
     if (committed) throw committedUnverified(failure);
     throw failure;
   }
-  if (!committed || !outcome || !preservation || !fileIdentity || !sqliteOwnedState) {
-    throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "writer did not reach a verified commit");
+  if (!result) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "coordinator produced no result");
   }
-  try {
-    const verified = verifyCommittedSqliteSchemaV1File(
-      absoluteDatabasePath,
-      fileIdentity,
-      preservation,
-      sqliteOwnedState,
-      testBoundary,
-    );
-    return { status: outcome, state: verified };
-  } catch (error) {
-    throw committedUnverified(error);
-  }
+  return result;
 }
 
 export function captureSqliteSchemaV1PreservationSnapshot(
@@ -571,6 +727,51 @@ export function sqliteCatalogDigest(db: Database.Database): string {
   ])));
 }
 
+export function sqliteInternalCatalogDigest(db: Database.Database): string {
+  return digestSqliteInternalCatalogRows(readSqliteInternalCatalogRows(db));
+}
+
+function readSqliteInternalCatalogRows(
+  db: Database.Database,
+): Array<{ type: string; name: string; tbl_name: string; sql: string | null }> {
+  return db.prepare(`
+    SELECT type, name, tbl_name, sql
+    FROM sqlite_schema
+    WHERE name LIKE 'sqlite\\_%' ESCAPE '\\'
+    ORDER BY type COLLATE BINARY, name COLLATE BINARY, tbl_name COLLATE BINARY
+  `).all() as Array<{ type: string; name: string; tbl_name: string; sql: string | null }>;
+}
+
+function digestSqliteInternalCatalogRows(
+  rows: readonly { type: string; name: string; tbl_name: string; sql: string | null }[],
+): string {
+  return sha256(JSON.stringify(rows.map((row) => [
+    row.type,
+    row.name,
+    row.tbl_name,
+    row.sql?.replace(/\r\n?/gu, "\n") ?? null,
+  ])));
+}
+
+function expectedInternalCatalogDigest(
+  state: "accepted-legacy" | "staged" | "final",
+): string {
+  return state === "accepted-legacy"
+    ? SQLITE_SCHEMA_V1_ACCEPTED_LEGACY_INTERNAL_CATALOG_DIGEST
+    : SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST;
+}
+
+function assertSqliteInternalCatalog(db: Database.Database, expectedDigest: string): void {
+  const rows = readSqliteInternalCatalogRows(db);
+  if (rows.some((row) => row.name === "sqlite_stat1" || row.name === "sqlite_stat4")) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_SQLITE_INTERNAL_CATALOG_DRIFT", "ANALYZE statistics catalog");
+  }
+  const actualDigest = digestSqliteInternalCatalogRows(rows);
+  if (actualDigest !== expectedDigest) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_SQLITE_INTERNAL_CATALOG_DRIFT", actualDigest);
+  }
+}
+
 export function sqliteSchemaV1PhysicalManifestDigest(db: Database.Database): string {
   return sha256(JSON.stringify(readPhysicalManifest(db)));
 }
@@ -623,14 +824,31 @@ function captureSqliteOwnedState(db: Database.Database): SqliteOwnedStateSnapsho
     throw new SqliteSchemaV1CoordinatorError("G006A_SQLITE_OWNED_STATE_DRIFT", "duplicate or unknown sqlite_sequence rows");
   }
   for (const table of SQLITE_SCHEMA_V1_AUTOINCREMENT_TABLES) {
-    const maxRow = db.prepare(`
-      SELECT CAST(COALESCE(MAX(${quoteIdentifier("id")}), 0) AS TEXT) AS max_id
+    const countRow = db.prepare(`
+      SELECT CAST(COUNT(*) AS TEXT) AS row_count
       FROM ${quoteIdentifier(table)}
-    `).get() as { max_id: string };
-    const rawMaximumId = BigInt(maxRow.max_id);
+    `).get() as { row_count: unknown };
+    const maxRow = db.prepare(`
+      SELECT
+        CAST(MAX(${quoteIdentifier("id")}) AS TEXT) AS max_id,
+        typeof(MAX(${quoteIdentifier("id")})) AS max_type
+      FROM ${quoteIdentifier(table)}
+    `).get() as { max_id: unknown; max_type: unknown };
+    if (typeof countRow.row_count !== "string" || !/^(0|[1-9][0-9]*)$/u.test(countRow.row_count)) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_SQLITE_OWNED_STATE_DRIFT", `${table} row count`);
+    }
+    const rowCount = BigInt(countRow.row_count);
+    if ((rowCount === BIGINT_ZERO && (maxRow.max_id !== null || maxRow.max_type !== "null"))
+        || (rowCount > BIGINT_ZERO
+          && (maxRow.max_type !== "integer"
+            || typeof maxRow.max_id !== "string"
+            || !/^-?(0|[1-9][0-9]*)$/u.test(maxRow.max_id)))) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_SQLITE_OWNED_STATE_DRIFT", `${table} maximum id`);
+    }
+    const rawMaximumId = typeof maxRow.max_id === "string" ? BigInt(maxRow.max_id) : BIGINT_ZERO;
     const maximumId = rawMaximumId > BIGINT_ZERO ? rawMaximumId : BIGINT_ZERO;
     const sequence = sequenceRows.find((row) => row.name === table);
-    if ((!sequence && maximumId !== BIGINT_ZERO) || (sequence && sequence.seq < maximumId)) {
+    if ((!sequence && rowCount > BIGINT_ZERO) || (sequence && sequence.seq < maximumId)) {
       throw new SqliteSchemaV1CoordinatorError("G006A_SQLITE_OWNED_STATE_DRIFT", `${table} high-water is below table data`);
     }
   }
@@ -663,39 +881,74 @@ function assertSqliteSchemaV1PhysicalManifest(db: Database.Database): void {
   }
 }
 
-function resolveAndConsumeCapabilityHandoff(handoff: SqliteSchemaV1FinalizerHandoff): CapabilityState {
-  const record = readExactPlainRecord(
-    handoff,
-    ["capability", "handoffBindingId"],
-    "G006A_FINALIZER_MISMATCH",
-    "handoff",
-  );
-  const handoffBindingId = requireBindingId(record.handoffBindingId);
-  if (!record.capability || typeof record.capability !== "object" || isProxy(record.capability)) {
-    throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
-  }
-  const capabilityObject = record.capability;
-  if (consumedCapabilities.has(capabilityObject)) {
-    throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_CONSUMED");
-  }
-  const state = capabilityStates.get(capabilityObject);
-  if (!state) throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
-  consumedCapabilities.add(capabilityObject);
-  if (state.handoffBindingId !== handoffBindingId) {
-    throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_MISMATCH", "handoff binding");
-  }
-  return state;
+interface ResolvedCapabilityHandoff {
+  readonly capability: object;
+  readonly state: CapabilityState;
 }
 
-function extractHandoffBindingId(handoff: SqliteSchemaV1FinalizerHandoff | undefined): string {
-  if (!handoff) throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
-  const record = readExactPlainRecord(
-    handoff,
-    ["capability", "handoffBindingId"],
-    "G006A_FINALIZER_MISMATCH",
-    "handoff",
-  );
-  return requireBindingId(record.handoffBindingId);
+function resolveAndConsumeCapabilityHandoff(handoff: SqliteSchemaV1FinalizerHandoff): ResolvedCapabilityHandoff {
+  const knownCapability = readKnownCapabilityFromHandoff(handoff);
+  const knownState = knownCapability ? capabilityStates.get(knownCapability) : undefined;
+  const claimed = Boolean(knownCapability && knownState?.leaseLifecycle.status === "ready");
+  if (claimed && knownCapability && knownState) {
+    knownState.leaseLifecycle.status = "consuming";
+    consumedCapabilities.add(knownCapability);
+    if (!capabilityLeaseFinalizer.unregister(knownState.leaseLifecycle.unregisterToken)) {
+      terminalizeCapabilityLease(knownState);
+      throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_UNAVAILABLE", "capability lease registry invariant");
+    }
+  }
+  try {
+    const record = readExactPlainRecord(
+      handoff,
+      ["capability", "handoffBindingId"],
+      "G006A_FINALIZER_MISMATCH",
+      "handoff",
+    );
+    const handoffBindingId = requireBindingId(record.handoffBindingId);
+    if (!record.capability || typeof record.capability !== "object" || isProxy(record.capability)) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
+    }
+    const capabilityObject = record.capability;
+    const state = capabilityStates.get(capabilityObject);
+    if (!state) throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
+    if (!claimed || capabilityObject !== knownCapability || state !== knownState) {
+      if (consumedCapabilities.has(capabilityObject)) {
+        throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_CONSUMED");
+      }
+      throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
+    }
+    if (state.handoffBindingId !== handoffBindingId) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_MISMATCH", "handoff binding");
+    }
+    return Object.freeze({ capability: capabilityObject, state });
+  } catch (error) {
+    if (claimed && knownState) {
+      try {
+        terminalizeCapabilityLease(knownState);
+      } catch (closeError) {
+        throw closeError;
+      }
+    }
+    throw error;
+  }
+}
+
+function terminalizeCapabilityLease(state: CapabilityState): void {
+  if (state.leaseLifecycle.status === "terminal") return;
+  state.leaseLifecycle.status = "terminal";
+  closeFileLease(state.sourceFileLease);
+}
+
+function readKnownCapabilityFromHandoff(handoff: SqliteSchemaV1FinalizerHandoff): object | undefined {
+  if (!handoff || typeof handoff !== "object" || isProxy(handoff)) return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(handoff, "capability");
+    if (!descriptor || !("value" in descriptor) || !descriptor.value || typeof descriptor.value !== "object") return undefined;
+    return capabilityStates.has(descriptor.value) ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 type SqlOperation = "create-table" | "create-index" | "create-trigger" | "insert" | "update" | "delete";
@@ -1116,19 +1369,27 @@ function assertNoSchemaQualification(operation: SqlOperation, tokens: readonly S
 
 function verifyCommittedSqliteSchemaV1File(
   absoluteDatabasePath: string,
-  fileIdentity: PhysicalFileIdentity,
-  preservation: SqliteSchemaV1PreservationSnapshot,
-  sqliteOwnedState: SqliteOwnedStateSnapshot,
+  retainedLease: FileLeaseState,
+  preservation: SqliteSchemaV1PreservationSnapshot | undefined,
+  sqliteOwnedState: SqliteOwnedStateSnapshot | undefined,
   testBoundary: FreshVerifierBoundaryState | undefined,
 ): SqliteSchemaV1State {
   let verifier: Database.Database | undefined;
+  let verifiedState: SqliteSchemaV1State | undefined;
   try {
     if (testBoundary?.mode === "fail-verifier-open") throw new Error("simulated verifier open failure");
     if (testBoundary?.mode === "replace-before-verifier") replaceDatabaseFileWithExactCloneForTest(absoluteDatabasePath);
-    verifier = openExactDatabase(absoluteDatabasePath, true, fileIdentity);
-    assertConnectionBoundary(verifier, absoluteDatabasePath);
+    assertFileLeaseIdentity(retainedLease);
+    verifier = openExactDatabase(absoluteDatabasePath, true, retainedLease.identity);
+    assertVerifierIdentity(verifier, absoluteDatabasePath, retainedLease);
     assertWritableSchemaOff(verifier);
+    assertVerifierIdentity(verifier, absoluteDatabasePath, retainedLease);
     const state = classifySqliteSchemaV1(verifier);
+    if (!preservation
+        && !sqliteOwnedState
+        && (state.kind === "accepted-legacy" || state.kind === "staged")) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
+    }
     if (state.kind !== "final"
         || state.userVersion !== SQLITE_SCHEMA_V1_FINAL_USER_VERSION
         || state.catalogDigest !== SQLITE_SCHEMA_V1_CATALOG_DIGEST
@@ -1136,17 +1397,40 @@ function verifyCommittedSqliteSchemaV1File(
         || state.targetColumnCount !== state.expectedTargetColumnCount) {
       throw new SqliteSchemaV1CoordinatorError("G006A_CATALOG_DRIFT", state.reason);
     }
+    assertVerifierIdentity(verifier, absoluteDatabasePath, retainedLease);
+    assertSqliteInternalCatalog(verifier, SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST);
+    assertVerifierIdentity(verifier, absoluteDatabasePath, retainedLease);
     assertSqliteSchemaV1PhysicalManifest(verifier);
-    assertSqliteSchemaV1Preservation(
-      preservation,
-      captureSqliteSchemaV1PreservationSnapshot(verifier, preservation),
-    );
-    assertSqliteOwnedState(sqliteOwnedState, captureSqliteOwnedState(verifier));
+    assertVerifierIdentity(verifier, absoluteDatabasePath, retainedLease);
+    const verifiedPreservation = captureSqliteSchemaV1PreservationSnapshot(verifier, preservation);
+    if (preservation) assertSqliteSchemaV1Preservation(preservation, verifiedPreservation);
+    applyVerifierTestFault(verifier, absoluteDatabasePath, testBoundary, "after-preservation");
+    assertVerifierIdentity(verifier, absoluteDatabasePath, retainedLease);
+    const verifiedSqliteOwnedState = captureSqliteOwnedState(verifier);
+    if (sqliteOwnedState) assertSqliteOwnedState(sqliteOwnedState, verifiedSqliteOwnedState);
+    assertVerifierIdentity(verifier, absoluteDatabasePath, retainedLease);
     assertSqliteSchemaV1DatabaseHealth(verifier);
-    return state;
+    assertVerifierIdentity(verifier, absoluteDatabasePath, retainedLease);
+    applyVerifierTestFault(verifier, absoluteDatabasePath, testBoundary, "before-return");
+    assertVerifierIdentity(verifier, absoluteDatabasePath, retainedLease);
+    verifiedState = state;
   } finally {
     if (verifier) closeExactDatabase(verifier);
   }
+  assertFileLeaseIdentity(retainedLease);
+  if (!verifiedState) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "fresh verifier produced no state");
+  }
+  return verifiedState;
+}
+
+function assertVerifierIdentity(
+  verifier: Database.Database,
+  absoluteDatabasePath: string,
+  retainedLease: FileLeaseState,
+): void {
+  assertFileLeaseIdentity(retainedLease);
+  assertConnectionBoundary(verifier, absoluteDatabasePath);
 }
 
 function readPhysicalManifest(db: Database.Database): readonly PhysicalTableManifest[] {
@@ -1345,6 +1629,26 @@ function applyWriterTestFault(db: Database.Database, boundary: FreshVerifierBoun
   }
 }
 
+function applyVerifierTestFault(
+  db: Database.Database,
+  absoluteDatabasePath: string,
+  boundary: FreshVerifierBoundaryState | undefined,
+  phase: "after-preservation" | "before-return",
+): void {
+  const mode = boundary?.mode;
+  const shouldReplace = (phase === "after-preservation" && mode === "replace-after-verifier-preservation")
+    || (phase === "before-return" && mode === "replace-before-verifier-return");
+  const shouldRemove = (phase === "after-preservation" && mode === "remove-after-verifier-preservation")
+    || (phase === "before-return" && mode === "remove-before-verifier-return");
+  if (!shouldReplace && !shouldRemove) return;
+  if (db.open) db.close();
+  if (shouldReplace) {
+    replaceDatabaseFileWithExactCloneForTest(absoluteDatabasePath);
+  } else {
+    removeDatabasePathForTest(absoluteDatabasePath);
+  }
+}
+
 function replaceDatabaseFileWithExactCloneForTest(absoluteDatabasePath: string): void {
   if (process.env.NODE_ENV !== "test") {
     throw new SqliteSchemaV1CoordinatorError("G006A_VERIFIER_BOUNDARY_REJECTED", "file replacement outside test runtime");
@@ -1365,6 +1669,15 @@ function replaceDatabaseFileWithExactCloneForTest(absoluteDatabasePath: string):
   }
 }
 
+function removeDatabasePathForTest(absoluteDatabasePath: string): void {
+  if (process.env.NODE_ENV !== "test") {
+    throw new SqliteSchemaV1CoordinatorError("G006A_VERIFIER_BOUNDARY_REJECTED", "file removal outside test runtime");
+  }
+  const removedPath = `${absoluteDatabasePath}.g006a-verifier-removed`;
+  rmSync(removedPath, { force: true });
+  renameSync(absoluteDatabasePath, removedPath);
+}
+
 function assertMintTimeSourceSnapshot(
   db: Database.Database,
   locked: SqliteSchemaV1State,
@@ -1376,6 +1689,10 @@ function assertMintTimeSourceSnapshot(
       || capability.targetCatalogDigest !== SQLITE_SCHEMA_V1_CATALOG_DIGEST) {
     throw new SqliteSchemaV1CoordinatorError("G006A_SOURCE_SNAPSHOT_DRIFT", "source state, version, or catalog");
   }
+  if (capability.sourceInternalCatalogDigest !== expectedInternalCatalogDigest(locked.kind)) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_SQLITE_INTERNAL_CATALOG_DRIFT", "mint-time internal catalog pin");
+  }
+  assertSqliteInternalCatalog(db, capability.sourceInternalCatalogDigest);
   const physicalDigest = sqliteSchemaV1PhysicalManifestDigest(db);
   if (physicalDigest !== capability.sourcePhysicalManifestDigest) {
     throw new SqliteSchemaV1CoordinatorError("G006A_SOURCE_SNAPSHOT_DRIFT", "source physical manifest");
@@ -1462,20 +1779,12 @@ function openExactDatabase(
   expectedIdentity?: PhysicalFileIdentity,
 ): Database.Database {
   let db: Database.Database | undefined;
-  let descriptor: number | undefined;
+  let lease: FileLeaseState | undefined;
   try {
-    if (process.platform !== "win32") {
-      throw new SqliteSchemaV1CoordinatorError(
-        "G006A_FILE_IDENTITY_UNAVAILABLE",
-        "cross-handle replacement exclusion is only proven for Windows SQLite locking",
-      );
-    }
-    descriptor = openSync(absoluteDatabasePath, readonly ? "r" : "r+");
-    const identity = readStableFileIdentityFromDescriptor(descriptor);
-    if (expectedIdentity && !sameFileIdentity(identity, expectedIdentity)) {
+    lease = openFileLease(absoluteDatabasePath, readonly);
+    if (expectedIdentity && !sameFileIdentity(lease.identity, expectedIdentity)) {
       throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_DRIFT", "opened lease differs from mint-time file");
     }
-    assertPathFileIdentity(absoluteDatabasePath, identity);
     db = new Database(absoluteDatabasePath, { readonly, fileMustExist: true });
     const state = db as unknown as { readonly memory?: boolean; readonly name?: string; readonly readonly?: boolean };
     if (state.memory !== false
@@ -1483,18 +1792,96 @@ function openExactDatabase(
         || state.name !== absoluteDatabasePath) {
       throw new SqliteSchemaV1CoordinatorError("G006A_CONNECTION_BOUNDARY_REJECTED", "connection mode or path");
     }
-    connectionLeaseStates.set(db, Object.freeze({ descriptor, identity, databasePath: absoluteDatabasePath }));
+    connectionLeaseStates.set(db, lease);
     assertLeasedFileIdentity(db, absoluteDatabasePath);
     return db;
   } catch (error) {
     if (db) connectionLeaseStates.delete(db);
+    let cleanupFailure: unknown;
     try {
       if (db?.open) db.close();
-    } finally {
-      if (descriptor !== undefined) closeSync(descriptor);
+    } catch (closeError) {
+      cleanupFailure = closeError;
+    }
+    if (lease) {
+      try {
+        closeFileLease(lease);
+      } catch (closeError) {
+        cleanupFailure ??= closeError;
+      }
+    }
+    throw cleanupFailure ?? error;
+  }
+}
+
+function openFileLease(
+  absoluteDatabasePath: string,
+  readonly: boolean,
+  purpose: FileLeaseState["purpose"] = "connection",
+): FileLeaseState {
+  if (process.platform !== "win32") {
+    throw new SqliteSchemaV1CoordinatorError(
+      "G006A_FILE_IDENTITY_UNAVAILABLE",
+      "cross-handle replacement exclusion is only proven for Windows SQLite locking",
+    );
+  }
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(absoluteDatabasePath, readonly ? "r" : "r+");
+    const lease: FileLeaseState = {
+      descriptorLease: { descriptor },
+      identity: readStableFileIdentityFromDescriptor(descriptor),
+      databasePath: absoluteDatabasePath,
+      auditId: nextLeaseAuditId,
+      purpose,
+    };
+    assertFileLeaseIdentity(lease);
+    nextLeaseAuditId += 1;
+    if (process.env.NODE_ENV === "test") {
+      leaseAuditEvents.push(Object.freeze({ id: lease.auditId, event: "open", purpose }));
+    }
+    return lease;
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch (closeError) {
+        throw closeError;
+      }
     }
     throw error;
   }
+}
+
+function closeDescriptorLease(lease: DescriptorLease): boolean {
+  const descriptor = lease.descriptor;
+  if (descriptor === null) return false;
+  lease.descriptor = null;
+  closeSync(descriptor);
+  return true;
+}
+
+function closeFileLease(lease: FileLeaseState): boolean {
+  const descriptor = lease.descriptorLease.descriptor;
+  if (descriptor === null) return false;
+  lease.descriptorLease.descriptor = null;
+  if (process.env.NODE_ENV === "test") {
+    leaseAuditEvents.push(Object.freeze({ id: lease.auditId, event: "close", purpose: lease.purpose }));
+  }
+  closeSync(descriptor);
+  return true;
+}
+
+function assertFileLeaseIdentity(lease: FileLeaseState): void {
+  const descriptor = lease.descriptorLease.descriptor;
+  if (descriptor === null) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_UNAVAILABLE", "file lease is closed");
+  }
+  const descriptorIdentity = readStableFileIdentityFromDescriptor(descriptor);
+  if (!sameFileIdentity(descriptorIdentity, lease.identity)) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_DRIFT", "leased descriptor identity changed");
+  }
+  assertPathFileIdentity(lease.databasePath, lease.identity);
 }
 
 function closeExactDatabase(db: Database.Database): void {
@@ -1508,7 +1895,7 @@ function closeExactDatabase(db: Database.Database): void {
     connectionLeaseStates.delete(db);
     if (lease) {
       try {
-        closeSync(lease.descriptor);
+        closeFileLease(lease);
       } catch (error) {
         failure ??= error;
       }
@@ -1517,24 +1904,12 @@ function closeExactDatabase(db: Database.Database): void {
   if (failure) throw failure;
 }
 
-function readConnectionFileIdentity(db: Database.Database): PhysicalFileIdentity {
-  const lease = connectionLeaseStates.get(db);
-  if (!lease) {
-    throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_UNAVAILABLE", "connection has no coordinator lease");
-  }
-  return lease.identity;
-}
-
 function assertLeasedFileIdentity(db: Database.Database, absoluteDatabasePath: string): void {
   const lease = connectionLeaseStates.get(db);
   if (!lease || lease.databasePath !== absoluteDatabasePath) {
     throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_UNAVAILABLE", "missing exact-path file lease");
   }
-  const descriptorIdentity = readStableFileIdentityFromDescriptor(lease.descriptor);
-  if (!sameFileIdentity(descriptorIdentity, lease.identity)) {
-    throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_DRIFT", "leased descriptor identity changed");
-  }
-  assertPathFileIdentity(absoluteDatabasePath, lease.identity);
+  assertFileLeaseIdentity(lease);
 }
 
 function readStableFileIdentityFromDescriptor(descriptor: number): PhysicalFileIdentity {
@@ -1583,6 +1958,41 @@ export function __testOnlySqliteSchemaV1PhysicalFileIdentityMatches(
   right: Readonly<{ device: bigint; inode: bigint }>,
 ): boolean {
   return sameFileIdentity(left, right);
+}
+
+/** @internal Capability lease lifecycle regression seam. */
+export function __testOnlySqliteSchemaV1CapabilityLeaseStatus(
+  capability: SqliteSchemaV1LaterFinalizerCapability,
+): Readonly<{ lifecycle: "ready" | "consuming" | "terminal"; descriptorOpen: boolean }> {
+  if (!capability || typeof capability !== "object" || isProxy(capability)) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
+  }
+  const state = capabilityStates.get(capability as object);
+  if (!state) throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
+  return Object.freeze({
+    lifecycle: state.leaseLifecycle.status,
+    descriptorOpen: state.sourceFileLease.descriptorLease.descriptor !== null,
+  });
+}
+
+/** @internal Deterministic lease open/close ordering seam; test runtime only. */
+export function __testOnlyResetSqliteSchemaV1LeaseAudit(): void {
+  if (process.env.NODE_ENV !== "test") {
+    throw new SqliteSchemaV1CoordinatorError("G006A_VERIFIER_BOUNDARY_REJECTED");
+  }
+  leaseAuditEvents.length = 0;
+}
+
+/** @internal Deterministic lease open/close ordering seam; test runtime only. */
+export function __testOnlySqliteSchemaV1LeaseAudit(): readonly Readonly<{
+  id: number;
+  event: "open" | "close";
+  purpose: FileLeaseState["purpose"];
+}>[] {
+  if (process.env.NODE_ENV !== "test") {
+    throw new SqliteSchemaV1CoordinatorError("G006A_VERIFIER_BOUNDARY_REJECTED");
+  }
+  return Object.freeze(leaseAuditEvents.map((event) => Object.freeze({ ...event })));
 }
 
 function committedUnverified(error: unknown): SqliteSchemaV1CommittedUnverifiedError {

@@ -10,6 +10,8 @@ export const SQLITE_SCHEMA_V1_PRIMARY_SCHEMA = "main" as const;
 export const SQLITE_SCHEMA_V1_AUTOINCREMENT_TABLES = Object.freeze([
   "tenant_deletion_checkpoint_events",
 ] as const);
+export const SQLITE_SCHEMA_V1_ACCEPTED_LEGACY_INTERNAL_CATALOG_DIGEST = "eb29b4dec23fa7311cd93c298515b871b94fe109d00a3d9db149ef6726f1637c" as const;
+export const SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST = "2d866e21e5a30454bcfb7ea709aac96cdda17a1e7ab813b7e161265c0a060844" as const;
 export const SQLITE_SCHEMA_V1_CATALOG_DIGEST = "080477dd8fce09c3e8d8ca7461f2bc0a8b2222edab26afe7297367bdfe6362cf" as const;
 export const SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_DIGEST = "b47346d186f2768f577b6e9b52f6112ee09c5d94b05aad3ef31303343c07a8f8" as const;
 export const SQLITE_SCHEMA_V1_DEFINITION_DIGEST = "fd28b893542b08248df08f58706f2947d1c3bef5aeecf920ee19ea2eeeb280d2" as const;
