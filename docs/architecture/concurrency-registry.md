@@ -2116,3 +2116,24 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   caller, startup, PostgreSQL or external change is permitted.
 - Source remains unmerged and unaccepted. Both reviewers must verify the exact
   repair delta before Sol may adjudicate merge eligibility.
+
+## G-006C2A documentation-repair result and rereview launch
+
+- Terra-medium completed repair commit `27582d1` directly atop `db501cc`, with
+  exactly the authorized module comment and validation receipt paths. The
+  cumulative source remains the original four paths and the worktree is clean.
+- The receipt now records root's exact pre-dispatch `npm ci`, normal package-
+  registry traffic, 448 installed/449 audited packages and 14 findings, while
+  preserving that no remediation or prohibited external action occurred. The
+  comment and receipt now state that C2A narrows previously verified binding
+  evidence only and assigns current file/schema/scope/parent/location checks to
+  the atomic C2B/C writers.
+- Repair validation passes focused C2A 36/36, typecheck and focused zero-warning
+  ESLint. Comment-stripped TypeScript output remains byte-equivalent, the fixture
+  and test blobs are unchanged, cumulative scope is four paths, and C2A residue
+  and worktree-bound process counts are zero.
+- The original architecture and security reviewers now verify immutable repair
+  tip `27582d1`. They may inspect and run focused local checks but cannot edit,
+  commit, merge, accept, touch blocked roots or perform external activity. They
+  must confirm both P3s are closed, behavior remains unchanged and the receipt's
+  repair lineage is unambiguous. Sol alone decides merge eligibility.
