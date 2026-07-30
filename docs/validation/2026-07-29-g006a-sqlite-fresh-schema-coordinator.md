@@ -18,6 +18,8 @@ Rejected round-3 source: `b2843b8bff6d44d2861318c9523fe8780f12395e`
 
 Rejected round-4 source: `c23d280773f1594c7a2a28598bf5dd0c780f1440`
 
+Rejected round-5 source: `9756f93ff6d296c851539f2486ebe48ac4838d28`
+
 ## Result
 
 G-006A is prepared locally as an inert, deterministic SQLite final-catalog
@@ -161,7 +163,10 @@ failure path. A recognizably conveyed capability and its retained root lease
 are claimed before coordinate options are inspected, so unknown options,
 accessors, proxies, and fake boundaries consume and terminalize that authority.
 An authority hidden behind an accessor or proxy is neither inspected nor
-seized. Copies, spread/prototype forgeries, path aliases, path or binding
+seized. Only an exactly `undefined` handoff selects replay. Runtime `null`,
+`false`, numeric zero or negative zero, zero BigInt, `NaN`, and empty string enter
+handoff validation and reject before options, path, or lease work. Copies,
+spread/prototype forgeries, path aliases, path or binding
 mismatch, cross-file use, plan failure, and second use reject closed and cannot
 retry with the same token. The exported cancellation operation deterministically
 disposes an unused capability; a `FinalizationRegistry` fallback holds only the
@@ -224,7 +229,14 @@ mint-time state, user version, catalog, physical metadata, all-table payloads,
 and healthy FK/integrity results. Before commit it again requires identical
 all-table payloads and counts, exact catalog and physical metadata, an empty
 `foreign_key_check`, and `integrity_check=ok`. Normal plan or validation failure
-rolls back the owned transaction and the writer closes in `finally`. After
+rolls back the owned transaction and the writer closes exactly once. The first
+plan, validation, open, commit, or post-commit failure remains primary;
+coexisting rollback, database-close, descriptor-close, capability-terminal,
+and root-close failures are retained in ordered `g006aCleanupFailures`
+diagnostics. Cleanup-only failure is surfaced directly, rollback is attempted
+only before commit while a transaction is open, and no rollback runs after a
+successful commit. A writer-close failure after commit is therefore reported
+as committed-unverified. After
 commit the writer closes, then the coordinator opens a distinct fresh read-only
 connection to the exact canonical file path and rechecks final state/user version/catalog,
 37-table and target cardinalities, the pinned full table/index/index-xinfo/
@@ -250,7 +262,7 @@ an ordinary noncommitted error. In-memory finalization fails closed.
 ## Local validation evidence
 
 - `npm exec vitest run src/lib/__tests__/sqlite-schema-coordinator.test.ts`
-  - PASS: 1 file, 32/32 tests, final round-5 run 11.75 s.
+  - PASS: 1 file, 34/34 tests, final round-6 run 14.54 s.
   - Covers deterministic fresh construction, exact catalog metadata, tenant
     and source key enforcement, both nullable-workspace unique identities,
     cross-tenant and invalid-source rejection, all coordinator classifications,
@@ -276,14 +288,19 @@ an ordinary noncommitted error. In-memory finalization fails closed.
     `sqlite_sequence` poison detection including zero/negative-ID nonempty
     tables, legitimate historical AUTOINCREMENT high-water rebuild and
     restoration, pre-allocation huge sparse-array bounds, single-read-only-
-    verifier replay, and row-count/payload/FK/integrity guards.
+    verifier replay, row-count/payload/FK/integrity guards, exact-undefined
+    replay selection with the complete malformed-falsey matrix rejected before
+    options/path/lease work, writer-open/rollback/close primary-failure
+    precedence, ordered cleanup diagnostics, real-cleanup sentinel boundaries,
+    exact-once writer close, and committed writer-close recovery by later
+    read-only replay.
 - `npm run typecheck`
-  - PASS: `tsc --noEmit --pretty false`, final run 4.2 s.
+  - PASS: `tsc --noEmit --pretty false`, final run 5.0 s.
 - `npm run lint`
-  - PASS: full repository ESLint, final run 18.2 s.
+  - PASS: full repository ESLint, final run 20.9 s.
 - `npm run db:verify:recovery`
   - PASS: all 37 application tables match SQLite schema and tracked
-    migrations, 1.9 s.
+    migrations, 2.4 s.
 - `git diff --cached --check`
   - PASS: no whitespace errors.
 - `git diff --cached --name-only` plus `git diff --name-only`
@@ -406,6 +423,25 @@ the same object. Distinct suffixes now exercise `sqlite`, `sqliteX`, and
 `SQLITEX` application prefixes without changing production partition logic.
 The resulting 32-test matrix passed. No catalog pin, accepted state, SQL denial,
 or preserved payload rule was weakened.
+
+## Repair round 6 notes
+
+Round-5 source `9756f93ff6d296c851539f2486ebe48ac4838d28` was
+rejected because truthiness allowed falsey malformed handoffs to enter replay,
+and writer rollback or close cleanup could replace the original operation
+failure. Repair round 6 makes only exact `undefined` select replay and applies
+the established ordered cleanup-diagnostic contract to writer rollback/close,
+writer-open cleanup, verifier cleanup, capability registration/cancel/claim/
+terminalization, connection cleanup, and partial descriptor cleanup.
+
+Closed test-only modes execute a real rollback or close, verify the resource is
+no longer active, and only then raise a fixed sentinel. Duplicate primary-key
+plans prove the original `SQLITE_CONSTRAINT_PRIMARYKEY` code and UNIQUE message
+survive rollback and close sentinels while the database remains staged and
+unchanged. A cleanup-only writer-close sentinel after a successful commit is
+reported committed-unverified, leaves the database final, and permits later
+read-only replay. The first expanded round-6 matrix passed 34/34; no production
+guard was weakened to obtain that result.
 
 All database exercises used in-memory or task-owned temporary file-backed
 SQLite instances with synthetic rows. Every temporary directory and verifier

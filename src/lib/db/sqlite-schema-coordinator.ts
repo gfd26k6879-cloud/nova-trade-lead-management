@@ -185,7 +185,10 @@ interface FreshVerifierBoundaryState {
     | "wal-mutate-after-verifier-preservation"
     | "wal-mutate-before-verifier-return"
     | "writer-attached-schema"
-    | "writer-temp-object";
+    | "writer-temp-object"
+    | "writer-rollback-sentinel"
+    | "writer-close-sentinel"
+    | "writer-open-primary-and-cleanup-sentinel";
 }
 
 interface SqliteSchemaCatalogRow {
@@ -340,11 +343,13 @@ export function createSqliteSchemaV1LaterFinalizerCapability(
       try {
         closeExactDatabase(inspector);
       } catch (error) {
-        failure ??= error;
+        failure = failure === undefined
+          ? error
+          : retainCleanupFailure(failure, error, "capability inspector close");
       }
     }
   }
-  if (failure
+  if (failure !== undefined
       || !sourceFileLease
       || !actual
       || !sourceInternalCatalogDigest
@@ -355,10 +360,14 @@ export function createSqliteSchemaV1LaterFinalizerCapability(
       try {
         closeFileLease(sourceFileLease);
       } catch (error) {
-        failure ??= error;
+        failure = failure === undefined
+          ? error
+          : retainCleanupFailure(failure, error, "capability mint root close");
       }
     }
-    throw failure ?? new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "incomplete capability mint");
+    throw failure === undefined
+      ? new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "incomplete capability mint")
+      : failure;
   }
 
   const capability = Object.freeze(Object.create(null)) as SqliteSchemaV1LaterFinalizerCapability;
@@ -390,8 +399,13 @@ export function createSqliteSchemaV1LaterFinalizerCapability(
     );
   } catch (error) {
     capabilityStates.delete(capability as object);
-    closeFileLease(sourceFileLease);
-    throw error;
+    let failure: unknown = error;
+    try {
+      closeFileLease(sourceFileLease);
+    } catch (closeError) {
+      failure = retainCleanupFailure(failure, closeError, "capability registration root close");
+    }
+    throw failure;
   }
   return capability;
 }
@@ -409,8 +423,16 @@ export function cancelSqliteSchemaV1LaterFinalizerCapability(
   consumedCapabilities.add(capabilityObject);
   state.leaseLifecycle.status = "terminal";
   if (!capabilityLeaseFinalizer.unregister(state.leaseLifecycle.unregisterToken)) {
-    closeFileLease(state.sourceFileLease);
-    throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_UNAVAILABLE", "capability lease registry invariant");
+    let failure: unknown = new SqliteSchemaV1CoordinatorError(
+      "G006A_FILE_IDENTITY_UNAVAILABLE",
+      "capability lease registry invariant",
+    );
+    try {
+      closeFileLease(state.sourceFileLease);
+    } catch (closeError) {
+      failure = retainCleanupFailure(failure, closeError, "capability cancel root close");
+    }
+    throw failure;
   }
   closeFileLease(state.sourceFileLease);
   return true;
@@ -427,7 +449,10 @@ export function createSqliteSchemaV1FreshVerifierTestBoundary(
     | "wal-mutate-after-verifier-preservation"
     | "wal-mutate-before-verifier-return"
     | "writer-attached-schema"
-    | "writer-temp-object",
+    | "writer-temp-object"
+    | "writer-rollback-sentinel"
+    | "writer-close-sentinel"
+    | "writer-open-primary-and-cleanup-sentinel",
 ): SqliteSchemaV1FreshVerifierTestBoundary {
   if (process.env.NODE_ENV !== "test"
       || ![
@@ -441,6 +466,9 @@ export function createSqliteSchemaV1FreshVerifierTestBoundary(
         "wal-mutate-before-verifier-return",
         "writer-attached-schema",
         "writer-temp-object",
+        "writer-rollback-sentinel",
+        "writer-close-sentinel",
+        "writer-open-primary-and-cleanup-sentinel",
       ].includes(mode)) {
     throw new SqliteSchemaV1CoordinatorError("G006A_VERIFIER_BOUNDARY_REJECTED");
   }
@@ -526,7 +554,9 @@ export function coordinateSqliteSchemaV1WholeUpgrade(
   let result: SqliteSchemaV1WholeUpgradeResult | undefined;
   let failure: unknown;
   try {
-    const resolvedCapability = handoff ? resolveAndConsumeCapabilityHandoff(handoff) : undefined;
+    const resolvedCapability = handoff === undefined
+      ? undefined
+      : resolveAndConsumeCapabilityHandoff(handoff);
     capabilityState = resolvedCapability?.state;
     retainedLease = capabilityState?.sourceFileLease;
     testBoundary = resolveCoordinateTestBoundary(options);
@@ -549,44 +579,55 @@ export function coordinateSqliteSchemaV1WholeUpgrade(
       );
       result = { status: "replayed", state: verified };
     } else {
-    try {
-      writer = openExactDatabase(absoluteDatabasePath, false, retainedLease.identity);
-      assertFileLeaseIdentity(retainedLease);
-      applyWriterTestFault(writer, testBoundary);
-      assertConnectionBoundary(writer, absoluteDatabasePath);
-      forceWritableSchemaOff(writer);
-      writer.exec("BEGIN IMMEDIATE");
+      let writerFailure: unknown;
       try {
+        writer = openExactDatabase(
+          absoluteDatabasePath,
+          false,
+          retainedLease.identity,
+          testBoundary?.mode === "writer-open-primary-and-cleanup-sentinel"
+            ? "primary-and-cleanup-sentinel"
+            : undefined,
+        );
+        assertFileLeaseIdentity(retainedLease);
+        applyWriterTestFault(writer, testBoundary);
+        assertConnectionBoundary(writer, absoluteDatabasePath);
+        forceWritableSchemaOff(writer);
+        writer.exec("BEGIN IMMEDIATE");
         forceWritableSchemaOff(writer);
         assertFileLeaseIdentity(retainedLease);
         assertConnectionBoundary(writer, absoluteDatabasePath);
         const locked = classifySqliteSchemaV1(writer);
         if (locked.kind === "final") {
-          throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_MISMATCH", "final database does not accept a finalizer");
-        } else {
-          if (locked.kind !== "accepted-legacy" && locked.kind !== "staged") throw rejectedState(locked);
-          if (!capabilityState) throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_REQUIRED");
-          assertMintTimeSourceSnapshot(writer, locked, capabilityState);
-          preservation = capabilityState.sourcePreservation;
-          sqliteOwnedState = capabilityState.sourceSqliteOwnedState;
-          executeFinalizerPlan(writer, capabilityState.plan, sqliteOwnedState);
-          writer.pragma(`user_version = ${SQLITE_SCHEMA_V1_FINAL_USER_VERSION}`);
-          const after = classifySqliteSchemaV1(writer);
-          if (after.kind !== "final") {
-            throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_POSTCONDITION_FAILED", after.reason);
-          }
-          assertSqliteInternalCatalog(writer, SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST);
-          assertSqliteSchemaV1Preservation(
-            preservation,
-            captureSqliteSchemaV1PreservationSnapshot(writer, preservation),
+          throw new SqliteSchemaV1CoordinatorError(
+            "G006A_FINALIZER_MISMATCH",
+            "final database does not accept a finalizer",
           );
-          assertSqliteSchemaV1PhysicalManifest(writer);
-          assertSqliteOwnedState(sqliteOwnedState, captureSqliteOwnedState(writer));
-          assertSqliteSchemaV1DatabaseHealth(writer);
-          outcome = "finalized";
         }
+        if (locked.kind !== "accepted-legacy" && locked.kind !== "staged") throw rejectedState(locked);
+        assertMintTimeSourceSnapshot(writer, locked, capabilityState);
+        preservation = capabilityState.sourcePreservation;
+        sqliteOwnedState = capabilityState.sourceSqliteOwnedState;
+        executeFinalizerPlan(writer, capabilityState.plan, sqliteOwnedState);
+        writer.pragma(`user_version = ${SQLITE_SCHEMA_V1_FINAL_USER_VERSION}`);
+        const after = classifySqliteSchemaV1(writer);
+        if (after.kind !== "final") {
+          throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_POSTCONDITION_FAILED", after.reason);
+        }
+        assertSqliteInternalCatalog(writer, SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST);
+        assertSqliteSchemaV1Preservation(
+          preservation,
+          captureSqliteSchemaV1PreservationSnapshot(writer, preservation),
+        );
+        assertSqliteSchemaV1PhysicalManifest(writer);
+        assertSqliteOwnedState(sqliteOwnedState, captureSqliteOwnedState(writer));
+        assertSqliteSchemaV1DatabaseHealth(writer);
+        outcome = "finalized";
         if (!sqliteOwnedState) {
-          throw new SqliteSchemaV1CoordinatorError("G006A_SQLITE_OWNED_STATE_DRIFT", "missing transaction baseline");
+          throw new SqliteSchemaV1CoordinatorError(
+            "G006A_SQLITE_OWNED_STATE_DRIFT",
+            "missing transaction baseline",
+          );
         }
         assertSqliteInternalCatalog(writer, SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST);
         assertSqliteOwnedState(sqliteOwnedState, captureSqliteOwnedState(writer));
@@ -598,41 +639,44 @@ export function coordinateSqliteSchemaV1WholeUpgrade(
         assertFileLeaseIdentity(retainedLease);
         assertConnectionBoundary(writer, absoluteDatabasePath);
       } catch (error) {
-        if (writer.inTransaction) writer.exec("ROLLBACK");
-        throw error;
-      }
-    } finally {
-      if (writer) {
-        try {
-          closeExactDatabase(writer);
-        } finally {
+        writerFailure = error;
+        if (writer && !committed && writer.open && writer.inTransaction) {
+          try {
+            rollbackWriterWithTestFault(writer, testBoundary);
+          } catch (rollbackError) {
+            writerFailure = retainCleanupFailure(writerFailure, rollbackError, "writer rollback");
+          }
+        }
+      } finally {
+        if (writer) {
+          const scopedWriter = writer;
           writer = undefined;
+          try {
+            closeWriterWithTestFault(scopedWriter, testBoundary);
+          } catch (closeError) {
+            writerFailure = writerFailure === undefined
+              ? closeError
+              : retainCleanupFailure(writerFailure, closeError, "writer close");
+          }
         }
       }
-    }
-    if (!committed || !outcome || !preservation || !sqliteOwnedState) {
-      throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "writer did not reach a verified commit");
-    }
-    assertFileLeaseIdentity(retainedLease);
-    const verified = verifyCommittedSqliteSchemaV1File(
-      absoluteDatabasePath,
-      retainedLease,
-      preservation,
-      sqliteOwnedState,
-      testBoundary,
-    );
-    result = { status: outcome, state: verified };
+      if (writerFailure !== undefined) throw writerFailure;
+      if (!committed || !outcome || !preservation || !sqliteOwnedState) {
+        throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "writer did not reach a verified commit");
+      }
+      assertFileLeaseIdentity(retainedLease);
+      const verified = verifyCommittedSqliteSchemaV1File(
+        absoluteDatabasePath,
+        retainedLease,
+        preservation,
+        sqliteOwnedState,
+        testBoundary,
+      );
+      result = { status: outcome, state: verified };
     }
   } catch (error) {
     failure = error;
   } finally {
-    if (writer) {
-      try {
-        closeExactDatabase(writer);
-      } catch (error) {
-        failure ??= error;
-      }
-    }
     if (retainedLease) {
       try {
         if (capabilityState) {
@@ -641,11 +685,13 @@ export function coordinateSqliteSchemaV1WholeUpgrade(
           closeFileLease(retainedLease);
         }
       } catch (error) {
-        failure ??= error;
+        failure = failure === undefined
+          ? error
+          : retainCleanupFailure(failure, error, "retained root close");
       }
     }
   }
-  if (failure) {
+  if (failure !== undefined) {
     if (committed) throw committedUnverified(failure);
     throw failure;
   }
@@ -940,8 +986,16 @@ function resolveAndConsumeCapabilityHandoff(handoff: SqliteSchemaV1FinalizerHand
     knownState.leaseLifecycle.status = "consuming";
     consumedCapabilities.add(knownCapability);
     if (!capabilityLeaseFinalizer.unregister(knownState.leaseLifecycle.unregisterToken)) {
-      terminalizeCapabilityLease(knownState);
-      throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_UNAVAILABLE", "capability lease registry invariant");
+      let failure: unknown = new SqliteSchemaV1CoordinatorError(
+        "G006A_FILE_IDENTITY_UNAVAILABLE",
+        "capability lease registry invariant",
+      );
+      try {
+        terminalizeCapabilityLease(knownState);
+      } catch (closeError) {
+        failure = retainCleanupFailure(failure, closeError, "capability claim terminal close");
+      }
+      throw failure;
     }
   }
   try {
@@ -969,14 +1023,15 @@ function resolveAndConsumeCapabilityHandoff(handoff: SqliteSchemaV1FinalizerHand
     }
     return Object.freeze({ capability: capabilityObject, state });
   } catch (error) {
+    let failure: unknown = error;
     if (claimed && knownState) {
       try {
         terminalizeCapabilityLease(knownState);
       } catch (closeError) {
-        throw closeError;
+        failure = retainCleanupFailure(failure, closeError, "recognized handoff terminal close");
       }
     }
-    throw error;
+    throw failure;
   }
 }
 
@@ -1484,7 +1539,7 @@ function verifyCommittedSqliteSchemaV1File(
       }
     }
   } catch (error) {
-    failure ??= error;
+    if (failure === undefined) failure = error;
   } finally {
     if (verifier) {
       try {
@@ -1751,6 +1806,44 @@ function applyWriterTestFault(db: Database.Database, boundary: FreshVerifierBoun
   }
 }
 
+function rollbackWriterWithTestFault(
+  writer: Database.Database,
+  boundary: FreshVerifierBoundaryState | undefined,
+): void {
+  writer.exec("ROLLBACK");
+  if (writer.inTransaction) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "writer rollback left a transaction open");
+  }
+  if (boundary?.mode === "writer-rollback-sentinel") {
+    if (process.env.NODE_ENV !== "test") {
+      throw new SqliteSchemaV1CoordinatorError("G006A_VERIFIER_BOUNDARY_REJECTED");
+    }
+    throw new SqliteSchemaV1CoordinatorError(
+      "G006A_VERIFIER_BOUNDARY_REJECTED",
+      "simulated writer rollback cleanup failure",
+    );
+  }
+}
+
+function closeWriterWithTestFault(
+  writer: Database.Database,
+  boundary: FreshVerifierBoundaryState | undefined,
+): void {
+  closeExactDatabase(writer);
+  if (writer.open) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "writer close left the connection open");
+  }
+  if (boundary?.mode === "writer-close-sentinel") {
+    if (process.env.NODE_ENV !== "test") {
+      throw new SqliteSchemaV1CoordinatorError("G006A_VERIFIER_BOUNDARY_REJECTED");
+    }
+    throw new SqliteSchemaV1CoordinatorError(
+      "G006A_VERIFIER_BOUNDARY_REJECTED",
+      "simulated writer close cleanup failure",
+    );
+  }
+}
+
 function applyVerifierTestFault(
   db: Database.Database,
   absoluteDatabasePath: string,
@@ -1931,6 +2024,7 @@ function openExactDatabase(
   absoluteDatabasePath: string,
   readonly: boolean,
   expectedIdentity?: PhysicalFileIdentity,
+  testFault?: "primary-and-cleanup-sentinel",
 ): Database.Database {
   let db: Database.Database | undefined;
   let lease: FileLeaseState | undefined;
@@ -1938,6 +2032,15 @@ function openExactDatabase(
     lease = openFileLease(absoluteDatabasePath, readonly);
     if (expectedIdentity && !sameFileIdentity(lease.identity, expectedIdentity)) {
       throw new SqliteSchemaV1CoordinatorError("G006A_FILE_IDENTITY_DRIFT", "opened lease differs from mint-time file");
+    }
+    if (testFault === "primary-and-cleanup-sentinel") {
+      if (process.env.NODE_ENV !== "test") {
+        throw new SqliteSchemaV1CoordinatorError("G006A_VERIFIER_BOUNDARY_REJECTED");
+      }
+      throw new SqliteSchemaV1CoordinatorError(
+        "G006A_CONNECTION_BOUNDARY_REJECTED",
+        "simulated writer open primary failure",
+      );
     }
     db = new Database(absoluteDatabasePath, { readonly, fileMustExist: true });
     const state = db as unknown as { readonly memory?: boolean; readonly name?: string; readonly readonly?: boolean };
@@ -1950,21 +2053,31 @@ function openExactDatabase(
     assertLeasedFileIdentity(db, absoluteDatabasePath);
     return db;
   } catch (error) {
+    let failure: unknown = error;
     if (db) connectionLeaseStates.delete(db);
-    let cleanupFailure: unknown;
     try {
       if (db?.open) db.close();
     } catch (closeError) {
-      cleanupFailure = closeError;
+      failure = retainCleanupFailure(failure, closeError, "open database close");
     }
     if (lease) {
       try {
         closeFileLease(lease);
       } catch (closeError) {
-        cleanupFailure ??= closeError;
+        failure = retainCleanupFailure(failure, closeError, "open lease close");
       }
     }
-    throw cleanupFailure ?? error;
+    if (testFault === "primary-and-cleanup-sentinel" && process.env.NODE_ENV === "test") {
+      failure = retainCleanupFailure(
+        failure,
+        new SqliteSchemaV1CoordinatorError(
+          "G006A_VERIFIER_BOUNDARY_REJECTED",
+          "simulated writer open cleanup failure",
+        ),
+        "open lease close",
+      );
+    }
+    throw failure;
   }
 }
 
@@ -1996,14 +2109,15 @@ function openFileLease(
     }
     return lease;
   } catch (error) {
+    let failure: unknown = error;
     if (descriptor !== undefined) {
       try {
         closeSync(descriptor);
       } catch (closeError) {
-        throw closeError;
+        failure = retainCleanupFailure(failure, closeError, "partial file lease close");
       }
     }
-    throw error;
+    throw failure;
   }
 }
 
@@ -2051,11 +2165,13 @@ function closeExactDatabase(db: Database.Database): void {
       try {
         closeFileLease(lease);
       } catch (error) {
-        failure ??= error;
+        failure = failure === undefined
+          ? error
+          : retainCleanupFailure(failure, error, "connection lease close");
       }
     }
   }
-  if (failure) throw failure;
+  if (failure !== undefined) throw failure;
 }
 
 function assertLeasedFileIdentity(db: Database.Database, absoluteDatabasePath: string): void {
@@ -2162,7 +2278,18 @@ export function __testOnlySqliteSchemaV1NameIsInternal(name: unknown): boolean {
 
 function committedUnverified(error: unknown): SqliteSchemaV1CommittedUnverifiedError {
   const detail = error instanceof Error ? error.message : "fresh read-only verification failed";
-  return new SqliteSchemaV1CommittedUnverifiedError(detail);
+  let wrapped: unknown = new SqliteSchemaV1CommittedUnverifiedError(detail);
+  if (error instanceof Error) {
+    const cleanupFailures = (error as Error & {
+      g006aCleanupFailures?: readonly Readonly<{ phase: string; error: unknown }>[];
+    }).g006aCleanupFailures;
+    if (Array.isArray(cleanupFailures)) {
+      for (const cleanup of cleanupFailures) {
+        wrapped = retainCleanupFailure(wrapped, cleanup.error, cleanup.phase);
+      }
+    }
+  }
+  return wrapped as SqliteSchemaV1CommittedUnverifiedError;
 }
 
 function countTargetColumns(db: Database.Database): { actual: number; expected: number } {

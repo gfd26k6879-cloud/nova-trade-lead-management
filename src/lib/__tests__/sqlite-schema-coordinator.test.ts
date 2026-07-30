@@ -399,6 +399,71 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
+  it("selects replay only for exact undefined across staged and final falsey handoffs", () => {
+    const staged = createTemporaryStagedDatabase();
+    const final = createTemporaryStagedDatabase();
+    const values = [undefined, null, false, 0, -0, BigInt(0), Number.NaN, ""] as const;
+    let optionTrapCalls = 0;
+    const hostileOptions = new Proxy({}, {
+      ownKeys: (target) => { optionTrapCalls += 1; return Reflect.ownKeys(target); },
+    });
+    try {
+      expect(coordinateSqliteSchemaV1WholeUpgrade(
+        final.path,
+        createFinalizerHandoff(final.path, "g006b:falsey:final-setup", []),
+      )).toMatchObject({ status: "finalized" });
+
+      for (const value of values) {
+        __testOnlyResetSqliteSchemaV1LeaseAudit();
+        const before = classifySqliteSchemaV1(staged.db);
+        if (value === undefined) {
+          expect(() => coordinateSqliteSchemaV1WholeUpgrade(staged.path, value))
+            .toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_REQUIRED" }));
+          expect(leaseAuditShape()).toEqual([
+            "open:replay-root",
+            "open:connection",
+            "close:connection",
+            "close:replay-root",
+          ]);
+        } else {
+          expect(() => coordinateSqliteSchemaV1WholeUpgrade(
+            `${staged.directory}\.\schema.db`,
+            value as unknown as SqliteSchemaV1FinalizerHandoff,
+            hostileOptions,
+          )).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_MISMATCH" }));
+          expect(leaseAuditShape()).toEqual([]);
+        }
+        expect(classifySqliteSchemaV1(staged.db)).toEqual(before);
+      }
+
+      for (const value of values) {
+        __testOnlyResetSqliteSchemaV1LeaseAudit();
+        const before = classifySqliteSchemaV1(final.db);
+        if (value === undefined) {
+          expect(coordinateSqliteSchemaV1WholeUpgrade(final.path, value))
+            .toMatchObject({ status: "replayed", state: { kind: "final" } });
+          expect(leaseAuditShape()).toEqual([
+            "open:replay-root",
+            "open:connection",
+            "close:connection",
+            "close:replay-root",
+          ]);
+        } else {
+          expect(() => coordinateSqliteSchemaV1WholeUpgrade(
+            final.path,
+            value as unknown as SqliteSchemaV1FinalizerHandoff,
+          )).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_MISMATCH" }));
+          expect(leaseAuditShape()).toEqual([]);
+        }
+        expect(classifySqliteSchemaV1(final.db)).toEqual(before);
+      }
+      expect(optionTrapCalls).toBe(0);
+    } finally {
+      staged.cleanup();
+      final.cleanup();
+    }
+  });
+
   it("rejects callbacks, accessors, proxies, functions, async values, thenables, symbols, and non-plain plan data", () => {
     const fixture = createTemporaryStagedDatabase();
     let getterCalls = 0;
@@ -1078,6 +1143,111 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     )).toThrowError(expect.objectContaining({ code: "G006A_VERIFIER_BOUNDARY_REJECTED" }));
   });
 
+  it("retains writer primaries across rollback, close, and open cleanup failures", () => {
+    const rollback = createTemporaryStagedDatabase();
+    const close = createTemporaryStagedDatabase();
+    const open = createTemporaryStagedDatabase();
+    const committedClose = createTemporaryStagedDatabase();
+    try {
+      for (const [fixture, mode, id, phase, cleanupMessage] of [
+        [
+          rollback,
+          "writer-rollback-sentinel",
+          "writer-rollback-primary",
+          "writer rollback",
+          "simulated writer rollback cleanup failure",
+        ],
+        [
+          close,
+          "writer-close-sentinel",
+          "writer-close-primary",
+          "writer close",
+          "simulated writer close cleanup failure",
+        ],
+      ] as const) {
+        const handoff = createFinalizerHandoff(fixture.path, `g006b:cleanup:${mode}`, duplicateMarketPlan(id));
+        const boundary = createSqliteSchemaV1FreshVerifierTestBoundary(mode);
+        __testOnlyResetSqliteSchemaV1LeaseAudit();
+        const failure = captureFailure(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff, {
+          freshVerifierTestBoundary: boundary,
+        }));
+        expect((failure as { code?: string }).code).toBe("SQLITE_CONSTRAINT_PRIMARYKEY");
+        expect((failure as Error).message).toContain("UNIQUE constraint failed: location_markets.id");
+        expect(readCleanupDiagnostics(failure).map(({ phase: cleanupPhase }) => cleanupPhase)).toEqual([phase]);
+        expect(readCleanupDiagnostics(failure).map(({ error }) => (error as Error).message))
+          .toEqual([expect.stringContaining(cleanupMessage)]);
+        expect(classifySqliteSchemaV1(fixture.db).kind).toBe("staged");
+        expect(fixture.db.prepare("SELECT id FROM location_markets WHERE id = ?").get(id)).toBeUndefined();
+        expect(__testOnlySqliteSchemaV1CapabilityLeaseStatus(handoff.capability))
+          .toEqual({ lifecycle: "terminal", descriptorOpen: false });
+        expect(leaseAuditShape()).toEqual([
+          "open:connection",
+          "close:connection",
+          "close:capability-root",
+        ]);
+      }
+
+      const openHandoff = createFinalizerHandoff(open.path, "g006b:cleanup:open", []);
+      const openBoundary = createSqliteSchemaV1FreshVerifierTestBoundary(
+        "writer-open-primary-and-cleanup-sentinel",
+      );
+      __testOnlyResetSqliteSchemaV1LeaseAudit();
+      const openFailure = captureFailure(() => coordinateSqliteSchemaV1WholeUpgrade(open.path, openHandoff, {
+        freshVerifierTestBoundary: openBoundary,
+      }));
+      expect(openFailure).toMatchObject({
+        code: "G006A_CONNECTION_BOUNDARY_REJECTED",
+        message: expect.stringContaining("simulated writer open primary failure"),
+      });
+      expect(readCleanupDiagnostics(openFailure).map(({ phase }) => phase)).toEqual(["open lease close"]);
+      expect(readCleanupDiagnostics(openFailure).map(({ error }) => (error as Error).message))
+        .toEqual([expect.stringContaining("simulated writer open cleanup failure")]);
+      expect(classifySqliteSchemaV1(open.db).kind).toBe("staged");
+      expect(__testOnlySqliteSchemaV1CapabilityLeaseStatus(openHandoff.capability))
+        .toEqual({ lifecycle: "terminal", descriptorOpen: false });
+      expect(leaseAuditShape()).toEqual([
+        "open:connection",
+        "close:connection",
+        "close:capability-root",
+      ]);
+
+      const committedHandoff = createFinalizerHandoff(
+        committedClose.path,
+        "g006b:cleanup:committed-close",
+        [],
+      );
+      const committedBoundary = createSqliteSchemaV1FreshVerifierTestBoundary("writer-close-sentinel");
+      __testOnlyResetSqliteSchemaV1LeaseAudit();
+      const committedFailure = captureFailure(() => coordinateSqliteSchemaV1WholeUpgrade(
+        committedClose.path,
+        committedHandoff,
+        { freshVerifierTestBoundary: committedBoundary },
+      ));
+      expect(committedFailure).toMatchObject({
+        code: "G006A_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
+        committed: true,
+        status: "committed-unverified-recovery-required",
+        message: expect.stringContaining("simulated writer close cleanup failure"),
+      });
+      expect(readCleanupDiagnostics(committedFailure)).toEqual([]);
+      expect(classifySqliteSchemaV1(committedClose.db).kind).toBe("final");
+      expect(__testOnlySqliteSchemaV1CapabilityLeaseStatus(committedHandoff.capability))
+        .toEqual({ lifecycle: "terminal", descriptorOpen: false });
+      expect(leaseAuditShape()).toEqual([
+        "open:connection",
+        "close:connection",
+        "close:capability-root",
+      ]);
+      expect(coordinateSqliteSchemaV1WholeUpgrade(committedClose.path))
+        .toMatchObject({ status: "replayed", state: { kind: "final" } });
+    } finally {
+      rollback.cleanup();
+      close.cleanup();
+      open.cleanup();
+      committedClose.cleanup();
+    }
+  });
+
   it("finalizes only after internal exact-path read-only reopen and closes writer and verifier", () => {
     const fixture = createTemporaryStagedDatabase();
     try {
@@ -1486,6 +1656,22 @@ function createFinalizerHandoff(
 
 function leaseAuditShape(): string[] {
   return __testOnlySqliteSchemaV1LeaseAudit().map(({ event, purpose }) => `${event}:${purpose}`);
+}
+
+function captureFailure(operation: () => unknown): unknown {
+  try {
+    operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected operation to fail");
+}
+
+function readCleanupDiagnostics(error: unknown): Array<{ phase: string; error: unknown }> {
+  if (!error || typeof error !== "object") return [];
+  const diagnostics = (error as { g006aCleanupFailures?: unknown }).g006aCleanupFailures;
+  if (!Array.isArray(diagnostics)) return [];
+  return diagnostics as Array<{ phase: string; error: unknown }>;
 }
 
 function readInternalCatalogRowCount(db: Database.Database): number {
