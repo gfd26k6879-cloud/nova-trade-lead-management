@@ -977,12 +977,17 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   `87795a7` with exactly one attributable commit permitted. Producer evidence
   cannot authorize merge or acceptance, and any need for a fifth path,
   mutation authority, B1 logic, or source-of-truth decision is a hard stop.
-- Two disjoint Sol read-only acceptance preflights run concurrently at the
-  four-total-agent ceiling. Quality owns prepared-state authority refusal and
-  hostile state-machine cases; the independent lane owns the exact 31/32
-  catalog/digest and near-state matrix. They inspect only the immutable
-  baseline, hold no locks, create no accepted evidence, and cannot replace the
-  fresh post-commit dual review.
+- Two disjoint Sol read-only acceptance preflights completed against immutable
+  `87795a7` with no owned residue. Quality pinned prepared-state authority
+  refusal and the hostile state-machine matrix. The independent catalog lane
+  reproduced the accepted legacy pins, then derived the exact prepared pins:
+  application `11db5719be3e6d3b0bb9a11111d867235f2837ed02a23b3af4901fd7690e3cbb`,
+  internal `eb29b4dec23fa7311cd93c298515b871b94fe109d00a3d9db149ef6726f1637c`
+  with 53 rows, and physical
+  `90117968b064e6bded92dbf82c18fffa31951c0998c727f662eee56e78721ba6`.
+  Its suggestion to mint capability from prepared state is rejected by Sol's
+  binding reconciliation; prepared stays recognition-only. Neither preflight
+  can replace the fresh post-commit dual review.
 - After that prerequisite is accepted, B1 owns its separate `BEGIN IMMEDIATE`
   pre-finalization transaction and exact intermediate verifier. B1 will retain
   T-028's historical checksum unchanged, use a separately versioned full-row
