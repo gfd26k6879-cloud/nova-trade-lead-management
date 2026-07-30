@@ -877,3 +877,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   prior lease, catalog, sequence, SQL, sparse, all-37, physical, rollback,
   reopen, scope, and cleanup gates. The same four-path ceiling and both locks
   remain; fresh dual rereview and Sol's merged release gate are still required.
+- Repair round 6 is active with the original Terra medium producer against
+  immutable rejected source `9756f93ff6d296c851539f2486ebe48ac4838d28`.
+  The dispatch is evidence-only, exactly one same-scope commit, with no merge,
+  startup activation, later-card work, or external action.
