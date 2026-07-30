@@ -513,3 +513,6 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   ceiling, with fresh dual rereview and the recovery lock retained.
 - The original Terra-medium producer is executing round 3 from `295dac1`; no
   dependent implementation or overlapping recovery-contract work is active.
+- Two lock-free G-006B handoff preflights may inspect the immutable T-028 and
+  recovery contracts beside round 3. They cannot implement, modify the T-028
+  receipt, acquire locks, or waive any G-006R/G-006A dependency.
