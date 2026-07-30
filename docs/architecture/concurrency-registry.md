@@ -2379,3 +2379,43 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   change its internal packet sequencing only after Sol adjudication. All 318
   cards, Q-040, T-029, G006C2B/C, C3-C6 and G009/G010/G013 authority remain open
   and preserved. No implementation is authorized by this preflight launch.
+
+## G-006C2A Repair-5 stop and finalization-first sequencing preflight
+
+- Architecture STOPs Repair-5 inside C0/C2A. Immutable G006B generation-zero
+  history and process-local capabilities cannot, after a legitimate prepared-
+  legacy write and process restart, distinguish that authorized change from an
+  identically shaped offline in-place mutation. A retained lease can close one
+  proof-to-write window but cannot survive restart. A checkpoint stored only in
+  the mutable database is equally insufficient against offline rewrite.
+- Terra-medium Quality confirms that the old five-path ceiling is dishonest and
+  supplies the required second-write, restart/remint, clone/swap, in-place drift,
+  concurrency, crash, input-semantics and receipt matrix. Its follow-up fixed-
+  operation runner proposal could own one lease-held transaction without a raw
+  handle or arbitrary callback, but it has no independent durable restart trust
+  root. Sol therefore rejects that nine-path proposal as incomplete rather than
+  authorizing speculative source.
+- The original security reviewer did not return a verdict after bounded stop
+  requests and was interrupted without repository activity. Under the user's
+  approved fallback, a Terra-medium security review independently accepts the
+  restart indistinguishability finding and STOPs the fixed runner as a complete
+  solution. It recommends finalization-first only after a narrow compatibility
+  preflight; the alternative is an externally trusted mutable checkpoint chain
+  atomically advanced by every C2-C6 writer, a much broader recovery contract
+  that Sol does not infer or authorize.
+- Sol closes Repair-5 without code. Accepted C2A at `2f5ad55` remains exactly an
+  unwired, non-authorizing, one-shot selector permit; rejected Repair-4 source
+  `1d2931d` remains clean, attributable and unmerged. C2B remains unopened and
+  G006C2C/C3-C6 plus every parent, all 318 cards, Q-040 and T-029 remain open.
+- The next step is read-only finalization-first sequencing proof. Architecture
+  maps the remaining G006B finalization dependencies and decides whether final
+  constraints/startup proof can precede C2-C6 without losing their contracts.
+  Security defines the finalized-state operational binding, immutable-versus-
+  mutable trust boundary, retained lease/transaction sequence and restart/tamper
+  behavior. Terra-medium Quality inventories the exact prepared/final schema and
+  creates the executable finalization, first-write, second-write, restart, swap,
+  rollback and regression matrix with an honest path ceiling.
+- These preflights are local, read-only, lock-free and source-free. They cannot
+  edit, test mutable fixtures, create temporary resources, access blocked roots,
+  perform external activity or authorize finalization, C2B/C, C3-C6, startup or
+  later-card implementation. Sol must reconcile their evidence before any edit.
