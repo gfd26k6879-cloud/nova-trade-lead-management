@@ -496,3 +496,18 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   zero-orphan bindings under one canonical hash. Without exact source-card
   identity or an explicitly provisioned fresh binding, mutable SQLite startup
   fails closed.
+
+## G-006R repair round 3
+
+- Source `295dac10b414439d54e07b0d6e2976c074bf0185` is rejected and must not be
+  merged or accepted. Both fresh lanes persisted a SQLite `writable_schema`
+  spoof where a physically wrong partial index retained duplicate NULL-workspace
+  identities, stored DDL appended a second top-level exact `WHERE`, read-only
+  reopen and `integrity_check` succeeded, and metadata validation falsely passed.
+- Round 3 must require one balanced CREATE INDEX statement with exactly one
+  top-level `WHERE`, no parenthesis underflow/unbalanced depth, and no statement
+  separator or trailing tokens beyond an optional terminal semicolon plus
+  whitespace/comments. A persisted close/reopen spoof regression is mandatory.
+- The binary comparator and valid quote/comment/escape handling remain closed
+  findings and must be preserved. Repair stays inside the existing seven-path
+  ceiling, with fresh dual rereview and the recovery lock retained.
