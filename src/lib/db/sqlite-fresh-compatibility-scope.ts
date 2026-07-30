@@ -6,9 +6,11 @@ import {
   readFileSync,
   realpathSync,
   statSync,
+  writeFileSync,
   type BigIntStats,
 } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { isProxy } from "node:util/types";
 
 import Database from "better-sqlite3";
@@ -235,6 +237,11 @@ export interface SqliteFreshCompatibilityProvisionResult {
   readonly canonicalBindingHash: string;
 }
 
+export interface SqliteFreshCompatibilityMint<T> {
+  readonly value: T;
+  readonly revoke: () => boolean;
+}
+
 export type SqliteFreshCompatibilityTestFault =
   | "hold-before-commit"
   | "fail-before-commit"
@@ -244,7 +251,10 @@ export type SqliteFreshCompatibilityTestFault =
   | "fail-verifier-proof"
   | "fail-writer-close"
   | "fail-verifier-close"
-  | "fail-root-close";
+  | "fail-root-close"
+  | "hold-before-final-lease"
+  | "hold-after-mint"
+  | "fail-after-mint-before-lease-release";
 
 declare const sqliteFreshCompatibilityTestBoundaryBrand: unique symbol;
 
@@ -254,18 +264,24 @@ export interface SqliteFreshCompatibilityTestBoundary {
 
 interface TestBoundaryState {
   readonly fault: SqliteFreshCompatibilityTestFault;
+  readonly signalPath?: string;
 }
 
 const testBoundaries = new WeakMap<object, TestBoundaryState>();
 
 export function createSqliteFreshCompatibilityTestBoundary(
   fault: SqliteFreshCompatibilityTestFault,
+  signalPath?: string,
 ): SqliteFreshCompatibilityTestBoundary {
   if (process.env.NODE_ENV !== "test") {
     throw new SqliteFreshFoundationError("G006C1_INPUT_REJECTED", "test boundary is unavailable outside tests");
   }
+  const signalFault = fault === "hold-before-final-lease" || fault === "hold-after-mint";
+  if (signalFault !== (signalPath !== undefined)) {
+    throw new SqliteFreshFoundationError("G006C1_INPUT_REJECTED", "test signal path does not match fault");
+  }
   const boundary = Object.freeze(Object.create(null)) as SqliteFreshCompatibilityTestBoundary;
-  testBoundaries.set(boundary as object, Object.freeze({ fault }));
+  testBoundaries.set(boundary as object, Object.freeze({ fault, signalPath }));
   return boundary;
 }
 
@@ -960,6 +976,34 @@ function resolveBoundary(value: SqliteFreshCompatibilityTestBoundary | undefined
   return state;
 }
 
+function validateTestSignalPath(boundary: TestBoundaryState | undefined, databasePath: string): void {
+  if (!boundary?.signalPath) return;
+  const signalPath = boundary.signalPath;
+  if (!isAbsolute(signalPath) || resolve(signalPath) !== signalPath) inputError("test signal path");
+  const databaseParent = dirname(databasePath);
+  let signalParent: string;
+  let temporaryRoot: string;
+  try {
+    signalParent = realpathSync.native(dirname(signalPath));
+    temporaryRoot = realpathSync.native(tmpdir());
+  } catch (error) {
+    inputError(`test signal parent: ${describeError(error)}`);
+  }
+  const relativeToTemporaryRoot = relative(temporaryRoot, signalParent);
+  if (signalParent !== databaseParent
+      || relativeToTemporaryRoot === ""
+      || relativeToTemporaryRoot === ".."
+      || relativeToTemporaryRoot.startsWith(`..${sep}`)
+      || isAbsolute(relativeToTemporaryRoot)) {
+    inputError("test signal path must be beside the database under the temporary root");
+  }
+}
+
+function emitTestSignal(boundary: TestBoundaryState, expectedFault: SqliteFreshCompatibilityTestFault): void {
+  if (boundary.fault !== expectedFault || !boundary.signalPath) return;
+  writeFileSync(boundary.signalPath, `${expectedFault}\n`, { encoding: "utf8", flag: "wx" });
+}
+
 function buildResult(
   input: SqliteFreshCompatibilityProvisionInput,
   status: "provisioned" | "replayed",
@@ -999,22 +1043,45 @@ function buildResult(
  * storage proof only; no receipt, request, session, actor, permission, or
  * provider authority is consulted or returned.
  */
-export function provisionSqliteFreshCompatibilityFoundation(
+export function provisionSqliteFreshCompatibilityFoundation<T>(
   inputValue: SqliteFreshCompatibilityProvisionInput,
+  mint: (result: SqliteFreshCompatibilityProvisionResult) => SqliteFreshCompatibilityMint<T>,
   testBoundaryValue?: SqliteFreshCompatibilityTestBoundary,
-): SqliteFreshCompatibilityProvisionResult {
+): T {
   const input = validateInput(inputValue);
   const testBoundary = resolveBoundary(testBoundaryValue);
   requireCanonicalExistingFile(input.databasePath);
+  validateTestSignalPath(testBoundary, input.databasePath);
 
   let retained: RetainedFile | undefined;
   let writer: Database.Database | undefined;
   let verifier: Database.Database | undefined;
+  let lease: Database.Database | undefined;
   let status: "provisioned" | "replayed" | undefined;
   let committed = false;
   let verified = false;
+  let leaseVerified = false;
+  let leaseReleased = false;
+  let minted: SqliteFreshCompatibilityMint<T> | undefined;
+  let mintRevocationAttempted = false;
   let failure: unknown;
   const cleanupEvidence: string[] = [];
+
+  const revokeMint = (): void => {
+    if (!minted || mintRevocationAttempted) return;
+    mintRevocationAttempted = true;
+    try {
+      cleanupEvidence.push(`fresh binding revocation: ${minted.revoke() ? "deleted" : "not-present"}`);
+    } catch (error) {
+      cleanupEvidence.push(`fresh binding revocation: ${describeError(error)}`);
+    }
+  };
+
+  const recordFailure = (error: unknown, cleanupLabel?: string): void => {
+    if (failure === undefined) failure = error;
+    else if (cleanupLabel) cleanupEvidence.push(`${cleanupLabel}: ${describeError(error)}`);
+    revokeMint();
+  };
 
   try {
     retained = retainFile(input.databasePath, input.expectedFileIdentity);
@@ -1068,15 +1135,14 @@ export function provisionSqliteFreshCompatibilityFoundation(
       assertConnectionPragmas(writer, input.expectedJournalMode, "writer after commit");
     }
   } catch (error) {
-    if (failure === undefined) failure = error;
+    recordFailure(error);
   } finally {
     if (writer) {
       try {
         writer.close();
         if (testBoundary?.fault === "fail-writer-close") throw new Error("simulated writer close uncertainty");
       } catch (error) {
-        if (failure === undefined) failure = error;
-        else cleanupEvidence.push(`writer close: ${describeError(error)}`);
+        recordFailure(error, "writer close");
       }
     }
   }
@@ -1111,15 +1177,70 @@ export function provisionSqliteFreshCompatibilityFoundation(
         verified = true;
       }
     } catch (error) {
-      if (failure === undefined) failure = error;
+      recordFailure(error);
     } finally {
       if (verifier) {
         try {
           verifier.close();
           if (testBoundary?.fault === "fail-verifier-close") throw new Error("simulated verifier close uncertainty");
         } catch (error) {
-          if (failure === undefined) failure = error;
-          else cleanupEvidence.push(`verifier close: ${describeError(error)}`);
+          recordFailure(error, "verifier close");
+        }
+      }
+    }
+  }
+
+  if (failure === undefined && committed && verified && retained && status) {
+    try {
+      if (testBoundary?.fault === "hold-before-final-lease") {
+        emitTestSignal(testBoundary, "hold-before-final-lease");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000);
+      }
+      assertRetainedIdentity(input.databasePath, retained, "before final lease open");
+      lease = openExactDatabase(input.databasePath, false);
+      lease.pragma("foreign_keys = ON");
+      assertConnectionIdentity(lease, input.databasePath, retained, "lease before final proof");
+      assertConnectionPragmas(lease, input.expectedJournalMode, "lease before final proof");
+      lease.exec("BEGIN IMMEDIATE");
+      try {
+        assertConnectionIdentity(lease, input.databasePath, retained, "lease inside final proof");
+        assertExactFoundation(lease, input);
+        assertConnectionIdentity(lease, input.databasePath, retained, "lease before mint");
+        leaseVerified = true;
+        const candidate = mint(buildResult(input, status));
+        if (candidate === null || typeof candidate !== "object" || typeof candidate.revoke !== "function") {
+          throw new Error("fresh binding mint returned an invalid revocation handle");
+        }
+        minted = candidate;
+        if (testBoundary?.fault === "hold-after-mint") {
+          emitTestSignal(testBoundary, "hold-after-mint");
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000);
+        }
+        if (testBoundary?.fault === "fail-after-mint-before-lease-release") {
+          throw new Error("simulated post-mint pre-release failure");
+        }
+        assertConnectionIdentity(lease, input.databasePath, retained, "lease before release");
+        lease.exec("ROLLBACK");
+        if (lease.inTransaction) throw new Error("final lease remained active after rollback");
+        leaseReleased = true;
+      } catch (error) {
+        recordFailure(error);
+        if (lease.inTransaction) {
+          try {
+            lease.exec("ROLLBACK");
+          } catch (rollbackError) {
+            cleanupEvidence.push(`lease rollback: ${describeError(rollbackError)}`);
+          }
+        }
+      }
+    } catch (error) {
+      recordFailure(error);
+    } finally {
+      if (lease) {
+        try {
+          lease.close();
+        } catch (error) {
+          recordFailure(error, "lease close");
         }
       }
     }
@@ -1129,16 +1250,18 @@ export function provisionSqliteFreshCompatibilityFoundation(
     try {
       assertRetainedIdentity(input.databasePath, retained, "final retained identity");
     } catch (error) {
-      if (failure === undefined) failure = error;
-      else cleanupEvidence.push(`final retained identity: ${describeError(error)}`);
+      recordFailure(error, "final retained identity");
     }
     try {
       closeSync(retained.descriptor);
       if (testBoundary?.fault === "fail-root-close") throw new Error("simulated retained descriptor close uncertainty");
     } catch (error) {
-      if (failure === undefined) failure = error;
-      else cleanupEvidence.push(`retained descriptor close: ${describeError(error)}`);
+      recordFailure(error, "retained descriptor close");
     }
+  }
+
+  if (failure === undefined && (!committed || !verified || !leaseVerified || !leaseReleased || !status || !minted)) {
+    recordFailure(new Error("non-exhaustive provisioning outcome"));
   }
 
   if (failure !== undefined) {
@@ -1148,10 +1271,7 @@ export function provisionSqliteFreshCompatibilityFoundation(
     if (failure instanceof SqliteFreshFoundationError && cleanupEvidence.length === 0) throw failure;
     throw new SqliteFreshFoundationError("G006C1_STATE_REJECTED", describeError(failure), cleanupEvidence);
   }
-  if (!committed || !verified || !status) {
-    throw new SqliteFreshFoundationError("G006C1_STATE_REJECTED", "non-exhaustive provisioning outcome");
-  }
-  return buildResult(input, status);
+  return (minted as SqliteFreshCompatibilityMint<T>).value;
 }
 
 export function __testOnlySqliteFreshDatabaseBytes(databasePath: string): string {

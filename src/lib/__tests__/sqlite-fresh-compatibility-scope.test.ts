@@ -39,6 +39,7 @@ import {
   SqliteFreshFoundationCommittedUnverifiedError,
   SqliteFreshFoundationError,
   SQLITE_FRESH_COMPATIBILITY_SOURCE_CARD_ID,
+  type SqliteFreshCompatibilityTestFault,
   type SqliteFreshCompatibilityProvisionInput,
   type SqliteFreshFoundationInput,
   type SqliteFreshTenantPolicyRow,
@@ -252,12 +253,15 @@ interface CreatorOutcome {
   readonly ok: boolean;
   readonly status?: "provisioned" | "replayed";
   readonly code?: string;
+  readonly cleanupEvidence?: readonly string[];
 }
 
 function spawnCreator(
   databasePath: string,
   outputPath: string,
   variant: CreatorOutcome["variant"],
+  fault: SqliteFreshCompatibilityTestFault = "hold-before-commit",
+  signalPath?: string,
 ): Promise<CreatorOutcome> {
   const vitestCli = join(process.cwd(), "node_modules", "vitest", "vitest.mjs");
   const child = spawn(process.execPath, [
@@ -274,6 +278,8 @@ function spawnCreator(
       G006C1_CREATOR_DATABASE_PATH: databasePath,
       G006C1_CREATOR_OUTPUT_PATH: outputPath,
       G006C1_CREATOR_VARIANT: variant,
+      G006C1_CREATOR_FAULT: fault,
+      ...(signalPath ? { G006C1_CREATOR_SIGNAL_PATH: signalPath } : {}),
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -302,6 +308,53 @@ function spawnCreator(
   });
 }
 
+interface MutatorOutcome {
+  readonly ok: boolean;
+  readonly elapsedMs: number;
+  readonly code?: string;
+}
+
+function spawnMarketMutation(databasePath: string, marketId: string): Promise<MutatorOutcome> {
+  const script = `const Database=require('better-sqlite3');const started=Date.now();let db;try{db=new Database(process.argv[1],{fileMustExist:true,timeout:5000});db.prepare('INSERT INTO location_markets (id, name, country_code, admin_area1) VALUES (?, ?, ?, ?)').run(process.argv[2],'External','US','CO');process.stdout.write(JSON.stringify({ok:true,elapsedMs:Date.now()-started}));}catch(error){process.stdout.write(JSON.stringify({ok:false,elapsedMs:Date.now()-started,code:String(error&&error.code||'UNKNOWN')}));process.exitCode=1;}finally{if(db&&db.open)db.close();}`;
+  const child = spawn(process.execPath, ["-e", script, databasePath, marketId], {
+    cwd: process.cwd(),
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  children.push(child);
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+  return new Promise<MutatorOutcome>((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => {
+      child.kill();
+      rejectPromise(new Error(`mutator timeout: ${stderr}`));
+    }, 10_000);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      rejectPromise(error);
+    });
+    child.once("exit", () => {
+      clearTimeout(timer);
+      const index = children.indexOf(child);
+      if (index >= 0) children.splice(index, 1);
+      if (!stdout) {
+        rejectPromise(new Error(`mutator produced no outcome: ${stderr}`));
+        return;
+      }
+      resolvePromise(JSON.parse(stdout) as MutatorOutcome);
+    });
+  });
+}
+
+async function waitForFile(path: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${basename(path)}`);
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 20));
+  }
+}
+
 function state(databasePath: string): ReturnType<typeof classifySqliteSchemaV1> {
   const db = new Database(databasePath, { fileMustExist: true });
   try {
@@ -325,11 +378,19 @@ describe("G006C1 fresh SQLite compatibility foundation", () => {
     const databasePath = process.env.G006C1_CREATOR_DATABASE_PATH;
     const outputPath = process.env.G006C1_CREATOR_OUTPUT_PATH;
     const variant = process.env.G006C1_CREATOR_VARIANT;
-    if (!databasePath || !outputPath || (variant !== "canonical" && variant !== "different")) {
+    const fault = process.env.G006C1_CREATOR_FAULT ?? "hold-before-commit";
+    const signalPath = process.env.G006C1_CREATOR_SIGNAL_PATH;
+    const allowedFaults: readonly string[] = [
+      "hold-before-commit",
+      "hold-before-final-lease",
+      "hold-after-mint",
+    ];
+    if (!databasePath || !outputPath || (variant !== "canonical" && variant !== "different")
+        || !allowedFaults.includes(fault)) {
       throw new Error("invalid subprocess creator environment");
     }
     const input = variant === "canonical" ? makeInput(databasePath) : differentFoundationInput(databasePath);
-    const boundary = createSqliteFreshCompatibilityTestBoundary("hold-before-commit");
+    const boundary = createSqliteFreshCompatibilityTestBoundary(fault as SqliteFreshCompatibilityTestFault, signalPath);
     try {
       const binding = await provisionFreshSqliteCompatibilityScope(input, boundary);
       const scope = requireFreshSqliteCompatibilityScope(binding, {
@@ -342,7 +403,11 @@ describe("G006C1 fresh SQLite compatibility foundation", () => {
       const code = error !== null && typeof error === "object" && "code" in error
         ? String((error as { code: unknown }).code)
         : "UNKNOWN";
-      writeFileSync(outputPath, JSON.stringify({ variant, ok: false, code } satisfies CreatorOutcome));
+      const cleanupEvidence = error !== null && typeof error === "object" && "cleanupEvidence" in error
+        && Array.isArray((error as { cleanupEvidence: unknown }).cleanupEvidence)
+        ? (error as { cleanupEvidence: readonly string[] }).cleanupEvidence
+        : undefined;
+      writeFileSync(outputPath, JSON.stringify({ variant, ok: false, code, cleanupEvidence } satisfies CreatorOutcome));
     }
   });
 
@@ -768,7 +833,28 @@ describe("G006C1 fresh SQLite compatibility foundation", () => {
     expect(error).toBeInstanceOf(SqliteFreshFoundationCommittedUnverifiedError);
     expect(error).toMatchObject({ code: "G006C1_COMMITTED_UNVERIFIED", committed: true, recoveryRequired: true });
     expect((error as SqliteFreshFoundationCommittedUnverifiedError).primaryEvidence).toContain("simulated");
+    if (fault === "fail-root-close") {
+      expect((error as SqliteFreshFoundationCommittedUnverifiedError).cleanupEvidence)
+        .toEqual(["fresh binding revocation: deleted"]);
+    } else {
+      expect((error as SqliteFreshFoundationCommittedUnverifiedError).cleanupEvidence)
+        .not.toContain("fresh binding revocation: deleted");
+    }
     expect(state(path).kind).toBe("staged");
+  });
+
+  it("revokes the minted fieldless capability on a post-mint failure before lease release", async () => {
+    const path = emptyDatabasePath();
+    const boundary = createSqliteFreshCompatibilityTestBoundary("fail-after-mint-before-lease-release");
+    const error = await provisionFreshSqliteCompatibilityScope(makeInput(path), boundary).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(SqliteFreshFoundationCommittedUnverifiedError);
+    expect(error).toMatchObject({ code: "G006C1_COMMITTED_UNVERIFIED", committed: true, recoveryRequired: true });
+    expect((error as SqliteFreshFoundationCommittedUnverifiedError).primaryEvidence)
+      .toContain("simulated post-mint pre-release failure");
+    expect((error as SqliteFreshFoundationCommittedUnverifiedError).cleanupEvidence)
+      .toEqual(["fresh binding revocation: deleted"]);
+    expect(state(path).kind).toBe("staged");
+    await expect(provision(path)).resolves.toBeDefined();
   });
 
   it("rejects an arbitrary test-boundary object before provisioning", async () => {
@@ -809,6 +895,62 @@ describe("G006C1 fresh SQLite compatibility foundation", () => {
     await expect(provision(path)).resolves.toBeDefined();
     expect(state(path).kind).toBe("staged");
   }, 10_000);
+
+  it("rejects a process mutation that wins after readonly proof but before the final lease", async () => {
+    const path = emptyDatabasePath();
+    const root = dirname(path);
+    const signalPath = join(root, "before-final-lease.signal");
+    const creator = spawnCreator(
+      path,
+      join(root, "before-final-lease.json"),
+      "canonical",
+      "hold-before-final-lease",
+      signalPath,
+    );
+    await waitForFile(signalPath);
+    const mutation = await spawnMarketMutation(path, "market-before-final-lease");
+    expect(mutation.ok).toBe(true);
+    const outcome = await creator;
+    expect(outcome).toMatchObject({ ok: false, code: "G006C1_COMMITTED_UNVERIFIED" });
+    expect(outcome.cleanupEvidence ?? []).not.toContain("fresh binding revocation: deleted");
+    const db = new Database(path, { readonly: true, fileMustExist: true });
+    try {
+      expect((db.prepare("SELECT count(*) AS count FROM location_markets").get() as { count: number }).count).toBe(1);
+    } finally {
+      db.close();
+    }
+  }, 30_000);
+
+  it("holds a process mutation until after successful mint and final lease release", async () => {
+    const path = emptyDatabasePath();
+    const root = dirname(path);
+    const signalPath = join(root, "after-mint.signal");
+    const creator = spawnCreator(
+      path,
+      join(root, "after-mint.json"),
+      "canonical",
+      "hold-after-mint",
+      signalPath,
+    );
+    await waitForFile(signalPath);
+    let mutationSettled = false;
+    const mutationPending = spawnMarketMutation(path, "market-after-mint").then((outcome) => {
+      mutationSettled = true;
+      return outcome;
+    });
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 200));
+    expect(mutationSettled).toBe(false);
+    const [creatorOutcome, mutationOutcome] = await Promise.all([creator, mutationPending]);
+    expect(creatorOutcome).toMatchObject({ ok: true, status: "provisioned" });
+    expect(mutationOutcome.ok).toBe(true);
+    expect(mutationOutcome.elapsedMs).toBeGreaterThanOrEqual(500);
+    const db = new Database(path, { readonly: true, fileMustExist: true });
+    try {
+      expect((db.prepare("SELECT count(*) AS count FROM location_markets").get() as { count: number }).count).toBe(1);
+    } finally {
+      db.close();
+    }
+  }, 30_000);
 
   it("serializes simultaneous same-input API creators into one provision and one replay", async () => {
     const path = emptyDatabasePath();

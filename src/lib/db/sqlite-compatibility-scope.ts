@@ -438,75 +438,89 @@ export async function provisionFreshSqliteCompatibilityScope(
 ): Promise<SqliteCompatibilityBinding> {
   const snapshot = snapshotFreshProvisionInput(inputValue);
   const fresh = await import("./sqlite-fresh-compatibility-scope");
-  const result = snapshotFreshVerifiedResult(
-    fresh.provisionSqliteFreshCompatibilityFoundation(snapshot, testBoundary),
-  );
-  const expectedIdentity = snapshot.expectedFileIdentity;
-  if (result.databasePath !== snapshot.databasePath
-      || result.fileIdentity.device !== expectedIdentity.device
-      || result.fileIdentity.fileId !== expectedIdentity.fileId
-      || result.journalMode !== snapshot.expectedJournalMode
-      || result.tenantId !== snapshot.foundation.tenant.id
-      || result.workspaceId !== snapshot.foundation.workspace.id
-      || result.ownerAuthIdentityId !== snapshot.foundation.ownerMembership.authIdentityId
-      || result.ownerMembershipId !== snapshot.foundation.ownerMembership.id
-      || result.ownerRoleBindingId !== snapshot.foundation.ownerRoleBinding.id
-      || result.policyId !== snapshot.foundation.policy.id
-      || result.policyVersion !== snapshot.foundation.policy.version
-      || result.policyHash !== snapshot.foundation.policyHash
-      || result.sourceCardId !== snapshot.source.cardId
-      || result.sourceHash !== snapshot.source.sourceHash
-      || result.playId !== snapshot.play.playId
-      || result.playVersion !== snapshot.play.playVersion
-      || result.playBindingId !== snapshot.play.bindingId
-      || result.playConfigurationHash !== snapshot.play.configurationHash
-      || result.catalogVersion !== snapshot.catalog.catalogVersion
-      || result.userVersion !== snapshot.catalog.userVersion
-      || result.catalogDigest !== snapshot.catalog.catalogDigest
-      || result.internalCatalogDigest !== snapshot.catalog.internalCatalogDigest
-      || result.physicalManifestDigest !== snapshot.catalog.physicalManifestDigest
-      || result.applicationTableCount !== snapshot.catalog.applicationTableCount
-      || result.foundationHash !== snapshot.expectedFoundationHash
-      || result.canonicalBindingHash !== snapshot.expectedCanonicalBindingHash) {
-    rejectInput("G006C1 provision result binding");
-  }
+  let mintedCapability: SqliteCompatibilityBinding | undefined;
+  try {
+    return fresh.provisionSqliteFreshCompatibilityFoundation(
+      snapshot,
+      (resultValue) => {
+        const result = snapshotFreshVerifiedResult(resultValue);
+        const expectedIdentity = snapshot.expectedFileIdentity;
+        if (result.databasePath !== snapshot.databasePath
+            || result.fileIdentity.device !== expectedIdentity.device
+            || result.fileIdentity.fileId !== expectedIdentity.fileId
+            || result.journalMode !== snapshot.expectedJournalMode
+            || result.tenantId !== snapshot.foundation.tenant.id
+            || result.workspaceId !== snapshot.foundation.workspace.id
+            || result.ownerAuthIdentityId !== snapshot.foundation.ownerMembership.authIdentityId
+            || result.ownerMembershipId !== snapshot.foundation.ownerMembership.id
+            || result.ownerRoleBindingId !== snapshot.foundation.ownerRoleBinding.id
+            || result.policyId !== snapshot.foundation.policy.id
+            || result.policyVersion !== snapshot.foundation.policy.version
+            || result.policyHash !== snapshot.foundation.policyHash
+            || result.sourceCardId !== snapshot.source.cardId
+            || result.sourceHash !== snapshot.source.sourceHash
+            || result.playId !== snapshot.play.playId
+            || result.playVersion !== snapshot.play.playVersion
+            || result.playBindingId !== snapshot.play.bindingId
+            || result.playConfigurationHash !== snapshot.play.configurationHash
+            || result.catalogVersion !== snapshot.catalog.catalogVersion
+            || result.userVersion !== snapshot.catalog.userVersion
+            || result.catalogDigest !== snapshot.catalog.catalogDigest
+            || result.internalCatalogDigest !== snapshot.catalog.internalCatalogDigest
+            || result.physicalManifestDigest !== snapshot.catalog.physicalManifestDigest
+            || result.applicationTableCount !== snapshot.catalog.applicationTableCount
+            || result.foundationHash !== snapshot.expectedFoundationHash
+            || result.canonicalBindingHash !== snapshot.expectedCanonicalBindingHash) {
+          rejectInput("G006C1 provision result binding");
+        }
 
-  const scope: FreshSqliteCompatibilityStorageScope = Object.freeze({
-    backend: "sqlite",
-    lifecycle: "fresh",
-    provisioningStatus: result.status,
-    fileIdentity: Object.freeze({ device: result.fileIdentity.device, fileId: result.fileIdentity.fileId }),
-    journalMode: result.journalMode,
-    tenantId: result.tenantId,
-    workspaceId: result.workspaceId,
-    ownerAuthIdentityId: result.ownerAuthIdentityId,
-    ownerMembershipId: result.ownerMembershipId,
-    ownerRoleBindingId: result.ownerRoleBindingId,
-    policyId: result.policyId,
-    policyVersion: result.policyVersion,
-    policyHash: result.policyHash,
-    sourceCardId: result.sourceCardId,
-    sourceHash: result.sourceHash,
-    playId: result.playId,
-    playVersion: result.playVersion,
-    playBindingId: result.playBindingId,
-    playConfigurationHash: result.playConfigurationHash,
-    catalogVersion: result.catalogVersion,
-    userVersion: result.userVersion,
-    catalogDigest: result.catalogDigest,
-    internalCatalogDigest: result.internalCatalogDigest,
-    physicalManifestDigest: result.physicalManifestDigest,
-    applicationTableCount: result.applicationTableCount,
-    foundationHash: result.foundationHash,
-    canonicalBindingHash: result.canonicalBindingHash,
-    authority: "storage-scope-only",
-    grantsAuthentication: false,
-    grantsAuthorization: false,
-    grantsProviderExecution: false,
-  });
-  const capability = Object.freeze(Object.create(null)) as SqliteCompatibilityBinding;
-  freshBindingStates.set(capability as object, Object.freeze({ databasePath: snapshot.databasePath, scope }));
-  return capability;
+        const scope: FreshSqliteCompatibilityStorageScope = Object.freeze({
+          backend: "sqlite",
+          lifecycle: "fresh",
+          provisioningStatus: result.status,
+          fileIdentity: Object.freeze({ device: result.fileIdentity.device, fileId: result.fileIdentity.fileId }),
+          journalMode: result.journalMode,
+          tenantId: result.tenantId,
+          workspaceId: result.workspaceId,
+          ownerAuthIdentityId: result.ownerAuthIdentityId,
+          ownerMembershipId: result.ownerMembershipId,
+          ownerRoleBindingId: result.ownerRoleBindingId,
+          policyId: result.policyId,
+          policyVersion: result.policyVersion,
+          policyHash: result.policyHash,
+          sourceCardId: result.sourceCardId,
+          sourceHash: result.sourceHash,
+          playId: result.playId,
+          playVersion: result.playVersion,
+          playBindingId: result.playBindingId,
+          playConfigurationHash: result.playConfigurationHash,
+          catalogVersion: result.catalogVersion,
+          userVersion: result.userVersion,
+          catalogDigest: result.catalogDigest,
+          internalCatalogDigest: result.internalCatalogDigest,
+          physicalManifestDigest: result.physicalManifestDigest,
+          applicationTableCount: result.applicationTableCount,
+          foundationHash: result.foundationHash,
+          canonicalBindingHash: result.canonicalBindingHash,
+          authority: "storage-scope-only",
+          grantsAuthentication: false,
+          grantsAuthorization: false,
+          grantsProviderExecution: false,
+        });
+        const capability = Object.freeze(Object.create(null)) as SqliteCompatibilityBinding;
+        freshBindingStates.set(capability as object, Object.freeze({ databasePath: snapshot.databasePath, scope }));
+        mintedCapability = capability;
+        return Object.freeze({
+          value: capability,
+          revoke: (): boolean => freshBindingStates.delete(capability as object),
+        });
+      },
+      testBoundary,
+    );
+  } catch (error) {
+    if (mintedCapability) freshBindingStates.delete(mintedCapability as object);
+    throw error;
+  }
 }
 
 /** Reveals only a fresh foundation's storage evidence after exact selection. */
