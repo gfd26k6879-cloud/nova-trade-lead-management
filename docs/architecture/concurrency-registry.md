@@ -18,7 +18,7 @@ The concurrent execution plan requires the final integration conductor to run `g
 
 | Domain | Thread title | Branch | Worktree | Current state |
 |---|---|---|---|---|
-| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | G-006R source `3443816f0e2dbe98c12a95aafb36ba03a3040e37` is accepted through integration merge `43a2387e7e9b7b63dabbf1341c5c0e54178771ff`; refresh to the accepted control baseline is required before staged G-006A work. |
+| Platform, Tenancy, and Security | `Nova Trade - Platform Tenancy Security` | `codex/nova-platform-tenancy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\platform-tenancy` | Staged G-006A is dispatched from accepted control baseline `a7c296298bf33f1cfb670741863c0ffe1629002c` with an exact four-path ceiling and no startup activation. |
 | Knowledge, Evidence, and Strategy | `Nova Trade - Knowledge Evidence Strategy` | `codex/nova-knowledge-strategy` | `C:\Users\Masih\Documents\NovaTradeWorktrees\knowledge-strategy` | Created clean at `1c9647d76c35dbac991b07eb962de5a54135bce2`; implementation lane not yet dispatched. |
 | Discovery, Accounts, and Decisioning | `Nova Trade - Discovery Accounts Decisioning` | `codex/nova-discovery-decisioning` | `C:\Users\Masih\Documents\NovaTradeWorktrees\discovery-decisioning` | G-004A source `c0892a06325b33657e5b73813635fec6a4081012` is accepted through integration `8383fa70a2bac8de71413ae135918bbaedf907b4`; runtime G-004B remains preserved and blocked for co-delivery with G-013/G-014. |
 | Product Workflow and UI | `Nova Trade - Product Workflow UI` | `codex/nova-product-workflow` | `C:\Users\Masih\Documents\NovaTradeWorktrees\product-workflow` | UI-000 seven-artifact design packet completed read-only at `feb6ecd2c0772879ae86b3949fa688cd7607c35d`; complete UI-001–UI-041 state matrix prepared; implementation and product/design/accessibility approval remain pending. |
@@ -33,13 +33,13 @@ The non-OneDrive root is selected to avoid sync churn and lock contention. The a
 | `integration-ledger` | Final integration conductor | Held | Released only when final integration authority ends. |
 | `migration-sequence` | None | Available after accepted G-005 | G-006 must declare whether this PostgreSQL sequence lock is needed before acquisition. |
 | `migration-harness` | None | Available after accepted G-005 | G-006 must name any shared inventory harness before acquisition. |
-| `sqlite-schema` | None | Available | Accepted task receipt. |
+| `sqlite-schema` | G-006A | Held for the staged final-schema catalog and coordinator | Release only after attributable commit, focused fresh/upgrade/fault tests, fresh dual review, local merge, and merged release gate. |
 | `auth-session` | None | Available | Accepted task receipt. |
 | `permissions` | None | Available | Accepted task receipt. |
 | `database-adapter` | None | Available | Accepted task receipt. |
 | `package-config` | None | Available | Accepted task receipt. |
 | `protected-shell` | None | Available | Accepted task receipt. |
-| `recovery-contract` | None | Available; G-006R accepted | Reacquire only for a serialized child with an exhaustive path ceiling and accepted-baseline receipt. |
+| `recovery-contract` | G-006A | Held read-compatible with the accepted G-006R archive contract | G-006A may not edit recovery files; release with accepted staged-artifact evidence or on a recorded stop. |
 | `full-release-gate` | None | Available; merged G-006R gate passed | `npm run release:check` exited 0 in 94.6 seconds at merge `43a2387e7e9b7b63dabbf1341c5c0e54178771ff`. |
 
 No domain lane may claim a lock implicitly. Every acquisition must name the task, exhaustive protected paths, integration baseline, expected release evidence, and stop conditions in the ledger.
@@ -59,7 +59,7 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
 | `G-005` | Accepted | Source `28005a3` passed repaired dual review, merged at `d2d6e7f`, and passed the full merged release gate. Runtime propagation and T029 reconciliation remain later cards. |
 | `G-006` | Parent split open | Preserve every success criterion through serialized G-006R recovery identity, staged G-006A fresh schema/coordinator, G-006B receipt-bound finalization, and the G-006C compatibility-adapter sequence. Accept only after all children independently pass and startup activation is proven. |
 | `G-006R` | Accepted | Repaired source `3443816` passed fresh domain/security and independent Quality review, merged at `43a2387`, and passed the full merged release gate. |
-| `G-006A` | Ready for staged implementation | Add final fresh SQLite shapes plus a fail-closed, versioned upgrade coordinator without startup activation; acquire the exact staged artifact locks only after refreshing to the accepted G-006R control baseline. |
+| `G-006A` | Staged artifact in progress | Terra-medium is implementing only the four-path final-schema catalog/coordinator packet from `a7c2962`; `schema.ts`, `getDb()`, writers, finalization, and startup activation remain frozen. |
 | `G-006B` | Blocked on accepted G-006A | Consume exactly one verified T028 SQLite receipt and verified backup to atomically finalize 17 non-audit tables with interruption/replay proof. |
 | `G-023` | Accepted | Included in transition baseline; no new work. |
 | `Q-002` | Accepted | Source `a6f05e7` passed independent exact PostgreSQL 16 review; merge `f956810` passed the full release gate. |
@@ -575,3 +575,30 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   until the G-006B and G-006C sequence is complete.
 - All work and validation were local. Nothing was pushed, deployed, applied to
   a remote database, or sent to a provider or customer system.
+
+## G-006A staged-artifact launch receipt
+
+- Accepted launch baseline is control commit
+  `a7c296298bf33f1cfb670741863c0ffe1629002c`, which contains accepted G-006R.
+  The Platform worktree must be clean and fast-forwarded to this exact commit
+  before any write.
+- One Terra-medium producer owns exactly `src/lib/db/sqlite-schema-v1.ts`,
+  `src/lib/db/sqlite-schema-coordinator.ts`,
+  `src/lib/__tests__/sqlite-schema-coordinator.test.ts`, and
+  `docs/validation/2026-07-29-g006a-sqlite-fresh-schema-coordinator.md`.
+  `sqlite-schema` and `recovery-contract` are held; no other lane may overlap.
+- The packet must derive final SQLite ownership columns, keys, foreign keys,
+  indexes, and nullable-workspace uniqueness from accepted G-002 through G-005
+  and G-006R source truth. It must expose a deterministic catalog digest and a
+  fail-closed versioned whole-upgrade coordinator with focused fresh, legacy,
+  interruption, replay, catalog-drift, row-count, foreign-key, and uniqueness
+  evidence. Unknown or partially upgraded states must stop without inference.
+- This is a preparation milestone, not G-006A acceptance. The producer must not
+  edit or wire `schema.ts`, `db/index.ts`, queries/writers, T-028, recovery
+  scripts, package configuration, or startup. It must not perform a destructive
+  legacy rebuild, invent a tenant/workspace/source identity, grant authority
+  from a receipt, or expand into G-006B, G-006C, G-007, or G-008.
+- Required producer output is one attributable commit, clean worktree, focused
+  tests, typecheck, lint, diff/scope checks, and a truthful receipt. Fresh dual
+  review and Sol's final integration gate remain mandatory; no external action
+  is authorized.
