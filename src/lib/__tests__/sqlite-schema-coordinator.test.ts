@@ -23,6 +23,7 @@ import {
   createSqliteSchemaV1LaterFinalizerCapability,
   sqliteCatalogDigest,
   sqliteInternalCatalogDigest,
+  SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST,
   SQLITE_SCHEMA_V1_PHYSICAL_MANIFEST_DIGEST,
   sqliteSchemaV1PhysicalManifestDigest,
   type SqliteSchemaV1FinalizerPlan,
@@ -37,6 +38,9 @@ import {
   SQLITE_SCHEMA_V1_DEFINITION_DIGEST,
   SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
   SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST,
+  SQLITE_SCHEMA_V1_PREPARED_LEGACY_CATALOG_DIGEST,
+  SQLITE_SCHEMA_V1_PREPARED_LEGACY_INTERNAL_CATALOG_DIGEST,
+  SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION,
   SQLITE_SCHEMA_V1_PRIMARY_SCHEMA,
   SQLITE_SCHEMA_V1_SQL,
   SQLITE_SCHEMA_V1_STAGED_USER_VERSION,
@@ -54,6 +58,12 @@ const TENANT_A = "10000000-0000-4000-8000-000000000001";
 const TENANT_B = "10000000-0000-4000-8000-000000000002";
 const WORKSPACE_A = "20000000-0000-4000-8000-000000000001";
 const MARKET = "market-colorado";
+const PREPARED_LEGACY_SOURCE_TABLES = Object.freeze([
+  "place_cache",
+  "places_master",
+  "place_observations",
+  "api_usage_events",
+] as const);
 
 describe("G-006A staged SQLite schema and coordinator", () => {
   it("builds one deterministic 37-table catalog from the exact frozen source", () => {
@@ -293,6 +303,159 @@ describe("G-006A staged SQLite schema and coordinator", () => {
       partial.close();
       drift.close();
       stagedDrift.close();
+    }
+  });
+
+  it("recognizes only the exact 6000 prepared-legacy catalog with 31 of 32 target columns", () => {
+    const prepared = createPreparedLegacyDatabase();
+    try {
+      expect({
+        application: sqliteCatalogDigest(prepared),
+        internal: sqliteInternalCatalogDigest(prepared),
+        physical: sqliteSchemaV1PhysicalManifestDigest(prepared),
+      }).toEqual({
+        application: SQLITE_SCHEMA_V1_PREPARED_LEGACY_CATALOG_DIGEST,
+        internal: SQLITE_SCHEMA_V1_PREPARED_LEGACY_INTERNAL_CATALOG_DIGEST,
+        physical: SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST,
+      });
+      expect(classifySqliteSchemaV1(prepared)).toMatchObject({
+        kind: "prepared-legacy",
+        userVersion: SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION,
+        applicationTableCount: SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT,
+        targetColumnCount: 31,
+        expectedTargetColumnCount: 32,
+        catalogDigest: SQLITE_SCHEMA_V1_PREPARED_LEGACY_CATALOG_DIGEST,
+      });
+
+      for (const table of PREPARED_LEGACY_SOURCE_TABLES) {
+        expect(tableColumns(prepared, table).find(({ name }) => name === "source_card_id"))
+          .toMatchObject({ type: "TEXT", notnull: 0, dflt_value: null });
+      }
+      const sourceColumnTables = applicationTableNames(prepared)
+        .filter((table) => tableColumns(prepared, table).some(({ name }) => name === "source_card_id"));
+      expect(sourceColumnTables).toEqual([...PREPARED_LEGACY_SOURCE_TABLES].sort());
+      expect(tableColumns(prepared, "crawl_units").some(({ name }) => name === "location_mode")).toBe(false);
+    } finally {
+      prepared.close();
+    }
+  });
+
+  it("rejects every prepared-legacy column, catalog, internal, physical, and version near-state", () => {
+    const canonicalColumns = preparedLegacyColumnDefinitions();
+    const cases: Array<readonly [string, () => Database.Database]> = [
+      ["missing source column", () => createPreparedLegacyDatabase(canonicalColumns.slice(0, -1))],
+      ["wrong source type", () => createPreparedLegacyDatabase(canonicalColumns.map((column, index) => (
+        index === 0 ? { ...column, definition: "INTEGER" } : column
+      )))],
+      ["wrong source nullability", () => createPreparedLegacyDatabase(canonicalColumns.map((column, index) => (
+        index === 0 ? { ...column, definition: "TEXT NOT NULL DEFAULT ''" } : column
+      )))],
+      ["wrong source default", () => createPreparedLegacyDatabase(canonicalColumns.map((column, index) => (
+        index === 0 ? { ...column, definition: "TEXT DEFAULT 'google_places_legacy'" } : column
+      )))],
+      ["unexpected source check", () => createPreparedLegacyDatabase(canonicalColumns.map((column, index) => (
+        index === 0
+          ? { ...column, definition: "TEXT CHECK (source_card_id IS NULL OR source_card_id = 'google_places_legacy')" }
+          : column
+      )))],
+      ["source column on wrong table", () => createPreparedLegacyDatabase([
+        ...canonicalColumns.slice(0, -1),
+        { table: "leads", definition: "TEXT" },
+      ])],
+      ["unexpected location mode", () => createPreparedLegacyDatabase(canonicalColumns, (db) => {
+        db.exec("ALTER TABLE crawl_units ADD COLUMN location_mode TEXT");
+      })],
+      ["additional column", () => createPreparedLegacyDatabase(canonicalColumns, (db) => {
+        db.exec("ALTER TABLE place_cache ADD COLUMN unexpected_column TEXT");
+      })],
+      ["additional index", () => createPreparedLegacyDatabase(canonicalColumns, (db) => {
+        db.exec("CREATE INDEX g006ap_unexpected_index ON place_cache(source_card_id)");
+      })],
+      ["additional trigger", () => createPreparedLegacyDatabase(canonicalColumns, (db) => {
+        db.exec(`
+          CREATE TRIGGER g006ap_unexpected_trigger
+          AFTER INSERT ON place_cache BEGIN SELECT NEW.source_card_id; END
+        `);
+      })],
+      ["wrong unversioned prepared catalog", () => createPreparedLegacyDatabase(canonicalColumns, undefined, 0)],
+      ["prepared catalog at staged version", () => createPreparedLegacyDatabase(
+        canonicalColumns,
+        undefined,
+        SQLITE_SCHEMA_V1_STAGED_USER_VERSION,
+      )],
+      ["accepted catalog at prepared version", () => createAcceptedLegacyDatabaseAtVersion(
+        SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION,
+      )],
+      ["schema-v1 catalog at prepared version", () => createStagedDatabaseAtVersion(
+        SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION,
+      )],
+      ["internal ANALYZE catalog", () => createPreparedLegacyDatabase(canonicalColumns, (db) => {
+        db.exec("ANALYZE");
+      })],
+      ["physical index-column spoof", () => createPreparedLegacyDatabase(canonicalColumns, (db) => {
+        spoofPreparedLegacyPhysicalIndex(db);
+      })],
+    ];
+
+    for (const [label, create] of cases) {
+      const candidate = create();
+      try {
+        if (label === "internal ANALYZE catalog") {
+          expect(sqliteCatalogDigest(candidate)).toBe(SQLITE_SCHEMA_V1_PREPARED_LEGACY_CATALOG_DIGEST);
+          expect(sqliteInternalCatalogDigest(candidate))
+            .not.toBe(SQLITE_SCHEMA_V1_PREPARED_LEGACY_INTERNAL_CATALOG_DIGEST);
+          expect(sqliteSchemaV1PhysicalManifestDigest(candidate))
+            .toBe(SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST);
+        }
+        if (label === "physical index-column spoof") {
+          expect(sqliteCatalogDigest(candidate)).toBe(SQLITE_SCHEMA_V1_PREPARED_LEGACY_CATALOG_DIGEST);
+          expect(sqliteInternalCatalogDigest(candidate))
+            .toBe(SQLITE_SCHEMA_V1_PREPARED_LEGACY_INTERNAL_CATALOG_DIGEST);
+          expect(sqliteSchemaV1PhysicalManifestDigest(candidate))
+            .not.toBe(SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST);
+        }
+        expect(classifySqliteSchemaV1(candidate).kind, label).not.toBe("prepared-legacy");
+      } finally {
+        candidate.close();
+      }
+    }
+  });
+
+  it("keeps prepared-legacy state outside capability minting and whole-upgrade authority", () => {
+    const fixture = createTemporaryPreparedLegacyDatabase();
+    try {
+      const before = classifySqliteSchemaV1(fixture.db);
+      expect(before.kind).toBe("prepared-legacy");
+      expect(() => createFreshSqliteSchemaV1(fixture.db))
+        .toThrowError(expect.objectContaining({ code: "G006A_STATE_REJECTED" }));
+      expect(classifySqliteSchemaV1(fixture.db)).toEqual(before);
+
+      __testOnlyResetSqliteSchemaV1LeaseAudit();
+      expect(() => createSqliteSchemaV1LaterFinalizerCapability({
+        databasePath: fixture.path,
+        handoffBindingId: "g006b:prepared-rejected",
+        targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+        plan: [],
+      })).toThrowError(expect.objectContaining({ code: "G006A_STATE_REJECTED" }));
+      expect(leaseAuditShape()).toEqual([
+        "open:capability-root",
+        "open:connection",
+        "close:connection",
+        "close:capability-root",
+      ]);
+
+      __testOnlyResetSqliteSchemaV1LeaseAudit();
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path))
+        .toThrowError(expect.objectContaining({ code: "G006A_CATALOG_DRIFT" }));
+      expect(leaseAuditShape()).toEqual([
+        "open:replay-root",
+        "open:connection",
+        "close:connection",
+        "close:replay-root",
+      ]);
+      expect(classifySqliteSchemaV1(fixture.db)).toEqual(before);
+    } finally {
+      fixture.cleanup();
     }
   });
 
@@ -1638,6 +1801,13 @@ function createTemporaryAcceptedLegacyDatabase(): TemporaryDatabaseFixture {
   return fixture;
 }
 
+function createTemporaryPreparedLegacyDatabase(): TemporaryDatabaseFixture {
+  const fixture = createTemporaryAcceptedLegacyDatabase();
+  applyPreparedLegacyShape(fixture.db, preparedLegacyColumnDefinitions());
+  fixture.db.pragma(`user_version = ${SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION}`);
+  return fixture;
+}
+
 function createFinalizerHandoff(
   databasePath: string,
   handoffBindingId: string,
@@ -1814,6 +1984,23 @@ function spoofNullWorkspacePartialIndex(db: Database.Database): void {
   }
 }
 
+function spoofPreparedLegacyPhysicalIndex(db: Database.Database): void {
+  const expectedSql = indexSql(db, "idx_leads_score");
+  db.exec(`
+    DROP INDEX idx_leads_score;
+    CREATE INDEX idx_leads_score ON leads(status);
+  `);
+  db.unsafeMode(true);
+  db.pragma("writable_schema = ON");
+  try {
+    db.prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'index' AND name = 'idx_leads_score'")
+      .run(expectedSql);
+  } finally {
+    db.pragma("writable_schema = OFF");
+    db.unsafeMode(false);
+  }
+}
+
 function createEmptyDatabase(): Database.Database {
   const db = new Database(":memory:");
   db.pragma("foreign_keys = ON");
@@ -1830,6 +2017,48 @@ function createAcceptedLegacyDatabase(): Database.Database {
   const db = createEmptyDatabase();
   db.exec(SCHEMA_SQL);
   prepareSqliteCompatibilityBackfill(sqliteBackfillAdapter(db));
+  return db;
+}
+
+function preparedLegacyColumnDefinitions(): Array<{ table: string; definition: string }> {
+  return PREPARED_LEGACY_SOURCE_TABLES.map((table) => ({ table, definition: "TEXT" }));
+}
+
+function applyPreparedLegacyShape(
+  db: Database.Database,
+  columns: readonly Readonly<{ table: string; definition: string }>[],
+): void {
+  for (const { table, definition } of columns) {
+    db.exec(`ALTER TABLE "${table}" ADD COLUMN source_card_id ${definition}`);
+  }
+}
+
+function createPreparedLegacyDatabase(
+  columns: readonly Readonly<{ table: string; definition: string }>[] = preparedLegacyColumnDefinitions(),
+  mutate?: (db: Database.Database) => void,
+  userVersion: number = SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION,
+): Database.Database {
+  const db = createAcceptedLegacyDatabase();
+  try {
+    applyPreparedLegacyShape(db, columns);
+    mutate?.(db);
+    db.pragma(`user_version = ${userVersion}`);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
+function createAcceptedLegacyDatabaseAtVersion(userVersion: number): Database.Database {
+  const db = createAcceptedLegacyDatabase();
+  db.pragma(`user_version = ${userVersion}`);
+  return db;
+}
+
+function createStagedDatabaseAtVersion(userVersion: number): Database.Database {
+  const db = createStagedDatabase();
+  db.pragma(`user_version = ${userVersion}`);
   return db;
 }
 
@@ -1906,13 +2135,23 @@ function insertDeletionCheckpointEventWithId(db: Database.Database, id: bigint, 
 function tableColumns(
   db: Database.Database,
   table: string,
-): Array<{ name: string; notnull: number; pk: number; dflt_value: string | null }> {
+): Array<{ name: string; type: string; notnull: number; pk: number; dflt_value: string | null }> {
   return db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{
     name: string;
+    type: string;
     notnull: number;
     pk: number;
     dflt_value: string | null;
   }>;
+}
+
+function applicationTableNames(db: Database.Database): string[] {
+  return (db.prepare(`
+    SELECT name
+    FROM sqlite_schema
+    WHERE type = 'table' AND substr(lower(name), 1, 7) <> 'sqlite_'
+    ORDER BY name COLLATE BINARY
+  `).all() as Array<{ name: string }>).map(({ name }) => name);
 }
 
 function primaryKeyColumns(db: Database.Database, table: string): string[] {
