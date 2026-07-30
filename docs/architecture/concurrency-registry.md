@@ -1518,3 +1518,32 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   zero-warning lint, helper hash/pin, parser, diff, scope and residue checks must
   pass before exactly one commit. No production edit, merge, push, deployment,
   external action, stale-root deletion or self-acceptance is authorized.
+- Evidence-only source `b833832` closes the quality rejection as exactly one
+  commit over `4853080`, changing only the G006B test and receipt while keeping
+  the production TypeScript and PowerShell blobs byte-identical. Both parent
+  modes now prove 38 replacement attempts across 38 unique child intervals,
+  exact final-tree mapping and parent FileId continuity. Every restart row now
+  proves database and archive-parent FileIds, exact visible-final set, all
+  pre-existing final identities/bytes, exact golden bytes for newly created
+  PREPARED/COMMITTED files, the 38-entry tree and zero lock/temp residue.
+- The producer's final frozen file passed 71/71 in 907.1 seconds after the
+  receipt freeze. A fresh independent read-only review accepts the repaired
+  evidence; its targeted three cases passed in 171.40 seconds. The receipt now
+  binds `f3d285e`, rejection control `bdba0cd` and immutable delta parent
+  `4853080`, and distinguishes inherited gates from current observed results.
+  The prior security receipt-forward-reference concern is therefore moot in
+  addition to being non-binding; its runtime review found no security defect.
+- Sol merged the reviewed Platform line with non-fast-forward merge `f069c06`
+  whose parents are exact integration control `bdba0cd` and source `b833832`.
+  The source contributes exactly the four authorized G006B paths. All four
+  merged blobs equal the accepted source blobs; typecheck, zero-warning lint,
+  Next.js production build, exact 37-table recovery verification, PowerShell
+  parsing, normalized helper hash/pin and merged targeted 3/3 evidence gate
+  pass. The integration worktree is clean.
+- G006B-B1 is accepted as the local legacy pre-adapter preparation milestone;
+  it does not complete child G006B, activate startup, apply final constraints,
+  authorize restore or close parent G006. The next serialized child is G006C0
+  through G006C6 under the already accepted no-default/no-inference writer
+  adapter contract. The known policy-blocked `g006b-identity-cleanup-qjkSgV`
+  synthetic root remains disclosed, untouched and recoverable. No remote,
+  provider, production, customer, paid, push or deployment action occurred.
