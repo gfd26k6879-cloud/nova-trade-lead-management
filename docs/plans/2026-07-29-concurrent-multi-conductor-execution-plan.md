@@ -880,3 +880,19 @@ The geography ownership reconciliation remains a product/architecture decision o
 ## Final operating rule
 
 Many workers may implement. Several domain conductors may review and coordinate. Only one final conductor may integrate, merge, accept, and declare completion. That final conductor is `gpt-5.6-sol` running at `extra-high` reasoning, and every material claim must return to it with source-linked evidence.
+
+## 2026-07-30 meaningful-milestone and human-checkpoint overlay
+
+The user has directed execution to optimize for observable product milestones
+while preserving the complete PRD and all 318 implementation cards. The additive
+operating overlay is:
+
+- `docs/plans/2026-07-30-meaningful-milestone-human-checkpoint-execution-plan.md`
+
+That overlay controls current runtime concurrency allocation, original-card
+progress reporting, review consolidation, milestone sequencing, and mandatory
+human pause gates. It does not replace or weaken this plan's source hierarchy,
+ownership, isolation, security, evidence, or external-action restrictions. Its
+first required action is to finish only the already-active G006C2A Repair-4
+source packet to a clean local checkpoint and then pause before review, merge,
+acceptance, C2B, or any new dispatch until the user explicitly resumes.
