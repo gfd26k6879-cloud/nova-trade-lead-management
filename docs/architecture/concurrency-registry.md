@@ -1109,3 +1109,14 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   existing T-028 receipt before exported replay, compare it completely before
   and after, and independently own its bounded path/file-lease/reopen checks.
   It may not export, copy authority from, or modify accepted coordinators.
+- Sol also closed the sidecar schema without inventing tenant-specific pins.
+  The deterministic timestamp-free envelope has exact keys `format`,
+  `schemaVersion`, `phase`, `handoffId`, `recordSha256`, and `payload`.
+  Prepared payload binds the exact operation, legacy-T028 basis, identity-only
+  source, source database/file state, full manifest and selected 20-column
+  receipt row/JSON, full G-023 seed and binding, backup, schema-3 archive,
+  all-37 preservation/audit evidence, fixed mutation, and expected poststate.
+  Committed payload binds the prepared record and exact independent reopen
+  verification. Tenant/workspace/owner/policy/receipt/configuration values come
+  only from the explicit inputs and database evidence; no customer value is
+  global, defaulted, or inferred.
