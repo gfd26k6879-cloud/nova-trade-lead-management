@@ -2020,3 +2020,41 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   fixtures, acquire locks, touch blocked roots, perform external activity or
   waive the no-default/no-inference rules. Sol alone may reconcile a replacement
   packet; the stopped packet authorizes no implementation.
+
+## G-006C2A replacement storage-operation packet
+
+- Architecture and security independently return GO for a replacement C2A only
+  as an unwired, non-authorizing SQLite storage primitive. That is the original
+  G006C boundary: it constrains compatibility mutations to the exact verified
+  database, tenant, nullable row workspace and G002 operation, but it neither
+  decides nor represents who may invoke them. T012/T013 and the later G009,
+  G010 and G013 cutover continue to own interactive and worker authority.
+- The stopped authority-aware packet is superseded, not waived. Its exact four
+  paths and Terra-medium producer remain, but C2A must not import or call tenant
+  permission, policy, session, worker-context or cron authorization. It defines a
+  fieldless private-WeakMap storage-operation capability with literal
+  `storage-operation-scope-only` meaning and literal false authentication,
+  authorization, worker and provider grants. It is not exported from a public
+  barrel or wired to production callers.
+- Creation consumes only a genuine C0 upgraded or C1 fresh binding through the
+  lifecycle-corresponding assertion, plus exact `databasePath`, `tenantId`,
+  `storageWorkspaceId`, explicit `operationWorkspaceId` and one fixed G002 table
+  operation. A non-null operation workspace must equal the storage workspace;
+  null explicitly denotes a tenant-wide row and can never be omitted, defaulted
+  or inferred. A one-shot exact-match consumer deletes private state before
+  returning frozen storage evidence. Copies, spreads, proxies, prototypes,
+  fabrications, replays and cross-lifecycle/database/tenant/workspace/operation
+  uses fail closed.
+- C2A mutates no table and exposes no callback or database handle. Its focused
+  matrix has at least 24 genuine fresh/upgraded, exact-null/exact-workspace,
+  lifecycle, database, tenant, operation, input-shape, forgery, proxy, copy,
+  replay and one-shot cases. It must prove the returned evidence contains only
+  storage facts and the literal false grants. Existing C0/C1/G006A and
+  PostgreSQL/readiness/session regressions, typecheck, zero-warning lint,
+  four-path/protected-blob and owned-prefix residue gates remain mandatory.
+- C2B/C may later consume this primitive only in detached SQLite writer modules;
+  no route, action, worker, scheduler, startup, legacy public signature or
+  PostgreSQL branch may use it inside C2. Any need for a policy evaluator,
+  actor/session/worker fact, persistent audit, caller activation, scope inference
+  or an additional path is a stop. This replacement preserves all 318 cards and
+  defers—not deletes or duplicates—the G009/G010/G013 authority conversion.
