@@ -10,6 +10,8 @@ Dispatch/control head: `88e49440d2ff52b4db249bd199b2b2a3547fe9a3`
 
 Rejected round-0 source: `7286bc6b2ee15cba2d19de0cd57b74c86f979fa2`
 
+Rejected round-1 source: `ff479d95ef624996b019968a489917a740ec2071`
+
 ## Result
 
 G-006A is prepared locally as an inert, deterministic SQLite final-catalog
@@ -98,41 +100,62 @@ for optional references while retaining the required tenant component.
 - `unknown`, `partial`, and `drift`: rejected closed with no mutation.
 
 Whole-schema finalization requires an opaque later-finalizer capability whose
-state exists only in a private `WeakMap`. It is bound to the exact Database
-object, classified source state and digest, non-empty exact handoff binding ID,
-target digest, and captured callback. A private `WeakSet` consumes it before
-`BEGIN IMMEDIATE`; callback or pre-commit failure leaves it consumed. Copies,
-spread/prototype forgeries, callback replacement, cross-database use, binding
-mismatch, and second use reject before mutation. This is a local
+state exists only in a private `WeakMap`. Minting accepts an exact canonical
+existing file path, exact non-empty handoff binding ID, target digest, and a
+finite plain declarative operation plan. It independently opens the exact file
+read-only, verifies the connection boundary and source health, captures source
+kind/user version/catalog digest, the complete physical-manifest digest, and
+the exact all-37 preservation snapshot, then closes the inspector. No caller
+database handle is accepted or retained.
+
+The operation plan is a closed discriminated union: single-statement
+create-table/index/trigger; insert/update/delete with scalar binds; and
+identifier-validated drop/rename operations. Minting inspects own property
+descriptors, rejects accessors, proxies, functions, async/thenable values,
+symbols, unknown keys, non-plain prototypes, malformed arrays, and non-scalar
+bind objects, and clones byte binds. It freezes a deep private copy; no caller
+object, callback, method, thenable, closure, or mutable bind reference enters
+capability state or the transaction.
+
+A private `WeakSet` consumes the opaque identity before any writer transaction
+attempt. Copies, spread/prototype forgeries, path aliases, path or binding
+mismatch, cross-file use, plan failure, and second use reject closed and cannot
+retry with the same token. The coordinator opens its own exact-path writer,
+acquires `BEGIN IMMEDIATE`, and revalidates every mint-time source invariant and
+snapshot under the lock before executing the private plan. A quote/comment-
+aware token scanner denies transaction/savepoint control, PRAGMA,
+`writable_schema`, ATTACH/DETACH, VACUUM, catalog targets, TEMP/TEMPORARY, and
+qualified or attached-schema routes. Each statement is revalidated and
+compiled with single-statement `prepare` before execution. The coordinator
+alone controls `user_version`, commit, and rollback.
+
+Every inspector, writer, and verifier requires `database_list` to contain only
+the exact `main` file plus SQLite's optional empty `temp` entry, and requires
+zero `sqlite_temp_schema` objects. The only test boundary is an opaque token
+with one of three closed internal fault modes; it cannot carry a callback,
+connection, path, or arbitrary success result. This remains a local
 program-integrity boundary only. G-006B/C still own the receipt/sidecar
 authority that permits a real handoff.
-
-The callback receives a frozen bounded session, never a `better-sqlite3`
-handle. It exposes only single-statement create-table/index/trigger,
-insert/update/delete, identifier-validated drop, and table-rename operations.
-A quote/comment-aware token scanner enforces the leading operation grammar and
-denies transaction control, PRAGMA, `writable_schema`, ATTACH/DETACH, VACUUM,
-and SQLite catalog targets. Every accepted statement is then compiled with
-single-statement `prepare` before execution. The coordinator forces
-`writable_schema=OFF`, exclusively owns `BEGIN IMMEDIATE`/commit/rollback, and
-sets `user_version=6002` itself.
 
 The compatibility receipt remains evidence bound by later work; its presence
 does not authorize a tenant choice or catalog transition. The coordinator does
 not interpret it as authority.
 
-Before a later finalizer runs, the coordinator snapshots all 37 application
+At capability minting, the coordinator snapshots all 37 application
 tables. For every table it records the complete source-column order, row
 count, and deterministic type-tagged canonical row-payload digest. This
 includes platform/reference tables, ZIP rows, `audit_logs`, the receipt table,
 and existing T-028 tenant/workspace values. A final catalog may add
 migration-owned columns, but it cannot remove or change any source-state value.
 
-Before commit the coordinator requires identical all-table payloads and
-counts, exact catalog and physical metadata, an empty `foreign_key_check`, and
-`integrity_check=ok`. Normal callback or validation failure rolls back the
-owned transaction. After commit it opens a distinct fresh read-only connection
-to the exact resolved file path, rechecks final state/user version/catalog,
+Before plan execution under the owned writer lock, it requires the exact
+mint-time state, user version, catalog, physical metadata, all-table payloads,
+and healthy FK/integrity results. Before commit it again requires identical
+all-table payloads and counts, exact catalog and physical metadata, an empty
+`foreign_key_check`, and `integrity_check=ok`. Normal plan or validation failure
+rolls back the owned transaction and the writer closes in `finally`. After
+commit the writer closes, then the coordinator opens a distinct fresh read-only
+connection to the exact canonical file path and rechecks final state/user version/catalog,
 37-table and target cardinalities, the pinned full table/index/index-xinfo/
 partial-predicate/FK manifest, all-table preservation, FK health, and
 integrity, and closes the verifier in `finally`. Only that fresh verification
@@ -143,27 +166,33 @@ In-memory finalization fails closed.
 ## Local validation evidence
 
 - `npx vitest run src/lib/__tests__/sqlite-schema-coordinator.test.ts --reporter=verbose`
-  - PASS: 1 file, 15/15 tests, final repair run 5.50 s.
+  - PASS: 1 file, 18/18 tests, final round-2 run 6.41 s.
   - Covers deterministic fresh construction, exact catalog metadata, tenant
     and source key enforcement, both nullable-workspace unique identities,
     cross-tenant and invalid-source rejection, all coordinator classifications,
-    opaque identity and one-shot handoff enforcement, every forbidden SQL
-    family, caller-transaction rejection, normal and accepted-legacy
-    rollback/restart, all-37 preservation, close/reopen finalization,
-    committed-unverified reporting, verifier cleanup, persistent physical-index
-    spoof rejection, final replay, and row-count/payload/FK/integrity guards.
+    descriptor-level hostile-plan rejection, callback/raw-handle structural
+    exclusion, caller-plan and byte-bind copying, opaque one-shot identity,
+    path alias/binding/cross-file/failure reuse rejection, every forbidden SQL
+    family including TEMP and qualified schemas, mint-time row/value/table/
+    catalog/index/user-version drift, connection-list/temp-schema guards, normal and accepted-
+    legacy rollback/restart, all-37 preservation, close/reopen finalization,
+    committed-unverified reporting, persistent physical-index spoof rejection,
+    final replay, and row-count/payload/FK/integrity guards.
 - `npm run typecheck`
-  - PASS: `tsc --noEmit --pretty false`, final run 4.8 s.
+  - PASS: `tsc --noEmit --pretty false`, final run 4.6 s.
 - `npm run lint`
-  - PASS: full repository ESLint, final run 23.0 s.
+  - PASS: full repository ESLint, final run 18.6 s.
 - `npm run db:verify:recovery`
   - PASS: all 37 application tables match SQLite schema and tracked
-    migrations, 2.1 s.
+    migrations, 2.0 s.
 - `git diff --cached --check`
   - PASS: no whitespace errors.
 - `git diff --cached --name-only` plus `git diff --name-only`
   - PASS: exactly the four authorized G-006A paths are staged and there is no
     unstaged delta.
+- Task residue checks
+  - PASS: zero `novatrade-g006a-*` temporary directories and zero lingering
+    task Vitest, ESLint, TypeScript, or recovery-verification processes.
 - Runtime: Node.js `v24.13.1`.
 
 The first focused Vitest attempt stopped during module import because the
@@ -194,6 +223,23 @@ mode is now enabled only while constructing that synthetic persisted spoof and
 is disabled immediately afterward. The isolated spoof regression and fresh
 complete matrices then passed. No production guard, catalog pin, or finalizer
 boundary was weakened.
+
+## Repair round 2 notes
+
+Round-1 source `ff479d95ef624996b019968a489917a740ec2071` was
+rejected because the coordinator still accepted a caller-owned writable
+database handle and invoked arbitrary caller JavaScript inside its transaction.
+Repair round 2 removes the callback/session mechanism entirely, replaces it
+with the copied declarative plan above, and makes inspection, writing, locking,
+rollback, close, and post-commit read-only verification coordinator-owned.
+
+The first complete round-2 focused run passed 16/18 tests. Both failures used
+the same persistent partial-index spoof fixture without the probe rows needed
+for SQLite `integrity_check` to distinguish forged catalog SQL from the actual
+index predicate. The two null/non-null workspace probe rows from round 1 were
+restored, and source health is now revalidated under `BEGIN IMMEDIATE` before
+any plan operation. The fresh 18-test matrix then passed. No production
+catalog, manifest pin, SQL denial, or connection boundary was weakened.
 
 All database exercises used in-memory or task-owned temporary file-backed
 SQLite instances with synthetic rows. Every temporary directory and verifier

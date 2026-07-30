@@ -18,9 +18,8 @@ import {
   sqliteCatalogDigest,
   SQLITE_SCHEMA_V1_PHYSICAL_MANIFEST_DIGEST,
   sqliteSchemaV1PhysicalManifestDigest,
+  type SqliteSchemaV1FinalizerPlan,
   type SqliteSchemaV1FinalizerHandoff,
-  type SqliteSchemaV1FinalizerSession,
-  type SqliteSchemaV1LaterFinalizerContext,
 } from "@/lib/db/sqlite-schema-coordinator";
 import {
   SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT,
@@ -28,6 +27,7 @@ import {
   SQLITE_SCHEMA_V1_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_DEFINITION_DIGEST,
   SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
+  SQLITE_SCHEMA_V1_PRIMARY_SCHEMA,
   SQLITE_SCHEMA_V1_SQL,
   SQLITE_SCHEMA_V1_STAGED_USER_VERSION,
   SQLITE_SCHEMA_V1_TRANSFORM_TABLES,
@@ -54,6 +54,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     )).toThrow(/frozen SCHEMA_SQL digest drift/);
     expect(SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_DIGEST).toBe("b47346d186f2768f577b6e9b52f6112ee09c5d94b05aad3ef31303343c07a8f8");
     expect(SQLITE_SCHEMA_V1_DEFINITION_DIGEST).toBe("fd28b893542b08248df08f58706f2947d1c3bef5aeecf920ee19ea2eeeb280d2");
+    expect(SQLITE_SCHEMA_V1_PRIMARY_SCHEMA).toBe("main");
     expect(() => assertSqliteSchemaV1DefinitionDigest(SQLITE_SCHEMA_V1_SQL)).not.toThrow();
     expect(() => assertSqliteSchemaV1DefinitionDigest(`${SQLITE_SCHEMA_V1_SQL} `))
       .toThrow(/generated schema-v1 definition digest drift/);
@@ -251,201 +252,311 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("requires an exact file-bound handoff before transaction or mutation", () => {
-    const legacy = createAcceptedLegacyDatabase();
-    const stagedMemory = createStagedDatabase();
+  it("requires an exact canonical file path and declarative handoff", () => {
+    const fixture = createTemporaryStagedDatabase();
     try {
-      const beforeDigest = sqliteCatalogDigest(legacy);
-      const beforeChanges = legacy.prepare("SELECT total_changes() AS count").get() as { count: number };
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(legacy)).toThrowError(expect.objectContaining({
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path)).toThrowError(expect.objectContaining({
         code: "G006A_FINALIZER_REQUIRED",
       }));
-      expect(legacy.inTransaction).toBe(false);
-      expect(sqliteCatalogDigest(legacy)).toBe(beforeDigest);
-      expect(legacy.prepare("SELECT total_changes() AS count").get()).toEqual(beforeChanges);
-      expect(() => createSqliteSchemaV1LaterFinalizerCapability({
-        db: legacy,
-        handoffBindingId: "g006b:legacy:receipt-1",
-        sourceState: "accepted-legacy",
-        sourceCatalogDigest: beforeDigest,
-        targetCatalogDigest: "0".repeat(64),
-        execute: () => undefined,
-      })).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_MISMATCH" }));
-      expect(() => createSqliteSchemaV1LaterFinalizerCapability({
-        db: legacy,
-        handoffBindingId: " ",
-        sourceState: "accepted-legacy",
-        sourceCatalogDigest: beforeDigest,
-        targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
-        execute: () => undefined,
-      })).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_MISMATCH" }));
-
-      const memoryHandoff = createFinalizerHandoff(stagedMemory, "g006b:memory:denied", () => undefined);
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(stagedMemory, memoryHandoff)).toThrowError(expect.objectContaining({
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(":memory:")).toThrowError(expect.objectContaining({
         code: "G006A_FILE_BACKED_FINALIZATION_REQUIRED",
       }));
-      expect(classifySqliteSchemaV1(stagedMemory).kind).toBe("staged");
+      expect(() => createSqliteSchemaV1LaterFinalizerCapability({
+        databasePath: "",
+        handoffBindingId: "g006b:path:empty",
+        targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+        plan: [],
+      })).toThrowError(expect.objectContaining({ code: "G006A_FILE_BACKED_FINALIZATION_REQUIRED" }));
+      expect(() => createSqliteSchemaV1LaterFinalizerCapability({
+        databasePath: join(fixture.directory, "missing.db"),
+        handoffBindingId: "g006b:path:missing",
+        targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+        plan: [],
+      })).toThrowError(expect.objectContaining({ code: "G006A_DATABASE_PATH_REJECTED" }));
+      expect(() => createFinalizerHandoff(fixture.path, " ", [])).toThrowError(expect.objectContaining({
+        code: "G006A_FINALIZER_MISMATCH",
+      }));
+      expect(() => createSqliteSchemaV1LaterFinalizerCapability({
+        databasePath: fixture.path,
+        handoffBindingId: "g006b:target:wrong",
+        targetCatalogDigest: "0".repeat(64) as typeof SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+        plan: [],
+      })).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_MISMATCH" }));
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(
+        fixture.db as unknown as string,
+      )).toThrowError(expect.objectContaining({ code: "G006A_DATABASE_PATH_REJECTED" }));
+      expect(classifySqliteSchemaV1(fixture.db).kind).toBe("staged");
     } finally {
-      legacy.close();
-      stagedMemory.close();
+      fixture.cleanup();
     }
   });
 
-  it("uses identity-bound one-shot capability state and rejects copies, replacement, and cross-database use", () => {
+  it("rejects callbacks, accessors, proxies, functions, async values, thenables, symbols, and non-plain plan data", () => {
+    const fixture = createTemporaryStagedDatabase();
+    let getterCalls = 0;
+    let proxyCalls = 0;
+    let callbackCalls = 0;
+    try {
+      const withExecute = {
+        databasePath: fixture.path,
+        handoffBindingId: "g006b:hostile:callback",
+        targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+        plan: [],
+        execute: () => { callbackCalls += 1; fixture.db.exec("DELETE FROM zip_codes"); },
+      } as unknown as Parameters<typeof createSqliteSchemaV1LaterFinalizerCapability>[0];
+      expect(() => createSqliteSchemaV1LaterFinalizerCapability(withExecute)).toThrowError(expect.objectContaining({
+        code: "G006A_FINALIZER_MISMATCH",
+      }));
+      expect(callbackCalls).toBe(0);
+
+      const accessorOperation = Object.defineProperty({}, "kind", {
+        enumerable: true,
+        get: () => { getterCalls += 1; return "delete"; },
+      });
+      const proxyPlan = new Proxy([], {
+        ownKeys: (target) => { proxyCalls += 1; return Reflect.ownKeys(target); },
+      });
+      const symbolOperation = { kind: "delete", sql: "DELETE FROM location_markets", [Symbol("hidden")]: true };
+      const thenableOperation = {
+        kind: "delete",
+        sql: "DELETE FROM location_markets",
+        then: () => { callbackCalls += 1; },
+      };
+      const sparsePlan = new Array<unknown>(1);
+      const customPlan: unknown[] & { extra?: boolean } = [];
+      customPlan.extra = true;
+      const accessorPlan: unknown[] = [];
+      Object.defineProperty(accessorPlan, "0", {
+        configurable: true,
+        enumerable: true,
+        get: () => { getterCalls += 1; return { kind: "delete", sql: "DELETE FROM location_markets" }; },
+      });
+      Object.defineProperty(accessorPlan, "length", { value: 1, writable: true });
+      const hostilePlans: unknown[] = [
+        [accessorOperation],
+        accessorPlan,
+        proxyPlan,
+        sparsePlan,
+        customPlan,
+        [() => undefined],
+        Promise.resolve([]),
+        [thenableOperation],
+        [symbolOperation],
+        [new Error("not declarative")],
+        [new Date()],
+        [{ kind: "insert", sql: "INSERT INTO location_markets (id, name, country_code) VALUES (?, ?, ?)", binds: [{}] }],
+      ];
+      for (const [index, plan] of hostilePlans.entries()) {
+        expect(() => createSqliteSchemaV1LaterFinalizerCapability({
+          databasePath: fixture.path,
+          handoffBindingId: `g006b:hostile:${index}`,
+          targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+          plan: plan as SqliteSchemaV1FinalizerPlan,
+        })).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_PLAN_REJECTED" }));
+      }
+      expect(getterCalls).toBe(0);
+      expect(proxyCalls).toBe(0);
+      expect(callbackCalls).toBe(0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("copies caller plans and byte binds before mint returns", () => {
+    const fixture = createTemporaryStagedDatabase();
+    const byteId = Buffer.from("copied-byte-id");
+    const plan: Array<Record<string, unknown>> = [
+      {
+        kind: "insert",
+        sql: "INSERT INTO location_markets (id, name, country_code) VALUES (?, ?, ?)",
+        binds: [byteId, "Copied", "US"],
+      },
+      {
+        kind: "delete",
+        sql: "DELETE FROM location_markets WHERE id = ?",
+        binds: [byteId],
+      },
+    ];
+    try {
+      const handoff = createFinalizerHandoff(
+        fixture.path,
+        "g006b:copy:plan",
+        plan as unknown as SqliteSchemaV1FinalizerPlan,
+      );
+      byteId.fill(0);
+      plan[0]!.sql = "PRAGMA writable_schema = ON";
+      plan.splice(1, 1);
+      expect(coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff)).toMatchObject({
+        status: "finalized",
+        state: { kind: "final" },
+      });
+      expect(fixture.db.prepare("SELECT COUNT(*) AS count FROM location_markets").get()).toMatchObject({ count: 0 });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps opaque capability identity one-shot across copies, wrong bindings, cross-path attempts, failures, and success", () => {
     const first = createTemporaryStagedDatabase();
     const second = createTemporaryStagedDatabase();
-    const bindingId = "g006b:staged:identity-1";
-    let originalCalls = 0;
-    let replacementCalls = 0;
     try {
-      const state = classifySqliteSchemaV1(first.db);
-      const input = {
-        db: first.db,
-        handoffBindingId: bindingId,
-        sourceState: "staged" as const,
-        sourceCatalogDigest: state.catalogDigest,
-        targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
-        execute: () => { originalCalls += 1; },
-      };
-      const capability = createSqliteSchemaV1LaterFinalizerCapability(input);
-      input.execute = () => { replacementCalls += 1; };
-      expect(Object.keys(capability)).toEqual([]);
-      expect(() => Object.assign(capability as object, { execute: input.execute })).toThrow();
-      first.db.exec("BEGIN");
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.db, {
-        capability,
-        handoffBindingId: bindingId,
-      })).toThrowError(expect.objectContaining({ code: "G006A_STATE_REJECTED" }));
-      first.db.exec("ROLLBACK");
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.db, {
-        capability,
-        handoffBindingId: `${bindingId}:wrong`,
-      })).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_MISMATCH" }));
-
-      const spread = { ...capability } as unknown as typeof capability;
-      const prototype = Object.create(capability) as typeof capability;
-      for (const forged of [spread, prototype]) {
-        expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.db, {
-          capability: forged,
-          handoffBindingId: bindingId,
+      const original = createFinalizerHandoff(first.path, "g006b:identity:original", []);
+      for (const forged of [
+        { ...original.capability },
+        Object.create(original.capability),
+      ]) {
+        expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.path, {
+          capability: forged as typeof original.capability,
+          handoffBindingId: original.handoffBindingId,
         })).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_REQUIRED" }));
       }
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(second.db, {
-        capability,
-        handoffBindingId: bindingId,
-      })).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_MISMATCH" }));
-      expect(classifySqliteSchemaV1(second.db).kind).toBe("staged");
 
-      const handoff = { capability, handoffBindingId: bindingId };
-      expect(coordinateSqliteSchemaV1WholeUpgrade(first.db, handoff)).toMatchObject({
-        status: "finalized",
-        state: { kind: "final", userVersion: SQLITE_SCHEMA_V1_FINAL_USER_VERSION },
-      });
-      expect(originalCalls).toBe(1);
-      expect(replacementCalls).toBe(0);
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.db, handoff)).toThrowError(expect.objectContaining({
+      const wrongBinding = createFinalizerHandoff(first.path, "g006b:identity:binding", []);
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.path, {
+        capability: wrongBinding.capability,
+        handoffBindingId: `${wrongBinding.handoffBindingId}:wrong`,
+      })).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_MISMATCH" }));
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.path, wrongBinding)).toThrowError(expect.objectContaining({
         code: "G006A_FINALIZER_CONSUMED",
       }));
+
+      const crossPath = createFinalizerHandoff(first.path, "g006b:identity:cross-path", []);
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(second.path, crossPath)).toThrowError(expect.objectContaining({
+        code: "G006A_FINALIZER_MISMATCH",
+      }));
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.path, crossPath)).toThrowError(expect.objectContaining({
+        code: "G006A_FINALIZER_CONSUMED",
+      }));
+
+      const aliasPath = `${first.directory}\\.\\schema.db`;
+      const pathAlias = createFinalizerHandoff(first.path, "g006b:identity:path-alias", []);
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(aliasPath, pathAlias)).toThrowError(expect.objectContaining({
+        code: "G006A_DATABASE_PATH_REJECTED",
+      }));
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.path, pathAlias)).toThrowError(expect.objectContaining({
+        code: "G006A_FINALIZER_CONSUMED",
+      }));
+
+      const failure = createFinalizerHandoff(first.path, "g006b:identity:failure", duplicateMarketPlan("failure"));
+      const before = classifySqliteSchemaV1(first.db);
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.path, failure)).toThrow();
+      expect(classifySqliteSchemaV1(first.db)).toEqual(before);
+      expect(first.db.prepare("SELECT id FROM location_markets WHERE id = 'failure'").get()).toBeUndefined();
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.path, failure)).toThrowError(expect.objectContaining({
+        code: "G006A_FINALIZER_CONSUMED",
+      }));
+
+      expect(coordinateSqliteSchemaV1WholeUpgrade(first.path, original)).toMatchObject({ status: "finalized" });
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(first.path, original)).toThrowError(expect.objectContaining({
+        code: "G006A_FINALIZER_CONSUMED",
+      }));
+      expect(classifySqliteSchemaV1(second.db).kind).toBe("staged");
     } finally {
       first.cleanup();
       second.cleanup();
     }
   });
 
-  it("rejects transaction control, multi-statement, PRAGMA, writable-schema, and catalog-write routes", () => {
-    const attempts: ReadonlyArray<readonly [string, (session: SqliteSchemaV1FinalizerSession) => void]> = [
-      ["begin", (session) => { session.update("BEGIN IMMEDIATE"); }],
-      ["commit", (session) => { session.update("COMMIT"); }],
-      ["end", (session) => { session.delete("/* leading comment */ END"); }],
-      ["rollback", (session) => { session.update("ROLLBACK"); }],
-      ["savepoint", (session) => { session.update("SAVEPOINT caller_owned"); }],
-      ["release", (session) => { session.update("RELEASE caller_owned"); }],
-      ["multi", (session) => {
-        session.insert("INSERT INTO location_markets (id, name, country_code) VALUES ('multi', 'Multi', 'US'); DELETE FROM location_markets");
-      }],
-      ["pragma", (session) => { session.update("/* leading */ PRAGMA user_version = 6002"); }],
-      ["attach", (session) => { session.update("ATTACH DATABASE 'other.db' AS other"); }],
-      ["detach", (session) => { session.update("DETACH DATABASE other"); }],
-      ["vacuum", (session) => { session.update("VACUUM"); }],
-      ["writable", (session) => { session.createTable('CREATE TABLE "writable_schema" (id TEXT)'); }],
-      ["catalog", (session) => { session.update('UPDATE "sqlite_schema" SET sql = sql'); }],
-      ["master", (session) => { session.update('UPDATE "sqlite_master" SET sql = sql'); }],
+  it("rejects transaction, catalog, multi-statement, TEMP, and attached-schema SQL at mint", () => {
+    const fixture = createTemporaryStagedDatabase();
+    const attempts: ReadonlyArray<readonly [string, SqliteSchemaV1FinalizerPlan]> = [
+      ["begin", [{ kind: "update", sql: "BEGIN IMMEDIATE" }]],
+      ["commit", [{ kind: "update", sql: "cOmMiT" }]],
+      ["end", [{ kind: "delete", sql: "/* leading */ END" }]],
+      ["rollback", [{ kind: "update", sql: "ROLLBACK" }]],
+      ["savepoint", [{ kind: "update", sql: "SAVEPOINT caller_owned" }]],
+      ["release", [{ kind: "update", sql: "RELEASE caller_owned" }]],
+      ["pragma", [{ kind: "update", sql: "/* leading */ PrAgMa user_version = 6002" }]],
+      ["attach", [{ kind: "update", sql: "ATTACH DATABASE 'other.db' AS other" }]],
+      ["detach", [{ kind: "update", sql: "DETACH DATABASE other" }]],
+      ["vacuum", [{ kind: "update", sql: "VACUUM" }]],
+      ["multi", [{ kind: "insert", sql: "INSERT INTO location_markets (id, name, country_code) VALUES ('multi', 'Multi', 'US'); DELETE FROM location_markets" }]],
+      ["catalog", [{ kind: "update", sql: "UPDATE [sqlite_schema] SET sql = sql" }]],
+      ["master", [{ kind: "update", sql: "UPDATE `sqlite_master` SET sql = sql" }]],
+      ["writable", [{ kind: "create-table", sql: "CREATE TABLE \"writable_schema\" (id TEXT)" }]],
+      ["temp-table", [{ kind: "create-table", sql: "CREATE /*x*/ TeMp TABLE denied (id TEXT)" }]],
+      ["temporary-table", [{ kind: "create-table", sql: "CREATE TEMPORARY TABLE denied (id TEXT)" }]],
+      ["temp-trigger", [{ kind: "create-trigger", sql: "CREATE TEMP TRIGGER denied AFTER INSERT ON location_markets BEGIN SELECT 1; END" }]],
+      ["temp-index-declaration", [{ kind: "create-index", sql: "CREATE TEMP INDEX denied ON location_markets(id)" }]],
+      ["temporary-trigger", [{ kind: "create-trigger", sql: "CREATE \"TEMPORARY\" TRIGGER denied AFTER INSERT ON location_markets BEGIN SELECT 1; END" }]],
+      ["temp-index", [{ kind: "create-index", sql: "CREATE INDEX denied ON \"temp\" . location_markets(id)" }]],
+      ["attached-insert", [{ kind: "insert", sql: "INSERT INTO \"other\" . location_markets (id) VALUES ('x')" }]],
+      ["qualified-main", [{ kind: "update", sql: "UPDATE main.location_markets SET name = name" }]],
+      ["attached-trigger", [{ kind: "create-trigger", sql: "CREATE TRIGGER denied AFTER INSERT ON aux.location_markets BEGIN SELECT NEW.name; END" }]],
+      ["trigger-multi", [{ kind: "create-trigger", sql: "CREATE TRIGGER denied AFTER INSERT ON location_markets BEGIN SELECT 1; END; DROP TABLE location_markets" }]],
     ];
-
-    for (const [name, attempt] of attempts) {
-      const fixture = createTemporaryStagedDatabase();
-      try {
-        const handoff = createFinalizerHandoff(fixture.db, `g006b:forbidden:${name}`, (session) => {
-          session.insert(
-            "INSERT INTO location_markets (id, name, country_code) VALUES (?, ?, 'US')",
-            [`before-${name}`, `Before ${name}`],
-          );
-          attempt(session);
-        });
-        expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.db, handoff)).toThrowError(expect.objectContaining({
+    try {
+      for (const [name, plan] of attempts) {
+        expect(() => createFinalizerHandoff(fixture.path, `g006b:sql:${name}`, plan)).toThrowError(expect.objectContaining({
           code: "G006A_FINALIZER_SQL_REJECTED",
         }));
-        expect(fixture.db.prepare("SELECT id FROM location_markets WHERE id = ?").get(`before-${name}`)).toBeUndefined();
-        expect(classifySqliteSchemaV1(fixture.db).kind).toBe("staged");
-        expect(Number(fixture.db.pragma("writable_schema", { simple: true }))).toBe(0);
-        expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.db, handoff)).toThrowError(expect.objectContaining({
-          code: "G006A_FINALIZER_CONSUMED",
-        }));
-      } finally {
-        fixture.cleanup();
       }
-    }
-  });
-
-  it("rolls back normal callback failure, consumes the handoff, and deactivates escaped sessions", () => {
-    const fixture = createTemporaryStagedDatabase();
-    let escapedSession: SqliteSchemaV1FinalizerSession | undefined;
-    try {
-      const before = classifySqliteSchemaV1(fixture.db);
-      const handoff = createFinalizerHandoff(fixture.db, "g006b:failure:one-shot", (session) => {
-        escapedSession = session;
-        session.insert("INSERT INTO location_markets (id, name, country_code) VALUES ('interrupted', 'Interrupted', 'US')");
-        throw new Error("simulated interruption");
-      });
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.db, handoff)).toThrow(/simulated interruption/);
-      expect(fixture.db.inTransaction).toBe(false);
-      expect(fixture.db.prepare("SELECT id FROM location_markets WHERE id = 'interrupted'").get()).toBeUndefined();
-      expect(classifySqliteSchemaV1(fixture.db)).toEqual(before);
-      expect(() => escapedSession?.insert(
-        "INSERT INTO location_markets (id, name, country_code) VALUES ('escaped', 'Escaped', 'US')",
-      )).toThrowError(expect.objectContaining({ code: "G006A_FINALIZER_SQL_REJECTED" }));
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.db, handoff)).toThrowError(expect.objectContaining({
-        code: "G006A_FINALIZER_CONSUMED",
-      }));
+      expect(classifySqliteSchemaV1(fixture.db).kind).toBe("staged");
+      expect(Number(fixture.db.pragma("writable_schema", { simple: true }))).toBe(0);
     } finally {
       fixture.cleanup();
     }
   });
 
-  it("rolls back interrupted accepted-legacy finalizers and permits a fresh bound restart", () => {
-    const fixture = createTemporaryAcceptedLegacyDatabase();
+  it("binds mint-time rows, catalog, physical indexes, and user_version under the writer lock", () => {
+    const row = createTemporaryStagedDatabase();
+    const value = createTemporaryStagedDatabase();
+    const table = createTemporaryStagedDatabase();
+    const catalog = createTemporaryStagedDatabase();
+    const physical = createTemporaryStagedDatabase();
+    const version = createTemporaryStagedDatabase();
     try {
-      const before = classifySqliteSchemaV1(fixture.db);
-      const first = createFinalizerHandoff(fixture.db, "g006b:legacy:interruption-1", (session) => {
-        session.insert("INSERT INTO location_markets (id, name, country_code) VALUES ('legacy-interrupted', 'Interrupted', 'US')");
-        throw new Error("legacy interruption one");
-      });
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.db, first)).toThrow(/legacy interruption one/);
-      expect(fixture.db.prepare("SELECT id FROM location_markets WHERE id = 'legacy-interrupted'").get()).toBeUndefined();
-      expect(classifySqliteSchemaV1(fixture.db)).toEqual(before);
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.db, first)).toThrowError(expect.objectContaining({
-        code: "G006A_FINALIZER_CONSUMED",
+      const rowHandoff = createFinalizerHandoff(row.path, "g006b:drift:row", []);
+      row.db.prepare("INSERT INTO zip_codes (zip, city, state, county) VALUES ('80000', 'Drift', 'CO', 'Test')").run();
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(row.path, rowHandoff)).toThrowError(expect.objectContaining({
+        code: "G006A_ROW_COUNT_DRIFT",
+      }));
+      expect(classifySqliteSchemaV1(row.db).kind).toBe("staged");
+
+      value.db.prepare("INSERT INTO zip_codes (zip, city, state, county) VALUES ('80001', 'Original', 'CO', 'Test')").run();
+      const valueHandoff = createFinalizerHandoff(value.path, "g006b:drift:value", []);
+      value.db.prepare("UPDATE zip_codes SET city = 'Changed' WHERE zip = '80001'").run();
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(value.path, valueHandoff)).toThrowError(expect.objectContaining({
+        code: "G006A_PAYLOAD_DRIFT",
       }));
 
-      const retry = createFinalizerHandoff(fixture.db, "g006b:legacy:interruption-2", (session) => {
-        session.insert("INSERT INTO location_markets (id, name, country_code) VALUES ('legacy-retry', 'Retry', 'US')");
-        throw new Error("legacy interruption two");
-      });
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.db, retry)).toThrow(/legacy interruption two/);
-      expect(fixture.db.prepare("SELECT id FROM location_markets WHERE id = 'legacy-retry'").get()).toBeUndefined();
-      expect(classifySqliteSchemaV1(fixture.db)).toEqual(before);
+      const tableHandoff = createFinalizerHandoff(table.path, "g006b:drift:table", []);
+      table.db.exec("ALTER TABLE zip_codes ADD COLUMN unexpected_g006a TEXT");
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(table.path, tableHandoff)).toThrowError(expect.objectContaining({
+        code: "G006A_STATE_REJECTED",
+      }));
+
+      const catalogHandoff = createFinalizerHandoff(catalog.path, "g006b:drift:catalog", []);
+      catalog.db.exec("DROP INDEX idx_ai_usage_tenant_created");
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(catalog.path, catalogHandoff)).toThrowError(expect.objectContaining({
+        code: "G006A_STATE_REJECTED",
+      }));
+
+      insertPartialIndexProbeRows(physical.db);
+      const physicalHandoff = createFinalizerHandoff(physical.path, "g006b:drift:physical", []);
+      spoofNullWorkspacePartialIndex(physical.db);
+      physical.db.close();
+      physical.db = new Database(physical.path);
+      expect(classifySqliteSchemaV1(physical.db).kind).toBe("staged");
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(physical.path, physicalHandoff)).toThrowError(expect.objectContaining({
+        code: "G006A_INTEGRITY_CHECK_FAILED",
+      }));
+
+      const versionHandoff = createFinalizerHandoff(version.path, "g006b:drift:version", []);
+      version.db.pragma("user_version = 99");
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(version.path, versionHandoff)).toThrowError(expect.objectContaining({
+        code: "G006A_STATE_REJECTED",
+      }));
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(version.path, versionHandoff)).toThrowError(expect.objectContaining({
+        code: "G006A_FINALIZER_CONSUMED",
+      }));
     } finally {
-      fixture.cleanup();
+      row.cleanup();
+      value.cleanup();
+      table.cleanup();
+      catalog.cleanup();
+      physical.cleanup();
+      version.cleanup();
     }
   });
 
@@ -455,72 +566,64 @@ describe("G-006A staged SQLite schema and coordinator", () => {
       fixture.db.prepare("INSERT INTO zip_codes (zip, city, state, county) VALUES ('80000', 'Original', 'CO', 'Test')").run();
       const snapshot = captureSqliteSchemaV1PreservationSnapshot(fixture.db);
       expect(snapshot.tableNames).toHaveLength(37);
-      expect(snapshot.tableNames).toContain("zip_codes");
-      expect(snapshot.tableNames).toContain("audit_logs");
-      expect(snapshot.tableNames).toContain("compatibility_backfill_receipts");
+      expect(snapshot.tableNames).toEqual(expect.arrayContaining(["zip_codes", "audit_logs", "compatibility_backfill_receipts"]));
 
-      const deleteHandoff = createFinalizerHandoff(fixture.db, "g006b:preserve:zip-delete", (session) => {
-        session.delete("DELETE FROM zip_codes WHERE zip = ?", ["80000"]);
-      });
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.db, deleteHandoff)).toThrowError(expect.objectContaining({
+      const deleteHandoff = createFinalizerHandoff(fixture.path, "g006b:preserve:delete", [
+        { kind: "delete", sql: "DELETE FROM zip_codes WHERE zip = ?", binds: ["80000"] },
+      ]);
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, deleteHandoff)).toThrowError(expect.objectContaining({
         code: "G006A_ROW_COUNT_DRIFT",
       }));
       expect(fixture.db.prepare("SELECT city FROM zip_codes WHERE zip = '80000'").get()).toMatchObject({ city: "Original" });
 
-      const updateHandoff = createFinalizerHandoff(fixture.db, "g006b:preserve:zip-update", (session) => {
-        session.update("UPDATE zip_codes SET city = 'Changed' WHERE zip = ?", ["80000"]);
-      });
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.db, updateHandoff)).toThrowError(expect.objectContaining({
+      const updateHandoff = createFinalizerHandoff(fixture.path, "g006b:preserve:update", [
+        { kind: "update", sql: "UPDATE zip_codes SET city = 'Changed' WHERE zip = ?", binds: ["80000"] },
+      ]);
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, updateHandoff)).toThrowError(expect.objectContaining({
         code: "G006A_PAYLOAD_DRIFT",
       }));
       expect(fixture.db.prepare("SELECT city FROM zip_codes WHERE zip = '80000'").get()).toMatchObject({ city: "Original" });
-
-      const altered = captureSqliteSchemaV1PreservationSnapshot(fixture.db);
-      fixture.db.prepare("UPDATE zip_codes SET city = 'Out of band' WHERE zip = '80000'").run();
-      expect(() => assertSqliteSchemaV1Preservation(
-        altered,
-        captureSqliteSchemaV1PreservationSnapshot(fixture.db, altered),
-      )).toThrowError(expect.objectContaining({ code: "G006A_PAYLOAD_DRIFT" }));
     } finally {
       fixture.cleanup();
     }
   });
 
-  it("returns finalized only after exact fresh read-only reopen and closes the verifier", () => {
+  it("guards database_list and sqlite_temp_schema with closed fault modes and closes the writer", () => {
+    for (const mode of ["writer-attached-schema", "writer-temp-object"] as const) {
+      const fixture = createTemporaryStagedDatabase();
+      try {
+        const handoff = createFinalizerHandoff(fixture.path, `g006b:connection:${mode}`, []);
+        const boundary = createSqliteSchemaV1FreshVerifierTestBoundary(mode);
+        expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff, {
+          freshVerifierTestBoundary: boundary,
+        })).toThrowError(expect.objectContaining({ code: "G006A_CONNECTION_BOUNDARY_REJECTED" }));
+        expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff)).toThrowError(expect.objectContaining({
+          code: "G006A_FINALIZER_CONSUMED",
+        }));
+        expect(classifySqliteSchemaV1(fixture.db).kind).toBe("staged");
+      } finally {
+        fixture.cleanup();
+      }
+    }
+    expect(() => createSqliteSchemaV1FreshVerifierTestBoundary(
+      (() => new Database(":memory:")) as unknown as "fail-verifier-open",
+    )).toThrowError(expect.objectContaining({ code: "G006A_VERIFIER_BOUNDARY_REJECTED" }));
+  });
+
+  it("finalizes only after internal exact-path read-only reopen and closes writer and verifier", () => {
     const fixture = createTemporaryStagedDatabase();
-    let verifierOpenCount = 0;
-    let verifierCloseCount = 0;
     try {
-      const boundary = createSqliteSchemaV1FreshVerifierTestBoundary((databasePath) => {
-        verifierOpenCount += 1;
-        const verifier = new Database(databasePath, { readonly: true, fileMustExist: true });
-        const close = verifier.close.bind(verifier);
-        verifier.close = () => {
-          verifierCloseCount += 1;
-          close();
-          return verifier;
-        };
-        return verifier;
-      });
-      let callbackSawRawHandle = true;
-      let callbackBindingId: string | undefined;
-      let escapedSession: SqliteSchemaV1FinalizerSession | undefined;
-      const handoff = createFinalizerHandoff(fixture.db, "g006b:success:reopen", (session, context) => {
-        escapedSession = session;
-        callbackBindingId = context.handoffBindingId;
-        callbackSawRawHandle = ["prepare", "exec", "pragma", "transaction"].some((key) => key in session);
-        session.createTrigger(`
-          CREATE TRIGGER g006a_structural_token_probe
-          AFTER INSERT ON location_markets BEGIN
-            SELECT CASE WHEN NEW.name = 'PRAGMA writable_schema COMMIT END' THEN RAISE(IGNORE) END;
-          END
-        `);
-        session.dropTrigger("g006a_structural_token_probe");
-      });
-      const result = coordinateSqliteSchemaV1WholeUpgrade(fixture.db, handoff, {
-        freshVerifierTestBoundary: boundary,
-      });
-      expect(result).toMatchObject({
+      const handoff = createFinalizerHandoff(fixture.path, "g006b:success:reopen", [
+        {
+          kind: "create-trigger",
+          sql: `CREATE TRIGGER g006a_structural_token_probe
+            AFTER INSERT ON location_markets BEGIN
+              SELECT CASE WHEN NEW.name = 'PRAGMA writable_schema COMMIT END TEMP' THEN RAISE(IGNORE) END;
+            END`,
+        },
+        { kind: "drop-trigger", name: "g006a_structural_token_probe" },
+      ]);
+      expect(coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff)).toMatchObject({
         status: "finalized",
         state: {
           kind: "final",
@@ -529,14 +632,6 @@ describe("G-006A staged SQLite schema and coordinator", () => {
           targetColumnCount: 32,
         },
       });
-      expect(callbackSawRawHandle).toBe(false);
-      expect(callbackBindingId).toBe("g006b:success:reopen");
-      expect(verifierOpenCount).toBe(1);
-      expect(verifierCloseCount).toBe(1);
-      expect(() => escapedSession?.delete("DELETE FROM location_markets")).toThrowError(expect.objectContaining({
-        code: "G006A_FINALIZER_SQL_REJECTED",
-      }));
-
       fixture.db.close();
       const reopened = new Database(fixture.path, { readonly: true, fileMustExist: true });
       try {
@@ -546,28 +641,26 @@ describe("G-006A staged SQLite schema and coordinator", () => {
       } finally {
         reopened.close();
       }
+      fixture.db = new Database(fixture.path);
     } finally {
       fixture.cleanup();
     }
   });
 
-  it("reports committed-but-unverified recovery required when fresh reopen fails", () => {
+  it("reports committed-but-unverified recovery required when the fresh reopen fails", () => {
     const fixture = createTemporaryStagedDatabase();
     try {
-      const handoff = createFinalizerHandoff(fixture.db, "g006b:reopen:failure", () => undefined);
-      const boundary = createSqliteSchemaV1FreshVerifierTestBoundary(() => {
-        throw new Error("simulated verifier open failure");
-      });
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.db, handoff, {
+      const handoff = createFinalizerHandoff(fixture.path, "g006b:reopen:failure", []);
+      const boundary = createSqliteSchemaV1FreshVerifierTestBoundary("fail-verifier-open");
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff, {
         freshVerifierTestBoundary: boundary,
       })).toThrowError(expect.objectContaining({
         code: "G006A_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
         committed: true,
         status: "committed-unverified-recovery-required",
       }));
-      expect(fixture.db.inTransaction).toBe(false);
       expect(classifySqliteSchemaV1(fixture.db).kind).toBe("final");
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.db, handoff)).toThrowError(expect.objectContaining({
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, handoff)).toThrowError(expect.objectContaining({
         code: "G006A_FINALIZER_CONSUMED",
       }));
       fixture.db.close();
@@ -577,6 +670,28 @@ describe("G-006A staged SQLite schema and coordinator", () => {
       } finally {
         reopened.close();
       }
+      fixture.db = new Database(fixture.path);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("rolls back ordinary accepted-legacy plan failures and allows a fresh capability", () => {
+    const fixture = createTemporaryAcceptedLegacyDatabase();
+    try {
+      const before = classifySqliteSchemaV1(fixture.db);
+      const first = createFinalizerHandoff(fixture.path, "g006b:legacy:failure-1", duplicateMarketPlan("legacy-failure"));
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, first)).toThrow();
+      expect(fixture.db.prepare("SELECT id FROM location_markets WHERE id = 'legacy-failure'").get()).toBeUndefined();
+      expect(classifySqliteSchemaV1(fixture.db)).toEqual(before);
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, first)).toThrowError(expect.objectContaining({
+        code: "G006A_FINALIZER_CONSUMED",
+      }));
+
+      const retry = createFinalizerHandoff(fixture.path, "g006b:legacy:failure-2", duplicateMarketPlan("legacy-retry"));
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path, retry)).toThrow();
+      expect(fixture.db.prepare("SELECT id FROM location_markets WHERE id = 'legacy-retry'").get()).toBeUndefined();
+      expect(classifySqliteSchemaV1(fixture.db)).toEqual(before);
     } finally {
       fixture.cleanup();
     }
@@ -586,33 +701,14 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     const fixture = createTemporaryStagedDatabase();
     try {
       insertFoundation(fixture.db);
-      const insertAccess = fixture.db.prepare(`
-        INSERT INTO user_market_access (tenant_id, workspace_id, user_id, market_id)
-        VALUES (?, ?, ?, ?)
-      `);
-      insertAccess.run(TENANT_A, null, "null-workspace-user", MARKET);
-      insertAccess.run(TENANT_A, WORKSPACE_A, "workspace-user", MARKET);
+      insertPartialIndexProbeRows(fixture.db, false);
       fixture.db.pragma(`user_version = ${SQLITE_SCHEMA_V1_FINAL_USER_VERSION}`);
-      const expectedSql = indexSql(fixture.db, "g006r_user_market_access_null_identity");
-      fixture.db.exec(`
-        DROP INDEX g006r_user_market_access_null_identity;
-        CREATE UNIQUE INDEX g006r_user_market_access_null_identity
-          ON user_market_access(tenant_id, user_id, market_id)
-          WHERE workspace_id IS NOT NULL;
-      `);
-      fixture.db.unsafeMode(true);
-      fixture.db.pragma("writable_schema = ON");
-      fixture.db.prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'index' AND name = 'g006r_user_market_access_null_identity'")
-        .run(expectedSql);
-      fixture.db.pragma("writable_schema = OFF");
-      fixture.db.unsafeMode(false);
+      spoofNullWorkspacePartialIndex(fixture.db);
       fixture.db.close();
-
-      const spoofed = new Database(fixture.path);
-      fixture.db = spoofed;
-      expect(sqliteCatalogDigest(spoofed)).toBe(SQLITE_SCHEMA_V1_CATALOG_DIGEST);
-      expect(classifySqliteSchemaV1(spoofed).kind).toBe("final");
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(spoofed)).toThrowError(expect.objectContaining({
+      fixture.db = new Database(fixture.path);
+      expect(sqliteCatalogDigest(fixture.db)).toBe(SQLITE_SCHEMA_V1_CATALOG_DIGEST);
+      expect(classifySqliteSchemaV1(fixture.db).kind).toBe("final");
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path)).toThrowError(expect.objectContaining({
         code: "G006A_INTEGRITY_CHECK_FAILED",
       }));
     } finally {
@@ -620,14 +716,14 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("replays exact final state and detects row-count, payload, and foreign-key failures", () => {
+  it("replays exact file-backed final state and retains row, payload, scope, and foreign-key guards", () => {
     const payloadDb = createAcceptedLegacyDatabase();
     const countDb = createAcceptedLegacyDatabase();
     const scopeDb = createAcceptedLegacyDatabase();
-    const foreignKeyDb = createStagedDatabase();
+    const foreignKey = createTemporaryStagedDatabase();
+    const replay = createTemporaryStagedDatabase();
     try {
       const payloadBefore = captureSqliteSchemaV1PreservationSnapshot(payloadDb);
-      expect(payloadBefore.tableNames).toHaveLength(37);
       payloadDb.prepare("UPDATE settings SET max_calls_per_day = max_calls_per_day + 1 WHERE id = 1").run();
       expect(() => assertSqliteSchemaV1Preservation(
         payloadBefore,
@@ -650,32 +746,31 @@ describe("G-006A staged SQLite schema and coordinator", () => {
         captureSqliteSchemaV1PreservationSnapshot(scopeDb, scopeBefore),
       )).toThrowError(expect.objectContaining({ code: "G006A_PAYLOAD_DRIFT" }));
 
-      foreignKeyDb.pragma("foreign_keys = OFF");
-      foreignKeyDb.prepare(`
+      foreignKey.db.pragma("foreign_keys = OFF");
+      foreignKey.db.prepare(`
         INSERT INTO lead_notes (id, lead_id, author_user_id, body, tenant_id, workspace_id)
         VALUES ('orphan', 'missing', 'actor', 'orphan', ?, NULL)
       `).run(TENANT_A);
-      foreignKeyDb.pragma("foreign_keys = ON");
-      foreignKeyDb.pragma(`user_version = ${SQLITE_SCHEMA_V1_FINAL_USER_VERSION}`);
-      expect(() => assertSqliteSchemaV1DatabaseHealth(foreignKeyDb)).toThrowError(expect.objectContaining({
+      foreignKey.db.pragma("foreign_keys = ON");
+      foreignKey.db.pragma(`user_version = ${SQLITE_SCHEMA_V1_FINAL_USER_VERSION}`);
+      expect(() => assertSqliteSchemaV1DatabaseHealth(foreignKey.db)).toThrowError(expect.objectContaining({
         code: "G006A_FOREIGN_KEY_CHECK_FAILED",
       }));
-      expect(() => coordinateSqliteSchemaV1WholeUpgrade(foreignKeyDb)).toThrowError(expect.objectContaining({
+      expect(() => coordinateSqliteSchemaV1WholeUpgrade(foreignKey.path)).toThrowError(expect.objectContaining({
         code: "G006A_FOREIGN_KEY_CHECK_FAILED",
       }));
 
-      const replay = createStagedDatabase();
-      try {
-        replay.pragma(`user_version = ${SQLITE_SCHEMA_V1_FINAL_USER_VERSION}`);
-        expect(coordinateSqliteSchemaV1WholeUpgrade(replay)).toMatchObject({ status: "replayed", state: { kind: "final" } });
-      } finally {
-        replay.close();
-      }
+      replay.db.pragma(`user_version = ${SQLITE_SCHEMA_V1_FINAL_USER_VERSION}`);
+      expect(coordinateSqliteSchemaV1WholeUpgrade(replay.path)).toMatchObject({
+        status: "replayed",
+        state: { kind: "final" },
+      });
     } finally {
       payloadDb.close();
       countDb.close();
       scopeDb.close();
-      foreignKeyDb.close();
+      foreignKey.cleanup();
+      replay.cleanup();
     }
   });
 });
@@ -725,25 +820,57 @@ function createTemporaryAcceptedLegacyDatabase(): TemporaryDatabaseFixture {
 }
 
 function createFinalizerHandoff(
-  db: Database.Database,
+  databasePath: string,
   handoffBindingId: string,
-  execute: (session: SqliteSchemaV1FinalizerSession, context: SqliteSchemaV1LaterFinalizerContext) => void,
+  plan: SqliteSchemaV1FinalizerPlan,
 ): SqliteSchemaV1FinalizerHandoff {
-  const state = classifySqliteSchemaV1(db);
-  if (state.kind !== "staged" && state.kind !== "accepted-legacy") {
-    throw new Error(`cannot create finalizer handoff from ${state.kind}`);
-  }
   return Object.freeze({
     capability: createSqliteSchemaV1LaterFinalizerCapability({
-      db,
+      databasePath,
       handoffBindingId,
-      sourceState: state.kind,
-      sourceCatalogDigest: state.catalogDigest,
       targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
-      execute,
+      plan,
     }),
     handoffBindingId,
   });
+}
+
+function duplicateMarketPlan(id: string): SqliteSchemaV1FinalizerPlan {
+  const operation = {
+    kind: "insert" as const,
+    sql: "INSERT INTO location_markets (id, name, country_code) VALUES (?, ?, ?)",
+    binds: [id, "Failure", "US"],
+  };
+  return [operation, { ...operation }];
+}
+
+function insertPartialIndexProbeRows(db: Database.Database, withFoundation = true): void {
+  if (withFoundation) insertFoundation(db);
+  const insert = db.prepare(`
+    INSERT INTO user_market_access (tenant_id, workspace_id, user_id, market_id)
+    VALUES (?, ?, ?, ?)
+  `);
+  insert.run(TENANT_A, null, "null-workspace-user", MARKET);
+  insert.run(TENANT_A, WORKSPACE_A, "workspace-user", MARKET);
+}
+
+function spoofNullWorkspacePartialIndex(db: Database.Database): void {
+  const expectedSql = indexSql(db, "g006r_user_market_access_null_identity");
+  db.exec(`
+    DROP INDEX g006r_user_market_access_null_identity;
+    CREATE UNIQUE INDEX g006r_user_market_access_null_identity
+      ON user_market_access(tenant_id, user_id, market_id)
+      WHERE workspace_id IS NOT NULL;
+  `);
+  db.unsafeMode(true);
+  db.pragma("writable_schema = ON");
+  try {
+    db.prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'index' AND name = 'g006r_user_market_access_null_identity'")
+      .run(expectedSql);
+  } finally {
+    db.pragma("writable_schema = OFF");
+    db.unsafeMode(false);
+  }
 }
 
 function createEmptyDatabase(): Database.Database {
