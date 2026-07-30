@@ -1607,3 +1607,30 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   coordinator, PostgreSQL/session regressions, typecheck, zero-warning lint,
   build, recovery and diff/scope gates are required. Stop on any fourth path,
   G006B edit, inability to reconstruct full replay input, or need for C1-C6.
+
+## G-006C0 immutable-source review launch
+
+- Terra-medium producer source `55cf5f8` is frozen as exactly one commit over
+  dispatch control `b79a10c`, adding only the three authorized C0 paths. The
+  source worktree is clean. It does not edit G006B, schema, queries, startup,
+  writers, PostgreSQL, actions or workers, and it performs no merge, remote,
+  production, provider, paid or customer action.
+- Producer evidence reports focused C0 12/12, full accepted G006B 71/71, and
+  coordinator/PostgreSQL/session regressions 64/64 passing, together with
+  typecheck, zero-warning lint, production build, exact 37-table recovery,
+  diff/scope/blob exclusion and zero-new-residue gates. These remain producer
+  claims until independent review. A transient audit warning was disproved:
+  both the source and integration `queries.ts` copies resolve to Git blob
+  `41a5dc190f40e54a956c63201aa5d702b5fce32c`, have identical SHA-256 and bytes,
+  and have a zero `--no-index` diff.
+- Architecture independently owns replay-result derivation, backend and
+  lifecycle discrimination, C1-C6 consumer contract, exact selector evidence,
+  API minimality and path/public-signature exclusions. Security independently
+  owns descriptor/proxy races, caller-result rejection, G006B error
+  preservation, capability forgery/copy/cross-binding rejection, fresh
+  fail-closed behavior, PostgreSQL isolation and storage-scope-not-auth.
+- Both reviews are read-only against exact source
+  `55cf5f8fe9d2e249c51535fc4f60bca3a3851310`; neither may accept, merge, repair
+  or expand scope. Sol separately owns executable quality, receipt accuracy,
+  source attribution, gate reproduction and final acceptance. G006C1-C6 and
+  final G006B/G006 activation remain closed.
