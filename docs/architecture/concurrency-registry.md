@@ -2463,3 +2463,36 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   `C:\Users\Masih\Documents\NovaTradeWorktrees\g006b-finalization` from this
   launch control. It has no acceptance authority. Architecture/security review,
   Sol merged-control gates and truthful receipt evidence remain mandatory.
+
+## G-006B-B2 API review and corrected producer authorization
+
+- Terra-medium returns GO with six changed paths and confirms the existing
+  Windows publisher vocabulary can durably publish B2 PREPARED/COMMITTED without
+  a script edit. Its first choreography proposed an exported coordinator helper
+  accepting a caller-owned `better-sqlite3` connection inside an existing
+  transaction. Architecture and security both REPAIR that seam before any edit:
+  an intended sole caller is not runtime enforcement, and raw prepared-database
+  possession must not bypass B1/B2 lineage, native lease or terminal ownership.
+- Sol requires the corrected ownership boundary. G006B authenticates B1,
+  publishes durable B2 PREPARED and retains its native no-replace lease. It then
+  privately mints an unexposed, fieldless, one-shot WeakMap handoff bound to the
+  exact B1/B2 IDs and hashes, canonical/native identity, prepared preservation/
+  foundation/catalog evidence and fixed final target. No database, lease,
+  callback, replay payload or raw artifact crosses the boundary.
+- The coordinator receives only that handoff, burns it before hostile input or
+  database work, then owns exact-path open, its own file/connection lease,
+  `BEGIN IMMEDIATE`, the fixed seventeen-table rebuild, rollback/commit, close
+  and postcommit final verification. G006B remains awaiting with the native lease,
+  independently reopens and native-verifies the result, then publishes B2
+  COMMITTED. Forgery/copy/proxy/replay/cross-file/cross-binding attempts fail.
+- A static live-binding module cycle is permitted only with no top-level
+  dereference or invocation and a focused initialization regression. The
+  existing generic later-finalizer capability continues rejecting prepared
+  state. Any raw-DB prepared helper, public prepared mint, seventh changed path,
+  publisher change, C0/C1/C2/startup edit or activation is a stop.
+- Terra-medium confirms GO on that exact correction with zero edits. Sol now
+  authorizes implementation in the isolated B2 worktree within the six changed
+  paths; publisher bytes are a mandatory protected invariant. Producer tests,
+  truthful append-only receipts, one attributable commit and clean source are
+  required before immutable architecture/security review. No self-acceptance,
+  integration merge, persistent finalization or external activity is authorized.
