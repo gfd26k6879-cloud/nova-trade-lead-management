@@ -1283,3 +1283,27 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   assertions do not count. The receipt must bind current control revision and
   distinguish direct tests from separate host probes. The repair producer may
   not merge, expand scope, rewrite history or self-accept.
+- The Terra-medium producer completed bounded repair commit `9dc6742` as exactly
+  one commit over `6c8c2dc`, modifying only the same four authorized B1 files
+  and leaving the Platform worktree clean. The repair replaces one-shot native
+  create/publish authority with one long-lived broker: native create-time
+  handles retain every owned FileId, publication uses handle-based no-replace
+  rename plus Node challenge/release, and cleanup traverses only broker-owned
+  handles. Archive files are written directly into retained owned files; no
+  exporter-created child or current pathname is inspected to claim ownership.
+- Producer evidence reports the complete focused matrix passing 36/36 in
+  174.69 seconds, a post-final-helper-hash native subset passing 10/10,
+  typecheck, zero-warning full lint, production build, 76 related regressions
+  with two environment-gated PostgreSQL skips, the exact 37-table recovery
+  verifier, PowerShell parsing and exact normalized helper pin. The final
+  process/path audit reported zero publisher or workspace Node processes and
+  zero G006B lock/temp/staging residue. These are producer claims, not
+  acceptance.
+- Fresh post-repair acceptance now returns to the three independent specialist
+  lanes at the four-agent ceiling. Security owns the previously reproduced
+  deletion and 12/12 final-path exploits plus retained broker/two-publisher/
+  exit-14/cleanup review; architecture owns the exact production union, async
+  inspection snapshot, journal/restart/error taxonomy and artifact semantics;
+  quality owns substantive matrix and receipt accuracy plus repository gates.
+  Sol retains sole merge and acceptance authority; B1 remains locked and
+  unmerged.
