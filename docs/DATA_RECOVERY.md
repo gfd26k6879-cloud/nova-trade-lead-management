@@ -38,10 +38,12 @@ are not accepted as the binding.
 
 Schema 4 separates a row's logical archive identity from its database primary
 key. Every table manifest entry reports `physicalPrimaryKey`, all usable
-non-partial column-only `uniqueKeys` (including index name, ordered columns,
-and null-distinct behavior), `rowIdentity`, and `nullableIdentityColumns`.
-Physical key metadata is evidence about the source schema; it does not redefine
-the archive identity.
+column-only `uniqueKeys` (including index name, ordered columns, normalized
+partial predicate, and null-distinct behavior), `rowIdentity`, and
+`nullableIdentityColumns`. Physical key metadata is evidence about the source
+schema; it does not redefine the archive identity. A table without a physical
+primary key reports an empty list; logical-identity validation still applies,
+but no synthetic empty physical key is compared across rows.
 
 Only these logical identities changed from schema 3:
 
@@ -59,12 +61,28 @@ identities, and nulls fail closed. The only nullable identity component is
 `user_market_access.workspace_id`; its null token is distinct from every string,
 including the literal string `"null"`.
 
-Schema-4 export requires every identity column and an exact SQLite primary or
-non-partial unique key over the ordered identity. Import requires an exact
-PostgreSQL primary or unique key over the same ordered columns. The nullable
-`user_market_access` identity additionally requires PostgreSQL `NULLS NOT
-DISTINCT`, so `ON CONFLICT` handles a null workspace deterministically. Import
-conflict targets, preserved-reference matching, and post-import ordering all use
+Schema-4 export requires every identity column and exact SQLite uniqueness. A
+non-nullable identity uses the matching primary key or a non-partial unique
+index over the ordered identity. SQLite cannot make nulls equal in an ordinary
+four-column unique index, so `user_market_access` requires this exact partial
+index family:
+
+```text
+UNIQUE (tenant_id, user_id, market_id) WHERE workspace_id IS NULL
+UNIQUE (tenant_id, workspace_id, user_id, market_id) WHERE workspace_id IS NOT NULL
+```
+
+Both members must be column-only, in the stated order, with the normalized
+predicate shown. A missing member, expression, reordered column, predicate
+drift, or ordinary four-column index fails both export and read-only recovery
+verification.
+
+Import requires an exact, valid, ready, immediate PostgreSQL primary or unique
+arbiter over the ordered identity. Deferrable unique constraints are rejected
+before import because PostgreSQL `ON CONFLICT` cannot use them as arbiters. The
+nullable `user_market_access` identity additionally requires `NULLS NOT
+DISTINCT`, so null workspace conflicts are deterministic. Import conflict
+targets, preserved-reference matching, and post-import ordering all use
 `rowIdentity`, not the physical primary key.
 
 Schema 3 remains a frozen recovery format for a pre-G-006 SQLite snapshot. It
@@ -224,10 +242,13 @@ skipped: 2
 ```
 
 The fixture-only SQLite source supplies the schema-4 tenant/source columns and
-logical unique keys without changing application SQLite schema. This is a
-recovery-contract test adapter only; G-006 still owns the actual SQLite schema
-migration. The fixture also includes a null-workspace `user_market_access` row
-and a matching source-scoped place parent/observation.
+logical unique keys without changing application SQLite schema. Its
+`user_market_access` table intentionally has no physical primary key and uses
+the exact two-member partial index family above. The focused matrix proves two
+distinct logical grants, including a null workspace, export and validate while
+a duplicate null-workspace identity fails. This is a recovery-contract test
+adapter only; G-006 still owns the actual SQLite schema migration. The fixture
+also includes a matching source-scoped place parent/observation.
 
 The fixture-only PostgreSQL baseline supplies the minimal `worker_runs` shape
 required by the downstream stale-cleanup index and the five scheduler/feedback
@@ -237,8 +258,9 @@ scaffolding, not an application schema workaround. `pgcrypto`, `pg_net`, and
 whose historical approver binding is later revoked, a completed deletion job
 retaining its tombstone, earlier and latest checkpoint events, the T-028
 receipt, exact checksums/counts, policy booleans, JSONB object types, sequence
-proof, trigger cleanup, and negative rollback. It never uses `nosite-leads.db`,
-customer data, Supabase, a remote database, or external writes.
+proof, trigger cleanup, deferrable-arbiter preflight rejection, and negative
+rollback. It never uses `nosite-leads.db`, customer data, Supabase, a remote
+database, or external writes.
 
 Before final validation, reread
 `supabase/migrations/202607270010_add_compatibility_tenant_backfill.sql` so the

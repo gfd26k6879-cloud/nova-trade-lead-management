@@ -10,10 +10,12 @@ import {
   LEGACY_DATA_EXPORT_SCHEMA_VERSION,
   TENANT_INTEGRITY_CONTRACT_VERSION,
   encodeRowIdentity,
+  loadSqliteUniqueKeyMetadata,
   parseCliArgs,
   quoteIdent,
   sanitizeRawGoogleReviewJson,
   sha256,
+  sqliteKeyMetadataSupportsIdentity,
   tableContractsForSchemaVersion,
 } from "./data-transfer-contract.mjs";
 
@@ -71,7 +73,7 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir, sch
       if (legacySchema3 && !sameStringArray(actualPrimaryKey, contract.physicalPrimaryKey)) {
         throw new Error(`${contract.name}: SQLite primary key does not match the recovery contract`);
       }
-      const uniqueKeys = legacySchema3 ? [] : loadSqliteUniqueKeys(db, contract.name);
+      const uniqueKeys = legacySchema3 ? [] : loadSqliteUniqueKeyMetadata(db, contract.name);
 
       const excluded = new Set(contract.excludedColumns);
       const sourceColumns = schema.map(({ name }) => String(name));
@@ -86,10 +88,8 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir, sch
           throw new Error(`${contract.name}: schema-${schemaVersion} row identity column ${identityColumn} is missing from SQLite`);
         }
       }
-      if (!legacySchema3
-        && !sameStringArray(actualPrimaryKey, contract.rowIdentity)
-        && !uniqueKeys.some((key) => sameStringArray(key.columns, contract.rowIdentity))) {
-        throw new Error(`${contract.name}: schema-${schemaVersion} row identity requires an exact SQLite primary or unique key`);
+      if (!legacySchema3 && !sqliteKeyMetadataSupportsIdentity(actualPrimaryKey, uniqueKeys, contract)) {
+        throw new Error(`${contract.name}: schema-${schemaVersion} row identity lacks exact SQLite unique enforcement`);
       }
       const rawCredentialColumns = columns.filter((column) => /(?:^|_)(?:password|secret|credential|access_token|refresh_token|api_key)(?:_|$)/i.test(column));
       if (rawCredentialColumns.length > 0) {
@@ -139,20 +139,6 @@ export function exportSqliteData({ dbPath: inputDbPath, outDir: inputOutDir, sch
   } finally {
     db.close();
   }
-}
-
-function loadSqliteUniqueKeys(db, tableName) {
-  return db.prepare(`PRAGMA index_list(${quoteIdent(tableName)})`).all()
-    .filter((index) => Number(index.unique) === 1 && Number(index.partial) === 0 && String(index.origin) !== "pk")
-    .map((index) => {
-      const columns = db.prepare(`PRAGMA index_xinfo(${quoteIdent(String(index.name))})`).all()
-        .filter((column) => Number(column.key) === 1)
-        .sort((left, right) => Number(left.seqno) - Number(right.seqno));
-      if (columns.length === 0 || columns.some((column) => Number(column.cid) < 0 || typeof column.name !== "string")) return null;
-      return { name: String(index.name), columns: columns.map((column) => String(column.name)), nullsNotDistinct: false };
-    })
-    .filter(Boolean)
-    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
 }
 
 function sanitizeExportRow(tableName, row, rowIndex) {

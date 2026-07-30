@@ -75,6 +75,13 @@ const schema4RowIdentities = new Map([
   ["api_usage_events", ["tenant_id", "source_card_id", "id"]],
 ]);
 
+const schema4SqliteNullableIdentityIndexFamilies = new Map([
+  ["user_market_access", [
+    { columns: ["tenant_id", "user_id", "market_id"], predicate: "workspace_id IS NULL" },
+    { columns: ["tenant_id", "workspace_id", "user_id", "market_id"], predicate: "workspace_id IS NOT NULL" },
+  ]],
+]);
+
 function buildContracts(schemaVersion) {
   return Object.freeze(schema3Definitions.map((definition) => Object.freeze({
     name: definition.name,
@@ -87,6 +94,14 @@ function buildContracts(schemaVersion) {
       schemaVersion === DATA_EXPORT_SCHEMA_VERSION && definition.name === "user_market_access"
         ? ["workspace_id"]
         : [],
+    ),
+    sqliteNullableIdentityIndexFamily: Object.freeze(
+      (schemaVersion === DATA_EXPORT_SCHEMA_VERSION
+        ? schema4SqliteNullableIdentityIndexFamilies.get(definition.name) ?? []
+        : []).map((key) => Object.freeze({
+          columns: Object.freeze([...key.columns]),
+          predicate: key.predicate,
+        })),
     ),
     physicalPrimaryKey: Object.freeze([...(definition.primaryKey ?? [])]),
     jsonbColumns: Object.freeze([...(definition.jsonbColumns ?? [])]),
@@ -656,18 +671,20 @@ export function validateDataExportDirectory(inputDir) {
       }
       seenRowIdentities.add(encodedIdentity);
 
-      const primaryKey = physicalPrimaryKey.map((column) => {
-        const value = row[column];
-        if (value === null || value === undefined || value === "") {
-          throw new Error(`${contract.name}[${rowIndex}]: physical primary key column ${column} is empty`);
+      if (physicalPrimaryKey.length > 0) {
+        const primaryKey = physicalPrimaryKey.map((column) => {
+          const value = row[column];
+          if (value === null || value === undefined || value === "") {
+            throw new Error(`${contract.name}[${rowIndex}]: physical primary key column ${column} is empty`);
+          }
+          return value;
+        });
+        const encodedPrimaryKey = JSON.stringify(primaryKey);
+        if (seenPhysicalPrimaryKeys.has(encodedPrimaryKey)) {
+          throw new Error(`${contract.name}: duplicate physical primary key at row ${rowIndex}`);
         }
-        return value;
-      });
-      const encodedPrimaryKey = JSON.stringify(primaryKey);
-      if (seenPhysicalPrimaryKeys.has(encodedPrimaryKey)) {
-        throw new Error(`${contract.name}: duplicate physical primary key at row ${rowIndex}`);
+        seenPhysicalPrimaryKeys.add(encodedPrimaryKey);
       }
-      seenPhysicalPrimaryKeys.add(encodedPrimaryKey);
     }
 
     tables.set(contract.name, {
@@ -715,17 +732,27 @@ function assertUniqueKeyMetadata(value, columns, tableName) {
   const seen = new Set();
   for (const [index, key] of value.entries()) {
     assertRecord(key, `${tableName}: uniqueKeys[${index}] must be an object`);
-    assertExactKeys(key, ["name", "columns", "nullsNotDistinct"], `${tableName}: uniqueKeys[${index}]`);
+    assertExactKeys(key, ["name", "columns", "predicate", "nullsNotDistinct"], `${tableName}: uniqueKeys[${index}]`);
     if (typeof key.name !== "string" || key.name.length === 0) {
       throw new Error(`${tableName}: uniqueKeys[${index}].name must be a non-empty string`);
     }
     assertStringArray(key.columns, `${tableName}: uniqueKeys[${index}].columns`);
+    if (key.columns.length === 0) throw new Error(`${tableName}: uniqueKeys[${index}].columns must not be empty`);
     assertUnique(key.columns, `${tableName}: uniqueKeys[${index}].columns`);
     if (key.columns.some((column) => !columns.includes(column))) {
       throw new Error(`${tableName}: uniqueKeys[${index}] references a missing column`);
     }
     if (typeof key.nullsNotDistinct !== "boolean") {
       throw new Error(`${tableName}: uniqueKeys[${index}].nullsNotDistinct must be boolean`);
+    }
+    if (key.nullsNotDistinct) {
+      throw new Error(`${tableName}: SQLite unique metadata cannot use NULLS NOT DISTINCT`);
+    }
+    if (key.predicate !== null && (typeof key.predicate !== "string" || key.predicate.length === 0)) {
+      throw new Error(`${tableName}: uniqueKeys[${index}].predicate must be null or a non-empty string`);
+    }
+    if (key.predicate !== normalizeSqlitePredicate(key.predicate)) {
+      throw new Error(`${tableName}: uniqueKeys[${index}].predicate is not normalized`);
     }
     const encoded = JSON.stringify(key.name);
     if (seen.has(encoded)) throw new Error(`${tableName}: uniqueKeys contains duplicate metadata`);
@@ -734,8 +761,74 @@ function assertUniqueKeyMetadata(value, columns, tableName) {
 }
 
 function keyMetadataSupportsIdentity(physicalPrimaryKey, uniqueKeys, contract) {
-  if (contract.nullableIdentityColumns.length === 0 && sameStringArray(physicalPrimaryKey, contract.rowIdentity)) return true;
-  return uniqueKeys.some((key) => sameStringArray(key.columns, contract.rowIdentity));
+  return sqliteKeyMetadataSupportsIdentity(physicalPrimaryKey, uniqueKeys, contract);
+}
+
+export function loadSqliteUniqueKeyMetadata(db, tableName) {
+  return db.prepare(`PRAGMA index_list(${quoteIdent(tableName)})`).all()
+    .filter((index) => Number(index.unique) === 1 && String(index.origin) !== "pk")
+    .map((index) => {
+      const name = String(index.name);
+      const columns = db.prepare(`PRAGMA index_xinfo(${quoteIdent(name)})`).all()
+        .filter((column) => Number(column.key) === 1)
+        .sort((left, right) => Number(left.seqno) - Number(right.seqno));
+      if (columns.length === 0 || columns.some((column) => Number(column.cid) < 0 || typeof column.name !== "string")) return null;
+      const partial = Number(index.partial) === 1;
+      const schemaRow = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?").get(name);
+      const predicate = partial ? normalizeSqliteIndexPredicate(schemaRow?.sql, tableName, name) : null;
+      return {
+        name,
+        columns: columns.map((column) => String(column.name)),
+        predicate,
+        nullsNotDistinct: false,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+export function sqliteKeyMetadataSupportsIdentity(physicalPrimaryKey, uniqueKeys, contract) {
+  if (contract.nullableIdentityColumns.length === 0) {
+    return sameStringArray(physicalPrimaryKey, contract.rowIdentity)
+      || uniqueKeys.some((key) => key.predicate === null && sameStringArray(key.columns, contract.rowIdentity));
+  }
+  return contract.sqliteNullableIdentityIndexFamily.length > 0
+    && contract.sqliteNullableIdentityIndexFamily.every((required) => uniqueKeys.some((key) => (
+      key.nullsNotDistinct === false
+      && key.predicate === required.predicate
+      && sameStringArray(key.columns, required.columns)
+    )));
+}
+
+function normalizeSqliteIndexPredicate(createSql, tableName, indexName) {
+  if (typeof createSql !== "string") {
+    throw new Error(`${tableName}: partial unique index ${indexName} has no inspectable definition`);
+  }
+  const match = /\bWHERE\b([\s\S]+?)\s*;?\s*$/i.exec(createSql);
+  if (!match) throw new Error(`${tableName}: partial unique index ${indexName} has no predicate`);
+  return normalizeSqlitePredicate(match[1]);
+}
+
+function normalizeSqlitePredicate(value) {
+  if (typeof value !== "string") return value;
+  let normalized = value.trim().replace(/;\s*$/, "").replace(/\s+/g, " ");
+  while (normalized.startsWith("(") && normalized.endsWith(")") && hasSingleOuterParenthesisPair(normalized)) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  const workspaceNull = /^(?:workspace_id|"workspace_id"|`workspace_id`|\[workspace_id\])\s+IS\s+(NOT\s+)?NULL$/i.exec(normalized);
+  if (workspaceNull) return `workspace_id IS ${workspaceNull[1] ? "NOT " : ""}NULL`;
+  return normalized;
+}
+
+function hasSingleOuterParenthesisPair(value) {
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === "(") depth += 1;
+    else if (value[index] === ")") depth -= 1;
+    if (depth === 0 && index < value.length - 1) return false;
+    if (depth < 0) return false;
+  }
+  return depth === 0;
 }
 
 function parseJsonFile(filePath, label) {

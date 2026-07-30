@@ -175,6 +175,7 @@ async function loadTargetSchema(sql) {
       WHERE namespace_record.nspname = 'public'
         AND table_class.relname IN (${tablePlaceholders})
         AND index_record.indisunique
+        AND index_record.indimmediate
         AND index_record.indisvalid
         AND index_record.indisready
         AND index_record.indpred IS NULL
