@@ -1120,3 +1120,10 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   verification. Tenant/workspace/owner/policy/receipt/configuration values come
   only from the explicit inputs and database evidence; no customer value is
   global, defaulted, or inferred.
+- The accepted G-023 seed includes decimal `0.55`, which cannot be nested in
+  the outer sidecar's safe-integers-only canonical grammar. Sol preserved both
+  contracts: `g023` stores the full validated seed and accepted binding as
+  exact canonical UTF-8 JSON strings plus their SHA-256 identities and summary
+  IDs. Replay parses, revalidates, rebinds, and requires byte-for-byte canonical
+  equality. The accepted play is unchanged and the outer numeric grammar is
+  not widened.
