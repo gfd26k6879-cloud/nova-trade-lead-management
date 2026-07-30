@@ -891,3 +891,16 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   followed by a deterministic test-only sentinel: precommit sentinels attach to
   the original constraint failure, while a cleanup-only postcommit close maps
   to committed-unverified and leaves the final database replayable.
+- Round-6 producer source `87795a7ade9eb8ce51ee249d8adc7ac3e3d34341`
+  is exactly one commit over rejected `9756f93`, changes only the coordinator,
+  its focused test, and its validation receipt, and leaves the Platform
+  worktree clean. Producer evidence reports focused Vitest 34/34, typecheck,
+  full lint, the 37-table recovery verifier, diff/scope checks, and zero
+  residue; the schema-pin file is unchanged.
+- Fresh domain/security and independent Quality rereviews are active against
+  immutable `87795a7`. They must independently recheck the full falsey matrix,
+  cleanup-primary precedence and phase order across every repaired site,
+  precommit rollback, postcommit committed-unverified replay, capability and
+  file-lease lifecycle, and all prior round-1 through round-5 invariants. No
+  merge or acceptance is authorized until both pass and Sol validates the
+  merged integration branch.
