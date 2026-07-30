@@ -375,3 +375,29 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   uniqueness including `NULLS NOT DISTINCT`, audit the seven-path ceiling, and
   confirm G-006A/B, G-007/G-008, runtime, G-004B, and external boundaries remain
   untouched. `recovery-contract` remains held during review.
+
+## G-006R review rejection and repair round 1
+
+- Source `9087af7d73b7174a3683b771b877bf40eb0fd1ab` is rejected and must not be
+  merged or accepted. Both independent reviewers reproduced a P1: schema 4
+  encodes an empty physical-primary-key column list as the same `[]` tuple for
+  every row, so the second valid logical row is falsely rejected after G-006
+  removes the legacy SQLite primary key.
+- Independent Quality review also reproduced a P2: PostgreSQL target discovery
+  accepts a deferrable exact unique constraint even though it cannot arbitrate
+  the later `ON CONFLICT`. Target preflight must require an immediate unique
+  arbiter and reject `indimmediate = false` before import.
+- Repair round 1 remains within the same seven-path G-006R ceiling. Required
+  regressions cover two distinct rows with no physical primary key, duplicate
+  nullable logical identity rejection, null versus the literal string `null`,
+  and rejection of deferrable PostgreSQL uniqueness. Existing schema-3 and
+  schema-4 evidence must be rerun on the repaired immutable commit.
+- SQLite partial-index enforcement for the nullable `user_market_access`
+  workspace identity is a mandatory G-006A handoff: that child must either
+  validate the exact null/non-null partial-index family or define and validate
+  an equivalent explicit NULL guard. G-006R may validate logical rows but must
+  not claim that the current ordinary SQLite unique index physically enforces
+  NULL equality.
+- `recovery-contract` remains held. No merge, acceptance, release, external
+  action, SQLite schema change, or G-006A implementation is authorized during
+  this repair.
