@@ -1144,3 +1144,25 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   caller-controlled `publisherScriptPath` was identified as a candidate
   release-blocking authority injection and is explicitly under independent
   review; no merge, lock release, or downstream unlock is authorized.
+- All three fresh reviews rejected source `07a2129`. Reproducible P1 findings
+  are arbitrary PowerShell execution and forged native evidence through the
+  caller-selected helper, deletion of pre-existing or post-validation-swapped
+  caller files, mutation of a byte-identical replacement database before its
+  different FileId is noticed, missing stable read snapshots, incompatibility
+  with the application's persisted WAL mode, and failure to carry the durable
+  committed state through later verification/publication/cleanup. The native
+  lane also found source/destination pathname races because file handles allow
+  concurrent writes/deletes and exact-existing publication is not reopened.
+- The reviewers confirmed the exact four-path scope, canonical G-023 `0.55`
+  binding, schema-3 37-table-plus-manifest archive, all-row type-tagged
+  preservation, and four-table-only mutation. Full lint, typecheck, focused and
+  regression tests, recovery verification, PowerShell parsing, local NTFS and
+  OneDrive rejection checks passed, but passing gates do not override the
+  confirmed defects or the missing mandatory fault/tamper/concurrency matrix.
+- Sol rejected integration and retained all B1 locks. A bounded read-only repair
+  preflight now occupies the three specialist lanes at the four-agent ceiling:
+  native/restart owns WAL, database leasing, snapshot and publisher race
+  closure; architecture owns immutable input, exact handoff pins and cleanup
+  ownership; quality owns the complete executable repair matrix. The repair
+  must remain within the same four files and will be a new attributable delta,
+  never an amendment or history rewrite.
