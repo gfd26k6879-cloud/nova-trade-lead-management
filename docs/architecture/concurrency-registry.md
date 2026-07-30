@@ -2058,3 +2058,36 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   actor/session/worker fact, persistent audit, caller activation, scope inference
   or an additional path is a stop. This replacement preserves all 318 cards and
   defers—not deletes or duplicates—the G009/G010/G013 authority conversion.
+
+## G-006C2A producer result and immutable-source review launch
+
+- Terra-medium produced exact source `db501cc` as one clean commit over
+  replacement dispatch control `fb13a10`. Its four new paths are the permit
+  module, owned fixture, focused test and validation receipt; every previously
+  tracked path is unchanged. The implementation is fieldless, private-WeakMap,
+  lifecycle-bound, exact-scope, one-shot and explicitly non-authorizing, with no
+  SQL, database handle, public barrel or production caller wiring.
+- Focused C2A passes 36/36. Mandatory regressions pass: C0 12/12, C1 53/53 with
+  its intentional parent-only worker skip, G006A 37/37, PostgreSQL client/session
+  27/27 and supplemental readiness 30/30. Typecheck and full zero-warning ESLint
+  pass. The producer reports 458 preserved baseline blobs, zero unexpected call
+  sites, zero C2A/C0/C1 temporary roots and zero worktree-bound processes.
+- Two corrected attempts remain disclosed: a fixture imported a digest from the
+  wrong owner before any test case ran, and a two-database immutability proof hit
+  Vitest's default five-second case timeout only while deliberately contending
+  with three other heavy gates. The corrected import passes; the filesystem case
+  has a bounded 15-second timeout and passes in the final isolated 36/36 run.
+- Sol's pre-review scope and protected-blob audit passes, but finds one P3 receipt
+  accuracy issue: this worktree did run `npm ci` before producer dispatch and the
+  resulting 14 audit findings were observed in this packet environment. The
+  receipt instead says `node_modules` was already present and attributes the
+  finding only to an inherited G002 run. Source remains unmerged and unaccepted;
+  that wording must be repaired together with any independent review findings.
+- Architecture and security now review immutable source `db501cc` independently.
+  Architecture owns deep-module/API minimality, lifecycle and one-shot semantics,
+  C2B/C consumption compatibility, non-activation and later-card preservation.
+  Security owns binding forgery, selector snapshot/proxy/accessor behavior,
+  capability copying/replay/burn semantics, confused-deputy/non-authority claims,
+  cleanup containment and failure disclosure. Reviewers may run focused local
+  checks but cannot edit, commit, merge, accept, access blocked roots or perform
+  external activity. Sol alone authorizes a bounded repair and final merge.
