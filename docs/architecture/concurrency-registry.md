@@ -1248,3 +1248,38 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   contract; quality is verifying that five grouped tests substantively cover
   every required matrix row and that the receipt matches the actual evidence.
   Sol retains the sole acceptance and merge authority; B1 locks remain held.
+- All fresh reviewers rejected repair source `6c8c2dc`; it remains local,
+  clean, unmerged and unaccepted. A disposable runtime proof confirmed that a
+  predictable pre-existing derived temp is deleted even when the invocation
+  never created it, and a second proof confirmed post-validation replacement is
+  also deleted. Native exact-existing publication returned success with an
+  attacker replacement at the final pathname in 12/12 disposable races because
+  its verification handle shared delete and the branch returned a stale
+  identity without a no-delete reopen.
+- Architecture additionally confirmed that nested manifest arrays can execute
+  getters or proxy traps before rejection; the production union publicly
+  exposes fault injection; inspection pins are neither one stable transaction
+  nor post-final-close native evidence; resume does not require the current
+  journal mode to equal PREPARED; helper exit 14 loses its published-unverified
+  recovery classification; replay cleanup-only failure falls through to an
+  invalid ordinary error; and archive-entry temps are not ownership-tracked or
+  restart-cleaned. These defects block B1 even though scope, typecheck, lint,
+  focused/regression tests, recovery verification, helper pin/parser and the
+  accepted T-028/G-023/four-table/WAL behavior otherwise passed.
+- Sol authorizes one bounded Terra-medium repair delta on top of `6c8c2dc`,
+  still limited to the same four B1 paths and retaining every conformant behavior.
+  It must use unpredictable per-invocation resources plus a create-time native
+  FileId/volume ownership ledger, never inspect-to-claim; track and safely clean
+  every archive temp; validate all nested descriptors before observation; remove
+  fault authority from the production union; make inspection a retained-lease,
+  single-snapshot, post-close pin operation; bind resume to PREPARED journal
+  mode; preserve published-unverified and known-committed error taxonomy; and
+  close both exact-existing and moved publisher rename/replacement races.
+- Acceptance requires executable, independently reviewable coverage for the
+  complete hostile publisher/PATH, deep input, pre-existing resource, swapped
+  replacement, DELETE/WAL, concurrent WAL, byte-identical database replacement,
+  native publisher, every pin/hash, real postcommit failure, restart-state and
+  raw/semantic self-rehashed tamper matrix. Grouped labels or static source
+  assertions do not count. The receipt must bind current control revision and
+  distinguish direct tests from separate host probes. The repair producer may
+  not merge, expand scope, rewrite history or self-accept.
