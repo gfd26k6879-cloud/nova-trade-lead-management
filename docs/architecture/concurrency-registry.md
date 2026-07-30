@@ -2150,3 +2150,15 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   validation result, behavior, third cumulative path, external action or
   self-acceptance is permitted. The same reviewers must verify the exact one-line
   delta before merge eligibility.
+
+## G-006C2A lineage-repair result and final rereview
+
+- Terra-medium completed receipt-only commit `3cba1d0` directly atop `27582d1`.
+  Its exact delta is one path and one hunk: one ambiguous lineage line becomes
+  explicit full pre-repair baseline `db501cc...` and repair commit `27582d1...`.
+  `git diff --check` passes, cumulative scope remains four paths and the source
+  worktree is clean. Tests were correctly not rerun for this receipt-only edit.
+- The same architecture and security reviewers now inspect exact tip `3cba1d0`
+  only for lineage closure and delta integrity. No edit, commit, merge,
+  acceptance, blocked-root access or external activity is authorized. Sol alone
+  decides source eligibility and merged-control validation.
