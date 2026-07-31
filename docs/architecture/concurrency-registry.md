@@ -2578,3 +2578,55 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   temporary, does not enter Git, and must be removed after all repair validation
   completes. Independent immutable architecture and security review follow the
   producer; Sol remains the sole final acceptance and merge authority.
+
+## Linux cross-OS checkpoint after G-006B-B2
+
+Date: 2026-07-31
+
+Status: **Paused with G-006B-B2 accepted and merged; no later card is active.**
+
+- Rejected source `5d246fa477fffd9abb8615862f76e8836c1b0f7a`
+  remains preserved in history. Architecture, security, and Quality each
+  rejected it because full retained policy payload and coordinator-transaction
+  preservation binding were incomplete.
+- Corrected source `e235d173ec1c5550f2d1f49d8b643daa0a38bf43`
+  on `codex/nova-g006b-finalization-resume` passed independent architecture,
+  security, and Quality review with no blocking finding. It remains a relevant
+  provenance branch but is already included in integration.
+- The source was merged non-fast-forward into
+  `codex/nova-multitenant-integration` at
+  `77f8d652100b0f2d52c32218c38dca50e83876e3`.
+- The startup-disabled B2 API/artifact checkpoint is accepted. Parent G-006B,
+  final G-006A activation, G-006C, and parent G-006 remain open. All 318 cards,
+  Q-040, and T-029 remain preserved.
+- Source validation passed on Windows: focused 3/3, complete two-file 111/111,
+  TypeScript, focused ESLint, and diff checks. The merged focused matrix also
+  passed 3/3. Full application tests, build, browser, PostgreSQL, Linux, remote,
+  and production checks were not run for this proportional checkpoint.
+- Runtime capacity remains four total agents: one Sol final conductor and at
+  most three bounded non-root agents. Terra-medium remains the approved fallback
+  implementer only; it cannot accept its own work. All three review agents are
+  complete and active non-root agent count is zero.
+- `sqlite-schema`, `database-adapter`, and `integration-ledger` are released for
+  the pause. No card or resource lock is held. The next conductor must reacquire
+  exact locks only after explicit resume and a fresh source-truth review.
+- Thirteen registered worktrees were audited clean; none was removed. The
+  repair worktree's conductor-created `node_modules` junction was removed after
+  its exact link and target were verified. The real integration
+  `node_modules` directory was not touched.
+- Zero G006B test/helper processes remain. Three unrecorded synthetic roots
+  (`g006b-b1-nNolsg`, `g006b-b1-RCR62L`, and `g006b-b1-YeaNOl`) remain
+  untouched as Windows-only pre-Linux residuals; all three roots and descendants
+  contain zero reparse points. The previously documented `g006b-b1-ZKgBDT`,
+  `g006b-b1-Y18U0Y`, and `g006b-identity-cleanup-qjkSgV` residuals also remain
+  untouched. These absolute paths are immutable Windows provenance and do not
+  transfer through Git.
+- No push, PR, deployment, remote migration, provider/paid call, production or
+  customer-data access, outreach, account change, credential change, or
+  destructive Git operation occurred.
+
+The next permissible action is not G-006C2B. After an explicit user resume on
+Linux, first verify the fresh clone and current integration tip, then perform a
+read-only Sol reconciliation for finalized-only G-006C0/G-006C1 reminting and
+G-006C2A consumption against the accepted B2 final contract. Implementation
+requires a new bounded packet and fresh locks. Silence is not approval.
