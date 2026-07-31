@@ -323,3 +323,6 @@ only if real tenant-filtered plan evidence proves it. The SQLite portion remains
 paused behind G-006 finalized-binding work; G-006C2B is unopened. No hosted
 Supabase, remote migration, push, PR, deployment, production, provider, or
 credential action occurred.
+
+The accepted G-007P2 source commit is
+`a0472e6d13839d27d6ae133f92e1202f1f7c9185`.

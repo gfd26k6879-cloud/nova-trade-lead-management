@@ -72,3 +72,6 @@ paused G-006 finalized-binding lane, and G-006C2B remains unopened.
 No push, pull request, deployment, hosted Supabase access, remote migration,
 production access, provider call, credential change, or other external mutation
 occurred.
+
+Accepted source commit:
+`a0472e6d13839d27d6ae133f92e1202f1f7c9185`.
