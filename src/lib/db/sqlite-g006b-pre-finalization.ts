@@ -211,6 +211,7 @@ export interface SqliteG006bPreparedFinalizationEvidence {
   readonly sourceFileId: string;
   readonly sourceVolumeSerialNumber: string;
   readonly sourcePreservationAggregateSha256: string;
+  readonly tenantPolicyProjectedPayloadDigest: string;
   readonly tenantId: string;
   readonly workspaceId: string;
   readonly targetUserVersion: typeof SQLITE_SCHEMA_V1_FINAL_USER_VERSION;
@@ -296,6 +297,10 @@ interface PreservationEvidence {
   readonly transformAggregateSha256: string;
   readonly audit: PreservationTable;
   readonly relationshipOrphanCount: 0;
+}
+
+interface FinalizationTenantPolicyProjection extends PreservationTable {
+  readonly coordinatorPayloadDigest: string;
 }
 
 interface G023Evidence {
@@ -1406,9 +1411,34 @@ function finalizationPreservationBaseline(baseline: PreservationEvidence): Prese
   return Object.freeze({ ...baseline, tables: Object.freeze(tables) });
 }
 
+function captureFinalizationTenantPolicyProjection(
+  db: Database.Database,
+): FinalizationTenantPolicyProjection {
+  const available = (db.prepare(`PRAGMA table_info(${quoteIdentifier("tenant_policies")})`).all() as Array<{ name: string }>)
+    .map(({ name }) => name);
+  if (!available.includes("compatibility_policy_hash")) {
+    return fail("G006B_EVIDENCE_DRIFT", "tenant policy compatibility projection column");
+  }
+  const columns = available.filter((column) => column !== "compatibility_policy_hash");
+  const rows = db.prepare(
+    `SELECT ${columns.map(quoteIdentifier).join(", ")} FROM ${quoteIdentifier("tenant_policies")}`,
+  ).all() as Array<Record<string, unknown>>;
+  const encodedRows = rows.map((row) => canonicalRow(columns, row)).sort(compareCodeUnits);
+  return Object.freeze({
+    name: "tenant_policies",
+    columns: Object.freeze(columns),
+    rowCount: rows.length,
+    payloadSha256: sha256Bytes(
+      `${PRESERVATION_DOMAIN}TABLE\0tenant_policies\0${JSON.stringify(encodedRows)}`,
+    ),
+    coordinatorPayloadDigest: sha256Bytes(JSON.stringify(encodedRows)),
+  });
+}
+
 function sameFinalizationPreservation(
   baseline: PreservationEvidence,
   final: PreservationEvidence,
+  tenantPolicyProjection: FinalizationTenantPolicyProjection,
 ): boolean {
   if (baseline.algorithm !== final.algorithm
       || baseline.domain !== final.domain
@@ -1424,7 +1454,15 @@ function sameFinalizationPreservation(
     if (!actual) return false;
     if (table.name !== "tenant_policies") return sameCanonical(table, actual);
     const expectedColumns = table.columns.filter((column) => column !== "compatibility_policy_hash");
-    return sameCanonical(expectedColumns, actual.columns) && table.rowCount === actual.rowCount;
+    const expected = {
+      name: tenantPolicyProjection.name,
+      columns: tenantPolicyProjection.columns,
+      rowCount: tenantPolicyProjection.rowCount,
+      payloadSha256: tenantPolicyProjection.payloadSha256,
+    };
+    return sameCanonical(expectedColumns, tenantPolicyProjection.columns)
+      && table.rowCount === tenantPolicyProjection.rowCount
+      && sameCanonical(expected, actual);
   });
 }
 
@@ -2359,11 +2397,37 @@ function finalizationMutationEvidence(): Record<string, CanonicalValue> {
   };
 }
 
+function finalizationTenantPolicyProjection(
+  input: ValidatedFinalizationInput,
+  source: AuthenticatedB1FinalizationSource,
+): FinalizationTenantPolicyProjection {
+  const baseline = source.prepared.payload.preservation as unknown as PreservationEvidence;
+  const db = new Database(input.replay.backupPath, { readonly: true, fileMustExist: true });
+  try {
+    assertAcceptedState(db, input.replay.expectedAcceptedPhysicalManifestDigest);
+    if (!samePreservation(baseline, capturePreservation(db, baseline))) {
+      fail("G006B_EVIDENCE_DRIFT", "B2 policy projection backup baseline");
+    }
+    const projection = captureFinalizationTenantPolicyProjection(db);
+    const baselinePolicy = baseline.tables.find((table) => table.name === "tenant_policies");
+    const expectedColumns = baselinePolicy?.columns.filter((column) => column !== "compatibility_policy_hash");
+    if (!baselinePolicy
+        || !sameCanonical(expectedColumns, projection.columns)
+        || baselinePolicy.rowCount !== projection.rowCount) {
+      fail("G006B_EVIDENCE_DRIFT", "B2 policy projection baseline");
+    }
+    return projection;
+  } finally {
+    db.close();
+  }
+}
+
 function finalizationPreparedPayload(
   input: ValidatedFinalizationInput,
   source: AuthenticatedB1FinalizationSource,
 ): Record<string, unknown> {
   const sourcePreservation = source.prepared.payload.preservation as unknown as PreservationEvidence;
+  const tenantPolicyProjection = finalizationTenantPolicyProjection(input, source);
   return {
     operationId: input.replay.operationId,
     source: {
@@ -2391,6 +2455,7 @@ function finalizationPreparedPayload(
       transformAggregateSha256: sourcePreservation.transformAggregateSha256,
       auditPayloadSha256: sourcePreservation.audit.payloadSha256,
       relationshipOrphanCount: sourcePreservation.relationshipOrphanCount,
+      tenantPolicyProjection,
     },
     sourceSchema: {
       userVersion: SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION,
@@ -2422,6 +2487,13 @@ function assertFinalizationPreparedPayload(
   if (!sameCanonical(payload, finalizationPreparedPayload(input, source))) {
     fail("G006B_EVIDENCE_DRIFT", "B2 PREPARED fixed payload/linkage");
   }
+}
+
+function finalizationTenantPolicyProjectionPin(
+  prepared: FinalizationRecordEnvelope,
+): FinalizationTenantPolicyProjection {
+  const preservation = prepared.payload.preservation as Record<string, unknown>;
+  return preservation.tenantPolicyProjection as FinalizationTenantPolicyProjection;
 }
 
 async function retainFinalizationRecord(
@@ -2513,6 +2585,7 @@ function assertFinalState(db: Database.Database): ReturnType<typeof classifySqli
 async function verifyFinalizedDatabase(
   input: ValidatedFinalizationInput,
   source: AuthenticatedB1FinalizationSource,
+  prepared: FinalizationRecordEnvelope,
   lease: NativeDatabaseLease,
 ): Promise<{ database: Record<string, CanonicalValue>; verification: Record<string, unknown> }> {
   const settled = await lease.settle();
@@ -2535,7 +2608,11 @@ async function verifyFinalizedDatabase(
     const state = assertFinalState(db);
     const baseline = source.prepared.payload.preservation as unknown as PreservationEvidence;
     const preservation = capturePreservation(db, finalizationPreservationBaseline(baseline));
-    if (!sameFinalizationPreservation(baseline, preservation)) {
+    if (!sameFinalizationPreservation(
+      baseline,
+      preservation,
+      finalizationTenantPolicyProjectionPin(prepared),
+    )) {
       fail("G006B_EVIDENCE_DRIFT", "B2 final full-row preservation");
     }
     const counts = sourceCounts(db);
@@ -2682,7 +2759,7 @@ export async function runSqliteG006bFinalization(
       if (readCurrentSchemaKind(input.replay.databasePath) !== "final") {
         fail("G006B_RECOVERY_REQUIRED", "B2 replay requires final database");
       }
-      const verified = await verifyFinalizedDatabase(input, source, lease);
+      const verified = await verifyFinalizedDatabase(input, source, prepared, lease);
       const expectedCommitted = finalizationCommittedPayload(input, source, prepared, verified);
       if (!sameCanonical(committed.payload, expectedCommitted)) {
         fail("G006B_RECOVERY_REQUIRED", "B2 COMMITTED differs from independently reopened final state");
@@ -2718,6 +2795,8 @@ export async function runSqliteG006bFinalization(
           sourceFileId: currentNative.fileId,
           sourceVolumeSerialNumber: currentNative.volumeSerialNumber,
           sourcePreservationAggregateSha256: input.replay.expectedPreservationAggregateSha256,
+          tenantPolicyProjectedPayloadDigest:
+            finalizationTenantPolicyProjectionPin(prepared).coordinatorPayloadDigest,
           tenantId: input.replay.manifest.tenantId,
           workspaceId: input.replay.manifest.workspaceId,
           targetUserVersion: SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
@@ -2741,7 +2820,7 @@ export async function runSqliteG006bFinalization(
       } else {
         databaseFinalized = true;
       }
-      const verified = await verifyFinalizedDatabase(input, source, lease);
+      const verified = await verifyFinalizedDatabase(input, source, prepared, lease);
       const committed = await publishFinalizationEnvelope(
         input,
         "committed",

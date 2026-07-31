@@ -17,6 +17,7 @@ import Database from "better-sqlite3";
 
 import {
   consumeSqliteG006bPreparedFinalizationHandoffForCoordinator,
+  hashSqliteG006bDomain,
   type SqliteG006bPreparedFinalizationHandoff,
 } from "./sqlite-g006b-pre-finalization";
 
@@ -39,6 +40,13 @@ import {
 export const ACCEPTED_LEGACY_SQLITE_CATALOG_DIGEST = "07091889ff9806c20356f092d3812ff325f22537c63a56149eea7dab0a529ade" as const;
 export const SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST = "90117968b064e6bded92dbf82c18fffa31951c0998c727f662eee56e78721ba6" as const;
 export const SQLITE_SCHEMA_V1_PHYSICAL_MANIFEST_DIGEST = "07e10bb5c43d98d6f561d3c0b0f9f39a9ad2d579ed1a73b9e2a7a455367fdf79" as const;
+const G006B_PRESERVATION_DOMAIN = "NOVATRADE\0G006B\0B1\0PRESERVATION\0V1\0" as const;
+const G006B_B1_POST_ONLY_SOURCE_CARD_TABLES = new Set<string>([
+  "place_cache",
+  "places_master",
+  "place_observations",
+  "api_usage_events",
+]);
 const G006B_B2_REBUILD_TABLES = Object.freeze([
   ...SQLITE_SCHEMA_V1_TRANSFORM_TABLES,
   "tenant_policies",
@@ -756,6 +764,7 @@ export function finalizeSqliteSchemaV1PreparedFromG006b(
       || !/^g006b:v1:[0-9a-f]{64}$/u.test(evidence.sourceCommittedHandoffId)
       || !/^[0-9a-f]{64}$/u.test(evidence.sourceBindingHash)
       || !/^[0-9a-f]{64}$/u.test(evidence.sourcePreservationAggregateSha256)
+      || !/^[0-9a-f]{64}$/u.test(evidence.tenantPolicyProjectedPayloadDigest)
       || !/^[0-9a-f]{32}$/u.test(evidence.sourceFileId)
       || !/^[0-9]+$/u.test(evidence.sourceVolumeSerialNumber)
       || evidence.finalizationPreparedHandoffId !== `g006b-finalization:v1:${evidence.finalizationPreparedRecordSha256}`
@@ -803,7 +812,21 @@ export function finalizeSqliteSchemaV1PreparedFromG006b(
       }
       assertPreparedLegacyLocationRows(writer);
       assertPreparedLegacyFoundation(writer, evidence.tenantId, evidence.workspaceId);
+      const sourcePreservationAggregate = g006bSourcePreservationAggregateSha256(writer);
+      if (sourcePreservationAggregate !== evidence.sourcePreservationAggregateSha256) {
+        throw new SqliteSchemaV1CoordinatorError(
+          "G006A_SOURCE_SNAPSHOT_DRIFT",
+          "G-006B source preservation aggregate",
+        );
+      }
       preservation = captureSqliteG006bFinalizationPreservationSnapshot(writer);
+      if (preservation.tables.tenant_policies?.payloadDigest
+          !== evidence.tenantPolicyProjectedPayloadDigest) {
+        throw new SqliteSchemaV1CoordinatorError(
+          "G006A_SOURCE_SNAPSHOT_DRIFT",
+          "G-006B tenant policy projection",
+        );
+      }
       sqliteOwnedState = captureSqliteOwnedState(writer);
 
       rebuildPreparedLegacyTransformTables(writer);
@@ -1055,6 +1078,26 @@ function assertFinalLegacyLocationRows(db: Database.Database): void {
   if (Number(row.invalid) !== 0) {
     throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_POSTCONDITION_FAILED", "legacy-zip location-mode projection");
   }
+}
+
+function g006bSourcePreservationAggregateSha256(db: Database.Database): string {
+  const summaries = readApplicationTableNames(db).map((name) => {
+    const columns = readTableColumns(db, name).filter((column) => !(
+      column === "source_card_id" && G006B_B1_POST_ONLY_SOURCE_CARD_TABLES.has(name)
+    ));
+    const projection = columns.map(quoteIdentifier).join(", ");
+    const rows = db.prepare(`SELECT ${projection} FROM ${quoteIdentifier(name)}`).all() as Array<Record<string, unknown>>;
+    const encodedRows = rows.map((row) => canonicalRow(columns, row)).sort(compareCodeUnits);
+    return {
+      name,
+      columns,
+      rowCount: rows.length,
+      payloadSha256: sha256(
+        `${G006B_PRESERVATION_DOMAIN}TABLE\0${name}\0${JSON.stringify(encodedRows)}`,
+      ),
+    };
+  });
+  return hashSqliteG006bDomain(`${G006B_PRESERVATION_DOMAIN}AGGREGATE\0`, summaries);
 }
 
 function captureSqliteG006bFinalizationPreservationSnapshot(

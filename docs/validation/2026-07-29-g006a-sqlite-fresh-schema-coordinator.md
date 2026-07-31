@@ -544,3 +544,53 @@ This remains an artifact-only finalization capability. It does not wire
 startup, activate the database, authorize providers, or expand G-006A's
 existing general finalizer surface. No external or production activity
 occurred.
+
+## G-006B-B2 preservation-binding repair
+
+The first immutable finalization source,
+`5d246fa477fffd9abb8615862f76e8836c1b0f7a`, was independently rejected by
+architecture, security, and quality review. The decisive defects were that the
+post-commit verifier compared only the projected `tenant_policies` columns and
+row count rather than its retained payload, and that the coordinator no longer
+reproved the authenticated B1 preservation aggregate inside its own
+`BEGIN IMMEDIATE` transaction. That source remains preserved as rejected
+history and is not accepted by this receipt.
+
+The repair derives a full compatibility-column-excluded tenant-policy
+projection from the retained, authenticated B1 backup. B2 PREPARED binds both
+the G-006B domain payload hash and the coordinator-compatible payload digest.
+Exact PREPARED validation independently re-derives that projection from the
+backup on execute, resume, and replay. The opaque handoff carries only the
+bound digest.
+
+After acquiring its exact-path root lease, opening the writer, and entering
+`BEGIN IMMEDIATE`, the coordinator now recomputes the complete B1
+37-application-table preservation aggregate. It excludes only the four
+B1-added `source_card_id` columns that were absent from the accepted legacy
+baseline. The aggregate must match the authenticated B1 pin before any rebuild.
+The coordinator then captures the B2 preservation projection and requires the
+tenant-policy payload digest to match B2 PREPARED before mutation. The
+post-settle verifier compares the complete retained policy projection again.
+
+The repaired negative coverage rejects wrong B2 PREPARED and COMMITTED handoff
+pins, rejects a changed retained tenant-policy payload during
+committed-unverified resume, preserves the absent B2 COMMITTED artifact on that
+rejection, and rejects null-prototype, frozen-plain-object, and proxy handoff
+forgeries through both private entry points.
+
+Observed Windows validation for this repair:
+
+- Focused execute/replay, committed-unverified resume, and direct-forgery
+  matrix: 3/3 selected tests passed across 2 files; 108 skipped; exit 0;
+  50.70 seconds.
+- Complete B2/B1 and coordinator regression: 111/111 tests passed across
+  2 files; exit 0; 1001.88 seconds Vitest duration and 1003.1 seconds command
+  wall time.
+- Node 24.13.1, Vitest 4.0.18 TypeScript no-emit check: passed.
+- Focused ESLint over both source files and both test files: passed with zero
+  output.
+- Diff whitespace check: passed.
+
+No publisher or canonical schema-v1 source file changed. No later card,
+startup activation, provider call, customer data, remote migration, push,
+deployment, paid activity, or production mutation was authorized or performed.

@@ -425,6 +425,18 @@ describe("G-006B B1 SQLite pre-finalization", () => {
 
     const preparedId = (JSON.parse(readFileSync(finalization.finalizationPreparedPath, "utf8")) as { handoffId: string }).handoffId;
     const committedId = (JSON.parse(readFileSync(finalization.finalizationCommittedPath, "utf8")) as { handoffId: string }).handoffId;
+    await expect(runSqliteG006bFinalization({
+      ...finalization,
+      mode: "finalize-replay",
+      expectedFinalizationPreparedHandoffId: `g006b-finalization:v1:${"0".repeat(64)}`,
+      expectedFinalizationCommittedHandoffId: committedId,
+    })).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
+    await expect(runSqliteG006bFinalization({
+      ...finalization,
+      mode: "finalize-replay",
+      expectedFinalizationPreparedHandoffId: preparedId,
+      expectedFinalizationCommittedHandoffId: `g006b-finalization:v1:${"0".repeat(64)}`,
+    })).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
     leaseProcesses.commands.splice(0);
     await expect(runSqliteG006bFinalization({
       ...finalization,
@@ -519,6 +531,22 @@ describe("G-006B B1 SQLite pre-finalization", () => {
       mode: "finalize-resume",
       expectedFinalizationPreparedHandoffId: handoffId(afterFinalization.finalizationPreparedPath),
     };
+    const finalDatabaseBytes = readFileSync(afterCommit.databasePath);
+    const tamperedPolicy = new Database(afterCommit.databasePath);
+    tamperedPolicy.prepare(`
+      UPDATE tenant_policies
+      SET locale = 'fr-FR', version = version + 1
+      WHERE id = ?
+    `).run(afterCommit.manifest.policyId);
+    tamperedPolicy.close();
+    await expect(runSqliteG006bFinalization(afterResume)).rejects.toMatchObject({
+      code: "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
+      committed: true,
+      status: "committed-unverified-recovery-required",
+      detail: "B2 final full-row preservation",
+    });
+    expect(existsSync(afterFinalization.finalizationCommittedPath)).toBe(false);
+    writeFileSync(afterCommit.databasePath, finalDatabaseBytes);
     leaseProcesses.commands.splice(0);
     await expect(runSqliteG006bFinalization(afterResume)).resolves.toMatchObject({
       mode: "finalize-resume",

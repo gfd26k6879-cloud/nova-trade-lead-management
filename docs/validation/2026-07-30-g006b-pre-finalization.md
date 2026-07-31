@@ -155,3 +155,54 @@ B2 execute/resume/replay and direct-forgery rows. No external service,
 authenticated environment, customer data, push, deploy, production system, or
 paid call was used. Build and broader application suites were not rerun for
 this receipt and are not claimed.
+
+## G-006B-B2 rejected-source repair delta
+
+The immutable source
+`5d246fa477fffd9abb8615862f76e8836c1b0f7a` was rejected by all three
+independent read-only reviews and remains preserved as rejected history. The
+architecture review found that the final verifier projected away
+`tenant_policies.compatibility_policy_hash` but compared only the remaining
+column names and row count, allowing changed retained policy payloads to pass.
+The security review also found that a same-file write admitted by the outer
+Windows share mode could occur after B1 verification but before the
+coordinator transaction because the authenticated B1 preservation aggregate
+was not reproved under the coordinator's writer lock. The quality review
+confirmed both findings and requested stronger pin and forgery coverage.
+
+The repair computes the compatibility-column-excluded tenant-policy payload
+from the retained B1 backup after verifying its accepted physical state and
+complete preservation baseline. B2 PREPARED authenticates that projection.
+Execute, resume, and replay re-derive it from the same retained backup before
+accepting PREPARED. The coordinator receives only its pinned payload digest
+through the opaque one-shot handoff.
+
+Inside the coordinator-owned `BEGIN IMMEDIATE` and before any mutation, the
+complete 37-table B1 preservation aggregate is recomputed with only the four
+B1-added `source_card_id` columns projected back out. It must match the
+authenticated B1 aggregate. The coordinator's B2 preservation snapshot must
+also match the PREPARED tenant-policy payload digest. After commit and the
+single native settle, the final verifier hashes the complete retained
+tenant-policy projection and compares it with the PREPARED pin.
+
+Additional negative rows prove that wrong B2 PREPARED and COMMITTED handoff
+pins are rejected before replay, retained tenant-policy payload tampering is
+reported as committed-unverified recovery required without publishing B2
+COMMITTED, and null-prototype, frozen plain-object, and proxy handoffs cannot
+enter either the private consumer or coordinator.
+
+Observed repair validation on Windows:
+
+- Focused repaired matrix: 3/3 selected tests passed across 2 files;
+  108 skipped; exit 0; 50.70 seconds.
+- Complete B2/B1 and coordinator regression: 111/111 tests passed across
+  2 files; exit 0; 1001.88 seconds Vitest duration and 1003.1 seconds command
+  wall time.
+- Node 24.13.1 with Vitest 4.0.18; TypeScript no-emit passed.
+- Focused ESLint over the four changed TypeScript files passed with no output.
+- `git diff --check` passed.
+
+The protected Windows publisher and canonical schema-v1 source remain
+byte-unchanged. No external service, authenticated environment, customer data,
+later implementation card, push, deploy, remote migration, production system,
+or paid call was used.
