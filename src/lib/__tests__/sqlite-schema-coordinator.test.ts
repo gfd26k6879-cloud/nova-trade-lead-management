@@ -21,6 +21,7 @@ import {
   createFreshSqliteSchemaV1,
   createSqliteSchemaV1FreshVerifierTestBoundary,
   createSqliteSchemaV1LaterFinalizerCapability,
+  finalizeSqliteSchemaV1PreparedFromG006b,
   sqliteCatalogDigest,
   sqliteInternalCatalogDigest,
   SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST,
@@ -48,6 +49,10 @@ import {
   assertAcceptedSqliteSchemaV1Source,
   assertSqliteSchemaV1DefinitionDigest,
 } from "@/lib/db/sqlite-schema-v1";
+import {
+  consumeSqliteG006bPreparedFinalizationHandoffForCoordinator,
+  type SqliteG006bPreparedFinalizationHandoff,
+} from "@/lib/db/sqlite-g006b-pre-finalization";
 import { SCHEMA_SQL } from "@/lib/db/schema";
 import {
   type SqliteBackfillDb,
@@ -66,6 +71,20 @@ const PREPARED_LEGACY_SOURCE_TABLES = Object.freeze([
 ] as const);
 
 describe("G-006A staged SQLite schema and coordinator", () => {
+  it("rejects forged direct access to the cyclic G006B finalization boundary", () => {
+    const forgeries = [
+      Object.freeze(Object.create(null)),
+      Object.freeze({}),
+      new Proxy(Object.create(null), {}),
+    ] as unknown as SqliteG006bPreparedFinalizationHandoff[];
+    for (const forged of forgeries) {
+      expect(() => consumeSqliteG006bPreparedFinalizationHandoffForCoordinator(forged))
+        .toThrowError(expect.objectContaining({ code: "G006B_STATE_REJECTED" }));
+      expect(() => finalizeSqliteSchemaV1PreparedFromG006b(forged))
+        .toThrowError(expect.objectContaining({ code: "G006B_STATE_REJECTED" }));
+    }
+  });
+
   it("builds one deterministic 37-table catalog from the exact frozen source", () => {
     expect(() => assertAcceptedSqliteSchemaV1Source(SCHEMA_SQL)).not.toThrow();
     expect(() => assertAcceptedSqliteSchemaV1Source(`${SCHEMA_SQL} `)).toThrow(/frozen SCHEMA_SQL digest drift/);

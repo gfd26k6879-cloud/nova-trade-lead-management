@@ -49,10 +49,14 @@ import {
   SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST,
   assertSqliteSchemaV1DatabaseHealth,
   classifySqliteSchemaV1,
+  finalizeSqliteSchemaV1PreparedFromG006b,
   sqliteInternalCatalogDigest,
   sqliteSchemaV1PhysicalManifestDigest,
 } from "./sqlite-schema-coordinator";
 import {
+  SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+  SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
+  SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_ACCEPTED_LEGACY_INTERNAL_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_PREPARED_LEGACY_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_PREPARED_LEGACY_INTERNAL_CATALOG_DIGEST,
@@ -66,6 +70,9 @@ export const SQLITE_G006B_SOURCE_CARD_ID = "google_places_legacy" as const;
 export const SQLITE_G006B_PREPARED_DOMAIN = "NOVATRADE\0G006B\0B1\0PREPARED\0V1\0" as const;
 export const SQLITE_G006B_COMMITTED_DOMAIN = "NOVATRADE\0G006B\0B1\0COMMITTED\0V1\0" as const;
 export const SQLITE_G006B_BINDING_DOMAIN = "NOVATRADE\0G006B\0B1\0BINDING\0V1\0" as const;
+export const SQLITE_G006B_FINALIZATION_RECORD_FORMAT = "novatrade.sqlite-g006b-finalization" as const;
+export const SQLITE_G006B_FINALIZATION_PREPARED_DOMAIN = "NOVATRADE\0G006B\0B2\0PREPARED\0V1\0" as const;
+export const SQLITE_G006B_FINALIZATION_COMMITTED_DOMAIN = "NOVATRADE\0G006B\0B2\0COMMITTED\0V1\0" as const;
 const PRESERVATION_DOMAIN = "NOVATRADE\0G006B\0B1\0PRESERVATION\0V1\0";
 const ARCHIVE_DOMAIN = "NOVATRADE\0G006B\0B1\0ARCHIVE\0V1\0";
 const RECEIPT_ROW_DOMAIN = "NOVATRADE\0G006B\0B1\0T028-RECEIPT-ROW\0V1\0";
@@ -152,6 +159,66 @@ export type SqliteG006bPreFinalizationResult = Readonly<{
   readonly bindingHash: string;
 }>;
 
+interface SqliteG006bFinalizationCommonInput {
+  readonly replay: SqliteG006bReplayInput;
+  readonly finalizationPreparedPath: string;
+  readonly finalizationCommittedPath: string;
+}
+
+export interface SqliteG006bFinalizationExecuteInput extends SqliteG006bFinalizationCommonInput {
+  readonly mode: "finalize-execute";
+}
+
+export interface SqliteG006bFinalizationResumeInput extends SqliteG006bFinalizationCommonInput {
+  readonly mode: "finalize-resume";
+  readonly expectedFinalizationPreparedHandoffId: string;
+}
+
+export interface SqliteG006bFinalizationReplayInput extends SqliteG006bFinalizationCommonInput {
+  readonly mode: "finalize-replay";
+  readonly expectedFinalizationPreparedHandoffId: string;
+  readonly expectedFinalizationCommittedHandoffId: string;
+}
+
+export type SqliteG006bFinalizationInput =
+  | SqliteG006bFinalizationExecuteInput
+  | SqliteG006bFinalizationResumeInput
+  | SqliteG006bFinalizationReplayInput;
+
+export type SqliteG006bFinalizationResult = Readonly<{
+  readonly mode: SqliteG006bFinalizationInput["mode"];
+  readonly status: "finalized" | "replayed";
+  readonly preparedHandoffId: string;
+  readonly committedHandoffId: string;
+  readonly sourceBindingHash: string;
+  readonly userVersion: typeof SQLITE_SCHEMA_V1_FINAL_USER_VERSION;
+  readonly catalogDigest: typeof SQLITE_SCHEMA_V1_CATALOG_DIGEST;
+  readonly internalCatalogDigest: typeof SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST;
+}>;
+
+declare const sqliteG006bPreparedFinalizationHandoffBrand: unique symbol;
+export interface SqliteG006bPreparedFinalizationHandoff {
+  readonly [sqliteG006bPreparedFinalizationHandoffBrand]: "sqlite-g006b-prepared-finalization-handoff";
+}
+
+export interface SqliteG006bPreparedFinalizationEvidence {
+  readonly databasePath: string;
+  readonly sourcePreparedHandoffId: string;
+  readonly sourceCommittedHandoffId: string;
+  readonly sourceBindingHash: string;
+  readonly finalizationPreparedHandoffId: string;
+  readonly finalizationPreparedRecordSha256: string;
+  readonly sourceFileId: string;
+  readonly sourceVolumeSerialNumber: string;
+  readonly sourcePreservationAggregateSha256: string;
+  readonly tenantPolicyProjectedPayloadDigest: string;
+  readonly tenantId: string;
+  readonly workspaceId: string;
+  readonly targetUserVersion: typeof SQLITE_SCHEMA_V1_FINAL_USER_VERSION;
+  readonly targetCatalogDigest: typeof SQLITE_SCHEMA_V1_CATALOG_DIGEST;
+  readonly targetInternalCatalogDigest: typeof SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST;
+}
+
 export interface SqliteG006bInspectionInput {
   readonly databasePath: string;
   readonly manifest: CompatibilityBackfillManifest;
@@ -230,6 +297,10 @@ interface PreservationEvidence {
   readonly transformAggregateSha256: string;
   readonly audit: PreservationTable;
   readonly relationshipOrphanCount: 0;
+}
+
+interface FinalizationTenantPolicyProjection extends PreservationTable {
+  readonly coordinatorPayloadDigest: string;
 }
 
 interface G023Evidence {
@@ -471,6 +542,59 @@ function jsonSnapshot<T>(value: T): T {
   return structuredClone(value);
 }
 
+interface FinalizationRecordEnvelope {
+  readonly format: typeof SQLITE_G006B_FINALIZATION_RECORD_FORMAT;
+  readonly schemaVersion: 1;
+  readonly phase: "prepared" | "committed";
+  readonly handoffId: string;
+  readonly recordSha256: string;
+  readonly payload: Record<string, unknown>;
+}
+
+interface ValidatedFinalizationInput {
+  readonly mode: SqliteG006bFinalizationInput["mode"];
+  readonly replay: ValidatedInput;
+  readonly finalizationPreparedPath: string;
+  readonly finalizationCommittedPath: string;
+  readonly expectedFinalizationPreparedHandoffId?: string;
+  readonly expectedFinalizationCommittedHandoffId?: string;
+  readonly finalizationPreparedTemporaryPath: string;
+  readonly finalizationCommittedTemporaryPath: string;
+}
+
+const preparedFinalizationHandoffStates = new WeakMap<object, SqliteG006bPreparedFinalizationEvidence>();
+const consumedPreparedFinalizationHandoffs = new WeakSet<object>();
+
+function mintPreparedFinalizationHandoff(
+  evidence: SqliteG006bPreparedFinalizationEvidence,
+): SqliteG006bPreparedFinalizationHandoff {
+  const handoff = Object.freeze(Object.create(null)) as SqliteG006bPreparedFinalizationHandoff;
+  preparedFinalizationHandoffStates.set(handoff as object, deepFreeze(jsonSnapshot(evidence)));
+  return handoff;
+}
+
+/** @internal Runtime one-shot boundary consumed only by sqlite-schema-coordinator. */
+export function consumeSqliteG006bPreparedFinalizationHandoffForCoordinator(
+  handoff: SqliteG006bPreparedFinalizationHandoff,
+): SqliteG006bPreparedFinalizationEvidence {
+  if (!handoff || typeof handoff !== "object" || isProxy(handoff)) {
+    throw new SqliteG006bError("G006B_STATE_REJECTED", "prepared finalization handoff required");
+  }
+  const object = handoff as object;
+  const evidence = preparedFinalizationHandoffStates.get(object);
+  if (!evidence) {
+    throw new SqliteG006bError(
+      "G006B_STATE_REJECTED",
+      consumedPreparedFinalizationHandoffs.has(object)
+        ? "prepared finalization handoff consumed"
+        : "prepared finalization handoff required",
+    );
+  }
+  preparedFinalizationHandoffStates.delete(object);
+  consumedPreparedFinalizationHandoffs.add(object);
+  return evidence;
+}
+
 function helperNormalizedSha256(): string {
   const bytes = readFileSync(PUBLISHER_SCRIPT_PATH);
   const text = bytes.toString("utf8");
@@ -556,6 +680,63 @@ function validateInput(input: SqliteG006bPreFinalizationInput): ValidatedInput {
   ] as const) canonicalTarget(pathValue, label);
   canonicalDirectoryTarget(snapshot.archiveStagingDirectory, "derived archive staging");
   return deepFreeze(snapshot);
+}
+
+function validateFinalizationInput(input: SqliteG006bFinalizationInput): ValidatedFinalizationInput {
+  if (!input || typeof input !== "object" || isProxy(input)) fail("G006B_INPUT_REJECTED", "finalization input");
+  const modeDescriptor = Object.getOwnPropertyDescriptor(input, "mode");
+  if (!modeDescriptor || !("value" in modeDescriptor)) fail("G006B_INPUT_REJECTED", "finalization mode");
+  const mode = modeDescriptor.value;
+  const extra = mode === "finalize-resume" ? ["expectedFinalizationPreparedHandoffId"]
+    : mode === "finalize-replay"
+      ? ["expectedFinalizationPreparedHandoffId", "expectedFinalizationCommittedHandoffId"]
+      : [];
+  exactKeys(input, ["mode", "replay", "finalizationPreparedPath", "finalizationCommittedPath", ...extra], "finalization input");
+  if (mode !== "finalize-execute" && mode !== "finalize-resume" && mode !== "finalize-replay") {
+    fail("G006B_INPUT_REJECTED", "finalization mode");
+  }
+  const normalizedMode = mode as SqliteG006bFinalizationInput["mode"];
+  const replay = validateInput(input.replay);
+  if (replay.mode !== "replay") fail("G006B_INPUT_REJECTED", "finalization requires B1 replay input");
+  canonicalTarget(input.finalizationPreparedPath, "finalizationPreparedPath");
+  canonicalTarget(input.finalizationCommittedPath, "finalizationCommittedPath");
+  const allPaths = [
+    replay.databasePath, replay.backupPath, replay.archiveDirectory, replay.preparedPath, replay.committedPath,
+    input.finalizationPreparedPath, input.finalizationCommittedPath,
+  ];
+  if (new Set(allPaths).size !== allPaths.length) fail("G006B_INPUT_REJECTED", "finalization authority paths distinct");
+  const handoffPattern = /^g006b-finalization:v1:[0-9a-f]{64}$/u;
+  let expectedPrepared: string | undefined;
+  let expectedCommitted: string | undefined;
+  if (mode !== "finalize-execute") {
+    const value = input.expectedFinalizationPreparedHandoffId;
+    if (typeof value !== "string" || !handoffPattern.test(value)) {
+      fail("G006B_INPUT_REJECTED", "expectedFinalizationPreparedHandoffId");
+    }
+    expectedPrepared = value;
+  }
+  if (mode === "finalize-replay") {
+    const value = input.expectedFinalizationCommittedHandoffId;
+    if (typeof value !== "string" || !handoffPattern.test(value)) {
+      fail("G006B_INPUT_REJECTED", "expectedFinalizationCommittedHandoffId");
+    }
+    expectedCommitted = value;
+  }
+  const token = randomBytes(24).toString("hex");
+  return deepFreeze({
+    mode: normalizedMode,
+    replay,
+    finalizationPreparedPath: input.finalizationPreparedPath,
+    finalizationCommittedPath: input.finalizationCommittedPath,
+    ...(mode !== "finalize-execute" ? {
+      expectedFinalizationPreparedHandoffId: expectedPrepared,
+    } : {}),
+    ...(mode === "finalize-replay" ? {
+      expectedFinalizationCommittedHandoffId: expectedCommitted,
+    } : {}),
+    finalizationPreparedTemporaryPath: `${input.finalizationPreparedPath}.g006b.tmp.${token}`,
+    finalizationCommittedTemporaryPath: `${input.finalizationCommittedPath}.g006b.tmp.${token}`,
+  });
 }
 
 function assertNativeIdentity(value: unknown, label: string): asserts value is SqliteG006bNativeIdentity {
@@ -1220,6 +1401,71 @@ function samePreservation(left: PreservationEvidence, right: PreservationEvidenc
   return sameCanonical(left, right);
 }
 
+function finalizationPreservationBaseline(baseline: PreservationEvidence): PreservationEvidence {
+  const tables = baseline.tables.map((table) => table.name === "tenant_policies"
+    ? Object.freeze({
+      ...table,
+      columns: Object.freeze(table.columns.filter((column) => column !== "compatibility_policy_hash")),
+    })
+    : table);
+  return Object.freeze({ ...baseline, tables: Object.freeze(tables) });
+}
+
+function captureFinalizationTenantPolicyProjection(
+  db: Database.Database,
+): FinalizationTenantPolicyProjection {
+  const available = (db.prepare(`PRAGMA table_info(${quoteIdentifier("tenant_policies")})`).all() as Array<{ name: string }>)
+    .map(({ name }) => name);
+  if (!available.includes("compatibility_policy_hash")) {
+    return fail("G006B_EVIDENCE_DRIFT", "tenant policy compatibility projection column");
+  }
+  const columns = available.filter((column) => column !== "compatibility_policy_hash");
+  const rows = db.prepare(
+    `SELECT ${columns.map(quoteIdentifier).join(", ")} FROM ${quoteIdentifier("tenant_policies")}`,
+  ).all() as Array<Record<string, unknown>>;
+  const encodedRows = rows.map((row) => canonicalRow(columns, row)).sort(compareCodeUnits);
+  return Object.freeze({
+    name: "tenant_policies",
+    columns: Object.freeze(columns),
+    rowCount: rows.length,
+    payloadSha256: sha256Bytes(
+      `${PRESERVATION_DOMAIN}TABLE\0tenant_policies\0${JSON.stringify(encodedRows)}`,
+    ),
+    coordinatorPayloadDigest: sha256Bytes(JSON.stringify(encodedRows)),
+  });
+}
+
+function sameFinalizationPreservation(
+  baseline: PreservationEvidence,
+  final: PreservationEvidence,
+  tenantPolicyProjection: FinalizationTenantPolicyProjection,
+): boolean {
+  if (baseline.algorithm !== final.algorithm
+      || baseline.domain !== final.domain
+      || baseline.relationshipOrphanCount !== final.relationshipOrphanCount
+      || baseline.transformAggregateSha256 !== final.transformAggregateSha256
+      || baseline.tables.length !== final.tables.length
+      || !sameCanonical(baseline.audit, final.audit)) {
+    return false;
+  }
+  const finalTables = new Map(final.tables.map((table) => [table.name, table]));
+  return baseline.tables.every((table) => {
+    const actual = finalTables.get(table.name);
+    if (!actual) return false;
+    if (table.name !== "tenant_policies") return sameCanonical(table, actual);
+    const expectedColumns = table.columns.filter((column) => column !== "compatibility_policy_hash");
+    const expected = {
+      name: tenantPolicyProjection.name,
+      columns: tenantPolicyProjection.columns,
+      rowCount: tenantPolicyProjection.rowCount,
+      payloadSha256: tenantPolicyProjection.payloadSha256,
+    };
+    return sameCanonical(expectedColumns, tenantPolicyProjection.columns)
+      && table.rowCount === tenantPolicyProjection.rowCount
+      && sameCanonical(expected, actual);
+  });
+}
+
 function receiptRow(db: Database.Database, manifest: CompatibilityBackfillManifest): Record<string, unknown> {
   const rows = db.prepare(`SELECT ${RECEIPT_ROW_COLUMNS.map(quoteIdentifier).join(", ")} FROM compatibility_backfill_receipts WHERE idempotency_key=?`).all(manifest.idempotencyKey) as Array<Record<string, unknown>>;
   if (rows.length !== 1) fail("G006B_EVIDENCE_DRIFT", "exact T028 receipt row missing or duplicated");
@@ -1445,6 +1691,66 @@ async function publishEnvelope(input: ValidatedInput, phase: "prepared" | "commi
   return readEnvelope(destination, phase);
 }
 
+function createFinalizationEnvelope(
+  phase: "prepared" | "committed",
+  payload: Record<string, unknown>,
+): FinalizationRecordEnvelope {
+  const domain = phase === "prepared"
+    ? SQLITE_G006B_FINALIZATION_PREPARED_DOMAIN
+    : SQLITE_G006B_FINALIZATION_COMMITTED_DOMAIN;
+  const recordSha256 = hashSqliteG006bDomain(domain, payload);
+  return Object.freeze({
+    format: SQLITE_G006B_FINALIZATION_RECORD_FORMAT,
+    schemaVersion: 1,
+    phase,
+    handoffId: `g006b-finalization:v1:${recordSha256}`,
+    recordSha256,
+    payload,
+  });
+}
+
+function readFinalizationEnvelope(
+  path: string,
+  phase: "prepared" | "committed",
+): FinalizationRecordEnvelope {
+  const raw = readFileSync(path);
+  if (raw.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))) fail("G006B_EVIDENCE_DRIFT", `finalization ${phase} BOM`);
+  const text = raw.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(raw)) fail("G006B_EVIDENCE_DRIFT", `finalization ${phase} invalid UTF-8`);
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return fail("G006B_EVIDENCE_DRIFT", `finalization ${phase} invalid JSON`); }
+  if (canonicalizeSqliteG006bRecord(parsed) !== text) fail("G006B_EVIDENCE_DRIFT", `finalization ${phase} canonical bytes`);
+  exactKeys(parsed, ["format", "schemaVersion", "phase", "handoffId", "recordSha256", "payload"], `finalization ${phase}`);
+  const envelope = parsed as unknown as FinalizationRecordEnvelope;
+  if (envelope.format !== SQLITE_G006B_FINALIZATION_RECORD_FORMAT || envelope.schemaVersion !== 1 || envelope.phase !== phase) {
+    fail("G006B_EVIDENCE_DRIFT", `finalization ${phase} literals`);
+  }
+  const expected = createFinalizationEnvelope(phase, envelope.payload);
+  if (expected.handoffId !== envelope.handoffId || expected.recordSha256 !== envelope.recordSha256) {
+    fail("G006B_EVIDENCE_DRIFT", `finalization ${phase} hash`);
+  }
+  return envelope;
+}
+
+async function publishFinalizationEnvelope(
+  input: ValidatedFinalizationInput,
+  phase: "prepared" | "committed",
+  payload: Record<string, unknown>,
+  ledger: OwnershipLedger,
+): Promise<FinalizationRecordEnvelope> {
+  const envelope = createFinalizationEnvelope(phase, payload);
+  const temporary = phase === "prepared"
+    ? input.finalizationPreparedTemporaryPath
+    : input.finalizationCommittedTemporaryPath;
+  const destination = phase === "prepared"
+    ? input.finalizationPreparedPath
+    : input.finalizationCommittedPath;
+  if (existsSync(temporary)) fail("G006B_PUBLISH_FAILED", `finalization ${phase} temp exists`);
+  await writeOwnedDurable(temporary, Buffer.from(canonicalizeSqliteG006bRecord(envelope), "utf8"), ledger);
+  await publish(temporary, destination, ledger);
+  return readFinalizationEnvelope(destination, phase);
+}
+
 function readEnvelope(path: string, phase: "prepared" | "committed"): RecordEnvelope {
   const raw = readFileSync(path);
   if (raw.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))) fail("G006B_EVIDENCE_DRIFT", `${phase} BOM`);
@@ -1621,7 +1927,9 @@ function verifyPostT028(db: Database.Database, input: ValidatedInput, receipt: C
   const row = receiptRow(db, input.manifest);
   if (receiptRowSha256(row) !== input.expectedReceiptRowSha256 || !sameCanonical(parseReceipt(row), receipt)) fail("G006B_EVIDENCE_DRIFT", "post T028 receipt row");
   for (const table of COMPATIBILITY_TENANT_TABLES) {
-    const columns = (db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as Array<{ name: string }>).map((entry) => entry.name).filter((column) => column !== "source_card_id");
+    const columns = (db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as Array<{ name: string }>)
+      .map((entry) => entry.name)
+      .filter((column) => column !== "source_card_id" && column !== "location_mode");
     const rows = db.prepare(`SELECT ${columns.map(quoteIdentifier).join(", ")} FROM ${quoteIdentifier(table)}`).all() as Array<Record<string, unknown>>;
     const expectation = input.manifest.legacyTables.find((entry) => entry.table === table);
     const checksum = compatibilityContentChecksum(rows);
@@ -1649,7 +1957,8 @@ async function verifyPostDatabase(
   preparedPayload: Record<string, unknown>,
   receipt: CompatibilityBackfillReceipt,
   lease: NativeDatabaseLease,
-  settledNative: SqliteG006bNativeIdentity,
+  boundaryNative: SqliteG006bNativeIdentity,
+  sidecars: "captured" | "unsettled" = "captured",
 ): Promise<{ database: Record<string, CanonicalValue>; verification: Record<string, unknown> }> {
   const db = new Database(input.databasePath, { readonly: true, fileMustExist: true });
   db.pragma("foreign_keys = ON");
@@ -1675,9 +1984,14 @@ async function verifyPostDatabase(
     if (db.open && db.inTransaction) { try { db.exec("ROLLBACK"); } catch { /* primary is preserved */ } }
     throw error;
   } finally { db.close(); }
-  await lease.inspectAndReleaseSidecars();
+  // B1 and post-coordinator B2 verification retain the broker-captured
+  // sidecars. B2's pre-coordinator check deliberately stays on the original
+  // no-replace lease: settling there would install a FILE_SHARE_READ-only
+  // handle and prevent the coordinator from opening its independent writer.
+  if (sidecars === "captured") await lease.inspectAndReleaseSidecars();
+  else assertNoWalFrames(input.databasePath);
   const native = await lease.inspect();
-  if (!sameCanonical(native, settledNative)) fail("G006B_EVIDENCE_DRIFT", "post snapshot changed settled main bytes");
+  if (!sameCanonical(native, boundaryNative)) fail("G006B_EVIDENCE_DRIFT", "post snapshot changed boundary main bytes");
   const preparedDatabase = preparedPayload.database as Record<string, unknown>;
   const expectedNative = preparedDatabase.native as SqliteG006bNativeIdentity;
   if (native.fileId !== expectedNative.fileId || native.volumeSerialNumber !== expectedNative.volumeSerialNumber) fail("G006B_EVIDENCE_DRIFT", "post database file identity");
@@ -2032,6 +2346,535 @@ export async function runSqliteG006bPreFinalization(rawInput: SqliteG006bPreFina
   throw new SqliteG006bError(
     input.mode === "replay" ? "G006B_RECOVERY_REQUIRED" : "G006B_STATE_REJECTED",
     primary === undefined ? `${input.mode} cleanup failed` : message(primary),
+    cleanup,
+  );
+}
+
+interface AuthenticatedB1FinalizationSource {
+  readonly prepared: RecordEnvelope;
+  readonly committed: RecordEnvelope;
+  readonly receipt: CompatibilityBackfillReceipt;
+  readonly bindingHash: string;
+}
+
+async function authenticateB1FinalizationSource(
+  input: ValidatedInput,
+  lease: NativeDatabaseLease,
+): Promise<AuthenticatedB1FinalizationSource> {
+  const prepared = await retainRecoveryArtifactSet(input, lease, true);
+  if (prepared.handoffId !== input.expectedPreparedHandoffId) {
+    fail("G006B_RECOVERY_REQUIRED", "B1 PREPARED handoff pin");
+  }
+  const { receipt } = assertPreparedPayload(input, prepared.payload);
+  const committed = readEnvelope(input.committedPath, "committed");
+  if (committed.handoffId !== input.expectedCommittedHandoffId) {
+    fail("G006B_RECOVERY_REQUIRED", "B1 COMMITTED handoff pin");
+  }
+  exactKeys(
+    committed.payload,
+    ["operationId", "preparedHandoffId", "preparedRecordSha256", "bindingHash", "database", "verification"],
+    "B1 committed payload",
+  );
+  const bindingHash = hashSqliteG006bDomain(SQLITE_G006B_BINDING_DOMAIN, prepared.payload);
+  if (committed.payload.operationId !== input.operationId
+      || committed.payload.preparedHandoffId !== prepared.handoffId
+      || committed.payload.preparedRecordSha256 !== prepared.recordSha256
+      || committed.payload.bindingHash !== bindingHash) {
+    fail("G006B_RECOVERY_REQUIRED", "B1 COMMITTED/PREPARED linkage");
+  }
+  return Object.freeze({ prepared, committed, receipt, bindingHash });
+}
+
+function finalizationMutationEvidence(): Record<string, CanonicalValue> {
+  return {
+    transformTables: SQLITE_SCHEMA_V1_TRANSFORM_TABLES,
+    canonicalizationTables: ["tenant_policies", "compatibility_backfill_receipts"],
+    rebuildStrategy: "coordinator-owned-fixed-19-table-rebuild",
+    transitionalRemoval: "tenant_policies.compatibility_policy_hash",
+    locationMode: { source: "legacy_zip", insertedLiteral: "legacy_zip", activation: "blocked" },
+    grantsStartupActivation: false,
+    grantsProviderExecution: false,
+  };
+}
+
+function finalizationTenantPolicyProjection(
+  input: ValidatedFinalizationInput,
+  source: AuthenticatedB1FinalizationSource,
+): FinalizationTenantPolicyProjection {
+  const baseline = source.prepared.payload.preservation as unknown as PreservationEvidence;
+  const db = new Database(input.replay.backupPath, { readonly: true, fileMustExist: true });
+  try {
+    assertAcceptedState(db, input.replay.expectedAcceptedPhysicalManifestDigest);
+    if (!samePreservation(baseline, capturePreservation(db, baseline))) {
+      fail("G006B_EVIDENCE_DRIFT", "B2 policy projection backup baseline");
+    }
+    const projection = captureFinalizationTenantPolicyProjection(db);
+    const baselinePolicy = baseline.tables.find((table) => table.name === "tenant_policies");
+    const expectedColumns = baselinePolicy?.columns.filter((column) => column !== "compatibility_policy_hash");
+    if (!baselinePolicy
+        || !sameCanonical(expectedColumns, projection.columns)
+        || baselinePolicy.rowCount !== projection.rowCount) {
+      fail("G006B_EVIDENCE_DRIFT", "B2 policy projection baseline");
+    }
+    return projection;
+  } finally {
+    db.close();
+  }
+}
+
+function finalizationPreparedPayload(
+  input: ValidatedFinalizationInput,
+  source: AuthenticatedB1FinalizationSource,
+): Record<string, unknown> {
+  const sourcePreservation = source.prepared.payload.preservation as unknown as PreservationEvidence;
+  const tenantPolicyProjection = finalizationTenantPolicyProjection(input, source);
+  return {
+    operationId: input.replay.operationId,
+    source: {
+      preparedHandoffId: source.prepared.handoffId,
+      preparedRecordSha256: source.prepared.recordSha256,
+      committedHandoffId: source.committed.handoffId,
+      committedRecordSha256: source.committed.recordSha256,
+      bindingHash: source.bindingHash,
+    },
+    database: source.committed.payload.database,
+    foundation: {
+      tenantId: input.replay.manifest.tenantId,
+      workspaceId: input.replay.manifest.workspaceId,
+      ownerAuthIdentityId: input.replay.manifest.ownerAuthIdentityId,
+      policyId: input.replay.manifest.policyId,
+      policyVersion: input.replay.manifest.policyVersion,
+      manifestHash: compatibilityManifestHash(input.replay.manifest),
+      receiptRowSha256: input.replay.expectedReceiptRowSha256,
+      bindingId: input.replay.expectedBindingId,
+      configurationHash: input.replay.expectedConfigurationHash,
+    },
+    preservation: {
+      algorithm: sourcePreservation.algorithm,
+      aggregateSha256: sourcePreservation.aggregateSha256,
+      transformAggregateSha256: sourcePreservation.transformAggregateSha256,
+      auditPayloadSha256: sourcePreservation.audit.payloadSha256,
+      relationshipOrphanCount: sourcePreservation.relationshipOrphanCount,
+      tenantPolicyProjection,
+    },
+    sourceSchema: {
+      userVersion: SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION,
+      catalogDigest: SQLITE_SCHEMA_V1_PREPARED_LEGACY_CATALOG_DIGEST,
+      internalCatalogDigest: SQLITE_SCHEMA_V1_PREPARED_LEGACY_INTERNAL_CATALOG_DIGEST,
+      physicalManifestDigest: SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST,
+      applicationTableCount: 37,
+      targetColumnCount: 31,
+      expectedTargetColumnCount: 32,
+    },
+    targetSchema: {
+      userVersion: SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
+      catalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+      internalCatalogDigest: SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST,
+      physicalManifestDigest: "07e10bb5c43d98d6f561d3c0b0f9f39a9ad2d579ed1a73b9e2a7a455367fdf79",
+      applicationTableCount: 37,
+      targetColumnCount: 32,
+      expectedTargetColumnCount: 32,
+    },
+    mutation: finalizationMutationEvidence(),
+  };
+}
+
+function assertFinalizationPreparedPayload(
+  input: ValidatedFinalizationInput,
+  source: AuthenticatedB1FinalizationSource,
+  payload: Record<string, unknown>,
+): void {
+  if (!sameCanonical(payload, finalizationPreparedPayload(input, source))) {
+    fail("G006B_EVIDENCE_DRIFT", "B2 PREPARED fixed payload/linkage");
+  }
+}
+
+function finalizationTenantPolicyProjectionPin(
+  prepared: FinalizationRecordEnvelope,
+): FinalizationTenantPolicyProjection {
+  const preservation = prepared.payload.preservation as Record<string, unknown>;
+  return preservation.tenantPolicyProjection as FinalizationTenantPolicyProjection;
+}
+
+async function retainFinalizationRecord(
+  lease: NativeDatabaseLease,
+  path: string,
+  phase: "prepared" | "committed",
+): Promise<FinalizationRecordEnvelope> {
+  try {
+    await lease.retainFinal(path, "file");
+  } catch (error) {
+    fail(
+      phase === "prepared" ? "G006B_PREPARED_RECORD_REQUIRED" : "G006B_RECOVERY_REQUIRED",
+      `B2 ${phase.toUpperCase()} retention: ${message(error)}`,
+    );
+  }
+  return readFinalizationEnvelope(path, phase);
+}
+
+function readCurrentSchemaKind(databasePath: string): "prepared-legacy" | "final" {
+  const db = new Database(databasePath, { readonly: true, fileMustExist: true });
+  try {
+    db.pragma("foreign_keys = ON");
+    db.exec("BEGIN");
+    assertDatabaseConnectionBoundary(db);
+    const state = classifySqliteSchemaV1(db);
+    if (state.kind !== "prepared-legacy" && state.kind !== "final") {
+      fail("G006B_RECOVERY_REQUIRED", `B2 database state ${state.kind}: ${state.reason}`);
+    }
+    db.exec("COMMIT");
+    return state.kind;
+  } catch (error) {
+    if (db.open && db.inTransaction) {
+      try { db.exec("ROLLBACK"); } catch { /* primary error is authoritative */ }
+    }
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
+async function verifyCurrentPreparedForFinalization(
+  input: ValidatedFinalizationInput,
+  source: AuthenticatedB1FinalizationSource,
+  lease: NativeDatabaseLease,
+): Promise<void> {
+  // Do not consume the broker's one-shot settled lease before the coordinator
+  // takes its own exact-path writer lease and BEGIN IMMEDIATE transaction.
+  const inspected = await lease.inspect();
+  const verified = await verifyPostDatabase(
+    input.replay,
+    source.prepared.payload,
+    source.receipt,
+    lease,
+    inspected,
+    "unsettled",
+  );
+  if (!sameCanonical(verified.database, source.committed.payload.database)
+      || !sameCanonical(verified.verification, source.committed.payload.verification)) {
+    fail("G006B_RECOVERY_REQUIRED", "current prepared database differs from B1 COMMITTED");
+  }
+}
+
+function assertFinalState(db: Database.Database): ReturnType<typeof classifySqliteSchemaV1> {
+  assertDatabaseConnectionBoundary(db);
+  const state = classifySqliteSchemaV1(db);
+  const physical = sqliteSchemaV1PhysicalManifestDigest(db);
+  if (state.kind !== "final"
+      || state.userVersion !== SQLITE_SCHEMA_V1_FINAL_USER_VERSION
+      || state.catalogDigest !== SQLITE_SCHEMA_V1_CATALOG_DIGEST
+      || state.applicationTableCount !== 37
+      || state.targetColumnCount !== 32
+      || state.expectedTargetColumnCount !== 32
+      || sqliteInternalCatalogDigest(db) !== SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST
+      || physical !== "07e10bb5c43d98d6f561d3c0b0f9f39a9ad2d579ed1a73b9e2a7a455367fdf79") {
+    fail("G006B_STATE_REJECTED", `${state.kind}: ${state.reason}`);
+  }
+  const locationModes = db.prepare(`
+    SELECT COUNT(*) AS invalid
+    FROM crawl_units
+    WHERE location_mode <> 'legacy_zip'
+       OR zip IS NULL OR trim(zip) = ''
+       OR location_cell_id IS NOT NULL
+  `).get() as { invalid: number | bigint };
+  if (Number(locationModes.invalid) !== 0) fail("G006B_EVIDENCE_DRIFT", "final location-mode projection");
+  assertSqliteSchemaV1DatabaseHealth(db);
+  return state;
+}
+
+async function verifyFinalizedDatabase(
+  input: ValidatedFinalizationInput,
+  source: AuthenticatedB1FinalizationSource,
+  prepared: FinalizationRecordEnvelope,
+  lease: NativeDatabaseLease,
+): Promise<{ database: Record<string, CanonicalValue>; verification: Record<string, unknown> }> {
+  const settled = await lease.settle();
+  await lease.captureSidecars(input.replay.databasePath);
+  const db = new Database(input.replay.databasePath, { readonly: true, fileMustExist: true });
+  db.pragma("foreign_keys = ON");
+  let captured: {
+    readonly state: ReturnType<typeof classifySqliteSchemaV1>;
+    readonly preservation: PreservationEvidence;
+    readonly counts: readonly Record<string, CanonicalValue>[];
+    readonly health: Record<string, CanonicalValue>;
+    readonly g023: G023Evidence;
+    readonly dataVersion: number;
+    readonly journalMode: "delete" | "wal";
+  };
+  try {
+    db.exec("BEGIN");
+    const dataVersion = Number(db.pragma("data_version", { simple: true }));
+    const journalMode = assertDatabaseConnectionBoundary(db);
+    const state = assertFinalState(db);
+    const baseline = source.prepared.payload.preservation as unknown as PreservationEvidence;
+    const preservation = capturePreservation(db, finalizationPreservationBaseline(baseline));
+    if (!sameFinalizationPreservation(
+      baseline,
+      preservation,
+      finalizationTenantPolicyProjectionPin(prepared),
+    )) {
+      fail("G006B_EVIDENCE_DRIFT", "B2 final full-row preservation");
+    }
+    const counts = sourceCounts(db);
+    if (counts.some((count) => count.matching !== count.total || count.nulls !== 0 || count.other !== 0)) {
+      fail("G006B_EVIDENCE_DRIFT", "B2 source-card preservation");
+    }
+    verifyPostT028(db, input.replay, source.receipt);
+    const g023 = verifyG023Stored(input.replay, source.prepared.payload.g023, source.receipt);
+    const health = healthEvidence(db);
+    if (health.integrityCheck !== "ok" || health.foreignKeyFailureCount !== 0 || health.orphanCount !== 0) {
+      fail("G006B_EVIDENCE_DRIFT", "B2 final health");
+    }
+    if (journalMode !== input.replay.expectedJournalMode
+        || Number(db.pragma("data_version", { simple: true })) !== dataVersion) {
+      fail("G006B_EVIDENCE_DRIFT", "B2 final journal/data-version pin");
+    }
+    captured = { state, preservation, counts, health, g023, dataVersion, journalMode };
+    db.exec("COMMIT");
+  } catch (error) {
+    if (db.open && db.inTransaction) {
+      try { db.exec("ROLLBACK"); } catch { /* primary error is authoritative */ }
+    }
+    throw error;
+  } finally {
+    db.close();
+  }
+  await lease.inspectAndReleaseSidecars();
+  const native = await lease.inspect();
+  if (!sameCanonical(native, settled)) fail("G006B_EVIDENCE_DRIFT", "B2 final main changed after settle");
+  const sourceDatabase = source.committed.payload.database as Record<string, unknown>;
+  const sourceNative = sourceDatabase.native as SqliteG006bNativeIdentity;
+  if (native.fileId !== sourceNative.fileId || native.volumeSerialNumber !== sourceNative.volumeSerialNumber) {
+    fail("G006B_EVIDENCE_DRIFT", "B2 final database FileId/volume continuity");
+  }
+  const database: Record<string, CanonicalValue> = {
+    path: input.replay.databasePath,
+    native: native as unknown as Record<string, CanonicalValue>,
+    userVersion: captured.state.userVersion,
+    catalogDigest: captured.state.catalogDigest,
+    internalCatalogDigest: SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST,
+    physicalManifestDigest: "07e10bb5c43d98d6f561d3c0b0f9f39a9ad2d579ed1a73b9e2a7a455367fdf79",
+    applicationTableCount: captured.state.applicationTableCount,
+    targetColumnCount: captured.state.targetColumnCount,
+    expectedTargetColumnCount: captured.state.expectedTargetColumnCount,
+    tableIdentities: captured.preservation.tables as unknown as readonly CanonicalValue[],
+    sourceSnapshotFingerprint: input.replay.manifest.sourceSnapshotFingerprint,
+    dataVersion: captured.dataVersion,
+    journalMode: captured.journalMode,
+  };
+  const verification = {
+    preservation: captured.preservation,
+    audit: captured.preservation.audit,
+    receiptRowSha256: input.replay.expectedReceiptRowSha256,
+    manifestHash: compatibilityManifestHash(input.replay.manifest),
+    foundation: {
+      tenantId: input.replay.manifest.tenantId,
+      workspaceId: input.replay.manifest.workspaceId,
+      ownerAuthIdentityId: input.replay.manifest.ownerAuthIdentityId,
+      policyId: input.replay.manifest.policyId,
+      policyVersion: input.replay.manifest.policyVersion,
+      status: "exact",
+    },
+    source: { cardId: SQLITE_G006B_SOURCE_CARD_ID, counts: captured.counts },
+    g023: {
+      bindingId: captured.g023.bindingId,
+      configurationHash: captured.g023.configurationHash,
+      bindingSha256: captured.g023.bindingSha256,
+    },
+    health: captured.health,
+    locationMode: { mode: "legacy_zip", rowCount: captured.preservation.tables.find((table) => table.name === "crawl_units")!.rowCount },
+    activation: { state: "blocked", grantsStartupActivation: false, grantsProviderExecution: false },
+    relationshipOrphanCount: 0,
+  };
+  return { database, verification };
+}
+
+function finalizationCommittedPayload(
+  input: ValidatedFinalizationInput,
+  source: AuthenticatedB1FinalizationSource,
+  prepared: FinalizationRecordEnvelope,
+  verified: { database: Record<string, CanonicalValue>; verification: Record<string, unknown> },
+): Record<string, unknown> {
+  return {
+    operationId: input.replay.operationId,
+    preparedHandoffId: prepared.handoffId,
+    preparedRecordSha256: prepared.recordSha256,
+    sourcePreparedHandoffId: source.prepared.handoffId,
+    sourceCommittedHandoffId: source.committed.handoffId,
+    sourceBindingHash: source.bindingHash,
+    database: verified.database,
+    verification: verified.verification,
+  };
+}
+
+export async function runSqliteG006bFinalization(
+  rawInput: SqliteG006bFinalizationInput,
+): Promise<SqliteG006bFinalizationResult> {
+  const input = validateFinalizationInput(rawInput);
+  const cleanup: string[] = [];
+  let primary: unknown;
+  let lease: NativeDatabaseLease | undefined;
+  let ledger: OwnershipLedger | undefined;
+  let result: SqliteG006bFinalizationResult | undefined;
+  let databaseFinalized = false;
+  let preparedPublishedOrRetained = false;
+  let cleanupPublishedUnverified: SqliteG006bPublishedUnverifiedError | undefined;
+  try {
+    const acquired = await NativeDatabaseLease.acquire(input.replay.databasePath, input.replay.lockPath);
+    lease = acquired.lease;
+    ledger = new OwnershipLedger(lease);
+    if (acquired.identity.fileId !== input.replay.expectedSourceIdentity.fileId
+        || acquired.identity.volumeSerialNumber !== input.replay.expectedSourceIdentity.volumeSerialNumber) {
+      fail("G006B_EVIDENCE_DRIFT", "B2 source FileId/volume at lease acquisition");
+    }
+    const source = await authenticateB1FinalizationSource(input.replay, lease);
+    let prepared: FinalizationRecordEnvelope;
+    if (input.mode === "finalize-execute") {
+      if (existsSync(input.finalizationPreparedPath) || existsSync(input.finalizationCommittedPath)) {
+        fail("G006B_STATE_REJECTED", "B2 execute requires absent finalization records");
+      }
+      if (readCurrentSchemaKind(input.replay.databasePath) !== "prepared-legacy") {
+        fail("G006B_STATE_REJECTED", "B2 execute requires the prepared legacy database");
+      }
+      await verifyCurrentPreparedForFinalization(input, source, lease);
+      prepared = await publishFinalizationEnvelope(input, "prepared", finalizationPreparedPayload(input, source), ledger);
+      preparedPublishedOrRetained = true;
+    } else {
+      prepared = await retainFinalizationRecord(lease, input.finalizationPreparedPath, "prepared");
+      preparedPublishedOrRetained = true;
+      if (prepared.handoffId !== input.expectedFinalizationPreparedHandoffId) {
+        fail("G006B_RECOVERY_REQUIRED", "B2 PREPARED handoff pin");
+      }
+      assertFinalizationPreparedPayload(input, source, prepared.payload);
+      if (input.mode === "finalize-resume" && existsSync(input.finalizationCommittedPath)) {
+        fail("G006B_PREPARED_RECORD_REQUIRED", "B2 resume requires absent COMMITTED");
+      }
+    }
+
+    if (input.mode === "finalize-replay") {
+      const committed = await retainFinalizationRecord(lease, input.finalizationCommittedPath, "committed");
+      if (committed.handoffId !== input.expectedFinalizationCommittedHandoffId) {
+        fail("G006B_RECOVERY_REQUIRED", "B2 COMMITTED handoff pin");
+      }
+      if (readCurrentSchemaKind(input.replay.databasePath) !== "final") {
+        fail("G006B_RECOVERY_REQUIRED", "B2 replay requires final database");
+      }
+      const verified = await verifyFinalizedDatabase(input, source, prepared, lease);
+      const expectedCommitted = finalizationCommittedPayload(input, source, prepared, verified);
+      if (!sameCanonical(committed.payload, expectedCommitted)) {
+        fail("G006B_RECOVERY_REQUIRED", "B2 COMMITTED differs from independently reopened final state");
+      }
+      result = deepFreeze({
+        mode: input.mode,
+        status: "replayed",
+        preparedHandoffId: prepared.handoffId,
+        committedHandoffId: committed.handoffId,
+        sourceBindingHash: source.bindingHash,
+        userVersion: SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
+        catalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+        internalCatalogDigest: SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST,
+      });
+    } else {
+      const current = readCurrentSchemaKind(input.replay.databasePath);
+      if (current === "prepared-legacy") {
+        if (input.mode === "finalize-resume") await verifyCurrentPreparedForFinalization(input, source, lease);
+        const currentNative = await lease.inspect();
+        const sourceDatabase = source.committed.payload.database as Record<string, unknown>;
+        const preparedNative = sourceDatabase.native as SqliteG006bNativeIdentity;
+        if (currentNative.fileId !== preparedNative.fileId
+            || currentNative.volumeSerialNumber !== preparedNative.volumeSerialNumber) {
+          fail("G006B_EVIDENCE_DRIFT", "B2 pre-coordinator FileId/volume continuity");
+        }
+        const handoff = mintPreparedFinalizationHandoff({
+          databasePath: input.replay.databasePath,
+          sourcePreparedHandoffId: source.prepared.handoffId,
+          sourceCommittedHandoffId: source.committed.handoffId,
+          sourceBindingHash: source.bindingHash,
+          finalizationPreparedHandoffId: prepared.handoffId,
+          finalizationPreparedRecordSha256: prepared.recordSha256,
+          sourceFileId: currentNative.fileId,
+          sourceVolumeSerialNumber: currentNative.volumeSerialNumber,
+          sourcePreservationAggregateSha256: input.replay.expectedPreservationAggregateSha256,
+          tenantPolicyProjectedPayloadDigest:
+            finalizationTenantPolicyProjectionPin(prepared).coordinatorPayloadDigest,
+          tenantId: input.replay.manifest.tenantId,
+          workspaceId: input.replay.manifest.workspaceId,
+          targetUserVersion: SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
+          targetCatalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+          targetInternalCatalogDigest: SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST,
+        });
+        try {
+          const finalized = finalizeSqliteSchemaV1PreparedFromG006b(handoff);
+          if (finalized.status !== "finalized"
+              || finalized.state.kind !== "final"
+              || finalized.state.catalogDigest !== SQLITE_SCHEMA_V1_CATALOG_DIGEST) {
+            fail("G006B_STATE_REJECTED", "coordinator final result");
+          }
+          databaseFinalized = true;
+        } catch (error) {
+          if (error && typeof error === "object" && "committed" in error && error.committed === true) {
+            databaseFinalized = true;
+          }
+          throw error;
+        }
+      } else {
+        databaseFinalized = true;
+      }
+      const verified = await verifyFinalizedDatabase(input, source, prepared, lease);
+      const committed = await publishFinalizationEnvelope(
+        input,
+        "committed",
+        finalizationCommittedPayload(input, source, prepared, verified),
+        ledger,
+      );
+      result = deepFreeze({
+        mode: input.mode,
+        status: "finalized",
+        preparedHandoffId: prepared.handoffId,
+        committedHandoffId: committed.handoffId,
+        sourceBindingHash: source.bindingHash,
+        userVersion: SQLITE_SCHEMA_V1_FINAL_USER_VERSION,
+        catalogDigest: SQLITE_SCHEMA_V1_CATALOG_DIGEST,
+        internalCatalogDigest: SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST,
+      });
+    }
+  } catch (error) {
+    primary = error;
+  } finally {
+    if (ledger) cleanupPublishedUnverified = await ledger.cleanupAll(cleanup);
+    if (lease) {
+      try { await lease.releaseSidecarsIfCaptured(); } catch (error) { cleanup.push(`B2 sidecar release: ${message(error)}`); }
+      try {
+        await lease.release();
+      } catch (error) {
+        if (error instanceof SqliteG006bPublishedUnverifiedError) cleanupPublishedUnverified ??= error;
+        cleanup.push(`B2 native lease release: ${message(error)}`);
+      }
+    }
+  }
+  if (!primary && cleanup.length === 0 && result) return result;
+  const detail = primary === undefined ? "B2 cleanup failed" : message(primary);
+  if (databaseFinalized || result?.status === "replayed") {
+    throw new SqliteG006bCommittedUnverifiedError(detail, cleanup);
+  }
+  if (primary instanceof SqliteG006bCommittedUnverifiedError) {
+    throw new SqliteG006bCommittedUnverifiedError(message(primary), [...primary.cleanupFailures, ...cleanup]);
+  }
+  if (primary instanceof SqliteG006bPublishedUnverifiedError) {
+    throw new SqliteG006bPublishedUnverifiedError(message(primary), [...primary.cleanupFailures, ...cleanup]);
+  }
+  if (cleanupPublishedUnverified) {
+    throw new SqliteG006bPublishedUnverifiedError(
+      primary ? `${message(primary)}; ${message(cleanupPublishedUnverified)}` : message(cleanupPublishedUnverified),
+      [...cleanupPublishedUnverified.cleanupFailures, ...cleanup],
+    );
+  }
+  if (primary instanceof SqliteG006bError) {
+    throw new SqliteG006bError(primary.code, message(primary), [...primary.cleanupFailures, ...cleanup]);
+  }
+  throw new SqliteG006bError(
+    preparedPublishedOrRetained ? "G006B_RECOVERY_REQUIRED" : "G006B_STATE_REJECTED",
+    detail,
     cleanup,
   );
 }

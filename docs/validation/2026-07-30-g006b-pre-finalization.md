@@ -90,3 +90,119 @@ The 71-case file combines operation tests and direct Windows host probes; it is 
 This is a fail-closed Windows/NTFS durability and restart-reconciliation boundary. It does not claim cross-file ACID atomicity or physical-media survival across every controller/storage power-loss mode. It does not self-accept the integration rejection or authorize launch.
 
 The exact stale synthetic root `C:\Users\Masih\AppData\Local\Temp\g006b-identity-cleanup-qjkSgV` was reverified before repair work as the earlier task-owned root containing only `broker.db`, `broker.db.g006b.lock`, and `owned.tmp`, with no subdirectories or owning process. Local destructive-action policy rejected its exact guarded removal, so it remains untouched and recoverable and is not counted as residue from this repair run.
+
+## G-006B-B2 finalization repair receipt
+
+Date: 2026-07-31
+
+Branch: `codex/nova-g006b-finalization-resume`
+
+Checkpoint carry commit: `88f71cb`
+
+This append-only receipt covers the local prepared-legacy `6000` to canonical
+final `6002` boundary only. It does not authorize startup activation, provider
+execution, a later G-006 card, push, deployment, remote migration, paid
+activity, or production mutation.
+
+The repaired B2 state machine authenticates the B1 PREPARED/COMMITTED pair,
+publishes a separate B2 PREPARED record, and transfers only an opaque,
+unforgeable, one-shot handoff to the coordinator. The coordinator owns its
+exact-path root lease, database connection, `BEGIN IMMEDIATE`, fixed rebuild,
+commit, close, and independent reopen. No raw database, lease, callback, SQL,
+or caller mutation plan crosses the boundary. A recognized handoff is burned
+before its evidence is inspected; a plain frozen object is rejected by both
+the private consumer and the coordinator entry point.
+
+The Windows broker's database lease and lock remain owned by G-006B across the
+handoff. Pre-coordinator verification uses non-settling native inspection under
+that lease. The single one-shot `settle` occurs only after coordinator commit,
+so the helper's settled read handle cannot block the writer and no second
+settle can fail after mutation. B2 temporary artifacts retain the publisher's
+existing `.g006b.tmp.<token>` sibling contract. The PowerShell publisher is
+byte-unchanged.
+
+Source-driven catalog comparison established that the canonical final schema
+requires 19 table rebuilds: the 17 transform tables plus
+`tenant_policies` and `compatibility_backfill_receipts`. The coordinator
+permits only `crawl_units.location_mode` to be added with the literal
+`legacy_zip`, and only the authenticated transitional
+`tenant_policies.compatibility_policy_hash` to be removed. Before removal, the
+policy id, tenant id, and compatibility hash must match the sole completed
+T-028 receipt. Every other column boundary is exact. All defined application
+indexes and triggers are dropped and recreated from the pinned canonical
+schema inside the same transaction; SQLite autoindexes remain SQLite-owned.
+
+The independent post-commit verifier hashes every canonical baseline column
+and every table. It allows only the authenticated compatibility hash column to
+be absent and excludes final-only `location_mode` from the legacy T-028
+content projection. Execute, pre-mutation resume, post-commit
+committed-unverified resume, and replay all end in the exact 37-table final
+state at `user_version=6002`, 32/32 target columns, `legacy_zip` location mode,
+healthy integrity/foreign keys, and one settle. Raw B2 PREPARED trailing-byte
+tampering is rejected before mutation.
+
+Observed local validation on Windows with Node 24.13.1:
+
+- Focused B2/coordinator matrix: 3/3 selected tests passed across 2 files; 108 skipped; exit 0; 41.14 seconds.
+- Complete B2/B1 and coordinator regression: 111/111 tests passed across 2 files; exit 0; 1051.90 seconds Vitest duration and 1052.9 seconds command wall time.
+- TypeScript: `tsc --noEmit --pretty false` passed, exit 0.
+- Focused ESLint over the four changed TypeScript files passed with no output, exit 0.
+- `git diff --check` passed.
+
+The complete run includes the inherited B1 Windows broker, restart, FileId,
+WAL, retained-final, publication-death, and 512 MiB race coverage plus the new
+B2 execute/resume/replay and direct-forgery rows. No external service,
+authenticated environment, customer data, push, deploy, production system, or
+paid call was used. Build and broader application suites were not rerun for
+this receipt and are not claimed.
+
+## G-006B-B2 rejected-source repair delta
+
+The immutable source
+`5d246fa477fffd9abb8615862f76e8836c1b0f7a` was rejected by all three
+independent read-only reviews and remains preserved as rejected history. The
+architecture review found that the final verifier projected away
+`tenant_policies.compatibility_policy_hash` but compared only the remaining
+column names and row count, allowing changed retained policy payloads to pass.
+The security review also found that a same-file write admitted by the outer
+Windows share mode could occur after B1 verification but before the
+coordinator transaction because the authenticated B1 preservation aggregate
+was not reproved under the coordinator's writer lock. The quality review
+confirmed both findings and requested stronger pin and forgery coverage.
+
+The repair computes the compatibility-column-excluded tenant-policy payload
+from the retained B1 backup after verifying its accepted physical state and
+complete preservation baseline. B2 PREPARED authenticates that projection.
+Execute, resume, and replay re-derive it from the same retained backup before
+accepting PREPARED. The coordinator receives only its pinned payload digest
+through the opaque one-shot handoff.
+
+Inside the coordinator-owned `BEGIN IMMEDIATE` and before any mutation, the
+complete 37-table B1 preservation aggregate is recomputed with only the four
+B1-added `source_card_id` columns projected back out. It must match the
+authenticated B1 aggregate. The coordinator's B2 preservation snapshot must
+also match the PREPARED tenant-policy payload digest. After commit and the
+single native settle, the final verifier hashes the complete retained
+tenant-policy projection and compares it with the PREPARED pin.
+
+Additional negative rows prove that wrong B2 PREPARED and COMMITTED handoff
+pins are rejected before replay, retained tenant-policy payload tampering is
+reported as committed-unverified recovery required without publishing B2
+COMMITTED, and null-prototype, frozen plain-object, and proxy handoffs cannot
+enter either the private consumer or coordinator.
+
+Observed repair validation on Windows:
+
+- Focused repaired matrix: 3/3 selected tests passed across 2 files;
+  108 skipped; exit 0; 50.70 seconds.
+- Complete B2/B1 and coordinator regression: 111/111 tests passed across
+  2 files; exit 0; 1001.88 seconds Vitest duration and 1003.1 seconds command
+  wall time.
+- Node 24.13.1 with Vitest 4.0.18; TypeScript no-emit passed.
+- Focused ESLint over the four changed TypeScript files passed with no output.
+- `git diff --check` passed.
+
+The protected Windows publisher and canonical schema-v1 source remain
+byte-unchanged. No external service, authenticated environment, customer data,
+later implementation card, push, deploy, remote migration, production system,
+or paid call was used.

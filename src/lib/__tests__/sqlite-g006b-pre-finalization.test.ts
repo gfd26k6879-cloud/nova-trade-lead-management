@@ -46,7 +46,10 @@ import {
   canonicalizeSqliteG006bRecord,
   computeSqliteG006bArchiveTreeHash,
   inspectSqliteG006bPreFinalizationEvidence,
+  runSqliteG006bFinalization,
   runSqliteG006bPreFinalization,
+  type SqliteG006bFinalizationExecuteInput,
+  type SqliteG006bFinalizationResumeInput,
   type SqliteG006bExecuteInput,
   type SqliteG006bPreFinalizationInput,
   type SqliteG006bReplayInput,
@@ -388,6 +391,170 @@ function independentArchiveTreeHash(directory: string): string {
 }
 
 describe("G-006B B1 SQLite pre-finalization", () => {
+  it("B2 executes and replays with exactly one post-coordinator settle per run", async () => {
+    const fixture = createAcceptedFixture();
+    const base = await operationInput(fixture);
+    await runSqliteG006bPreFinalization(base);
+    const replay = replayInput(base);
+    const finalization: SqliteG006bFinalizationExecuteInput = {
+      mode: "finalize-execute",
+      replay,
+      finalizationPreparedPath: join(fixture.root, "b2-prepared.json"),
+      finalizationCommittedPath: join(fixture.root, "b2-committed.json"),
+    };
+
+    leaseProcesses.commands.splice(0);
+    await expect(runSqliteG006bFinalization(finalization)).resolves.toMatchObject({
+      mode: "finalize-execute",
+      status: "finalized",
+    });
+    expect(leaseProcesses.commands.filter((command) => command.trim() === "settle")).toHaveLength(1);
+    const finalDb = new Database(fixture.databasePath, { readonly: true });
+    expect(classifySqliteSchemaV1(finalDb)).toMatchObject({
+      kind: "final",
+      userVersion: 6002,
+      applicationTableCount: 37,
+      targetColumnCount: 32,
+      expectedTargetColumnCount: 32,
+    });
+    expect(finalDb.prepare("SELECT location_mode FROM crawl_units WHERE id = 'unit-1'").get())
+      .toEqual({ location_mode: "legacy_zip" });
+    expect((finalDb.prepare("PRAGMA table_info(tenant_policies)").all() as Array<{ name: string }>)
+      .map(({ name }) => name)).not.toContain("compatibility_policy_hash");
+    finalDb.close();
+
+    const preparedId = (JSON.parse(readFileSync(finalization.finalizationPreparedPath, "utf8")) as { handoffId: string }).handoffId;
+    const committedId = (JSON.parse(readFileSync(finalization.finalizationCommittedPath, "utf8")) as { handoffId: string }).handoffId;
+    await expect(runSqliteG006bFinalization({
+      ...finalization,
+      mode: "finalize-replay",
+      expectedFinalizationPreparedHandoffId: `g006b-finalization:v1:${"0".repeat(64)}`,
+      expectedFinalizationCommittedHandoffId: committedId,
+    })).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
+    await expect(runSqliteG006bFinalization({
+      ...finalization,
+      mode: "finalize-replay",
+      expectedFinalizationPreparedHandoffId: preparedId,
+      expectedFinalizationCommittedHandoffId: `g006b-finalization:v1:${"0".repeat(64)}`,
+    })).rejects.toMatchObject({ code: "G006B_RECOVERY_REQUIRED" });
+    leaseProcesses.commands.splice(0);
+    await expect(runSqliteG006bFinalization({
+      ...finalization,
+      mode: "finalize-replay",
+      expectedFinalizationPreparedHandoffId: preparedId,
+      expectedFinalizationCommittedHandoffId: committedId,
+    })).resolves.toMatchObject({ mode: "finalize-replay", status: "replayed" });
+    expect(leaseProcesses.commands.filter((command) => command.trim() === "settle")).toHaveLength(1);
+  }, 120_000);
+
+  it("B2 resumes before mutation and after a committed-unverified coordinator boundary", async () => {
+    const beforeMutation = createAcceptedFixture();
+    const beforeBase = await operationInput(beforeMutation);
+    await runSqliteG006bPreFinalization(beforeBase);
+    const beforeFinalization: SqliteG006bFinalizationExecuteInput = {
+      mode: "finalize-execute",
+      replay: replayInput(beforeBase),
+      finalizationPreparedPath: join(beforeMutation.root, "b2-prepared.json"),
+      finalizationCommittedPath: join(beforeMutation.root, "b2-committed.json"),
+    };
+    const originalExec = Database.prototype.exec;
+    let rejectedBeginImmediate = false;
+    const beforeFault = vi.spyOn(Database.prototype, "exec").mockImplementation(function (
+      this: Database.Database,
+      sql: string,
+    ) {
+      if (!rejectedBeginImmediate && this.name === beforeMutation.databasePath && sql === "BEGIN IMMEDIATE") {
+        rejectedBeginImmediate = true;
+        throw new Error("B2 coordinator interruption before mutation");
+      }
+      return originalExec.call(this, sql);
+    });
+    await expect(runSqliteG006bFinalization(beforeFinalization)).rejects.toMatchObject({
+      code: "G006B_RECOVERY_REQUIRED",
+    });
+    beforeFault.mockRestore();
+    expect(rejectedBeginImmediate).toBe(true);
+    expect(existsSync(beforeFinalization.finalizationPreparedPath)).toBe(true);
+    expect(existsSync(beforeFinalization.finalizationCommittedPath)).toBe(false);
+    const preparedDb = new Database(beforeMutation.databasePath, { readonly: true });
+    expect(classifySqliteSchemaV1(preparedDb).kind).toBe("prepared-legacy");
+    preparedDb.close();
+
+    const beforeResume: SqliteG006bFinalizationResumeInput = {
+      ...beforeFinalization,
+      mode: "finalize-resume",
+      expectedFinalizationPreparedHandoffId: handoffId(beforeFinalization.finalizationPreparedPath),
+    };
+    const preparedBytes = readFileSync(beforeFinalization.finalizationPreparedPath);
+    writeFileSync(beforeFinalization.finalizationPreparedPath, Buffer.concat([preparedBytes, Buffer.from("\n")]));
+    await expect(runSqliteG006bFinalization(beforeResume)).rejects.toMatchObject({
+      code: "G006B_EVIDENCE_DRIFT",
+    });
+    writeFileSync(beforeFinalization.finalizationPreparedPath, preparedBytes);
+    leaseProcesses.commands.splice(0);
+    await expect(runSqliteG006bFinalization(beforeResume)).resolves.toMatchObject({
+      mode: "finalize-resume",
+      status: "finalized",
+    });
+    expect(leaseProcesses.commands.filter((command) => command.trim() === "settle")).toHaveLength(1);
+
+    const afterCommit = createAcceptedFixture();
+    const afterBase = await operationInput(afterCommit);
+    await runSqliteG006bPreFinalization(afterBase);
+    const afterFinalization: SqliteG006bFinalizationExecuteInput = {
+      mode: "finalize-execute",
+      replay: replayInput(afterBase),
+      finalizationPreparedPath: join(afterCommit.root, "b2-prepared.json"),
+      finalizationCommittedPath: join(afterCommit.root, "b2-committed.json"),
+    };
+    let rejectedPostCommitVerifier = false;
+    leaseProcesses.onCommand = (child, command) => {
+      if (rejectedPostCommitVerifier || command.trim() !== "settle") return;
+      rejectedPostCommitVerifier = true;
+      child.kill();
+    };
+    await expect(runSqliteG006bFinalization(afterFinalization)).rejects.toMatchObject({
+      code: "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
+      committed: true,
+      status: "committed-unverified-recovery-required",
+    });
+    leaseProcesses.onCommand = undefined;
+    expect(rejectedPostCommitVerifier).toBe(true);
+    expect(existsSync(afterFinalization.finalizationPreparedPath)).toBe(true);
+    expect(existsSync(afterFinalization.finalizationCommittedPath)).toBe(false);
+    const finalDb = new Database(afterCommit.databasePath, { readonly: true });
+    expect(classifySqliteSchemaV1(finalDb).kind).toBe("final");
+    finalDb.close();
+
+    const afterResume: SqliteG006bFinalizationResumeInput = {
+      ...afterFinalization,
+      mode: "finalize-resume",
+      expectedFinalizationPreparedHandoffId: handoffId(afterFinalization.finalizationPreparedPath),
+    };
+    const finalDatabaseBytes = readFileSync(afterCommit.databasePath);
+    const tamperedPolicy = new Database(afterCommit.databasePath);
+    tamperedPolicy.prepare(`
+      UPDATE tenant_policies
+      SET locale = 'fr-FR', version = version + 1
+      WHERE id = ?
+    `).run(afterCommit.manifest.policyId);
+    tamperedPolicy.close();
+    await expect(runSqliteG006bFinalization(afterResume)).rejects.toMatchObject({
+      code: "G006B_COMMITTED_UNVERIFIED_RECOVERY_REQUIRED",
+      committed: true,
+      status: "committed-unverified-recovery-required",
+      detail: "B2 final full-row preservation",
+    });
+    expect(existsSync(afterFinalization.finalizationCommittedPath)).toBe(false);
+    writeFileSync(afterCommit.databasePath, finalDatabaseBytes);
+    leaseProcesses.commands.splice(0);
+    await expect(runSqliteG006bFinalization(afterResume)).resolves.toMatchObject({
+      mode: "finalize-resume",
+      status: "finalized",
+    });
+    expect(leaseProcesses.commands.filter((command) => command.trim() === "settle")).toHaveLength(1);
+  }, 180_000);
+
   it("uses strict recursive canonical JSON with UTF-16 key order and integer-only outer numbers", () => {
     expect(canonicalizeSqliteG006bRecord({ z: 1, A: [true, null], text: "ok" })).toBe('{"A":[true,null],"text":"ok","z":1}');
     expect(() => canonicalizeSqliteG006bRecord({ unsafe: 0.55 })).toThrow(/safe integer/);
