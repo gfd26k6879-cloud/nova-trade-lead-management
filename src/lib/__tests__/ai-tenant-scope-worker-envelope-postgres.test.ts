@@ -15,7 +15,9 @@ import {
 const G002 = "202607290001_add_location_crawl_tenant_scope.sql";
 const G003 = "202607290002_add_lead_crm_tenant_scope.sql";
 const G004A = "202607290003_add_ai_tenant_scope_worker_envelope.sql";
+const G007P2 = "202607310002_tenant_prefix_ai_verification_indexes.sql";
 const migrationSql = readFileSync(join("supabase", "migrations", G004A), "utf8");
+const g007p2Sql = readFileSync(join("supabase", "migrations", G007P2), "utf8");
 const skipped = new Set(["20260514161714_supabase_ai_verification_cron.sql", "20260514163203_scheduler_v2_sales_ready_pipeline.sql"]);
 const pinnedPostgres16 = "postgres@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20";
 const tenantA = "00000000-0000-4000-8000-000000000401";
@@ -248,7 +250,61 @@ describe("G-004A AI tenant scope and worker envelope", () => {
         expect(version.version.startsWith("16")).toBe(true);
 
         const full = await resetTo(client);
-        expect(full).toEqual({ discovered: 46, applied: 44, skipped: 2 });
+        expect(full).toEqual({ discovered: 47, applied: 45, skipped: 2 });
+        await client.unsafe(g007p2Sql);
+        const verificationIndexes = await client.unsafe<Array<{ indexname: string; indexdef: string }>>(`
+          SELECT indexname,indexdef FROM pg_catalog.pg_indexes
+          WHERE schemaname='public' AND tablename='ai_lead_verifications'
+            AND indexname IN (
+              'idx_ai_verifications_tenant_lead_created',
+              'idx_g007p_ai_verifications_tenant_status_created',
+              'idx_g007p_ai_verifications_tenant_requester_created',
+              'idx_ai_verifications_lead_created',
+              'idx_ai_verifications_status_created',
+              'idx_ai_verifications_requester_created'
+            ) ORDER BY indexname
+        `);
+        expect(verificationIndexes.map((row) => row.indexname)).toEqual([
+          "idx_ai_verifications_tenant_lead_created",
+          "idx_g007p_ai_verifications_tenant_requester_created",
+          "idx_g007p_ai_verifications_tenant_status_created",
+        ]);
+        expect(verificationIndexes.every((row) => row.indexdef.includes("(tenant_id,"))).toBe(true);
+        await client.unsafe("SET enable_seqscan=off");
+        try {
+          for (const hotPath of [
+            {
+              index: "idx_g007p_ai_verifications_tenant_status_created",
+              sql: `EXPLAIN (COSTS OFF) SELECT id FROM public.ai_lead_verifications
+                WHERE tenant_id='${tenantA}' AND status='pending'
+                ORDER BY created_at DESC LIMIT 10`,
+            },
+            {
+              index: "idx_g007p_ai_verifications_tenant_requester_created",
+              sql: `EXPLAIN (COSTS OFF) SELECT id FROM public.ai_lead_verifications
+                WHERE tenant_id='${tenantA}' AND requested_by_user_id='${ownerA}'
+                ORDER BY created_at DESC LIMIT 10`,
+            },
+          ] as const) {
+            const plan = await client.unsafe<Record<string, string>[]>(hotPath.sql);
+            expect(plan.map((row) => Object.values(row)[0]).join("\n")).toContain(hotPath.index);
+          }
+        } finally {
+          await client.unsafe("RESET enable_seqscan");
+        }
+
+        for (const mutation of ["partial", "spoof"] as const) {
+          await resetTo(client, G007P2);
+          if (mutation === "partial") {
+            await client.unsafe("DROP INDEX public.idx_ai_verifications_requester_created");
+          } else {
+            await client.unsafe("CREATE INDEX idx_g007p_ai_verifications_tenant_status_created ON public.ai_lead_verifications(status,tenant_id,created_at DESC)");
+          }
+          await expect(client.unsafe(g007p2Sql)).rejects.toThrow(/G007P2_INDEX_CATALOG_DRIFT/);
+          expect((await client.unsafe(`SELECT count(*)::integer count FROM pg_catalog.pg_indexes
+            WHERE schemaname='public' AND tablename='ai_lead_verifications'
+              AND indexname='idx_g007p_ai_verifications_tenant_requester_created'`))[0].count).toBe(0);
+        }
         expect((await client.unsafe("SELECT count(*)::integer count FROM pg_catalog.pg_attribute WHERE attrelid='public.worker_runs'::regclass AND attname IN ('tenant_id','workspace_id') AND NOT attisdropped"))[0].count).toBe(0);
 
         // Real nonempty T-028 -> G-002 -> G-003 -> G-004A upgrade.

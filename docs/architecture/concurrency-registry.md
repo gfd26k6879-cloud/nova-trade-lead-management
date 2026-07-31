@@ -2673,3 +2673,22 @@ Date: 2026-07-31
   on G-002 through G-005 tenant-owned tables before any further migration.
 - The SQLite portion of G-007 remains dependent on paused G-006 finalized-
   binding work. G-006C2B remains unopened and no external action is authorized.
+
+## G-007P2 tenant-prefixed AI verification index packet
+
+- Parent-only read-only preflight audited the remaining G-002 through G-005
+  tenant-owned-table indexes. Active non-root agents remained zero.
+- PostgreSQL 16 plan evidence showed tenant-filtered AI-verification status and
+  requester reads using global indexes and applying `tenant_id` as a filter;
+  the tenant-plus-lead path was already correct.
+- `migration-sequence` and `integration-ledger` were bounded to migration
+  `202607310002_tenant_prefix_ai_verification_indexes.sql`, its focused G-004A
+  test, migration-count expectations, and append-only acceptance documents.
+- The packet retains the accepted tenant/lead index, removes three global
+  secondary indexes, and adds tenant-prefixed status and requester indexes.
+  Exact final replay succeeds; partial or spoofed catalogs fail closed.
+- G-004A/G-007P2, G-002, G-003, G-005, T-029, TypeScript, focused ESLint,
+  recovery, Fedora-portable coordinator, build, and diff gates pass.
+- Both locks are released after the local acceptance commit. Parent G-007
+  remains open; the next child is read-only G-007P3 preflight. G-006C2B remains
+  unopened, and no remote or external action is authorized.

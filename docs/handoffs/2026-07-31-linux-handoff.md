@@ -297,3 +297,29 @@ the four inherited global `lead_ai_artifacts` hot-path indexes with exact
 tenant-prefixed equivalents and fails closed on catalog drift. Parent G-007 is
 still open; the next preflight is G-007P2 over the remaining G-002 through G-005
 global indexes. No hosted Supabase or remote migration was used.
+
+## G-007P2 continuation receipt
+
+Date: 2026-07-31
+
+G-007P2 audited the live PostgreSQL 16 catalog and split one exact remaining
+family. Tenant-filtered AI-verification status and requester reads selected
+global indexes and applied tenant scope as a filter, while the tenant/lead path
+already used the accepted G-004A index. Migration
+`202607310002_tenant_prefix_ai_verification_indexes.sql` removes the three
+global secondary indexes, retains the accepted tenant/lead index, and adds
+tenant-prefixed status and requester indexes. Exact replay is a no-op and
+partial/spoofed catalog state fails closed.
+
+All local gates passed: G-004A/G-007P2 1/1, G-002 2/2, G-003 2/2, G-005 1/1,
+T-029 19/19 with 47 discovered/45 applied/2 runtime-only skipped migrations,
+TypeScript, focused ESLint, recovery over 37 tables, Fedora coordinator 12
+passed/26 Windows-native skipped, and the production build with 11/11 static
+pages. Historical Windows acceptance remains unchanged.
+
+Parent G-007 remains open. The exact next step is read-only G-007P3 preflight
+over the remaining global-index families, followed by another bounded packet
+only if real tenant-filtered plan evidence proves it. The SQLite portion remains
+paused behind G-006 finalized-binding work; G-006C2B is unopened. No hosted
+Supabase, remote migration, push, PR, deployment, production, provider, or
+credential action occurred.

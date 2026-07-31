@@ -374,7 +374,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 46, applied: 44, skipped: 2 });
+        expect(full).toEqual({ discovered: 47, applied: 45, skipped: 2 });
         await assertCatalog(client);
 
         await resetDatabase(client, false);
