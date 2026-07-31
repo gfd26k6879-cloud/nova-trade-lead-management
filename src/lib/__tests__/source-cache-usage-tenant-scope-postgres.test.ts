@@ -16,7 +16,9 @@ const G002 = "202607290001_add_location_crawl_tenant_scope.sql";
 const G003 = "202607290002_add_lead_crm_tenant_scope.sql";
 const G004A = "202607290003_add_ai_tenant_scope_worker_envelope.sql";
 const G005 = "202607290004_add_source_cache_usage_tenant_scope.sql";
+const G007P1 = "202607310001_tenant_prefix_ai_artifact_indexes.sql";
 const migrationSql = readFileSync(join("supabase", "migrations", G005), "utf8");
+const g007p1Sql = readFileSync(join("supabase", "migrations", G007P1), "utf8");
 const skipped = new Set(["20260514161714_supabase_ai_verification_cron.sql", "20260514163203_scheduler_v2_sales_ready_pipeline.sql"]);
 const pinnedPostgres16 = "postgres@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20";
 const tenantA = "00000000-0000-4000-8000-000000000501";
@@ -247,7 +249,8 @@ describe("G-005 source cache and usage tenant scope", () => {
         expect(version.version.startsWith("16")).toBe(true);
 
         const full = await resetTo(client);
-        expect(full).toEqual({ discovered: 45, applied: 43, skipped: 2 });
+        expect(full).toEqual({ discovered: 46, applied: 44, skipped: 2 });
+        await client.unsafe(g007p1Sql);
         await client.unsafe(migrationSql);
         const [catalog] = await client.unsafe<Array<{ source_columns: number; tenant_columns: number; primary_keys: number; source_checks: number; tenant_indexes: number; global_indexes: number; triggers: number; rls_tables: number; policies: number }>>(`
           SELECT
@@ -267,6 +270,89 @@ describe("G-005 source cache and usage tenant scope", () => {
         `);
         expect(catalog).toMatchObject({ source_columns: 4, tenant_columns: 4, primary_keys: 4, source_checks: 4, global_indexes: 0, triggers: 4, rls_tables: 4, policies: 0 });
         expect(catalog.tenant_indexes).toBeGreaterThanOrEqual(4);
+
+        const expectedG007pConstraints = [
+          "user_market_access_tenant_workspace_user_market_unique",
+          "crawl_runs_tenant_id_id_unique",
+          "crawl_units_tenant_id_id_unique",
+          "crawl_units_tenant_run_fkey",
+          "leads_tenant_id_id_unique",
+          "leads_tenant_place_id_unique",
+          "lead_notes_tenant_lead_fkey",
+          "outreach_events_tenant_lead_fkey",
+          "admin_requests_tenant_lead_fkey",
+          "demos_tenant_lead_fkey",
+          "ai_lead_verifications_tenant_id_id_unique",
+          "lead_ai_artifacts_tenant_id_id_unique",
+          "ai_lead_verifications_tenant_lead_fkey",
+          "lead_ai_artifacts_tenant_lead_fkey",
+          "ai_feedback_events_tenant_lead_fkey",
+          "ai_feedback_events_tenant_verification_fkey",
+          "ai_feedback_events_tenant_artifact_fkey",
+          "ai_usage_events_tenant_lead_fkey",
+          "ai_usage_events_tenant_verification_fkey",
+          "place_cache_pkey",
+          "places_master_pkey",
+          "place_observations_pkey",
+          "api_usage_events_pkey",
+          "place_observations_tenant_source_place_fkey",
+          "place_observations_tenant_run_fkey",
+          "place_observations_tenant_unit_fkey",
+          "place_observations_tenant_lead_fkey",
+          "api_usage_events_tenant_run_fkey",
+          "api_usage_events_tenant_unit_fkey",
+          "api_usage_events_tenant_lead_fkey",
+        ] as const;
+        const g007pConstraints = await client.unsafe<Array<{ conname: string; convalidated: boolean }>>(`
+          SELECT conname, convalidated
+          FROM pg_catalog.pg_constraint
+          WHERE connamespace = 'public'::regnamespace
+            AND conname = ANY($1::text[])
+          ORDER BY conname
+        `, [expectedG007pConstraints]);
+        expect(g007pConstraints.map((row) => row.conname)).toEqual([...expectedG007pConstraints].sort());
+        expect(g007pConstraints.every((row) => row.convalidated)).toBe(true);
+
+        await client.unsafe("SET enable_seqscan = off");
+        try {
+          const hotPaths = [
+            {
+              index: "idx_crawl_units_tenant_retry_ready",
+              sql: `EXPLAIN (COSTS OFF) SELECT id FROM public.crawl_units
+                WHERE tenant_id = '${tenantA}' AND status = 'pending' AND next_retry_at <= now()
+                ORDER BY created_at LIMIT 10`,
+            },
+            {
+              index: "idx_lead_notes_tenant_lead_created",
+              sql: `EXPLAIN (COSTS OFF) SELECT id FROM public.lead_notes
+                WHERE tenant_id = '${tenantA}' AND lead_id = 'lead-1'
+                ORDER BY created_at DESC LIMIT 10`,
+            },
+            {
+              index: "idx_ai_artifacts_tenant_queue",
+              sql: `EXPLAIN (COSTS OFF) SELECT id FROM public.lead_ai_artifacts
+                WHERE tenant_id = '${tenantA}' AND status = 'queued' AND next_retry_at <= now()
+                ORDER BY created_at LIMIT 10`,
+            },
+            {
+              index: "idx_place_observations_tenant_source_place_time",
+              sql: `EXPLAIN (COSTS OFF) SELECT id FROM public.place_observations
+                WHERE tenant_id = '${tenantA}' AND source_card_id = 'google_places_legacy' AND place_id = 'place-1'
+                ORDER BY observed_at DESC LIMIT 10`,
+            },
+          ] as const;
+          for (const hotPath of hotPaths) {
+            const plan = await client.unsafe<Record<string, string>[]>(hotPath.sql);
+            const renderedPlan = plan.map((row) => Object.values(row)[0]).join("\n");
+            if (hotPath.index === "idx_ai_artifacts_tenant_queue") {
+              expect(renderedPlan).toMatch(/idx_(?:ai_artifacts|g007p_ai_artifacts)_tenant_/u);
+            } else {
+              expect(renderedPlan).toContain(hotPath.index);
+            }
+          }
+        } finally {
+          await client.unsafe("RESET enable_seqscan");
+        }
         for (const role of ["anon", "authenticated"]) {
           for (const table of sourceTables) {
             expect((await client.unsafe("SELECT has_table_privilege($1,$2,'SELECT,INSERT,UPDATE,DELETE') allowed", [role, `public.${table}`]))[0].allowed).toBe(false);

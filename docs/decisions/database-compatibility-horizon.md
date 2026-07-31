@@ -185,3 +185,27 @@ This decision is complete when all of the following are satisfied and documented
   - continuing SQLite in legacy mode can obscure RLS/tenant bugs if tests are not explicit per-phase,
   - recovery tooling currently covers only legacy tables, so phase 3+ data is non-portable without contract expansion,
   - object-storage and vector/search confidence depends on explicit connector/storage decisions outside current slice.
+
+## 11) 2026-07-31 Fedora and Supabase operating clarification
+
+This append-only clarification records an environment relocation, not a redesign
+or a rewrite of the Windows acceptance record.
+
+- Fedora/Linux is the primary development and local-validation environment from
+  this point forward.
+- Supabase/Postgres remains the authoritative application database for all new
+  multi-tenant capabilities. Linux development must exercise the Postgres path
+  with an explicit `DATABASE_URL`; absence of that variable continues to select
+  only the bounded legacy/local SQLite compatibility path until a later card
+  changes that runtime selector.
+- The accepted G-006B-B2 Win32/NTFS evidence remains valid historical evidence
+  for its exact legacy boundary. Fedora cannot reproduce or replace its file-ID,
+  share-mode, retained-handle, or PowerShell guarantees.
+- Finalized-only G-006C0/G-006C1 reminting and G-006C2A consumption are still the
+  next dependencies if the dormant SQLite activation path is resumed. They are
+  not prerequisites for Postgres-only work under D-004 and must not be executed
+  on Fedora under weaker filesystem assumptions.
+- G-006C2B remains unopened. No SQLite finalizer or compatibility writer is wired
+  into startup, and no persistent database is mutated by this clarification.
+- The next Postgres dependency slice must be explicitly bounded and validated on
+  disposable PostgreSQL before any hosted Supabase, staging, or production claim.

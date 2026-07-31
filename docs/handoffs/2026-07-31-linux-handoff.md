@@ -256,3 +256,44 @@ evidence. A later Windows-capable runner must continue to own that boundary.
 - Next card: none until explicit resume.
 
 Silence is not approval. Remain paused.
+
+## Fedora resume receipt
+
+Date: 2026-07-31
+
+The user explicitly resumed the local implementation process and selected
+Fedora/Linux as the continuing development environment and Supabase/Postgres as
+the application database direction. The checkout was verified at the handoff
+tagged commit before edits, with a clean worktree, Node 24.13.1, npm 11.8.0,
+and lockfile installation through `npm ci`.
+
+Read-only reconciliation reached these conclusions:
+
+1. G-006B-B2 remains accepted, merged, startup-disabled Windows/NTFS evidence.
+2. Finalized-only G-006C0/G-006C1 reminting followed by G-006C2A finalized-
+   binding consumption is still the correct order if legacy SQLite activation
+   resumes. G-006C2B cannot precede it.
+3. That sequence depends on the Windows native lease contract and is therefore
+   paused, not reinterpreted or reimplemented with weaker Linux filesystem
+   claims.
+4. Accepted D-004 already makes Postgres authoritative and states that SQLite
+   compatibility does not block Postgres-only platform features. The Linux move
+   therefore permits the next explicitly split Postgres dependency slice while
+   preserving every original card and SQLite retirement condition.
+
+The coordinator test file now distinguishes its 12 portable cases from 26
+Windows file-identity/finalization cases. Fedora observed 12 passing and 26
+skipped; the historical Windows 111/111 result is unchanged. The exact next
+implementation preflight is the Postgres-only portion of G-007: audit the
+accepted G-002 through G-005 constraints and indexes, identify only missing
+tenant-prefixed ownership enforcement, then issue a one-migration/test packet
+if a real delta exists. The SQLite portion of G-007 remains dependent on the
+paused G-006 legacy lane.
+
+The first bounded Postgres result is G-007P1. Real PostgreSQL 16 plan evidence
+showed the legacy global AI-artifact status index winning over the tenant queue
+index. Migration `202607310001_tenant_prefix_ai_artifact_indexes.sql` replaces
+the four inherited global `lead_ai_artifacts` hot-path indexes with exact
+tenant-prefixed equivalents and fails closed on catalog drift. Parent G-007 is
+still open; the next preflight is G-007P2 over the remaining G-002 through G-005
+global indexes. No hosted Supabase or remote migration was used.

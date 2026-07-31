@@ -71,6 +71,8 @@ const PREPARED_LEGACY_SOURCE_TABLES = Object.freeze([
 ] as const);
 
 describe("G-006A staged SQLite schema and coordinator", () => {
+  const windowsFileIdentityIt = process.platform === "win32" ? it : it.skip;
+
   it("rejects forged direct access to the cyclic G006B finalization boundary", () => {
     const forgeries = [
       Object.freeze(Object.create(null)),
@@ -440,7 +442,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("keeps prepared-legacy state outside capability minting and whole-upgrade authority", () => {
+  windowsFileIdentityIt("keeps prepared-legacy state outside capability minting and whole-upgrade authority", () => {
     const fixture = createTemporaryPreparedLegacyDatabase();
     try {
       const before = classifySqliteSchemaV1(fixture.db);
@@ -478,7 +480,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("exhaustively partitions sqliteX schema objects and rejects them at mint, finalization, and replay", () => {
+  windowsFileIdentityIt("exhaustively partitions sqliteX schema objects and rejects them at mint, finalization, and replay", () => {
     const beforeMint = createTemporaryStagedDatabase();
     const duringPlan = createTemporaryStagedDatabase();
     const duringReplay = createTemporaryStagedDatabase();
@@ -542,7 +544,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("requires an exact canonical file path and declarative handoff", () => {
+  windowsFileIdentityIt("requires an exact canonical file path and declarative handoff", () => {
     const fixture = createTemporaryStagedDatabase();
     try {
       expect(() => coordinateSqliteSchemaV1WholeUpgrade(fixture.path)).toThrowError(expect.objectContaining({
@@ -581,7 +583,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("selects replay only for exact undefined across staged and final falsey handoffs", () => {
+  windowsFileIdentityIt("selects replay only for exact undefined across staged and final falsey handoffs", () => {
     const staged = createTemporaryStagedDatabase();
     const final = createTemporaryStagedDatabase();
     const values = [undefined, null, false, 0, -0, BigInt(0), Number.NaN, ""] as const;
@@ -717,7 +719,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("copies caller plans and byte binds before mint returns", () => {
+  windowsFileIdentityIt("copies caller plans and byte binds before mint returns", () => {
     const fixture = createTemporaryStagedDatabase();
     const byteId = Buffer.from("copied-byte-id");
     const plan: Array<Record<string, unknown>> = [
@@ -779,7 +781,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("keeps opaque capability identity one-shot across copies, wrong bindings, cross-path attempts, failures, and success", () => {
+  windowsFileIdentityIt("keeps opaque capability identity one-shot across copies, wrong bindings, cross-path attempts, failures, and success", () => {
     const first = createTemporaryStagedDatabase();
     const second = createTemporaryStagedDatabase();
     try {
@@ -850,7 +852,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("retains, cancels, and terminalizes capability-root leases exactly once in deterministic open-close order", () => {
+  windowsFileIdentityIt("retains, cancels, and terminalizes capability-root leases exactly once in deterministic open-close order", () => {
     const canceled = createTemporaryStagedDatabase();
     const invalid = createTemporaryStagedDatabase();
     const mintFailure = createTemporaryStagedDatabase();
@@ -918,7 +920,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("claims recognizable capabilities before rejecting options without inspecting hidden authority", () => {
+  windowsFileIdentityIt("claims recognizable capabilities before rejecting options without inspecting hidden authority", () => {
     const fixture = createTemporaryStagedDatabase();
     let getterCalls = 0;
     let proxyCalls = 0;
@@ -984,7 +986,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("binds capabilities to bigint physical file identity and rejects same-path exact or poisoned clones before plan execution", () => {
+  windowsFileIdentityIt("binds capabilities to bigint physical file identity and rejects same-path exact or poisoned clones before plan execution", () => {
     const exact = createTemporaryStagedDatabase();
     const poisoned = createTemporaryStagedDatabase();
     try {
@@ -1032,7 +1034,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("rejects complete internal-catalog ANALYZE contamination at mint, under lock, and during final replay", () => {
+  windowsFileIdentityIt("rejects complete internal-catalog ANALYZE contamination at mint, under lock, and during final replay", () => {
     const stagedBeforeMint = createTemporaryStagedDatabase();
     const legacyBeforeMint = createTemporaryAcceptedLegacyDatabase();
     const afterMint = createTemporaryStagedDatabase();
@@ -1150,7 +1152,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("binds mint-time rows, catalog, physical indexes, and user_version under the writer lock", () => {
+  windowsFileIdentityIt("binds mint-time rows, catalog, physical indexes, and user_version under the writer lock", () => {
     const row = createTemporaryStagedDatabase();
     const value = createTemporaryStagedDatabase();
     const table = createTemporaryStagedDatabase();
@@ -1212,7 +1214,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("binds exact sqlite_sequence rows at mint and rejects same-file high-water poison under the writer lock", () => {
+  windowsFileIdentityIt("binds exact sqlite_sequence rows at mint and rejects same-file high-water poison under the writer lock", () => {
     const fixture = createTemporaryStagedDatabase();
     try {
       const handoff = createFinalizerHandoff(fixture.path, "g006b:sequence:mint-drift", []);
@@ -1231,7 +1233,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("requires one sqlite_sequence row for nonempty AUTOINCREMENT data even when every id is zero or negative", () => {
+  windowsFileIdentityIt("requires one sqlite_sequence row for nonempty AUTOINCREMENT data even when every id is zero or negative", () => {
     const zero = createTemporaryStagedDatabase();
     const negative = createTemporaryStagedDatabase();
     try {
@@ -1255,7 +1257,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("rebuilds the sole AUTOINCREMENT table only with private mint-time high-water restoration", () => {
+  windowsFileIdentityIt("rebuilds the sole AUTOINCREMENT table only with private mint-time high-water restoration", () => {
     const fixture = createTemporaryStagedDatabase();
     try {
       fixture.db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)")
@@ -1275,7 +1277,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("preserves source columns and payloads across all 37 application tables", () => {
+  windowsFileIdentityIt("preserves source columns and payloads across all 37 application tables", () => {
     const fixture = createTemporaryStagedDatabase();
     try {
       fixture.db.prepare("INSERT INTO zip_codes (zip, city, state, county) VALUES ('80000', 'Original', 'CO', 'Test')").run();
@@ -1303,7 +1305,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("guards database_list and sqlite_temp_schema with closed fault modes and closes the writer", () => {
+  windowsFileIdentityIt("guards database_list and sqlite_temp_schema with closed fault modes and closes the writer", () => {
     for (const mode of ["writer-attached-schema", "writer-temp-object"] as const) {
       const fixture = createTemporaryStagedDatabase();
       try {
@@ -1325,7 +1327,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     )).toThrowError(expect.objectContaining({ code: "G006A_VERIFIER_BOUNDARY_REJECTED" }));
   });
 
-  it("retains writer primaries across rollback, close, and open cleanup failures", () => {
+  windowsFileIdentityIt("retains writer primaries across rollback, close, and open cleanup failures", () => {
     const rollback = createTemporaryStagedDatabase();
     const close = createTemporaryStagedDatabase();
     const open = createTemporaryStagedDatabase();
@@ -1430,7 +1432,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("finalizes only after internal exact-path read-only reopen and closes writer and verifier", () => {
+  windowsFileIdentityIt("finalizes only after internal exact-path read-only reopen and closes writer and verifier", () => {
     const fixture = createTemporaryStagedDatabase();
     try {
       const handoff = createFinalizerHandoff(fixture.path, "g006b:success:reopen", [
@@ -1467,7 +1469,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("reports committed-but-unverified recovery required when the fresh reopen fails", () => {
+  windowsFileIdentityIt("reports committed-but-unverified recovery required when the fresh reopen fails", () => {
     const fixture = createTemporaryStagedDatabase();
     try {
       const handoff = createFinalizerHandoff(fixture.path, "g006b:reopen:failure", []);
@@ -1498,7 +1500,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("reports committed-but-unverified when an exact clone replaces the file between writer close and verifier open", () => {
+  windowsFileIdentityIt("reports committed-but-unverified when an exact clone replaces the file between writer close and verifier open", () => {
     const fixture = createTemporaryStagedDatabase();
     try {
       const handoff = createFinalizerHandoff(fixture.path, "g006b:reopen:identity-swap", []);
@@ -1522,7 +1524,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("reports committed-unverified for late verifier replacement and final-gap removal attempts", () => {
+  windowsFileIdentityIt("reports committed-unverified for late verifier replacement and final-gap removal attempts", () => {
     const lateReplace = createTemporaryStagedDatabase();
     const finalRemove = createTemporaryStagedDatabase();
     try {
@@ -1555,7 +1557,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("replays with one read-only verifier under a retained root lease and reports late drift without commit status", () => {
+  windowsFileIdentityIt("replays with one read-only verifier under a retained root lease and reports late drift without commit status", () => {
     const replay = createTemporaryStagedDatabase();
     const drift = createTemporaryStagedDatabase();
     try {
@@ -1603,7 +1605,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("rejects concurrent WAL commits across the verifier read interval and closes the snapshot connection", () => {
+  windowsFileIdentityIt("rejects concurrent WAL commits across the verifier read interval and closes the snapshot connection", () => {
     const finalization = createTemporaryStagedDatabase();
     const replay = createTemporaryStagedDatabase();
     try {
@@ -1677,7 +1679,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("rolls back ordinary accepted-legacy plan failures and allows a fresh capability", () => {
+  windowsFileIdentityIt("rolls back ordinary accepted-legacy plan failures and allows a fresh capability", () => {
     const fixture = createTemporaryAcceptedLegacyDatabase();
     try {
       const before = classifySqliteSchemaV1(fixture.db);
@@ -1698,7 +1700,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("rejects a persisted wrong physical partial-index spoof after close and reopen", () => {
+  windowsFileIdentityIt("rejects a persisted wrong physical partial-index spoof after close and reopen", () => {
     const fixture = createTemporaryStagedDatabase();
     try {
       insertFoundation(fixture.db);
@@ -1717,7 +1719,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     }
   });
 
-  it("replays exact file-backed final state and retains row, payload, scope, and foreign-key guards", () => {
+  windowsFileIdentityIt("replays exact file-backed final state and retains row, payload, scope, and foreign-key guards", () => {
     const payloadDb = createAcceptedLegacyDatabase();
     const countDb = createAcceptedLegacyDatabase();
     const scopeDb = createAcceptedLegacyDatabase();

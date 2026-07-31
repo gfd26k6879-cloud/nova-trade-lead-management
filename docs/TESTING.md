@@ -39,3 +39,15 @@ E2E_ALLOW_MUTATIONS=1 npm run test:e2e:mutating
 For any non-loopback target, `E2E_ALLOW_REMOTE_MUTATIONS=1` is also required. Use that override only after approving the target, fixture data, rollback, and cleanup. Never point the mutating suite at production by habit.
 
 The public project is release evidence for public rendering only. It does not prove authenticated workflows, production data, migrations, workers, paid APIs, or deployment state.
+
+## Linux and Windows SQLite lanes
+
+On Linux, `src/lib/__tests__/sqlite-schema-coordinator.test.ts` runs the 12
+portable catalog, schema, and hostile-input cases and reports the 26 native
+file-identity/finalization cases as skipped. Those 26 cases require the accepted
+Windows/NTFS lease boundary; a Linux skip is not a pass and does not replace the
+recorded Windows evidence.
+
+Do not run `src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts` on Linux as
+acceptance evidence. New platform database behavior must instead use the
+explicit disposable-Postgres lane named by its task receipt.

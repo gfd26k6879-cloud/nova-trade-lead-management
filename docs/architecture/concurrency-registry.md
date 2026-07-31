@@ -2630,3 +2630,46 @@ Linux, first verify the fresh clone and current integration tip, then perform a
 read-only Sol reconciliation for finalized-only G-006C0/G-006C1 reminting and
 G-006C2A consumption against the accepted B2 final contract. Implementation
 requires a new bounded packet and fresh locks. Silence is not approval.
+
+## Fedora/Supabase resume reconciliation
+
+Date: 2026-07-31
+
+- The user explicitly resumed local implementation on Fedora and confirmed
+  Supabase/Postgres as the application database direction. Repository identity,
+  branch, handoff tag, clean baseline, and pinned Node/npm versions matched.
+- Sol reconciles the required finalized-only order as C0 final remint, C1 final
+  remint, then C2A finalized-binding consumption before any C2B. The order is
+  preserved but paused because its upgraded-path proof is the accepted Windows
+  native lease contract; Fedora cannot replace that evidence.
+- D-004 makes Postgres authoritative and explicitly prevents SQLite parity from
+  blocking Postgres-only work. The next eligible preflight is therefore the
+  Postgres-only child `G-007P`, preserving parent G-007 and its SQLite dependency.
+- `G-007P` initially holds no migration lock. It is read-only over G-002 through
+  G-005 migrations/tests and may request `migration-sequence` only after proving
+  a missing tenant constraint or index and defining one exact SQL/test packet.
+- The coordinator test classification changes one test path only: 12 portable
+  cases run on Fedora and 26 native file-identity/finalization cases skip there
+  while remaining active on Windows. Production SQLite source is unchanged.
+- Active non-root agents remain zero. No G-006C2B, startup, persistent database,
+  remote, provider, deployment, production, credential, or outreach action is
+  authorized by this reconciliation.
+
+## G-007P1 tenant-prefixed AI artifact index packet
+
+- Read-only G-007P plan inspection proved one concrete Postgres defect: a
+  tenant-filtered AI-artifact queue plan selected the inherited global status
+  index. `migration-sequence` was then acquired for one exact migration.
+- G-007P1 replaces only the four global `lead_ai_artifacts` hot-path indexes
+  with tenant-prefixed lead/type, status, retry-ready, and requester indexes.
+  Exact final replay returns without DDL; partial or spoofed baseline/final
+  catalog raises `G007P1_INDEX_CATALOG_DRIFT`.
+- Real disposable PostgreSQL 16 gates pass for G-002 2/2, G-003 2/2, G-004A
+  1/1, G-005/G-007P1 1/1, and T-029 19/19. Static, recovery, and build gates
+  pass. The initial synthetic plan failure and null-unsafe optional-regclass
+  preflight failure are retained in the validation receipt.
+- G-007P1 releases `migration-sequence` after final gates. Parent G-007 remains
+  open. The next read-only child is G-007P2, auditing remaining global indexes
+  on G-002 through G-005 tenant-owned tables before any further migration.
+- The SQLite portion of G-007 remains dependent on paused G-006 finalized-
+  binding work. G-006C2B remains unopened and no external action is authorized.

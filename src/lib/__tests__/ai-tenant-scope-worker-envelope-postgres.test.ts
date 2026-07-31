@@ -248,7 +248,7 @@ describe("G-004A AI tenant scope and worker envelope", () => {
         expect(version.version.startsWith("16")).toBe(true);
 
         const full = await resetTo(client);
-        expect(full).toEqual({ discovered: 45, applied: 43, skipped: 2 });
+        expect(full).toEqual({ discovered: 46, applied: 44, skipped: 2 });
         expect((await client.unsafe("SELECT count(*)::integer count FROM pg_catalog.pg_attribute WHERE attrelid='public.worker_runs'::regclass AND attname IN ('tenant_id','workspace_id') AND NOT attisdropped"))[0].count).toBe(0);
 
         // Real nonempty T-028 -> G-002 -> G-003 -> G-004A upgrade.
