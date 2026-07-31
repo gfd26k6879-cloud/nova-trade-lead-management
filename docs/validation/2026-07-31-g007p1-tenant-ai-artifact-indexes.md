@@ -4,6 +4,8 @@ Date: 2026-07-31
 
 Baseline: `0c48035ef4a44b64580716b04d3b629f0c3b5b47`
 
+Source commit: `076ce53719749546efaa5e89f113845bf2b8a4a0`
+
 Branch: `codex/nova-multitenant-integration`
 
 Status: locally implemented and validated; parent G-007 remains open
