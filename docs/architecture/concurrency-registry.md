@@ -2522,3 +2522,39 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   capacity. Their findings must be reconciled into one minimal repair-delta
   packet before a single bounded producer may continue in an authorized,
   writable repair worktree.
+
+## G-006B-B2 checkpoint repair-delta reconciliation
+
+- All three read-only lanes return `REPAIR`. Architecture accepts the private
+  one-shot handoff, coordinator-owned connection/transaction, terminal burn,
+  static live-binding cycle and absence of activation, but finds the two tests
+  and two append-only receipt updates missing. Quality confirms the checkpoint
+  contains only the two source paths and therefore has no executable B2 packet.
+- Security identifies a concrete P1. `verifyCurrentPreparedForFinalization`
+  calls the native broker's one-shot `settle` before the coordinator writer.
+  The resulting `OpenSettledRead` handle uses `FILE_SHARE_READ`, so it prevents
+  the coordinator's write-open. If execution reached the later boundary,
+  `verifyFinalizedDatabase` calls `settle` again and the unchanged broker rejects
+  it as `database already settled`. Execute/resume therefore cannot produce
+  truthful B2 COMMITTED evidence from the checkpoint.
+- Sol retains the corrected ownership design from control: G006B holds the
+  original native no-replace lease and lock while the coordinator owns its own
+  exact-path file lease, connection and `BEGIN IMMEDIATE` transaction. The
+  quality lane's proposed transfer of a raw/native lease into the coordinator is
+  rejected because the accepted boundary intentionally transfers only the
+  opaque fieldless evidence handoff. The coordinator must continue reopening
+  and independently pinning canonical/native identity.
+- The smallest repair keeps both checkpoint source files. Pre-finalization
+  verification uses native inspection under the still-held root lease and lock
+  without consuming the broker's settled boundary. Final verification calls
+  `settle` exactly once after coordinator commit, then reopens, checks sidecars,
+  publishes B2 COMMITTED and supports exact replay/recovery. The publisher
+  script remains byte-identical.
+- The repair ceiling is exactly the existing six paths: the two source files,
+  their two focused test files, and the two append-only receipts. Required
+  evidence covers execute/resume/replay, prepared/final and artifact crash
+  pairings, committed-unverified recovery, B1/B2 pins, copy/proxy/forgery/
+  cross-file rejection, cycle/direct-bypass initialization, fixed seventeen-
+  table preservation, `6000` to `6002`, validated `legacy_zip` derivation,
+  exact scope and protected-publisher gates. No activation, startup, C0/C1/C2,
+  PostgreSQL, persistent database or external action is authorized.
