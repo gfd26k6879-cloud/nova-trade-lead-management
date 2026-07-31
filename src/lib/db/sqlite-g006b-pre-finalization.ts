@@ -729,8 +729,8 @@ function validateFinalizationInput(input: SqliteG006bFinalizationInput): Validat
     ...(mode === "finalize-replay" ? {
       expectedFinalizationCommittedHandoffId: expectedCommitted,
     } : {}),
-    finalizationPreparedTemporaryPath: `${input.finalizationPreparedPath}.g006b-b2.tmp.${token}`,
-    finalizationCommittedTemporaryPath: `${input.finalizationCommittedPath}.g006b-b2.tmp.${token}`,
+    finalizationPreparedTemporaryPath: `${input.finalizationPreparedPath}.g006b.tmp.${token}`,
+    finalizationCommittedTemporaryPath: `${input.finalizationCommittedPath}.g006b.tmp.${token}`,
   });
 }
 
@@ -1396,6 +1396,38 @@ function samePreservation(left: PreservationEvidence, right: PreservationEvidenc
   return sameCanonical(left, right);
 }
 
+function finalizationPreservationBaseline(baseline: PreservationEvidence): PreservationEvidence {
+  const tables = baseline.tables.map((table) => table.name === "tenant_policies"
+    ? Object.freeze({
+      ...table,
+      columns: Object.freeze(table.columns.filter((column) => column !== "compatibility_policy_hash")),
+    })
+    : table);
+  return Object.freeze({ ...baseline, tables: Object.freeze(tables) });
+}
+
+function sameFinalizationPreservation(
+  baseline: PreservationEvidence,
+  final: PreservationEvidence,
+): boolean {
+  if (baseline.algorithm !== final.algorithm
+      || baseline.domain !== final.domain
+      || baseline.relationshipOrphanCount !== final.relationshipOrphanCount
+      || baseline.transformAggregateSha256 !== final.transformAggregateSha256
+      || baseline.tables.length !== final.tables.length
+      || !sameCanonical(baseline.audit, final.audit)) {
+    return false;
+  }
+  const finalTables = new Map(final.tables.map((table) => [table.name, table]));
+  return baseline.tables.every((table) => {
+    const actual = finalTables.get(table.name);
+    if (!actual) return false;
+    if (table.name !== "tenant_policies") return sameCanonical(table, actual);
+    const expectedColumns = table.columns.filter((column) => column !== "compatibility_policy_hash");
+    return sameCanonical(expectedColumns, actual.columns) && table.rowCount === actual.rowCount;
+  });
+}
+
 function receiptRow(db: Database.Database, manifest: CompatibilityBackfillManifest): Record<string, unknown> {
   const rows = db.prepare(`SELECT ${RECEIPT_ROW_COLUMNS.map(quoteIdentifier).join(", ")} FROM compatibility_backfill_receipts WHERE idempotency_key=?`).all(manifest.idempotencyKey) as Array<Record<string, unknown>>;
   if (rows.length !== 1) fail("G006B_EVIDENCE_DRIFT", "exact T028 receipt row missing or duplicated");
@@ -1857,7 +1889,9 @@ function verifyPostT028(db: Database.Database, input: ValidatedInput, receipt: C
   const row = receiptRow(db, input.manifest);
   if (receiptRowSha256(row) !== input.expectedReceiptRowSha256 || !sameCanonical(parseReceipt(row), receipt)) fail("G006B_EVIDENCE_DRIFT", "post T028 receipt row");
   for (const table of COMPATIBILITY_TENANT_TABLES) {
-    const columns = (db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as Array<{ name: string }>).map((entry) => entry.name).filter((column) => column !== "source_card_id");
+    const columns = (db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as Array<{ name: string }>)
+      .map((entry) => entry.name)
+      .filter((column) => column !== "source_card_id" && column !== "location_mode");
     const rows = db.prepare(`SELECT ${columns.map(quoteIdentifier).join(", ")} FROM ${quoteIdentifier(table)}`).all() as Array<Record<string, unknown>>;
     const expectation = input.manifest.legacyTables.find((entry) => entry.table === table);
     const checksum = compatibilityContentChecksum(rows);
@@ -1885,7 +1919,8 @@ async function verifyPostDatabase(
   preparedPayload: Record<string, unknown>,
   receipt: CompatibilityBackfillReceipt,
   lease: NativeDatabaseLease,
-  settledNative: SqliteG006bNativeIdentity,
+  boundaryNative: SqliteG006bNativeIdentity,
+  sidecars: "captured" | "unsettled" = "captured",
 ): Promise<{ database: Record<string, CanonicalValue>; verification: Record<string, unknown> }> {
   const db = new Database(input.databasePath, { readonly: true, fileMustExist: true });
   db.pragma("foreign_keys = ON");
@@ -1911,9 +1946,14 @@ async function verifyPostDatabase(
     if (db.open && db.inTransaction) { try { db.exec("ROLLBACK"); } catch { /* primary is preserved */ } }
     throw error;
   } finally { db.close(); }
-  await lease.inspectAndReleaseSidecars();
+  // B1 and post-coordinator B2 verification retain the broker-captured
+  // sidecars. B2's pre-coordinator check deliberately stays on the original
+  // no-replace lease: settling there would install a FILE_SHARE_READ-only
+  // handle and prevent the coordinator from opening its independent writer.
+  if (sidecars === "captured") await lease.inspectAndReleaseSidecars();
+  else assertNoWalFrames(input.databasePath);
   const native = await lease.inspect();
-  if (!sameCanonical(native, settledNative)) fail("G006B_EVIDENCE_DRIFT", "post snapshot changed settled main bytes");
+  if (!sameCanonical(native, boundaryNative)) fail("G006B_EVIDENCE_DRIFT", "post snapshot changed boundary main bytes");
   const preparedDatabase = preparedPayload.database as Record<string, unknown>;
   const expectedNative = preparedDatabase.native as SqliteG006bNativeIdentity;
   if (native.fileId !== expectedNative.fileId || native.volumeSerialNumber !== expectedNative.volumeSerialNumber) fail("G006B_EVIDENCE_DRIFT", "post database file identity");
@@ -2310,7 +2350,9 @@ async function authenticateB1FinalizationSource(
 function finalizationMutationEvidence(): Record<string, CanonicalValue> {
   return {
     transformTables: SQLITE_SCHEMA_V1_TRANSFORM_TABLES,
-    rebuildStrategy: "coordinator-owned-fixed-17-table-rebuild",
+    canonicalizationTables: ["tenant_policies", "compatibility_backfill_receipts"],
+    rebuildStrategy: "coordinator-owned-fixed-19-table-rebuild",
+    transitionalRemoval: "tenant_policies.compatibility_policy_hash",
     locationMode: { source: "legacy_zip", insertedLiteral: "legacy_zip", activation: "blocked" },
     grantsStartupActivation: false,
     grantsProviderExecution: false,
@@ -2425,9 +2467,17 @@ async function verifyCurrentPreparedForFinalization(
   source: AuthenticatedB1FinalizationSource,
   lease: NativeDatabaseLease,
 ): Promise<void> {
-  const settled = await lease.settle();
-  await lease.captureSidecars(input.replay.databasePath);
-  const verified = await verifyPostDatabase(input.replay, source.prepared.payload, source.receipt, lease, settled);
+  // Do not consume the broker's one-shot settled lease before the coordinator
+  // takes its own exact-path writer lease and BEGIN IMMEDIATE transaction.
+  const inspected = await lease.inspect();
+  const verified = await verifyPostDatabase(
+    input.replay,
+    source.prepared.payload,
+    source.receipt,
+    lease,
+    inspected,
+    "unsettled",
+  );
   if (!sameCanonical(verified.database, source.committed.payload.database)
       || !sameCanonical(verified.verification, source.committed.payload.verification)) {
     fail("G006B_RECOVERY_REQUIRED", "current prepared database differs from B1 COMMITTED");
@@ -2484,8 +2534,10 @@ async function verifyFinalizedDatabase(
     const journalMode = assertDatabaseConnectionBoundary(db);
     const state = assertFinalState(db);
     const baseline = source.prepared.payload.preservation as unknown as PreservationEvidence;
-    const preservation = capturePreservation(db, baseline);
-    if (!samePreservation(baseline, preservation)) fail("G006B_EVIDENCE_DRIFT", "B2 final full-row preservation");
+    const preservation = capturePreservation(db, finalizationPreservationBaseline(baseline));
+    if (!sameFinalizationPreservation(baseline, preservation)) {
+      fail("G006B_EVIDENCE_DRIFT", "B2 final full-row preservation");
+    }
     const counts = sourceCounts(db);
     if (counts.some((count) => count.matching !== count.total || count.nulls !== 0 || count.other !== 0)) {
       fail("G006B_EVIDENCE_DRIFT", "B2 source-card preservation");

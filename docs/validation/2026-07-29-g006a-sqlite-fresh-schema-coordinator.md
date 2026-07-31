@@ -502,3 +502,45 @@ recovery fixture was altered, no Docker resource was created, and no customer,
 credential, provider, paid, remote, or production system was accessed. G-006A
 remains preparation only; G-006B/C, startup activation, recovery reconciliation,
 and later acceptance remain out of scope.
+
+## G-006B-B2 private coordinator finalization receipt
+
+Date: 2026-07-31
+
+The coordinator now exposes one narrowly typed G-006B finalization entry point.
+It accepts only the opaque runtime capability minted after G-006B has
+authenticated B1 and durably published B2 PREPARED. The weak-map capability is
+claimed before evidence validation and is terminal on success or failure.
+Forged direct calls fail with `G006B_STATE_REJECTED`; no generic database,
+transaction, SQL-plan, callback, or lease API was added.
+
+For this one boundary the coordinator retains exclusive ownership of an
+independent exact-path root lease, writer, `BEGIN IMMEDIATE`, commit, close,
+and read-only reopen. G-006B continues to own the separate Windows native
+no-replace lease, lock, evidence artifacts, and terminal settle. The cyclic
+module binding is live only at call time and the focused direct-bypass test
+loads both modules and rejects a forged capability.
+
+The fixed finalization rebuild set is 19 tables: all 17 schema-v1 transform
+tables plus the two source-proven transitional shapes,
+`tenant_policies` and `compatibility_backfill_receipts`. The only permitted
+column delta is addition of `crawl_units.location_mode='legacy_zip'` and
+removal of receipt-bound `tenant_policies.compatibility_policy_hash`.
+Canonical application indexes and triggers are recreated from
+`SQLITE_SCHEMA_V1_SQL`; the final catalog, internal catalog, physical manifest,
+37-table set, row counts, canonical payloads, SQLite-owned state, health, and
+file identity are verified before commit and again after reopen.
+
+Observed local validation:
+
+- Full `sqlite-g006b-pre-finalization.test.ts` plus
+  `sqlite-schema-coordinator.test.ts`: 111/111 passed, exit 0, 1051.90 seconds.
+- Focused execute/resume/replay plus forged-boundary matrix: 3/3 passed, exit 0.
+- Node 24.13.1 TypeScript no-emit check: passed.
+- Focused ESLint for both source files and both test files: passed with zero output.
+- Diff whitespace check: passed.
+
+This remains an artifact-only finalization capability. It does not wire
+startup, activate the database, authorize providers, or expand G-006A's
+existing general finalizer surface. No external or production activity
+occurred.

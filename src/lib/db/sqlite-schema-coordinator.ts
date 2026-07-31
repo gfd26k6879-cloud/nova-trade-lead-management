@@ -17,7 +17,6 @@ import Database from "better-sqlite3";
 
 import {
   consumeSqliteG006bPreparedFinalizationHandoffForCoordinator,
-  hashSqliteG006bDomain,
   type SqliteG006bPreparedFinalizationHandoff,
 } from "./sqlite-g006b-pre-finalization";
 
@@ -40,7 +39,11 @@ import {
 export const ACCEPTED_LEGACY_SQLITE_CATALOG_DIGEST = "07091889ff9806c20356f092d3812ff325f22537c63a56149eea7dab0a529ade" as const;
 export const SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST = "90117968b064e6bded92dbf82c18fffa31951c0998c727f662eee56e78721ba6" as const;
 export const SQLITE_SCHEMA_V1_PHYSICAL_MANIFEST_DIGEST = "07e10bb5c43d98d6f561d3c0b0f9f39a9ad2d579ed1a73b9e2a7a455367fdf79" as const;
-const G006B_PRESERVATION_DOMAIN = "NOVATRADE\0G006B\0B1\0PRESERVATION\0V1\0" as const;
+const G006B_B2_REBUILD_TABLES = Object.freeze([
+  ...SQLITE_SCHEMA_V1_TRANSFORM_TABLES,
+  "tenant_policies",
+  "compatibility_backfill_receipts",
+] as const);
 
 export type SqliteSchemaV1StateKind =
   | "fresh"
@@ -800,11 +803,7 @@ export function finalizeSqliteSchemaV1PreparedFromG006b(
       }
       assertPreparedLegacyLocationRows(writer);
       assertPreparedLegacyFoundation(writer, evidence.tenantId, evidence.workspaceId);
-      const preservationAggregate = g006bPreservationAggregateSha256(writer);
-      if (preservationAggregate !== evidence.sourcePreservationAggregateSha256) {
-        throw new SqliteSchemaV1CoordinatorError("G006A_SOURCE_SNAPSHOT_DRIFT", "G-006B preservation aggregate");
-      }
-      preservation = captureSqliteSchemaV1PreservationSnapshot(writer);
+      preservation = captureSqliteG006bFinalizationPreservationSnapshot(writer);
       sqliteOwnedState = captureSqliteOwnedState(writer);
 
       rebuildPreparedLegacyTransformTables(writer);
@@ -814,7 +813,19 @@ export function finalizeSqliteSchemaV1PreparedFromG006b(
       if (after.kind !== "final"
           || after.userVersion !== SQLITE_SCHEMA_V1_FINAL_USER_VERSION
           || after.catalogDigest !== SQLITE_SCHEMA_V1_CATALOG_DIGEST) {
-        throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_POSTCONDITION_FAILED", after.reason);
+        const actualCatalog = readSqliteSchemaCatalogPartition(writer).application;
+        const expectedCatalog = canonicalFinalSchemaRows();
+        const mismatchIndex = actualCatalog.findIndex((row, index) => JSON.stringify(row) !== JSON.stringify(expectedCatalog[index]));
+        const actualMismatch = mismatchIndex >= 0 ? actualCatalog[mismatchIndex] : undefined;
+        const expectedMismatch = mismatchIndex >= 0 ? expectedCatalog[mismatchIndex] : undefined;
+        const mismatch = mismatchIndex >= 0
+          ? `${actualMismatch?.type ?? "missing"}/${actualMismatch?.name ?? "missing"}`
+            + `:${expectedMismatch?.type ?? "missing"}/${expectedMismatch?.name ?? "missing"}`
+          : `length=${actualCatalog.length}/${expectedCatalog.length}`;
+        throw new SqliteSchemaV1CoordinatorError(
+          "G006A_FINALIZER_POSTCONDITION_FAILED",
+          `${after.reason}; catalog=${after.catalogDigest}/${SQLITE_SCHEMA_V1_CATALOG_DIGEST}; first=${mismatchIndex}:${mismatch}`,
+        );
       }
       assertSqliteInternalCatalog(writer, SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST);
       assertSqliteSchemaV1PhysicalManifest(writer);
@@ -900,15 +911,15 @@ function canonicalFinalSchemaRows(): readonly SqliteSchemaCatalogRow[] {
 function rebuildPreparedLegacyTransformTables(db: Database.Database): void {
   const expectedRows = canonicalFinalSchemaRows();
   const expectedTables = new Map(expectedRows
-    .filter((row) => row.type === "table" && SQLITE_SCHEMA_V1_TRANSFORM_TABLES.some((table) => table === row.name))
+    .filter((row) => row.type === "table" && G006B_B2_REBUILD_TABLES.some((table) => table === row.name))
     .map((row) => [row.name, row.sql] as const));
-  if (expectedTables.size !== SQLITE_SCHEMA_V1_TRANSFORM_TABLES.length
+  if (expectedTables.size !== G006B_B2_REBUILD_TABLES.length
       || [...expectedTables.values()].some((sql) => typeof sql !== "string")) {
     throw new SqliteSchemaV1CoordinatorError("G006A_CATALOG_DRIFT", "canonical G-006B table definitions");
   }
 
   const temporaryNames = new Map<string, string>();
-  for (const table of SQLITE_SCHEMA_V1_TRANSFORM_TABLES) {
+  for (const table of G006B_B2_REBUILD_TABLES) {
     const temporary = `__g006b_b2_${table}`;
     const collision = db.prepare("SELECT 1 FROM main.sqlite_schema WHERE name = ?").get(temporary);
     if (collision) {
@@ -918,7 +929,7 @@ function rebuildPreparedLegacyTransformTables(db: Database.Database): void {
     temporaryNames.set(table, temporary);
   }
 
-  for (const table of SQLITE_SCHEMA_V1_TRANSFORM_TABLES) {
+  for (const table of G006B_B2_REBUILD_TABLES) {
     const sql = expectedTables.get(table);
     if (typeof sql !== "string") {
       throw new SqliteSchemaV1CoordinatorError("G006A_CATALOG_DRIFT", `missing canonical table ${table}`);
@@ -926,20 +937,29 @@ function rebuildPreparedLegacyTransformTables(db: Database.Database): void {
     db.exec(sql);
   }
 
-  for (const table of SQLITE_SCHEMA_V1_TRANSFORM_TABLES) {
+  for (const table of G006B_B2_REBUILD_TABLES) {
     const temporary = temporaryNames.get(table)!;
     const sourceColumns = readTableColumns(db, temporary);
     const targetColumns = readTableColumns(db, table);
     const addedColumns = targetColumns.filter((column) => !sourceColumns.includes(column));
     const removedColumns = sourceColumns.filter((column) => !targetColumns.includes(column));
     const expectedAdded = table === "crawl_units" ? ["location_mode"] : [];
-    if (!sameStrings(addedColumns, expectedAdded) || removedColumns.length !== 0) {
+    const expectedRemoved = table === "tenant_policies" ? ["compatibility_policy_hash"] : [];
+    if (!sameStrings(addedColumns, expectedAdded) || !sameStrings(removedColumns, expectedRemoved)) {
       throw new SqliteSchemaV1CoordinatorError(
         "G006A_FINALIZER_POSTCONDITION_FAILED",
         `${table} column boundary added=${addedColumns.join(",")} removed=${removedColumns.join(",")}`,
       );
     }
-    const sourceProjection = sourceColumns.map(quoteIdentifier).join(", ");
+    const preservedColumns = sourceColumns.filter((column) => targetColumns.includes(column));
+    const expectedPreservedColumns = targetColumns.filter((column) => !expectedAdded.includes(column));
+    if (!sameStrings(preservedColumns, expectedPreservedColumns)) {
+      throw new SqliteSchemaV1CoordinatorError(
+        "G006A_FINALIZER_POSTCONDITION_FAILED",
+        `${table} preserved column order`,
+      );
+    }
+    const sourceProjection = preservedColumns.map(quoteIdentifier).join(", ");
     const targetProjection = table === "crawl_units"
       ? `${sourceProjection}, ${quoteIdentifier("location_mode")}`
       : sourceProjection;
@@ -949,15 +969,17 @@ function rebuildPreparedLegacyTransformTables(db: Database.Database): void {
     db.exec(`INSERT INTO ${quoteIdentifier(table)} (${targetProjection}) SELECT ${selectProjection} FROM ${quoteIdentifier(temporary)}`);
   }
 
-  for (const table of [...SQLITE_SCHEMA_V1_TRANSFORM_TABLES].reverse()) {
+  for (const table of [...G006B_B2_REBUILD_TABLES].reverse()) {
     db.prepare(`DROP TABLE ${quoteIdentifier(temporaryNames.get(table)!)}`).run();
   }
 
-  const existingNames = new Set((db.prepare("SELECT name FROM main.sqlite_schema").all() as Array<{ name: string }>).map((row) => row.name));
   for (const row of expectedRows) {
-    if ((row.type !== "index" && row.type !== "trigger") || row.sql === null || existingNames.has(row.name)) continue;
+    if ((row.type !== "index" && row.type !== "trigger") || row.sql === null) continue;
+    db.prepare(`DROP ${row.type.toUpperCase()} IF EXISTS ${quoteIdentifier(row.name)}`).run();
+  }
+  for (const row of expectedRows) {
+    if ((row.type !== "index" && row.type !== "trigger") || row.sql === null) continue;
     db.exec(row.sql);
-    existingNames.add(row.name);
   }
 }
 
@@ -996,30 +1018,30 @@ function assertPreparedLegacyFoundation(db: Database.Database, tenantId: string,
       throw new SqliteSchemaV1CoordinatorError("G006A_SOURCE_SNAPSHOT_DRIFT", `${table} workspace foundation`);
     }
   }
-  const receipt = db.prepare(`
-    SELECT COUNT(*) AS matching
+  const receipts = db.prepare(`
+    SELECT policy_id AS policyId, policy_hash AS policyHash
     FROM compatibility_backfill_receipts
     WHERE tenant_id = ? AND workspace_id = ? AND status = 'completed'
-  `).get(tenantId, workspaceId) as { matching: number | bigint };
-  if (Number(receipt.matching) !== 1) {
+  `).all(tenantId, workspaceId) as Array<{ policyId: string; policyHash: string }>;
+  if (receipts.length !== 1) {
     throw new SqliteSchemaV1CoordinatorError("G006A_SOURCE_SNAPSHOT_DRIFT", "T028 foundation receipt");
   }
-}
-
-function g006bPreservationAggregateSha256(db: Database.Database): string {
-  const summaries = readApplicationTableNames(db).map((name) => {
-    const columns = readTableColumns(db, name);
-    const projection = columns.map(quoteIdentifier).join(", ");
-    const rows = db.prepare(`SELECT ${projection} FROM ${quoteIdentifier(name)}`).all() as Array<Record<string, unknown>>;
-    const encodedRows = rows.map((row) => canonicalRow(columns, row)).sort(compareCodeUnits);
-    return {
-      name,
-      columns,
-      rowCount: rows.length,
-      payloadSha256: sha256(`${G006B_PRESERVATION_DOMAIN}TABLE\0${name}\0${JSON.stringify(encodedRows)}`),
-    };
-  });
-  return hashSqliteG006bDomain(`${G006B_PRESERVATION_DOMAIN}AGGREGATE\0`, summaries);
+  const receipt = receipts[0]!;
+  const policy = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE
+        WHEN id = ? AND tenant_id = ? AND compatibility_policy_hash = ? THEN 1
+        ELSE 0
+      END) AS matching
+    FROM tenant_policies
+  `).get(receipt.policyId, tenantId, receipt.policyHash) as {
+    total: number | bigint;
+    matching: number | bigint | null;
+  };
+  if (Number(policy.total) !== 1 || Number(policy.matching ?? 0) !== 1) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_SOURCE_SNAPSHOT_DRIFT", "T028 tenant policy binding");
+  }
 }
 
 function assertFinalLegacyLocationRows(db: Database.Database): void {
@@ -1033,6 +1055,35 @@ function assertFinalLegacyLocationRows(db: Database.Database): void {
   if (Number(row.invalid) !== 0) {
     throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_POSTCONDITION_FAILED", "legacy-zip location-mode projection");
   }
+}
+
+function captureSqliteG006bFinalizationPreservationSnapshot(
+  db: Database.Database,
+): SqliteSchemaV1PreservationSnapshot {
+  const snapshot = captureSqliteSchemaV1PreservationSnapshot(db);
+  const policy = snapshot.tables.tenant_policies;
+  if (!policy || !policy.columns.includes("compatibility_policy_hash")) {
+    throw new SqliteSchemaV1CoordinatorError(
+      "G006A_SOURCE_SNAPSHOT_DRIFT",
+      "T028 tenant policy compatibility column",
+    );
+  }
+  const columns = policy.columns.filter((column) => column !== "compatibility_policy_hash");
+  const rows = db.prepare(
+    `SELECT ${columns.map(quoteIdentifier).join(", ")} FROM tenant_policies`,
+  ).all() as Array<Record<string, unknown>>;
+  const encodedRows = rows.map((row) => canonicalRow(columns, row)).sort(compareCodeUnits);
+  return Object.freeze({
+    tableNames: snapshot.tableNames,
+    tables: Object.freeze({
+      ...snapshot.tables,
+      tenant_policies: Object.freeze({
+        columns: Object.freeze(columns),
+        rowCount: rows.length,
+        payloadDigest: sha256(JSON.stringify(encodedRows)),
+      }),
+    }),
+  });
 }
 
 export function captureSqliteSchemaV1PreservationSnapshot(
