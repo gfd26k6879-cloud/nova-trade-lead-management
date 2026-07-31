@@ -16,6 +16,12 @@ import { isProxy } from "node:util/types";
 import Database from "better-sqlite3";
 
 import {
+  consumeSqliteG006bPreparedFinalizationHandoffForCoordinator,
+  hashSqliteG006bDomain,
+  type SqliteG006bPreparedFinalizationHandoff,
+} from "./sqlite-g006b-pre-finalization";
+
+import {
   SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT,
   SQLITE_SCHEMA_V1_ACCEPTED_LEGACY_INTERNAL_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_AUTOINCREMENT_TABLES,
@@ -34,6 +40,7 @@ import {
 export const ACCEPTED_LEGACY_SQLITE_CATALOG_DIGEST = "07091889ff9806c20356f092d3812ff325f22537c63a56149eea7dab0a529ade" as const;
 export const SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST = "90117968b064e6bded92dbf82c18fffa31951c0998c727f662eee56e78721ba6" as const;
 export const SQLITE_SCHEMA_V1_PHYSICAL_MANIFEST_DIGEST = "07e10bb5c43d98d6f561d3c0b0f9f39a9ad2d579ed1a73b9e2a7a455367fdf79" as const;
+const G006B_PRESERVATION_DOMAIN = "NOVATRADE\0G006B\0B1\0PRESERVATION\0V1\0" as const;
 
 export type SqliteSchemaV1StateKind =
   | "fresh"
@@ -729,6 +736,303 @@ export function coordinateSqliteSchemaV1WholeUpgrade(
     throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "coordinator produced no result");
   }
   return result;
+}
+
+/**
+ * Consumes G-006B's private, one-shot B2 handoff and owns the complete prepared
+ * legacy -> final transaction. No database handle, mutation plan, or callback
+ * crosses the G-006B/coordinator boundary.
+ */
+export function finalizeSqliteSchemaV1PreparedFromG006b(
+  handoff: SqliteG006bPreparedFinalizationHandoff,
+): SqliteSchemaV1WholeUpgradeResult {
+  // Claim first. A recognized capability is terminal on every subsequent path,
+  // including malformed evidence and failures before the database is opened.
+  const evidence = consumeSqliteG006bPreparedFinalizationHandoffForCoordinator(handoff);
+  if (!/^g006b:v1:[0-9a-f]{64}$/u.test(evidence.sourcePreparedHandoffId)
+      || !/^g006b:v1:[0-9a-f]{64}$/u.test(evidence.sourceCommittedHandoffId)
+      || !/^[0-9a-f]{64}$/u.test(evidence.sourceBindingHash)
+      || !/^[0-9a-f]{64}$/u.test(evidence.sourcePreservationAggregateSha256)
+      || !/^[0-9a-f]{32}$/u.test(evidence.sourceFileId)
+      || !/^[0-9]+$/u.test(evidence.sourceVolumeSerialNumber)
+      || evidence.finalizationPreparedHandoffId !== `g006b-finalization:v1:${evidence.finalizationPreparedRecordSha256}`
+      || !/^[0-9a-f]{64}$/u.test(evidence.finalizationPreparedRecordSha256)
+      || evidence.tenantId.length === 0
+      || evidence.workspaceId.length === 0
+      || evidence.targetUserVersion !== SQLITE_SCHEMA_V1_FINAL_USER_VERSION
+      || evidence.targetCatalogDigest !== SQLITE_SCHEMA_V1_CATALOG_DIGEST
+      || evidence.targetInternalCatalogDigest !== SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_MISMATCH", "G-006B handoff evidence pins");
+  }
+
+  let retainedLease: FileLeaseState | undefined;
+  let writer: Database.Database | undefined;
+  let preservation: SqliteSchemaV1PreservationSnapshot | undefined;
+  let sqliteOwnedState: SqliteOwnedStateSnapshot | undefined;
+  let committed = false;
+  let result: SqliteSchemaV1WholeUpgradeResult | undefined;
+  let failure: unknown;
+  try {
+    const absoluteDatabasePath = canonicalExistingDatabasePath(evidence.databasePath);
+    retainedLease = openFileLease(absoluteDatabasePath, true, "replay-root");
+    assertFileLeaseIdentity(retainedLease);
+    try {
+      writer = openExactDatabase(absoluteDatabasePath, false, retainedLease.identity);
+      assertConnectionBoundary(writer, absoluteDatabasePath);
+      forceWritableSchemaOff(writer);
+      writer.pragma("foreign_keys = OFF");
+      writer.pragma("legacy_alter_table = ON");
+      writer.exec("BEGIN IMMEDIATE");
+      forceWritableSchemaOff(writer);
+      assertFileLeaseIdentity(retainedLease);
+      assertConnectionBoundary(writer, absoluteDatabasePath);
+
+      const locked = classifySqliteSchemaV1(writer);
+      if (locked.kind !== "prepared-legacy"
+          || locked.userVersion !== SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION
+          || locked.catalogDigest !== SQLITE_SCHEMA_V1_PREPARED_LEGACY_CATALOG_DIGEST) {
+        throw rejectedState(locked);
+      }
+      assertSqliteInternalCatalog(writer, SQLITE_SCHEMA_V1_PREPARED_LEGACY_INTERNAL_CATALOG_DIGEST);
+      const preparedPhysical = sqliteSchemaV1PhysicalManifestDigest(writer);
+      if (preparedPhysical !== SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST) {
+        throw new SqliteSchemaV1CoordinatorError("G006A_PHYSICAL_CATALOG_DRIFT", preparedPhysical);
+      }
+      assertPreparedLegacyLocationRows(writer);
+      assertPreparedLegacyFoundation(writer, evidence.tenantId, evidence.workspaceId);
+      const preservationAggregate = g006bPreservationAggregateSha256(writer);
+      if (preservationAggregate !== evidence.sourcePreservationAggregateSha256) {
+        throw new SqliteSchemaV1CoordinatorError("G006A_SOURCE_SNAPSHOT_DRIFT", "G-006B preservation aggregate");
+      }
+      preservation = captureSqliteSchemaV1PreservationSnapshot(writer);
+      sqliteOwnedState = captureSqliteOwnedState(writer);
+
+      rebuildPreparedLegacyTransformTables(writer);
+      writer.pragma(`user_version = ${SQLITE_SCHEMA_V1_FINAL_USER_VERSION}`);
+
+      const after = classifySqliteSchemaV1(writer);
+      if (after.kind !== "final"
+          || after.userVersion !== SQLITE_SCHEMA_V1_FINAL_USER_VERSION
+          || after.catalogDigest !== SQLITE_SCHEMA_V1_CATALOG_DIGEST) {
+        throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_POSTCONDITION_FAILED", after.reason);
+      }
+      assertSqliteInternalCatalog(writer, SQLITE_SCHEMA_V1_INTERNAL_CATALOG_DIGEST);
+      assertSqliteSchemaV1PhysicalManifest(writer);
+      assertSqliteSchemaV1Preservation(
+        preservation,
+        captureSqliteSchemaV1PreservationSnapshot(writer, preservation),
+      );
+      assertSqliteOwnedState(sqliteOwnedState, captureSqliteOwnedState(writer));
+      assertFinalLegacyLocationRows(writer);
+      assertSqliteSchemaV1DatabaseHealth(writer);
+      assertFileLeaseIdentity(retainedLease);
+      assertConnectionBoundary(writer, absoluteDatabasePath);
+      writer.exec("COMMIT");
+      committed = true;
+    } catch (error) {
+      failure = error;
+      if (writer?.open && writer.inTransaction) {
+        try {
+          writer.exec("ROLLBACK");
+        } catch (rollbackError) {
+          failure = retainCleanupFailure(failure, rollbackError, "G-006B finalizer rollback");
+        }
+      }
+    } finally {
+      if (writer) {
+        const scopedWriter = writer;
+        writer = undefined;
+        try {
+          closeExactDatabase(scopedWriter);
+        } catch (closeError) {
+          failure = failure === undefined
+            ? closeError
+            : retainCleanupFailure(failure, closeError, "G-006B finalizer writer close");
+        }
+      }
+    }
+    if (failure !== undefined) throw failure;
+    if (!committed || !preservation || !sqliteOwnedState) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "G-006B finalizer did not commit");
+    }
+    assertFileLeaseIdentity(retainedLease);
+    const verified = verifyCommittedSqliteSchemaV1File(
+      absoluteDatabasePath,
+      retainedLease,
+      preservation,
+      sqliteOwnedState,
+      undefined,
+    );
+    result = { status: "finalized", state: verified };
+  } catch (error) {
+    failure = error;
+  } finally {
+    if (retainedLease) {
+      try {
+        closeFileLease(retainedLease);
+      } catch (closeError) {
+        failure = failure === undefined
+          ? closeError
+          : retainCleanupFailure(failure, closeError, "G-006B finalizer root close");
+      }
+    }
+  }
+  if (failure !== undefined) {
+    if (committed) throw committedUnverified(failure);
+    throw failure;
+  }
+  if (!result) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "G-006B finalizer produced no result");
+  }
+  return result;
+}
+
+function canonicalFinalSchemaRows(): readonly SqliteSchemaCatalogRow[] {
+  const expected = new Database(":memory:");
+  try {
+    expected.exec(SQLITE_SCHEMA_V1_SQL);
+    return Object.freeze(readSqliteSchemaCatalogPartition(expected).application.map((row) => Object.freeze({ ...row })));
+  } finally {
+    expected.close();
+  }
+}
+
+function rebuildPreparedLegacyTransformTables(db: Database.Database): void {
+  const expectedRows = canonicalFinalSchemaRows();
+  const expectedTables = new Map(expectedRows
+    .filter((row) => row.type === "table" && SQLITE_SCHEMA_V1_TRANSFORM_TABLES.some((table) => table === row.name))
+    .map((row) => [row.name, row.sql] as const));
+  if (expectedTables.size !== SQLITE_SCHEMA_V1_TRANSFORM_TABLES.length
+      || [...expectedTables.values()].some((sql) => typeof sql !== "string")) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_CATALOG_DRIFT", "canonical G-006B table definitions");
+  }
+
+  const temporaryNames = new Map<string, string>();
+  for (const table of SQLITE_SCHEMA_V1_TRANSFORM_TABLES) {
+    const temporary = `__g006b_b2_${table}`;
+    const collision = db.prepare("SELECT 1 FROM main.sqlite_schema WHERE name = ?").get(temporary);
+    if (collision) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", `private rebuild collision ${temporary}`);
+    }
+    db.prepare(`ALTER TABLE ${quoteIdentifier(table)} RENAME TO ${quoteIdentifier(temporary)}`).run();
+    temporaryNames.set(table, temporary);
+  }
+
+  for (const table of SQLITE_SCHEMA_V1_TRANSFORM_TABLES) {
+    const sql = expectedTables.get(table);
+    if (typeof sql !== "string") {
+      throw new SqliteSchemaV1CoordinatorError("G006A_CATALOG_DRIFT", `missing canonical table ${table}`);
+    }
+    db.exec(sql);
+  }
+
+  for (const table of SQLITE_SCHEMA_V1_TRANSFORM_TABLES) {
+    const temporary = temporaryNames.get(table)!;
+    const sourceColumns = readTableColumns(db, temporary);
+    const targetColumns = readTableColumns(db, table);
+    const addedColumns = targetColumns.filter((column) => !sourceColumns.includes(column));
+    const removedColumns = sourceColumns.filter((column) => !targetColumns.includes(column));
+    const expectedAdded = table === "crawl_units" ? ["location_mode"] : [];
+    if (!sameStrings(addedColumns, expectedAdded) || removedColumns.length !== 0) {
+      throw new SqliteSchemaV1CoordinatorError(
+        "G006A_FINALIZER_POSTCONDITION_FAILED",
+        `${table} column boundary added=${addedColumns.join(",")} removed=${removedColumns.join(",")}`,
+      );
+    }
+    const sourceProjection = sourceColumns.map(quoteIdentifier).join(", ");
+    const targetProjection = table === "crawl_units"
+      ? `${sourceProjection}, ${quoteIdentifier("location_mode")}`
+      : sourceProjection;
+    const selectProjection = table === "crawl_units"
+      ? `${sourceProjection}, 'legacy_zip'`
+      : sourceProjection;
+    db.exec(`INSERT INTO ${quoteIdentifier(table)} (${targetProjection}) SELECT ${selectProjection} FROM ${quoteIdentifier(temporary)}`);
+  }
+
+  for (const table of [...SQLITE_SCHEMA_V1_TRANSFORM_TABLES].reverse()) {
+    db.prepare(`DROP TABLE ${quoteIdentifier(temporaryNames.get(table)!)}`).run();
+  }
+
+  const existingNames = new Set((db.prepare("SELECT name FROM main.sqlite_schema").all() as Array<{ name: string }>).map((row) => row.name));
+  for (const row of expectedRows) {
+    if ((row.type !== "index" && row.type !== "trigger") || row.sql === null || existingNames.has(row.name)) continue;
+    db.exec(row.sql);
+    existingNames.add(row.name);
+  }
+}
+
+function assertPreparedLegacyLocationRows(db: Database.Database): void {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS invalid
+    FROM crawl_units
+    WHERE zip IS NULL OR trim(zip) = '' OR location_cell_id IS NOT NULL
+  `).get() as { invalid: number | bigint };
+  if (Number(row.invalid) !== 0) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", "prepared crawl units are not legacy-zip rows");
+  }
+}
+
+function assertPreparedLegacyFoundation(db: Database.Database, tenantId: string, workspaceId: string): void {
+  const workspaceTables = new Set([
+    "user_market_access", "crawl_runs", "crawl_units", "lead_notes", "outreach_events",
+    "admin_requests", "demos", "ai_lead_verifications", "lead_ai_artifacts", "ai_feedback_events",
+  ]);
+  for (const table of SQLITE_SCHEMA_V1_TRANSFORM_TABLES) {
+    const tenantMismatch = db.prepare(`
+      SELECT COUNT(*) AS invalid
+      FROM ${quoteIdentifier(table)}
+      WHERE tenant_id IS NULL OR tenant_id <> ?
+    `).get(tenantId) as { invalid: number | bigint };
+    if (Number(tenantMismatch.invalid) !== 0) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_SOURCE_SNAPSHOT_DRIFT", `${table} tenant foundation`);
+    }
+    if (!workspaceTables.has(table)) continue;
+    const workspaceMismatch = db.prepare(`
+      SELECT COUNT(*) AS invalid
+      FROM ${quoteIdentifier(table)}
+      WHERE workspace_id IS NULL OR workspace_id <> ?
+    `).get(workspaceId) as { invalid: number | bigint };
+    if (Number(workspaceMismatch.invalid) !== 0) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_SOURCE_SNAPSHOT_DRIFT", `${table} workspace foundation`);
+    }
+  }
+  const receipt = db.prepare(`
+    SELECT COUNT(*) AS matching
+    FROM compatibility_backfill_receipts
+    WHERE tenant_id = ? AND workspace_id = ? AND status = 'completed'
+  `).get(tenantId, workspaceId) as { matching: number | bigint };
+  if (Number(receipt.matching) !== 1) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_SOURCE_SNAPSHOT_DRIFT", "T028 foundation receipt");
+  }
+}
+
+function g006bPreservationAggregateSha256(db: Database.Database): string {
+  const summaries = readApplicationTableNames(db).map((name) => {
+    const columns = readTableColumns(db, name);
+    const projection = columns.map(quoteIdentifier).join(", ");
+    const rows = db.prepare(`SELECT ${projection} FROM ${quoteIdentifier(name)}`).all() as Array<Record<string, unknown>>;
+    const encodedRows = rows.map((row) => canonicalRow(columns, row)).sort(compareCodeUnits);
+    return {
+      name,
+      columns,
+      rowCount: rows.length,
+      payloadSha256: sha256(`${G006B_PRESERVATION_DOMAIN}TABLE\0${name}\0${JSON.stringify(encodedRows)}`),
+    };
+  });
+  return hashSqliteG006bDomain(`${G006B_PRESERVATION_DOMAIN}AGGREGATE\0`, summaries);
+}
+
+function assertFinalLegacyLocationRows(db: Database.Database): void {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS invalid
+    FROM crawl_units
+    WHERE location_mode <> 'legacy_zip'
+       OR zip IS NULL OR trim(zip) = ''
+       OR location_cell_id IS NOT NULL
+  `).get() as { invalid: number | bigint };
+  if (Number(row.invalid) !== 0) {
+    throw new SqliteSchemaV1CoordinatorError("G006A_FINALIZER_POSTCONDITION_FAILED", "legacy-zip location-mode projection");
+  }
 }
 
 export function captureSqliteSchemaV1PreservationSnapshot(
