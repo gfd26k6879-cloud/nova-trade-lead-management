@@ -2558,3 +2558,23 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   table preservation, `6000` to `6002`, validated `legacy_zip` derivation,
   exact scope and protected-publisher gates. No activation, startup, C0/C1/C2,
   PostgreSQL, persistent database or external action is authorized.
+
+## G-006B-B2 repair producer continuation
+
+- A writable continuation branch `codex/nova-g006b-finalization-resume` was
+  created from integration control `d823324bfae7073885b6bdc7266647630ce8a3c8`
+  at
+  `C:\Users\Masih\OneDrive\Documents\Nova Trade\.worktrees\g006b-finalization-resume`.
+  Preserved WIP `1e778f4b650dfc97dc599735af8539c8ba26f528` was carried
+  without content loss as `88f71cb`; the original branch and worktree remain
+  intact. The continuation worktree started clean.
+- Terra-medium producer `/root/g006b_b2_repair_producer` owns the exact
+  six-path repair packet under `sqlite-schema` and `database-adapter` locks.
+  It must keep the publisher, schema definition and all C0/C1/C2/startup/
+  PostgreSQL surfaces byte-identical, produce one repair commit, and leave a
+  clean worktree. It has no merge or acceptance authority.
+- The worktree uses a conductor-created junction to the integration
+  `node_modules`; no install or registry access is authorized. The junction is
+  temporary, does not enter Git, and must be removed after all repair validation
+  completes. Independent immutable architecture and security review follow the
+  producer; Sol remains the sole final acceptance and merge authority.
