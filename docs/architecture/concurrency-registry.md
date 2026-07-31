@@ -2496,3 +2496,29 @@ The opt-in T-029 recovery rehearsal currently stops after the 44-discovered/42-p
   truthful append-only receipts, one attributable commit and clean source are
   required before immutable architecture/security review. No self-acceptance,
   integration merge, persistent finalization or external activity is authorized.
+
+## CP-0 resume and immutable G-006B-B2 checkpoint review
+
+- The user resumed CP-0 on 2026-07-31. Integration remains clean at
+  `64ed00c722f648e27f2aeba46dc1a82abf5d5e63`; checkpoint control
+  `cfbb65005d38200da8911af1de076448271c09f1`, planning control
+  `ecb5c660f1f1e2886294ef2c3f2b524fccf38615`, rejected Repair-4
+  `1d2931d30222957a7dad856360607bc3b7121558`, and every prior ledger event,
+  branch, worktree, accepted card, all 318 cards, Q-040 and T-029 remain
+  preserved.
+- The interrupted G006B-B2 producer state is preserved as clean, attributable
+  checkpoint commit `1e778f4b650dfc97dc599735af8539c8ba26f528`. It changes only
+  `sqlite-g006b-pre-finalization.ts` and `sqlite-schema-coordinator.ts`, contains
+  no completed B2 tests or receipt updates, and remains unmerged and unaccepted.
+  Resume uses this immutable source as the repair base; it does not restart the
+  card or revive either rejected Repair-4 or stopped Repair-5.
+- Before any writer resumes, three Terra-medium read-only lanes independently
+  review the checkpoint: architecture/API/state-machine ownership, security/
+  provenance/capability/lease/crash behavior, and quality/test/receipt/path
+  completeness. Each reviewer has zero edit, commit, merge, test-process,
+  external-action or acceptance authority.
+- Actual runtime capacity is four total slots: this Sol final conductor plus at
+  most three bounded non-root agents. The three review lanes consume the pilot
+  capacity. Their findings must be reconciled into one minimal repair-delta
+  packet before a single bounded producer may continue in an authorized,
+  writable repair worktree.
