@@ -710,3 +710,6 @@ T-015 audit logs are outside this G-002 through G-005 lane. After the local
 receipt commit, P16 is the read-only classification of deliberately global
 `idx_demos_public_slug`, followed by P17 read-only audit of
 `idx_demos_lead_id`. No migration or external action is assumed.
+
+The G-007P15 deferred-audit receipt commit is
+`6f3279dbd6af85ce05df731f6a3071216a2c72f9`.

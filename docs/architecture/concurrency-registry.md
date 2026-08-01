@@ -3039,3 +3039,6 @@ Date: 2026-07-31
   propagation. Parent G-007 stays open. Counts remain 52/50/2 and sequence 008
   stays free. P16 public-slug classification is next, followed by P17 demos
   lead-index audit. The withdrawn audit-log proposal was outside G002-G005.
+- The attributable local receipt is
+  `6f3279dbd6af85ce05df731f6a3071216a2c72f9`. No P15 container, listener,
+  database, process, worktree, or lock remains.
