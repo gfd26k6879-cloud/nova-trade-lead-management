@@ -5416,14 +5416,30 @@ export async function assignLeadToUser(leadId: string, userId: string | null): P
     .run(userId, nowISO(), leadId);
 }
 
-export async function claimLeadForUser(leadId: string, userId: string): Promise<number> {
+export async function claimLeadForUser(
+  leadId: string,
+  userId: string,
+  options: { preserveAdminSemantics?: boolean } = {},
+): Promise<number> {
   const db = await getDb();
+  if (options.preserveAdminSemantics) {
+    const result = await db.prepare(
+      `UPDATE leads
+       SET assigned_to_user_id = ?, updated_at = ?
+       WHERE id = ?
+         AND (${leadUnassignedCondition("assigned_to_user_id")} OR assigned_to_user_id = ?)`
+    ).run(userId, nowISO(), leadId, userId);
+    return result.changes;
+  }
+
   const result = await db.prepare(
     `UPDATE leads
      SET assigned_to_user_id = ?, updated_at = ?
      WHERE id = ?
-       AND (${leadUnassignedCondition("assigned_to_user_id")} OR assigned_to_user_id = ?)`
-  ).run(userId, nowISO(), leadId, userId);
+       AND archived_at IS NULL
+       AND COALESCE(is_excluded, 0) = 0
+       AND ${leadUnassignedCondition("assigned_to_user_id")}`
+  ).run(userId, nowISO(), leadId);
   return result.changes;
 }
 

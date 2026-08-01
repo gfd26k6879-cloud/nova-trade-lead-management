@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
   userCanAccessMarket: vi.fn(),
@@ -9,6 +9,7 @@ vi.mock("@/lib/db/queries", () => ({
 }));
 
 import {
+  canClaimLeadForSession,
   canReadLeadForSession,
   constrainExploreFiltersForSession,
   constrainLeadFiltersForSession,
@@ -18,22 +19,36 @@ import {
 describe("lead access boundaries", () => {
   const researcher = { userId: "researcher-1", role: "researcher" as const };
   const admin = { userId: "admin-1", role: "admin" as const };
+  const activeLead = {
+    archived_at: null,
+    assigned_to_user_id: "researcher-1",
+    is_excluded: false,
+    market_id: "market-colorado",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   it("forces researcher lead filters to owned leads and assigned markets", () => {
     const filters = constrainLeadFiltersForSession(researcher, {
+      archived: "all",
       assigned: "unassigned",
       assignedToUserId: "other-user",
       includeExcluded: true,
+      status: "excluded",
       search: "plumber",
     });
 
     expect(filters).toMatchObject({
       assigned: "me",
       assignedToUserId: "researcher-1",
+      archived: "active",
       includeExcluded: false,
       search: "plumber",
       visibleToUserId: "researcher-1",
     });
+    expect(filters.status).toBeUndefined();
   });
 
   it("does not rewrite admin lead filters", () => {
@@ -41,21 +56,44 @@ describe("lead access boundaries", () => {
     expect(constrainLeadFiltersForSession(admin, filters)).toBe(filters);
   });
 
-  it("scopes researcher Explore filters to assigned markets without forcing owned leads", () => {
+  it("scopes researcher Explore filters to active nonexcluded unclaimed assigned-market inventory", () => {
     const filters = constrainExploreFiltersForSession(researcher, {
-      assigned: "unassigned",
+      archived: "all",
+      assigned: "me",
       assignedToUserId: "other-user",
       includeExcluded: true,
+      status: "excluded",
       search: "pilot",
     });
 
     expect(filters).toMatchObject({
+      archived: "active",
       assigned: "unassigned",
       includeExcluded: false,
       search: "pilot",
       visibleToUserId: "researcher-1",
     });
     expect(filters.assignedToUserId).toBeUndefined();
+    expect(filters.status).toBeUndefined();
+  });
+
+  it("preserves benign researcher Explore statuses", () => {
+    expect(constrainExploreFiltersForSession(researcher, { status: "contacted" })).toMatchObject({
+      archived: "active",
+      assigned: "unassigned",
+      includeExcluded: false,
+      status: "contacted",
+      visibleToUserId: "researcher-1",
+    });
+  });
+
+  it("clamps explicit archived-only researcher Explore requests to active inventory", () => {
+    expect(constrainExploreFiltersForSession(researcher, { archived: "archived" })).toMatchObject({
+      archived: "active",
+      assigned: "unassigned",
+      includeExcluded: false,
+      visibleToUserId: "researcher-1",
+    });
   });
 
   it("keeps researcher Explore scoped to unclaimed inventory even for owner:me URLs", () => {
@@ -96,16 +134,46 @@ describe("lead access boundaries", () => {
   });
 
   it("allows admins to read all lead details", async () => {
-    await expect(canReadLeadForSession(admin, { market_id: "market-canada" })).resolves.toBe(true);
+    await expect(canReadLeadForSession(admin, { ...activeLead, market_id: "market-canada" })).resolves.toBe(true);
     expect(dbMocks.userCanAccessMarket).not.toHaveBeenCalled();
   });
 
-  it("allows researchers only inside assigned markets", async () => {
+  it("allows researchers to read only owned active nonexcluded leads in assigned markets", async () => {
     dbMocks.userCanAccessMarket.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
 
-    await expect(canReadLeadForSession(researcher, { market_id: "market-colorado" })).resolves.toBe(true);
-    await expect(canReadLeadForSession(researcher, { market_id: "market-uk" })).resolves.toBe(false);
+    await expect(canReadLeadForSession(researcher, activeLead)).resolves.toBe(true);
+    await expect(canReadLeadForSession(researcher, { ...activeLead, market_id: "market-uk" })).resolves.toBe(false);
     expect(dbMocks.userCanAccessMarket).toHaveBeenCalledWith("researcher-1", "market-colorado");
     expect(dbMocks.userCanAccessMarket).toHaveBeenCalledWith("researcher-1", "market-uk");
+  });
+
+  it("rejects unowned, archived, and excluded researcher reads before the market lookup", async () => {
+    await expect(canReadLeadForSession(researcher, { ...activeLead, assigned_to_user_id: null })).resolves.toBe(false);
+    await expect(canReadLeadForSession(researcher, { ...activeLead, assigned_to_user_id: "researcher-2" })).resolves.toBe(false);
+    await expect(canReadLeadForSession(researcher, { ...activeLead, archived_at: "2026-08-01T00:00:00.000Z" })).resolves.toBe(false);
+    await expect(canReadLeadForSession(researcher, { ...activeLead, is_excluded: true })).resolves.toBe(false);
+    expect(dbMocks.userCanAccessMarket).not.toHaveBeenCalled();
+  });
+
+  it("allows researchers to claim only unassigned active nonexcluded leads in assigned markets", async () => {
+    const unassigned = { ...activeLead, assigned_to_user_id: null };
+    dbMocks.userCanAccessMarket.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await expect(canClaimLeadForSession(researcher, unassigned)).resolves.toBe(true);
+    await expect(canClaimLeadForSession(researcher, { ...unassigned, market_id: "market-uk" })).resolves.toBe(false);
+    await expect(canClaimLeadForSession(researcher, activeLead)).resolves.toBe(false);
+    await expect(canClaimLeadForSession(researcher, { ...unassigned, archived_at: "2026-08-01T00:00:00.000Z" })).resolves.toBe(false);
+    await expect(canClaimLeadForSession(researcher, { ...unassigned, is_excluded: true })).resolves.toBe(false);
+    expect(dbMocks.userCanAccessMarket).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves unrestricted admin claim capability", async () => {
+    await expect(canClaimLeadForSession(admin, {
+      archived_at: "2026-08-01T00:00:00.000Z",
+      assigned_to_user_id: "researcher-2",
+      is_excluded: true,
+      market_id: null,
+    })).resolves.toBe(true);
+    expect(dbMocks.userCanAccessMarket).not.toHaveBeenCalled();
   });
 });

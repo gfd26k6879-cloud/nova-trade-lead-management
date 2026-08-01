@@ -61,6 +61,7 @@ import {
   archiveLeadAction,
   claimLeadAction,
   createManualLeadAction,
+  getLeadByIdAction,
   logOutreachEventAction,
   restoreArchivedLeadAction,
   unclaimLeadAction,
@@ -69,9 +70,12 @@ import {
 
 const baseLead = {
   id: "lead-1",
+  archived_at: null,
   assigned_to_user_id: null,
   assigned_user_email: null,
   assigned_user_display_name: null,
+  is_excluded: false,
+  market_id: "market-colorado",
 };
 
 beforeEach(() => {
@@ -82,6 +86,26 @@ beforeEach(() => {
 });
 
 describe("lead ownership server actions", () => {
+  it("returns researcher lead details only for owned active nonexcluded assigned-market leads", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    queryMocks.getLeadById
+      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: "user-1" })
+      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: "user-2" })
+      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: "user-1", archived_at: "2026-08-01T00:00:00.000Z" })
+      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: "user-1", is_excluded: true })
+      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: "user-1", market_id: "market-uk" });
+    queryMocks.userCanAccessMarket
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    await expect(getLeadByIdAction("lead-1")).resolves.toMatchObject({ id: "lead-1" });
+    await expect(getLeadByIdAction("lead-1")).resolves.toBeNull();
+    await expect(getLeadByIdAction("lead-1")).resolves.toBeNull();
+    await expect(getLeadByIdAction("lead-1")).resolves.toBeNull();
+    await expect(getLeadByIdAction("lead-1")).resolves.toBeNull();
+    expect(queryMocks.userCanAccessMarket).toHaveBeenCalledTimes(2);
+  });
+
   it("records the claiming user on claim audit events", async () => {
     authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
     queryMocks.getLeadById.mockResolvedValue(baseLead);
@@ -97,6 +121,59 @@ describe("lead ownership server actions", () => {
       "lead-1",
       undefined,
       { actor: { userId: "user-1", email: "one@example.com", role: "researcher" } },
+    );
+  });
+
+  it("rejects researcher claims for already assigned, archived, or excluded leads", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+
+    for (const lead of [
+      { ...baseLead, assigned_to_user_id: "user-1" },
+      { ...baseLead, assigned_to_user_id: "user-2" },
+      { ...baseLead, archived_at: "2026-08-01T00:00:00.000Z" },
+      { ...baseLead, is_excluded: true },
+    ]) {
+      queryMocks.getLeadById.mockResolvedValueOnce(lead);
+      await expect(claimLeadAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    }
+
+    expect(queryMocks.claimLeadForUser).not.toHaveBeenCalled();
+  });
+
+  it("rejects researcher claims outside assigned markets before mutation or audit", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    queryMocks.getLeadById.mockResolvedValue(baseLead);
+    queryMocks.userCanAccessMarket.mockResolvedValue(false);
+
+    await expect(claimLeadAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    expect(queryMocks.claimLeadForUser).not.toHaveBeenCalled();
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("does not disclose lead identity when a researcher loses an atomic claim race", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    queryMocks.getLeadById.mockResolvedValueOnce(baseLead);
+    queryMocks.claimLeadForUser.mockResolvedValue(0);
+
+    await expect(claimLeadAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    expect(queryMocks.getLeadById).toHaveBeenCalledTimes(1);
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("preserves the admin claim path for inactive inventory", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    queryMocks.getLeadById.mockResolvedValue({
+      ...baseLead,
+      archived_at: "2026-08-01T00:00:00.000Z",
+      is_excluded: true,
+    });
+    queryMocks.claimLeadForUser.mockResolvedValue(1);
+
+    await expect(claimLeadAction("lead-1")).resolves.toEqual({ success: true });
+    expect(queryMocks.claimLeadForUser).toHaveBeenCalledWith(
+      "lead-1",
+      "admin-1",
+      { preserveAdminSemantics: true },
     );
   });
 
@@ -149,8 +226,29 @@ describe("lead ownership server actions", () => {
 
     const result = await logOutreachEventAction("lead-1", { channel: "call", outcome: "contacted" });
 
-    expect(result).toEqual({ error: "Taken by two@example.com." });
+    expect(result).toEqual({ error: "Lead not found" });
     expect(queryMocks.createOutreachEvent).not.toHaveBeenCalled();
+  });
+
+  it("prevents researchers from mutating archived or excluded owned leads", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    queryMocks.getLeadById
+      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: "user-1", archived_at: "2026-08-01T00:00:00.000Z" })
+      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: "user-1", is_excluded: true });
+
+    await expect(updateLeadStatusAction("lead-1", "contacted")).resolves.toEqual({ error: "Lead not found" });
+    await expect(updateLeadStatusAction("lead-1", "contacted")).resolves.toEqual({ error: "Lead not found" });
+    expect(queryMocks.updateLeadStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects researcher mutations outside assigned markets before mutation or audit", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    queryMocks.getLeadById.mockResolvedValue({ ...baseLead, assigned_to_user_id: "user-1", market_id: "market-uk" });
+    queryMocks.userCanAccessMarket.mockResolvedValue(false);
+
+    await expect(updateLeadStatusAction("lead-1", "contacted")).resolves.toEqual({ error: "Lead not found" });
+    expect(queryMocks.updateLeadStatus).not.toHaveBeenCalled();
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
   });
 
   it("archives leads with an audit event", async () => {

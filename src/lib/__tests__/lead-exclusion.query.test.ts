@@ -15,6 +15,7 @@ vi.mock("@/lib/db/index", () => {
 
 import {
   clearLeadExclusion,
+  claimLeadForUser,
   archiveLead,
   restoreArchivedLead,
   createManualLead,
@@ -51,6 +52,25 @@ afterEach(() => {
 });
 
 describe("lead exclusion query behavior", () => {
+  it("atomically restricts researcher claims while preserving the legacy admin path", async () => {
+    const availableId = insertLead(testDb, 900, { score: 10 });
+    const selfOwnedId = insertLead(testDb, 901, { score: 10 });
+    const archivedId = insertLead(testDb, 902, { score: 10 });
+    const excludedId = insertLead(testDb, 903, { score: 10 });
+    testDb.prepare("UPDATE leads SET assigned_to_user_id = ? WHERE id = ?").run("researcher-1", selfOwnedId);
+    testDb.prepare("UPDATE leads SET archived_at = ? WHERE id = ?").run("2026-08-01T00:00:00.000Z", archivedId);
+    testDb.prepare("UPDATE leads SET is_excluded = 1 WHERE id = ?").run(excludedId);
+
+    await expect(claimLeadForUser(availableId, "researcher-1")).resolves.toBe(1);
+    await expect(claimLeadForUser(selfOwnedId, "researcher-1")).resolves.toBe(0);
+    await expect(claimLeadForUser(archivedId, "researcher-1")).resolves.toBe(0);
+    await expect(claimLeadForUser(excludedId, "researcher-1")).resolves.toBe(0);
+
+    await expect(claimLeadForUser(archivedId, "admin-1", { preserveAdminSemantics: true })).resolves.toBe(1);
+    await expect(claimLeadForUser(excludedId, "admin-1", { preserveAdminSemantics: true })).resolves.toBe(1);
+    await expect(claimLeadForUser(excludedId, "admin-1", { preserveAdminSemantics: true })).resolves.toBe(1);
+  });
+
   it("removes excluded leads from qualified count", async () => {
     const keepId = insertLead(testDb, 1, { score: 12 });
     const excludedId = insertLead(testDb, 2, { score: 11 });

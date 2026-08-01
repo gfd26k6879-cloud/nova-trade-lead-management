@@ -27,24 +27,27 @@ const queryMocks = vi.hoisted(() => ({
   getConfiguredGoogleMapsBrowserApiKey: vi.fn(),
   getLeadMapPoints: vi.fn(),
   getLeadMapZipCoverage: vi.fn(),
+  userCanAccessMarket: vi.fn(),
+}));
+
+const filterMocks = vi.hoisted(() => ({
+  buildExploreQueryState: vi.fn(() => ({ filters: {} })),
 }));
 
 vi.mock("@/lib/auth", () => authMocks);
 vi.mock("@/lib/db/index", () => dbMocks);
 vi.mock("@/lib/db/queries", () => queryMocks);
 vi.mock("@/lib/explore-filters", () => ({
-  buildExploreQueryState: vi.fn(() => ({ filters: {} })),
+  buildExploreQueryState: filterMocks.buildExploreQueryState,
   parseMapPointLimit: vi.fn(() => 500),
-}));
-vi.mock("@/lib/lead-access", () => ({
-  constrainExploreFiltersForSession: vi.fn((_session: unknown, filters: unknown) => filters),
 }));
 
 import { GET } from "@/app/api/explore/map/route";
 
 describe("/api/explore/map", () => {
   beforeEach(() => {
-    authMocks.requirePermission.mockReset();
+    vi.clearAllMocks();
+    filterMocks.buildExploreQueryState.mockReturnValue({ filters: {} });
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
@@ -70,5 +73,34 @@ describe("/api/explore/map", () => {
     expect(json.error).toBe("You do not have permission to perform this action");
     expect(json.points).toEqual([]);
     expect(response.headers.get("Cache-Control")).toContain("no-store");
+  });
+
+  it("passes constrained active inventory filters to researcher map reads", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "researcher-1", email: "one@example.com", role: "researcher" });
+    filterMocks.buildExploreQueryState.mockReturnValue({
+      filters: {
+        archived: "all",
+        assigned: "me",
+        assignedToUserId: "researcher-2",
+        includeExcluded: true,
+        status: "excluded",
+      },
+    });
+    queryMocks.ensureDbReady.mockResolvedValue(undefined);
+    queryMocks.getLeadMapPoints.mockResolvedValue({ points: [], totalMapped: 0 });
+    queryMocks.getLeadMapZipCoverage.mockResolvedValue([]);
+    queryMocks.getConfiguredGoogleMapsBrowserApiKey.mockResolvedValue(null);
+
+    const response = await GET(new Request("https://example.com/api/explore/map?archived=all&status=excluded"));
+
+    expect(response.status).toBe(200);
+    expect(queryMocks.getLeadMapPoints).toHaveBeenCalledWith(expect.objectContaining({
+      archived: "active",
+      assigned: "unassigned",
+      assignedToUserId: undefined,
+      includeExcluded: false,
+      status: undefined,
+      visibleToUserId: "researcher-1",
+    }), 500, { includeTotal: false, fastOrder: true });
   });
 });

@@ -59,7 +59,7 @@ import {
   type QualityFilters,
 } from "@/lib/db/queries";
 import { requirePermission, type AppSession } from "@/lib/auth";
-import { canReadLeadForSession, constrainLeadFiltersForSession } from "@/lib/lead-access";
+import { canClaimLeadForSession, canReadLeadForSession, constrainLeadFiltersForSession } from "@/lib/lead-access";
 import type { PhoneVerificationStatus, QualityBucket } from "@/lib/lead-quality";
 import { generateOutreachPackage } from "@/lib/outreach-package";
 import { computeScoreWithBreakdown } from "@/lib/scoring";
@@ -214,7 +214,12 @@ async function requireLeadOwnershipForMutation(
   if (session.role === "admin") return { ok: true };
   const lead = await queryLeadById(id);
   if (!lead) return { ok: false, error: "Lead not found" };
-  if (!await canReadLeadForSession(session, lead)) return { ok: false, error: "Lead not found" };
+  if (!await canReadLeadForSession(session, lead)) {
+    if (await canClaimLeadForSession(session, lead)) {
+      return { ok: false, error: "Claim this lead before updating it." };
+    }
+    return { ok: false, error: "Lead not found" };
+  }
   if (!lead.assigned_to_user_id) return { ok: false, error: "Claim this lead before updating it." };
   if (lead.assigned_to_user_id !== session.userId) return { ok: false, error: `Taken by ${leadOwnerLabel(lead)}.` };
   return { ok: true };
@@ -366,9 +371,12 @@ export async function claimLeadAction(id: string) {
   await ensureDbReady();
   const lead = await queryLeadById(id);
   if (!lead) return { error: "Lead not found" };
-  if (!await canReadLeadForSession(session, lead)) return { error: "Lead not found" };
-  const changes = await dbClaimLeadForUser(id, session.userId);
+  if (!await canClaimLeadForSession(session, lead)) return { error: "Lead not found" };
+  const changes = session.role === "admin"
+    ? await dbClaimLeadForUser(id, session.userId, { preserveAdminSemantics: true })
+    : await dbClaimLeadForUser(id, session.userId);
   if (changes === 0) {
+    if (session.role !== "admin") return { error: "Lead not found" };
     const current = await queryLeadById(id);
     return { error: current ? `Taken by ${leadOwnerLabel(current)}.` : "Lead not found" };
   }

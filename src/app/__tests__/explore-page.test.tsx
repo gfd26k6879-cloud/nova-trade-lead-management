@@ -59,4 +59,39 @@ describe("ExplorePage", () => {
     expect(text).toContain("Explore loaded");
     expect(dbIndexMocks.withDbStatementTimeout).toHaveBeenCalledWith(10_000, expect.any(Function));
   });
+
+  it("passes only constrained active inventory filters to researcher Explore reads", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "researcher-1", email: "one@example.com", role: "researcher" });
+    queryMocks.ensureDbReady.mockResolvedValue(undefined);
+    queryMocks.getScoreBandThresholds.mockResolvedValue({});
+    queryMocks.getBusinessTypeCounts.mockResolvedValue([]);
+    queryMocks.getLeads.mockResolvedValue({ leads: [], total: 0 });
+    dbIndexMocks.withDbStatementTimeout.mockImplementation((_timeoutMs: number, fn: () => Promise<unknown>) => fn());
+
+    await ExplorePage({
+      searchParams: Promise.resolve({
+        archived: "all",
+        assigned: "me",
+        includeExcluded: "true",
+        mode: "directory",
+        status: "excluded",
+      }),
+    });
+
+    expect(queryMocks.getLeads).toHaveBeenCalledWith(expect.objectContaining({
+      archived: "active",
+      assigned: "unassigned",
+      assignedToUserId: undefined,
+      includeExcluded: false,
+      status: undefined,
+      visibleToUserId: "researcher-1",
+    }));
+    expect(queryMocks.getBusinessTypeCounts).toHaveBeenCalledWith(expect.objectContaining({
+      archived: "active",
+      assigned: "unassigned",
+      includeExcluded: false,
+      status: undefined,
+      visibleToUserId: "researcher-1",
+    }));
+  });
 });
