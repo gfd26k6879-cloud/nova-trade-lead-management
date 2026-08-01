@@ -556,3 +556,6 @@ The obligation transfers to G-009/G-011/G-012/G-014/G-019/G-020, with
 G-017/G-018 applying to any ordinary dashboard projection. All candidates and
 resources were removed; 38/38 indexes are healthy. Parent G-007 remains open,
 and no remote or external action occurred.
+
+The G-007P10 deferred-audit receipt commit is
+`0883f9d0764ededcc6de8cf2ebd8023c4cbc6780`.

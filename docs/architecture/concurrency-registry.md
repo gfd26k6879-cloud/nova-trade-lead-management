@@ -2930,3 +2930,5 @@ Date: 2026-07-31
 - Transfer the obligation to G-009/G-011/G-012/G-014/G-019/G-020, with
   G-017/G-018 governing any ordinary dashboard projection. Parent G-007 stays
   open and current runtime/global ownership remains unchanged.
+- Receipt commit `0883f9d0764ededcc6de8cf2ebd8023c4cbc6780` durably records
+  the deferral. No P10 lock or resource remains.

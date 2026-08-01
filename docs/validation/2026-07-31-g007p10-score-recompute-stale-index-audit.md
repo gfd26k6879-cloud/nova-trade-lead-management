@@ -6,6 +6,8 @@ Baseline: `d0be97dda153df1555116816a678df5a7b737e07`
 
 Status: accepted deferred defect; no migration
 
+Receipt commit: `0883f9d0764ededcc6de8cf2ebd8023c4cbc6780`
+
 ## Decision and evidence
 
 G-007P10 audited the ordered stale score-recompute selector at limits 1, 100,
