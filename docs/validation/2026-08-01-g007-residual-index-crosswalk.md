@@ -45,6 +45,9 @@ unclassified: G-002 is now 8 classified and 5 unclassified.
 After the accepted P25 plan audit, 34 names are mapped or accepted and 28 remain
 unclassified: G-002 is now 9 classified and 4 unclassified.
 
+After the accepted P26 source classification, 35 names are mapped or accepted
+and 27 remain unclassified: G-002 is now 10 classified and 3 unclassified.
+
 For this reconstruction, an exact audit target or named plan/control owner is
 mapped. Merely appearing as a migration foundation guard does not classify a
 tenant-query family. P18 and P19 each classify two names already inside the 28,
@@ -61,7 +64,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | A:P21 retain | `crawl_runs` | `idx_crawl_runs_status_created(status, created_at DESC)` | current global status-filter compatibility support; future G-013 form deferred |
 | A:P24 retain | `crawl_units` | `idx_crawl_units_budget_pages(crawl_run_id, status, pages_fetched, max_pages)` | exact current remaining-search-call aggregate owner; natural index-only plans use 5-20 buffers and zero heap fetches; transactional drop regresses to 2,503-2,750-buffer heap plans; future tenant/workspace form deferred to exact G-013/G-021 contract |
 | A:P25 retain | `crawl_units` | `idx_crawl_units_cell_status(location_cell_id, status, category)` | exact current cell-coverage and cell-ledger compatibility owner; target-led natural plans avoid sequential scans; platform cells never authorize tenant units; future tenant/workspace forms remain G-010/G-013 work |
-| U | `crawl_units` | `idx_crawl_units_market_status(market_id, status, category)` | market coverage; G-010/G-013 |
+| A:P26 retain/defer | `crawl_units` | `idx_crawl_units_market_status(market_id, status, category)` | no exact current reader; scope-neutral child-side support candidate for the single-column market FK, not constraint-owned or measured and incomplete for the compound market/cell FK; platform market is not tenant authority; retain PostgreSQL/SQLite compatibility and defer tenant/workspace market-unit query semantics and any tenant-prefixed replacement to an exact G-010/G-013 contract |
 | A:P4 retain | `crawl_units` | `idx_crawl_units_retry_ready(crawl_run_id, status, next_retry_at, created_at) WHERE status='retry_wait'` | retry reset; G-013 |
 | M:P4 RI/current run | `crawl_units` | `idx_crawl_units_run(crawl_run_id)` | run-child RI and compatibility; G-013 |
 | M:P4 plan control | `crawl_units` | `idx_crawl_units_run_status(crawl_run_id, status)` | run/status reads; G-013 |
@@ -315,3 +318,10 @@ sequence 010 remains free.
 G-007P25 receipt commit `381ff0a45fcf03677fdb90dbfd06984287b5bff8`
 records the accepted RETAIN decision. This lineage update opens no next
 residual family.
+
+G-007P26 classifies the market-status index RETAIN/DEFER from source. No exact
+current reader exists. Its leading market key is a scope-neutral, unmeasured
+single-FK support candidate, but it is not constraint-owned and does not cover
+the compound market/cell key. No live catalog, plan, health, use, performance,
+necessity, duplicate, replacement, or removal claim is made. Counts stay
+54/52/2 and sequence 010 remains free.

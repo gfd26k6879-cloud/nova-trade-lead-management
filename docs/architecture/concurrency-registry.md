@@ -3465,3 +3465,19 @@ Date: 2026-07-31
   reservation, migration, test edits, replacement, or removal absent an exact
   approved query or separately authorized RI workload. Counts remain 54/52/2,
   crosswalk 34/28, and sequence `202607310010` stays free.
+
+## G-007P26 accepted; retain/defer market-status compatibility
+
+- Source and caller tracing finds no exact current market-led crawl-unit reader.
+  Current coverage joins units by cell; the geography backfill is a writer, not
+  target-index ownership evidence.
+- The leading market key is structurally suitable only as an unmeasured,
+  scope-neutral child-side candidate for the single-column market FK. The target
+  is not constraint-owned and does not cover the compound market/cell key.
+- PostgreSQL and current/frozen SQLite compatibility are retained. Platform
+  markets never authorize tenant units; exact tenant/workspace market-unit query
+  semantics wait for G-010/G-013, and G-021 is not a current owner.
+- No PostgreSQL service or live catalog/plan claim was used. No defect,
+  candidate, migration, test edit, replacement, or removal packet is opened.
+  Counts remain 54/52/2, sequence 010 stays free, and the crosswalk becomes
+  35/27. The receipt reservation remains only through commit.

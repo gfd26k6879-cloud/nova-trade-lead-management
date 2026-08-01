@@ -1172,3 +1172,18 @@ compound market/cell coverage. Platform markets never authorize tenant units.
 No PostgreSQL service, live catalog/plan claim, defect, candidate, migration,
 test edit, replacement, or removal is assumed. Counts remain 54/52/2,
 crosswalk 34/28, and sequence 010 remains free.
+
+## G-007P26 accepted; retain/defer market-status compatibility
+
+Source and caller tracing finds no exact current market-led crawl-unit reader.
+Current coverage joins units by cell; the geography backfill is a writer, not
+target-index ownership evidence. The leading market key is only an unmeasured,
+scope-neutral child-side support candidate for the single-column market FK. The
+target is not constraint-owned and does not cover the compound market/cell key.
+
+Sol retains PostgreSQL and current/frozen SQLite compatibility and defers live
+plan, RI-necessity, tenant-query, replacement, and removal claims. Platform
+markets never authorize tenant units; G-010/G-013 still own the future query
+contract and G-021 is not a current owner. No PostgreSQL service, defect, candidate,
+migration, test edit, replacement, or removal packet is opened. Counts remain
+54/52/2, sequence 010 stays free, and the crosswalk is 35/27.
