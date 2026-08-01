@@ -984,5 +984,5 @@ after a fresh catalog, with the current crawl-run visibility pair
 `idx_crawl_runs_status_created` and `idx_crawl_runs_created_desc`; no migration
 is assumed. Parent G-007 and G-004B remain open. G-006 stays paused with native
 Windows evidence preserved; G-006C2B remains unopened. No remote or external
-action occurred. The acceptance commit is recorded by the following lineage
-update.
+action occurred. The P20A acceptance commit is
+`c8c3dba2ce980f2bfcbf7e0f6d71e1bf6a7d83d2`.

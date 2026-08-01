@@ -232,3 +232,8 @@ G-007P20 audit receipt commit
 `ef6d4154d86cbe0e71aac56a55484424db32d77d` accepts the three AI-usage
 query-history dispositions. The bounded researcher-cap write packet remains
 unnumbered; this crosswalk does not open it or a P21 audit.
+
+G-007P20A acceptance commit
+`c8c3dba2ce980f2bfcbf7e0f6d71e1bf6a7d83d2` consumes sequence 009 and
+accepts the separate tenant-cap support index. The next crawl-run visibility
+audit remains unnumbered and no migration is assumed.

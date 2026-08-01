@@ -3255,3 +3255,6 @@ Date: 2026-07-31
   `idx_crawl_runs_created_desc`; no migration is assumed. Parent G-007,
   G-004B, the native Windows G-006 lane, and G-006C2B remain open/paused as
   previously recorded.
+- P20A acceptance commit `c8c3dba2ce980f2bfcbf7e0f6d71e1bf6a7d83d2`
+  is final locally; this lineage commit records the release. No P21 card or
+  replacement objective is opened.

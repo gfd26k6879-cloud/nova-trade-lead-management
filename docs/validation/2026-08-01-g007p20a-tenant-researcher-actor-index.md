@@ -8,6 +8,8 @@ Status: accepted locally by Sol; acceptance lineage pending
 
 Implementation commit: `5076979cdef1c43f2ed404cd10c511f727ec642f`
 
+Acceptance commit: `c8c3dba2ce980f2bfcbf7e0f6d71e1bf6a7d83d2`
+
 Sol owns the root-only ledger, registry, handoff, crosswalk, and acceptance
 lineage updates.
 
@@ -153,8 +155,9 @@ identity configuration remains unset.
 Two initial G-003 containers used `pg_isready`, which returned against the
 image entrypoint's temporary bootstrap server before the requested database
 was created. The expected bootstrap fast shutdown then produced `ECONNRESET`
-before schema work. The accepted fresh retry waited for `psql -d <target>
--Atc 'SELECT 1'` to return `1` before exposing the URL and passed 6/6.
+before schema work. The accepted fresh retry waited for
+`psql -d <target> -Atc 'SELECT 1'` to return `1` before exposing the URL and
+passed 6/6.
 
 Every focused test asserts its uniquely named container is removed. The T-029
 container, loopback listener, and task-owned processes were also removed. No
