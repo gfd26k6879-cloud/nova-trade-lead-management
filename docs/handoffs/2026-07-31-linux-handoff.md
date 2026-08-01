@@ -1730,6 +1730,27 @@ residual `idx_leads_exclusion_score(is_excluded, score DESC)` remains unopened;
 the following card must reserve P35 separately. Main and the handoff tag remain
 unchanged, and no push or external action occurred.
 
+## G-007SR2 stored-exclusion normalization repair opened
+
+At clean baseline `43699d1fca4dede22b04e30df60d67542b769d9f`, Sol opens the
+bounded P1 compatibility repair proven during P35. PostgreSQL and SQLite can
+return schema-valid nonzero `is_excluded` integers such as `2`, `-1`, or `7`,
+while four row mappings treated only exact `1` as excluded. `getLeadById` then
+fed false into the accepted researcher detail, metadata, mutation, worker, and
+scoring lifecycle policy.
+
+One implementer owns a shared fail-closed normalizer, the four query mappings,
+the exact-false researcher lifecycle gate, and focused helper/query/discovery/
+access tests. Only canonical `0` or compatibility boolean `false` means active;
+all other runtime values are excluded. A discovery row with no joined lead
+must remain a directory candidate, and admin behavior remains unchanged.
+
+No migration, schema CHECK, stored-data cleanup, backfill, SQL predicate,
+canonical export/import, index, dependency, tenant-cutover, Windows lane, or
+hosted operation opens. Existing COALESCE lists and atomic researcher claim
+already reject anomalies and remain unchanged. P36 stays blocked until SR2 is
+independently accepted and its serialized locks are released.
+
 ## G-007P35 exclusion/score index audit opened
 
 Sol opens read-only G-007P35 at clean baseline

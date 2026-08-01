@@ -4078,3 +4078,29 @@ Date: 2026-08-01
   sequence `202607310010` remains free, and parent G-007 remains open.
 - The separate P1 normalization repair G-007SR2 remains unopened by this
   lineage receipt and must precede residual P36.
+
+## G-007SR2 stored-exclusion fail-closed normalization reservation
+
+Date: 2026-08-01
+
+- Sol opens a bounded compatibility-security repair at clean baseline
+  `43699d1fca4dede22b04e30df60d67542b769d9f`. It must complete before P36.
+- One implementer exclusively owns
+  `src/lib/db/lead-exclusion.ts`, `src/lib/db/queries.ts`,
+  `src/lib/lead-access.ts`, `src/lib/__tests__/lead-exclusion.test.ts`,
+  `src/lib/__tests__/lead-exclusion.query.test.ts`,
+  `src/lib/__tests__/crawl-actions.test.ts`, and
+  `src/lib/__tests__/lead-access.test.ts`. Sol owns durable documents,
+  integration, acceptance, and these serialized query/access/test locks.
+- Required policy: only canonical database `0` or compatibility boolean
+  `false` maps active; every other runtime value fails closed as excluded.
+  Discovery rows without a joined lead remain directory candidates through an
+  explicit `hasLead` guard. Researcher lifecycle policy requires exact false;
+  the admin early-return remains unchanged.
+- Existing COALESCE list/claim SQL, canonical writes/exports, imports, schema,
+  migrations, stored data, indexes, and tenant cutover remain unchanged. No
+  CHECK, cleanup, backfill, predicate rewrite, dependency change, hosted
+  operation, or P36 opening is authorized.
+- Two other agents own independent architecture/security and test/evidence
+  review. The implementer cannot self-accept. Stop on unexpected dirty overlap,
+  need for schema/data/SQL change, Windows-only evidence, or scope expansion.
