@@ -1757,3 +1757,36 @@ open. No hosted or external action opens.
 The preceding P34 lineage commit used the correct attributable author name but
 a mistyped noreply email. History is not rewritten; subsequent commits restore
 the established `masih.hedayati@users.noreply.github.com` identity.
+
+## G-007P35 exclusion/score index audit accepted
+
+Sol accepts RETAIN/DEFER for the healthy historical PostgreSQL
+`idx_leads_exclusion_score(is_excluded, score DESC)` and frozen SQLite mirror.
+No current caller was found for its raw leading key: authoritative source uses
+`COALESCE(is_excluded, 0) = 0/1`, and current exact-order selectors remain
+target-neutral or use accepted siblings. No current tenant-plan defect,
+candidate, migration, replacement, removal, CHECK, anomaly cleanup, test edit,
+or sequence use opens.
+
+Fresh PostgreSQL 16.14 replayed 54/52/2 over 220,012 interleaved rows with
+44,000 non-0/1 anomaly rows. Cumulative evidence proves exact installed/drop/
+restored results and source ordering, 38/37/38 catalogs, ten constraints,
+reachable 60/200/600 boundaries, live nondeterministic monitor semantics,
+deterministic microsecond lease ordering, six drift families, missing-target
+creation, invalid/not-ready same-name replay debt, and canonical restore. V3 is
+truthfully rejected lineage; v4/v5 close its and the default-boundary gaps.
+
+The accepted selectors preserve exact live WHERE/ORDER/LIMIT but omit some
+projection, LEFT JOIN, correlated subquery, and OFFSET surfaces. They support
+only this classification-only no-DDL result and do not claim full-route EXPLAIN
+identity or causal telemetry. Both independent reviewers accept with no
+remaining P0/P1/P2; no producer self-accepts. All P35 resources and payloads
+are removed and Sol independently verifies zero residue.
+
+The audit separately proves a P1 fail-closed compatibility defect for stored
+nonzero `is_excluded` values that mappings treat as false. It is not an index
+defect. Serialized G-007SR2 must repair it before P36 and may not infer schema,
+data-cleanup, or SQL-predicate authority. Crosswalk is 45/17 (G-003 22/17,
+G-002 13/0), inventory stays 54/52/2, original-card arithmetic stays 58/318
+accepted and 260 remaining, sequence `202607310010` is free, and parent G-007
+remains open. P35's durable reservation remains held until lineage commit.

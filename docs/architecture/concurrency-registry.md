@@ -4039,3 +4039,29 @@ Date: 2026-08-01
   Sequence `202607310010` remains free; no migration is assumed.
 - Stop before candidate DDL, migration, replacement, removal, or test edits
   unless an exact current or durably approved tenant-query defect is proven.
+
+## G-007P35 exclusion/score index audit accepted
+
+Date: 2026-08-01
+
+- Sol accepts RETAIN/DEFER for exact healthy historical PostgreSQL
+  `idx_leads_exclusion_score(is_excluded, score DESC)` and its frozen SQLite
+  compatibility mirror. No current source owner or material tenant-plan defect
+  was proven; no candidate, migration, replacement, removal, CHECK, cleanup,
+  test edit, or sequence use opens.
+- PostgreSQL 16.14 replayed 54/52/2 on 220,012 interleaved rows, including
+  44,000 preserved non-0/1 anomaly rows. Current authoritative COALESCE
+  predicates never selected the raw-leading target. Exact installed/drop/
+  restored results and ordering, 38/37/38 catalogs, ten constraints, drift,
+  missing replay, invalid/not-ready spoof, and canonical restore are reviewed.
+- Exact WHERE/ORDER/LIMIT selector read-equivalents support only this no-DDL
+  classification. They do not claim full projection, LEFT JOIN, correlated
+  subquery, OFFSET, timing, or buffer-plan fidelity.
+- Independent architecture/authority and test/evidence reviews accept with no
+  remaining P0/P1/P2; no producer self-accepts. All P35 containers, listeners,
+  processes, runners, databases, and payloads are removed.
+- A separate P1 stored-exclusion normalization defect is reserved for
+  serialized G-007SR2 before P36. It grants no P35 index or schema authority.
+- Crosswalk is 45/17 (G-003 22/17, G-002 13/0), inventory is 54/52/2,
+  sequence `202607310010` remains free, and parent G-007 remains open. Sol
+  retains only the P35 durable-document reservation until lineage commit.

@@ -116,7 +116,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | A:P8 | `leads` | `idx_leads_discovered_at(discovered_at)` | discovery counts; G-011/G-017 |
 | A:P34 retain; tenant forms defer | `leads` | `idx_leads_enrichment(enrichment_status, score DESC)` | healthy PostgreSQL compatibility owner for current stale-running recovery, selected pending/admin Kanban reads, exact lease ordering support, and scheduler status aggregation; lease/score/P6 siblings own broad active lists, exact Quality, CSV, and fallback controls; Explore/map enrichment shapes are query-function controls only; historical sibling catalog fast-path debt recorded; no current tenant-scoped caller, migration, replacement, test edit, or removal |
 | A:P5 defer / M:P6 control | `leads` | `idx_leads_enrichment_lease(enrichment_status, enrichment_next_retry_at, score DESC) WHERE archived_at IS NULL AND COALESCE(is_excluded,0)=0` | enrichment selector/lease; G-013/G-014/G-020 |
-| U | `leads` | `idx_leads_exclusion_score(is_excluded, score DESC)` | exclusion/aggregates; G-011/G-012/G-017 |
+| A:P35 retain/defer | `leads` | `idx_leads_exclusion_score(is_excluded, score DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility mirror; authoritative current predicates use COALESCE and cannot match the raw leading key; exact current selector read-equivalents remain target-neutral or sibling-owned; raw target-selecting anomaly controls are nonauthoritative; full projection/join/subquery/OFFSET EXPLAIN fidelity is expressly not claimed; catalog replay debt and separate stored-anomaly authorization defect recorded; future tenant forms deferred; no candidate, migration, replacement, removal, CHECK, cleanup, test edit, or sequence use |
 | U | `leads` | `idx_leads_location_cell(location_cell_id, score DESC)` | cell reads; G-010/G-011 |
 | U | `leads` | `idx_leads_market_active(market_id, archived_at, score DESC)` | market reads; G-010/G-011 |
 | U | `leads` | `idx_leads_numeric_filters(review_count, rating, score DESC)` | filters; G-011/G-017 |
@@ -520,3 +520,21 @@ residual is `idx_leads_exclusion_score`, but P34 does not open or number P35.
 G-007P34 acceptance commit `f61379c998df912abdbdb7a95a1a37836c89637c`
 records this classification locally. Its lineage-only successor releases the
 P34 reservation without opening or numbering P35.
+
+G-007P35 classifies `idx_leads_exclusion_score` RETAIN/DEFER. Fresh PostgreSQL
+16.14 replayed 54/52/2 on 220,012 interleaved rows with 44,000 preserved
+non-0/1 values. Current COALESCE exclusion predicates cannot use the raw
+leading key; exact WHERE/ORDER/LIMIT selectors remain target-neutral or use
+accepted siblings. Raw target-selecting controls grant no source or tenant
+authority. The bounded evidence does not claim full projection/join/subquery/
+OFFSET plan fidelity.
+
+Reviewed cumulative evidence proves exact installed/drop/restored results and
+ordering, exact 60/200/600 boundaries, monitor/lease tie semantics, 38/37/38
+catalogs, ten constraints, six drift families, missing creation, invalid/not-
+ready replay debt, and canonical restore. No migration, replacement, removal,
+constraint, cleanup, test edit, or sequence opens. Counts stay 54/52/2,
+sequence 010 stays free, crosswalk becomes 45/17, G-003 becomes 22/17, G-002
+stays 13/0, and parent G-007 remains open. A separate P1 stored-exclusion
+normalization repair G-007SR2 must precede P36; the next source residual after
+that repair is `idx_leads_location_cell`.
