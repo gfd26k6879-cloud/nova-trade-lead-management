@@ -14,10 +14,12 @@ const G002_MIGRATION = "202607290001_add_location_crawl_tenant_scope.sql";
 const G003_MIGRATION = "202607290002_add_lead_crm_tenant_scope.sql";
 const G007P3_MIGRATION = "202607310003_tenant_prefix_lead_ai_queue_indexes.sql";
 const G007P6_MIGRATION = "202607310004_tenant_enrichment_recovery_index.sql";
+const G007P7_MIGRATION = "202607310005_tenant_ai_website_repair_index.sql";
 const g002Sql = readFileSync(join("supabase", "migrations", G002_MIGRATION), "utf8");
 const g003Sql = readFileSync(join("supabase", "migrations", G003_MIGRATION), "utf8");
 const g007p3Sql = readFileSync(join("supabase", "migrations", G007P3_MIGRATION), "utf8");
 const g007p6Sql = readFileSync(join("supabase", "migrations", G007P6_MIGRATION), "utf8");
+const g007p7Sql = readFileSync(join("supabase", "migrations", G007P7_MIGRATION), "utf8");
 const skipped = new Set(["20260514161714_supabase_ai_verification_cron.sql", "20260514163203_scheduler_v2_sales_ready_pipeline.sql"]);
 const tenantA = "00000000-0000-4000-8000-000000000301";
 const tenantB = "00000000-0000-4000-8000-000000000302";
@@ -414,6 +416,126 @@ async function explainPlanned(client: PgClient, statement: string): Promise<stri
   )).map((row) => Object.values(row)[0]).join("\n");
 }
 
+const G007P7_INDEX = "idx_g007p7_leads_tenant_ai_viability_repair";
+const G007P7_INDEXDEF = "CREATE INDEX idx_g007p7_leads_tenant_ai_viability_repair ON public.leads USING btree (tenant_id, ai_checked_at DESC) WHERE ((ai_verification_status = 'site_found'::text) AND (ai_found_website_url IS NOT NULL) AND (ai_found_website_url <> ''::text) AND (COALESCE(ai_website_viability_status, ''::text) <> 'usable'::text))";
+
+async function seedG007P7PlanRows(client: PgClient): Promise<void> {
+  await client.unsafe(`
+    INSERT INTO auth.users(id) VALUES ('${ownerA}'),('${ownerB}');
+    INSERT INTO public.tenants(id,slug,name,status) VALUES
+      ('${tenantA}','g007p7-plan-a','G007P7 Plan A','active'),
+      ('${tenantB}','g007p7-plan-b','G007P7 Plan B','active');
+    INSERT INTO public.workspaces(id,tenant_id,slug,name,status) VALUES
+      ('${workspaceA}','${tenantA}','g007p7-plan-a','G007P7 Plan A','active'),
+      ('${workspaceB}','${tenantB}','g007p7-plan-b','G007P7 Plan B','active');
+    INSERT INTO public.tenant_memberships(id,tenant_id,auth_identity_id,workspace_id,status) VALUES
+      ('${membershipA}','${tenantA}','${ownerA}','${workspaceA}','active'),
+      ('${membershipB}','${tenantB}','${ownerB}','${workspaceB}','active');
+
+    INSERT INTO public.leads(
+      id,tenant_id,place_id,name,ai_verification_status,ai_found_website_url,
+      ai_website_viability_status,ai_checked_at,score,updated_at
+    )
+    SELECT
+      'g007p7-'||scope.label||'-'||series.n,
+      scope.tenant_id,
+      'g007p7-place-'||scope.label||'-'||series.n,
+      'G007P7 '||scope.label||' '||series.n,
+      CASE WHEN (series.n-1)%10 <= 6 THEN 'site_found' ELSE 'no_site_found' END,
+      CASE
+        WHEN (series.n-1)%10 <= 4 THEN 'https://found.invalid/'||scope.label||'/'||series.n
+        WHEN (series.n-1)%10 = 5 THEN ''
+        WHEN (series.n-1)%10 = 6 THEN NULL
+        ELSE 'https://other.invalid/'||scope.label||'/'||series.n
+      END,
+      CASE (series.n-1)%10
+        WHEN 0 THEN 'broken'
+        WHEN 1 THEN 'parked'
+        WHEN 2 THEN 'placeholder'
+        WHEN 3 THEN NULL
+        WHEN 4 THEN 'usable'
+        WHEN 5 THEN 'broken'
+        WHEN 6 THEN 'broken'
+        ELSE 'directory_only'
+      END,
+      CASE
+        WHEN scope.label='b' THEN now()-(series.n||' milliseconds')::interval
+        ELSE now()-interval '2 days'-(series.n||' milliseconds')::interval
+      END,
+      50001-series.n,
+      now()-(series.n||' milliseconds')::interval
+    FROM pg_catalog.generate_series(1,50000) series(n)
+    CROSS JOIN (VALUES
+      ('a','${tenantA}'::uuid),
+      ('b','${tenantB}'::uuid)
+    ) scope(label,tenant_id);
+
+    ANALYZE public.leads;
+  `);
+}
+
+async function g007p7CatalogSnapshot(client: PgClient): Promise<Record<string, unknown>> {
+  return {
+    columns: await client.unsafe(`
+      SELECT a.attname,a.atttypid::regtype::text type_name,a.attnotnull,a.attisdropped
+      FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid='public.leads'::regclass
+        AND a.attname IN (
+          'tenant_id','ai_verification_status','ai_found_website_url',
+          'ai_website_viability_status','ai_checked_at'
+        )
+      ORDER BY a.attname
+    `),
+    constraints: await client.unsafe(`
+      SELECT c.conname,c.contype,c.convalidated,c.connoinherit,
+        pg_catalog.pg_get_constraintdef(c.oid) definition,
+        CASE WHEN c.conindid<>0 THEN c.conindid::regclass::text ELSE NULL END backing_index,
+        i.relkind,x.indisunique,x.indisvalid,x.indisready,x.indislive
+      FROM pg_catalog.pg_constraint c
+      LEFT JOIN pg_catalog.pg_class i ON i.oid=c.conindid
+      LEFT JOIN pg_catalog.pg_index x ON x.indexrelid=c.conindid
+      WHERE c.connamespace='public'::regnamespace
+        AND c.conrelid='public.leads'::regclass
+        AND c.conname IN ('leads_ai_verification_status_check','leads_tenant_id_id_unique')
+      ORDER BY c.conname
+    `),
+    indexes: await client.unsafe(`
+      SELECT i.relname,i.relkind,
+        CASE WHEN i.relkind='i' THEN pg_catalog.pg_get_indexdef(i.oid) ELSE NULL END indexdef,
+        x.indisunique,x.indisvalid,x.indisready,x.indislive
+      FROM pg_catalog.pg_class i
+      JOIN pg_catalog.pg_namespace n ON n.oid=i.relnamespace
+      LEFT JOIN pg_catalog.pg_index x ON x.indexrelid=i.oid
+      WHERE n.nspname='public' AND (
+        i.relname IN (
+          'idx_leads_ai_status_checked','idx_g007p5_leads_tenant_enrichment_ready',
+          'idx_g007p6_leads_tenant_enrichment_recovery'
+        ) OR pg_catalog.left(
+          i.relname,
+          pg_catalog.length('idx_g007p7_leads_tenant_ai_viability_')
+        ) = 'idx_g007p7_leads_tenant_ai_viability_'
+      )
+      ORDER BY i.relname
+    `),
+  };
+}
+
+async function expectG007P7RejectedWithoutChange(client: PgClient, label: string): Promise<void> {
+  const before = await g007p7CatalogSnapshot(client);
+  await client.unsafe("SAVEPOINT g007p7_before_migration");
+  let failure: unknown;
+  try {
+    await client.unsafe(g007p7Sql);
+  } catch (error) {
+    failure = error;
+  }
+  await client.unsafe("ROLLBACK TO SAVEPOINT g007p7_before_migration");
+  expect(failure, label).toBeInstanceOf(Error);
+  expect((failure as Error).message, label).toMatch(/G007P7_INDEX_CATALOG_DRIFT/);
+  expect(await g007p7CatalogSnapshot(client), label).toEqual(before);
+  await client.unsafe("RELEASE SAVEPOINT g007p7_before_migration");
+}
+
 async function targetSnapshot(client: PgClient): Promise<Record<string, unknown>> {
   const snapshot: Record<string, unknown> = {};
   for (const table of targetTables) {
@@ -643,7 +765,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 49, applied: 47, skipped: 2 });
+        expect(full).toEqual({ discovered: 50, applied: 48, skipped: 2 });
         const fullIndexes = (await g007p6CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>;
         expect(fullIndexes.find((row) => row.relname === G007P6_INDEX)).toEqual({
           relname: G007P6_INDEX,
@@ -659,7 +781,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect(await g007p6CatalogSnapshot(client)).toEqual(exactReplayBefore);
 
         const baselineReceipt = await resetDatabase(client, true, false, G007P6_MIGRATION);
-        expect(baselineReceipt).toEqual({ discovered: 49, applied: 46, skipped: 2 });
+        expect(baselineReceipt).toEqual({ discovered: 50, applied: 46, skipped: 2 });
         const baselineCatalog = await g007p6CatalogSnapshot(client);
         expect((baselineCatalog.indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
           "idx_leads_enrichment",
@@ -866,6 +988,201 @@ describe("G-003 lead CRM tenant scope", () => {
   );
 
   it.skipIf(process.env.G003_RUN_DISPOSABLE_PG_TESTS !== "1")(
+    "installs the additive G-007P7 tenant AI website viability repair index with exact guards and compatible reads",
+    async () => {
+      const url = process.env.G003_DATABASE_URL;
+      if (!url) throw new Error("G003_DATABASE_URL is required");
+      const parsed = new URL(url);
+      if (!(parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") || !/^g003_lead_crm_rehearsal_[a-z0-9_]+$/.test(parsed.pathname.slice(1))) throw new Error("G-003 permits only a uniquely named loopback database");
+      const client = postgres(url, { max: 1, onnotice: () => undefined });
+      try {
+        expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
+
+        const full = await resetDatabase(client, true);
+        expect(full).toEqual({ discovered: 50, applied: 48, skipped: 2 });
+        const fullCatalog = await g007p7CatalogSnapshot(client);
+        expect((fullCatalog.indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P7_INDEX)).toEqual({
+          relname: G007P7_INDEX,
+          relkind: "i",
+          indexdef: G007P7_INDEXDEF,
+          indisunique: false,
+          indisvalid: true,
+          indisready: true,
+          indislive: true,
+        });
+        await client.unsafe(g007p7Sql);
+        expect(await g007p7CatalogSnapshot(client)).toEqual(fullCatalog);
+
+        const baselineReceipt = await resetDatabase(client, true, false, G007P7_MIGRATION);
+        expect(baselineReceipt).toEqual({ discovered: 50, applied: 47, skipped: 2 });
+        const baselineCatalog = await g007p7CatalogSnapshot(client);
+        expect((baselineCatalog.indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
+          G007P6_INDEX,
+          "idx_leads_ai_status_checked",
+        ]);
+
+        await client.unsafe("BEGIN");
+        await client.unsafe("CREATE INDEX idxXg007p7XleadsXtenantXaiXviabilityXshadow ON public.leads(id)");
+        expect(await g007p7CatalogSnapshot(client)).toEqual(baselineCatalog);
+        await client.unsafe(g007p7Sql);
+        expect(((await g007p7CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
+          G007P6_INDEX,
+          G007P7_INDEX,
+          "idx_leads_ai_status_checked",
+        ]);
+        expect((await client.unsafe("SELECT pg_catalog.to_regclass('public.idxXg007p7XleadsXtenantXaiXviabilityXshadow') IS NOT NULL present"))[0].present).toBe(true);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p7CatalogSnapshot(client)).toEqual(baselineCatalog);
+
+        await client.unsafe("BEGIN");
+        await client.unsafe(g007p7Sql);
+        expect(((await g007p7CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P7_INDEX)?.indexdef).toBe(G007P7_INDEXDEF);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p7CatalogSnapshot(client)).toEqual(baselineCatalog);
+
+        await client.unsafe("BEGIN");
+        await client.unsafe("CREATE INDEX idx_g007p5_leads_tenant_enrichment_ready ON public.leads(tenant_id,score DESC,updated_at ASC) WHERE enrichment_status='pending' AND enrichment_attempt_count<enrichment_max_attempts AND score>0 AND archived_at IS NULL AND COALESCE(is_excluded,0)=0");
+        const p5Baseline = await g007p7CatalogSnapshot(client);
+        await client.unsafe(g007p7Sql);
+        expect(((await g007p7CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P7_INDEX)?.indexdef).toBe(G007P7_INDEXDEF);
+        expect((await g007p7CatalogSnapshot(client)).columns).toEqual(p5Baseline.columns);
+        expect((await g007p7CatalogSnapshot(client)).constraints).toEqual(p5Baseline.constraints);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p7CatalogSnapshot(client)).toEqual(baselineCatalog);
+
+        const baselineMutations: Array<[string, string]> = [
+          ["missing_global", "DROP INDEX public.idx_leads_ai_status_checked"],
+          ["global_order_spoof", "DROP INDEX public.idx_leads_ai_status_checked; CREATE INDEX idx_leads_ai_status_checked ON public.leads(ai_checked_at DESC,ai_verification_status)"],
+          ["global_unhealthy", "UPDATE pg_catalog.pg_index SET indisvalid=false WHERE indexrelid='public.idx_leads_ai_status_checked'::regclass"],
+          ["global_non_index", "DROP INDEX public.idx_leads_ai_status_checked; CREATE TABLE public.idx_leads_ai_status_checked(sentinel integer)"],
+          ["reserved_p7_sibling", "CREATE INDEX idx_g007p7_leads_tenant_ai_viability_shadow ON public.leads(id)"],
+          ["tenant_nullable", "ALTER TABLE public.leads ALTER COLUMN tenant_id DROP NOT NULL"],
+          ["verification_status_nullable", "ALTER TABLE public.leads ALTER COLUMN ai_verification_status DROP NOT NULL"],
+          ["found_url_not_nullable", "ALTER TABLE public.leads ALTER COLUMN ai_found_website_url SET NOT NULL"],
+          ["viability_not_nullable", "ALTER TABLE public.leads ALTER COLUMN ai_website_viability_status SET NOT NULL"],
+          ["checked_at_not_nullable", "ALTER TABLE public.leads ALTER COLUMN ai_checked_at SET NOT NULL"],
+          ["status_constraint_set_spoof", "ALTER TABLE public.leads DROP CONSTRAINT leads_ai_verification_status_check; ALTER TABLE public.leads ADD CONSTRAINT leads_ai_verification_status_check CHECK (ai_verification_status IN ('not_checked','site_found','no_site_found','weak_site_found','uncertain','error'))"],
+          ["foundation_backing_unhealthy", `UPDATE pg_catalog.pg_index SET indisvalid=false WHERE indexrelid=(SELECT conindid FROM pg_catalog.pg_constraint WHERE connamespace='public'::regnamespace AND conrelid='public.leads'::regclass AND conname='leads_tenant_id_id_unique')`],
+        ];
+        for (const [label, mutation] of baselineMutations) {
+          await client.unsafe("BEGIN");
+          try {
+            await client.unsafe(mutation);
+            await expectG007P7RejectedWithoutChange(client, label);
+          } finally {
+            await client.unsafe("ROLLBACK");
+          }
+          expect(await g007p7CatalogSnapshot(client), label).toEqual(baselineCatalog);
+        }
+
+        await client.unsafe(g007p7Sql);
+        const installedCatalog = await g007p7CatalogSnapshot(client);
+        const finalMutations: Array<[string, string]> = [
+          ["candidate_order_spoof", `DROP INDEX public.${G007P7_INDEX}; CREATE INDEX ${G007P7_INDEX} ON public.leads(ai_checked_at DESC,tenant_id) WHERE ai_verification_status='site_found' AND ai_found_website_url IS NOT NULL AND ai_found_website_url<>'' AND COALESCE(ai_website_viability_status,'')<>'usable'`],
+          ["candidate_direction_spoof", `DROP INDEX public.${G007P7_INDEX}; CREATE INDEX ${G007P7_INDEX} ON public.leads(tenant_id,ai_checked_at ASC) WHERE ai_verification_status='site_found' AND ai_found_website_url IS NOT NULL AND ai_found_website_url<>'' AND COALESCE(ai_website_viability_status,'')<>'usable'`],
+          ["candidate_predicate_spoof", `DROP INDEX public.${G007P7_INDEX}; CREATE INDEX ${G007P7_INDEX} ON public.leads(tenant_id,ai_checked_at DESC) WHERE ai_verification_status='site_found' AND ai_found_website_url IS NOT NULL AND ai_found_website_url<>''`],
+          ["candidate_status_spoof", `DROP INDEX public.${G007P7_INDEX}; CREATE INDEX ${G007P7_INDEX} ON public.leads(tenant_id,ai_checked_at DESC) WHERE ai_verification_status='weak_site_found' AND ai_found_website_url IS NOT NULL AND ai_found_website_url<>'' AND COALESCE(ai_website_viability_status,'')<>'usable'`],
+          ["candidate_non_index", `DROP INDEX public.${G007P7_INDEX}; CREATE TABLE public.${G007P7_INDEX}(sentinel integer)`],
+          ["candidate_unhealthy", `UPDATE pg_catalog.pg_index SET indisvalid=false WHERE indexrelid='public.${G007P7_INDEX}'::regclass`],
+          ["candidate_reserved_sibling", "CREATE INDEX idx_g007p7_leads_tenant_ai_viability_extra ON public.leads(id)"],
+          ["final_found_url_not_nullable", "ALTER TABLE public.leads ALTER COLUMN ai_found_website_url SET NOT NULL"],
+        ];
+        for (const [label, mutation] of finalMutations) {
+          await client.unsafe("BEGIN");
+          try {
+            await client.unsafe(mutation);
+            await expectG007P7RejectedWithoutChange(client, label);
+          } finally {
+            await client.unsafe("ROLLBACK");
+          }
+          expect(await g007p7CatalogSnapshot(client), label).toEqual(installedCatalog);
+        }
+
+        await client.unsafe("BEGIN");
+        await client.unsafe(`
+          DROP INDEX public.idx_leads_ai_status_checked;
+          CREATE INDEX idx_g007p5_leads_tenant_enrichment_ready
+            ON public.leads(tenant_id,score DESC,updated_at ASC)
+            WHERE enrichment_status='pending'
+              AND enrichment_attempt_count<enrichment_max_attempts
+              AND score>0 AND archived_at IS NULL AND COALESCE(is_excluded,0)=0;
+        `);
+        const forwardCompatibleFinal = await g007p7CatalogSnapshot(client);
+        await client.unsafe(g007p7Sql);
+        expect(await g007p7CatalogSnapshot(client)).toEqual(forwardCompatibleFinal);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p7CatalogSnapshot(client)).toEqual(installedCatalog);
+
+        await resetDatabase(client, true, false, G007P7_MIGRATION);
+        await seedG007P7PlanRows(client);
+        expect((await client.unsafe("SELECT count(*)::integer count FROM public.leads"))[0].count).toBe(100000);
+        expect(await client.unsafe(`
+          SELECT tenant_id::text,count(*)::integer row_count,
+            count(*) FILTER (WHERE ai_verification_status='site_found' AND ai_found_website_url IS NOT NULL AND ai_found_website_url<>'' AND COALESCE(ai_website_viability_status,'')<>'usable')::integer candidates
+          FROM public.leads GROUP BY tenant_id ORDER BY tenant_id
+        `)).toEqual([
+          { tenant_id: tenantA, row_count: 50000, candidates: 20000 },
+          { tenant_id: tenantB, row_count: 50000, candidates: 20000 },
+        ]);
+
+        const tenantQuery = `SELECT * FROM public.leads WHERE tenant_id='${tenantA}' AND ai_verification_status='site_found' AND ai_found_website_url IS NOT NULL AND ai_found_website_url<>'' AND COALESCE(ai_website_viability_status,'')<>'usable' ORDER BY ai_checked_at DESC LIMIT 200`;
+        const baselineTenantPlan = await explain(client, tenantQuery);
+        expect(baselineTenantPlan).toContain("idx_leads_ai_status_checked");
+        expect(baselineTenantPlan).toMatch(/Filter: .*tenant_id/u);
+        expect(baselineTenantPlan).toMatch(/Rows Removed by Filter: [1-9][0-9]*/u);
+        const baselineTenantIds = (await client.unsafe<Array<{ id: string }>>(tenantQuery)).map((row) => row.id);
+        expect(baselineTenantIds).toHaveLength(200);
+
+        const nullableResult = async (): Promise<string[]> => {
+          await client.unsafe("BEGIN");
+          try {
+            await client.unsafe(`INSERT INTO public.leads(id,tenant_id,place_id,name,ai_verification_status,ai_found_website_url,ai_website_viability_status,ai_checked_at) VALUES ('g007p7-null-checked','${tenantA}','g007p7-null-checked','G007P7 null checked','site_found','https://null.invalid','broken',NULL)`);
+            return (await client.unsafe<Array<{ id: string }>>(`SELECT id FROM public.leads WHERE tenant_id='${tenantA}' AND ai_verification_status='site_found' AND ai_found_website_url IS NOT NULL AND ai_found_website_url<>'' AND COALESCE(ai_website_viability_status,'')<>'usable' ORDER BY ai_checked_at DESC LIMIT 1`)).map((row) => row.id);
+          } finally {
+            await client.unsafe("ROLLBACK");
+          }
+        };
+        const baselineNullableIds = await nullableResult();
+        expect(baselineNullableIds).toEqual(["g007p7-null-checked"]);
+
+        const compatibilitySql = (limit: number): string => `SELECT * FROM public.leads WHERE ai_verification_status='site_found' AND ai_found_website_url IS NOT NULL AND ai_found_website_url<>'' AND COALESCE(ai_website_viability_status,'')<>'usable' ORDER BY ai_checked_at DESC LIMIT ${limit}`;
+        const compatibilityBaseline = new Map<number, { plan: string; ids: string[] }>();
+        for (const limit of [1, 50, 200]) {
+          compatibilityBaseline.set(limit, {
+            plan: await explain(client, compatibilitySql(limit)),
+            ids: (await client.unsafe<Array<{ id: string }>>(compatibilitySql(limit))).map((row) => row.id),
+          });
+          expect(compatibilityBaseline.get(limit)?.plan, String(limit)).toContain("idx_leads_ai_status_checked");
+        }
+        const preservedBefore = await g007p7CatalogSnapshot(client);
+
+        await client.unsafe(g007p7Sql);
+        const finalTenantPlan = await explain(client, tenantQuery);
+        expect(finalTenantPlan).toContain(G007P7_INDEX);
+        expect(finalTenantPlan).toMatch(/Index Cond: \(tenant_id = '[^']+'::uuid\)/u);
+        expect(finalTenantPlan).not.toContain("Sort");
+        expect(finalTenantPlan.split("\n").filter((line) => line.includes("Filter:")).join("\n")).not.toContain("tenant_id");
+        expect((await client.unsafe<Array<{ id: string }>>(tenantQuery)).map((row) => row.id)).toEqual(baselineTenantIds);
+        expect(await nullableResult()).toEqual(baselineNullableIds);
+
+        for (const limit of [1, 50, 200]) {
+          const finalPlan = await explain(client, compatibilitySql(limit));
+          expect(finalPlan, String(limit)).toContain("idx_leads_ai_status_checked");
+          expect(finalPlan, String(limit)).not.toContain(G007P7_INDEX);
+          expect((await client.unsafe<Array<{ id: string }>>(compatibilitySql(limit))).map((row) => row.id), String(limit)).toEqual(compatibilityBaseline.get(limit)?.ids);
+        }
+        const finalPreserved = await g007p7CatalogSnapshot(client);
+        expect((finalPreserved.indexes as Array<Record<string, unknown>>).filter((row) => row.relname !== G007P7_INDEX)).toEqual(preservedBefore.indexes);
+        expect((finalPreserved.indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P7_INDEX)?.indexdef).toBe(G007P7_INDEXDEF);
+      } finally {
+        await client.unsafe("ROLLBACK").catch(() => undefined);
+        await client.end({ timeout: 5 });
+      }
+    },
+    240000,
+  );
+
+  it.skipIf(process.env.G003_RUN_DISPOSABLE_PG_TESTS !== "1")(
     "rehearses fresh, exact T-028 upgrade, receipt drift, rollback, hostile path, isolation, actors, anon projection, and replay on PostgreSQL 16",
     async () => {
       const url = process.env.G003_DATABASE_URL;
@@ -877,7 +1194,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 49, applied: 47, skipped: 2 });
+        expect(full).toEqual({ discovered: 50, applied: 48, skipped: 2 });
         await assertCatalog(client);
 
         const expectedFinalQueueIndexes: LeadAiQueueIndex[] = [
@@ -921,8 +1238,10 @@ describe("G-003 lead CRM tenant scope", () => {
           resetRuntimeDb = dbModule.resetDbClient;
           const { ensureDbReady } = await import("@/lib/db/queries");
           const p6RuntimeCatalogBefore = await g007p6CatalogSnapshot(client);
+          const p7RuntimeCatalogBefore = await g007p7CatalogSnapshot(client);
           await ensureDbReady();
           expect(await g007p6CatalogSnapshot(client)).toEqual(p6RuntimeCatalogBefore);
+          expect(await g007p7CatalogSnapshot(client)).toEqual(p7RuntimeCatalogBefore);
           expect(await leadAiQueueIndexSnapshot(client)).toEqual(expectedFinalQueueIndexes);
         } finally {
           await resetRuntimeDb?.();

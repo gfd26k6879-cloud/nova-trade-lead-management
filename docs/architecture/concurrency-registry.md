@@ -2828,3 +2828,33 @@ Date: 2026-07-31
   validated packet. `migration-sequence` and `integration-ledger` release after
   this lineage commit. No P6 container, process, listener, database, worktree,
   or lock remains.
+
+## G-007P7 tenant AI website-repair index packet
+
+- A fresh PostgreSQL 16.14 audit over 100,000 interleaved leads proves the exact
+  future tenant-scoped website-viability repair read filters 35,000 newer
+  wrong-tenant rows through global `idx_leads_ai_status_checked`.
+- The accepted 1,616 KiB hypothetical is exact and additive:
+  `(tenant_id, ai_checked_at DESC)` with the current `site_found`, nonempty URL,
+  and non-usable viability predicates. It reduces the scoped plan to 17 buffers
+  with zero filtering while the exact current unscoped query remains on the
+  retained global index at 18 buffers.
+- Sol holds `migration-sequence` and `integration-ledger`. One implementer may
+  edit migration `202607310005_tenant_ai_website_repair_index.sql`, the owning
+  G-003 PostgreSQL harness, runtime-ownership assertion, and migration-count
+  expectations only. Root owns acceptance documents and final review.
+- No current query/caller, batch mutation, AI worker, provider, route, runtime
+  repair source, SQLite, P3, P5/P6, consistency-repair, or score-recompute
+  change is authorized. The global compatibility index remains exact.
+- The sole implementation packet passed independent architecture and quality
+  review without repair. Exact replay, rollback, drift/spoof rejection,
+  literal-prefix protection, forward evolution, runtime ownership, nullable
+  ordering, and limits 1/50/200 compatibility are covered.
+- Root acceptance passes G-003/P6/P7 4/4, G-002 2/2, G-004A 1/1, G-005 1/1,
+  T-029 19/19 at 50/48/2, isolated Q-002 1/1, focused runtime/AI 15/15,
+  TypeScript, focused ESLint, 37-table recovery, Fedora coordinator 12
+  pass/26 Windows-native skip, build 11/11, diff, JSONL, and cleanup.
+- G-007P7 is accepted pending attributable local source and lineage commits.
+  Both locks release only after the lineage commit and final invariant check.
+  Parent G-007 and deferred G-007P5 remain open; P8 starts read-only with the
+  dashboard `idx_leads_discovered_at` family and assumes no migration.

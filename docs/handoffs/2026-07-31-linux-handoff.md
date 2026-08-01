@@ -445,3 +445,34 @@ is assumed. No remote or external action occurred.
 
 The accepted G-007P6 source commit is
 `672f14a99aa9224d307ebfe2e0bd25b11e884507`.
+
+## G-007P7 continuation receipt
+
+Date: 2026-07-31
+
+G-007P7 proves and corrects one PostgreSQL-only tenant website-viability repair
+read defect. On 100,000 interleaved leads, the scoped baseline used the retained
+global `idx_leads_ai_status_checked`, removed 35,036 rows including 35,000
+newer rows from the wrong tenant, and read 5,883 buffers. The additive 1,616 KiB
+partial index on `(tenant_id,ai_checked_at DESC)` for exact current eligibility
+reduces the scoped plan to 17 buffers with tenant in `Index Cond`, zero residual
+filtering, no sort, and identical ordered IDs.
+
+The current unscoped query retains the global index and identical results at
+limits 1, 50, and 200. Exact replay, rollback, foundation drift, catalog spoofs,
+health, literal-prefix siblings, later global/P5 evolution, P6 coexistence,
+nullable ordering, and live runtime ownership are covered. No query, caller,
+worker, provider, route, runtime repair, SQLite, or external behavior changed.
+Independent architecture and quality reviews both pass.
+
+Root gates pass: G-003/P6/P7 4/4, G-002 2/2, G-004A 1/1, G-005 1/1, T-029
+19/19 and isolated Q-002 1/1 at 50 discovered/48 applied/2 skipped, focused
+runtime and SQLite AI verification 15/15, TypeScript, focused ESLint, recovery
+over 37 tables, Fedora coordinator 12 pass/26 Windows-native skip, and build
+11/11. Two invalid root setup invocations are truthfully retained in the
+validation receipt and are not counted as evidence.
+
+Parent G-007 remains open and G-007P5 remains deferred. After attributable
+local commits and lock release, the next exact action is a read-only G-007P8
+PostgreSQL 16 audit of the dashboard `idx_leads_discovered_at` family. No
+migration is assumed. No remote or external action occurred.
