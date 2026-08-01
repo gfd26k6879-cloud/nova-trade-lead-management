@@ -1620,3 +1620,30 @@ page-body authorization check. The bounded repair is amended to include only
 `src/app/(protected)/leads/[id]/page.tsx` and one focused metadata access test.
 Metadata must authenticate and reuse the same read policy; denied and missing
 objects must not disclose a lead identity. No other page or UI scope opens.
+
+## G-007SR1 accepted
+
+Sol accepts implementation commit
+`726765ad7f1eeb9df91dcf7648e837561cda7792`. Researcher owned Leads and
+Explore are active/nonexcluded and cannot be broadened by direct archive or
+excluded selectors. Detail, metadata, and ordinary mutation require owned,
+active, nonexcluded, market-visible leads. Claim is separately limited to
+unassigned eligible inventory, with the lifecycle and assignment predicates
+repeated atomically. Admin access and legacy inactive/self-idempotent claim
+semantics are preserved.
+
+Root passed 83/83 focused tests, TypeScript, ESLint, 37-table recovery, Fedora
+coordinator 12 passed/26 Windows-native skipped, build 11/11, and fresh local
+PostgreSQL G-002 2/2, G-003 6/6, G-004A/P20A 2/2, G-005 1/1, and T-029 19/19.
+Two independent reviews accept with no P0/P1/P2. Invalid broad test attempts
+that entered the paused Windows lane are excluded and do not alter historical
+Windows evidence. A corrected broad boundary produced 2,296 passes and one
+unrelated unchanged millisecond retention-boundary test failure, isolated at
+18/19.
+
+All task containers, listeners, processes, and temporary artifacts are removed.
+Counts remain 54/52/2, crosswalk 43/19 (G-003 20/19, G-002 13/0), original-card
+arithmetic 58/318 accepted and 260 remaining, and sequence `202607310010` is
+free. Parent G-007 remains open. The exact next residual is
+`idx_leads_enrichment(enrichment_status, score DESC)`; P34 is not opened by
+this receipt.

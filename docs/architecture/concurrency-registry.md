@@ -3930,3 +3930,25 @@ Date: 2026-08-01
   `src/app/(protected)/leads/[id]/page.tsx` and one focused metadata access test.
   Metadata must authenticate and apply the same read policy, returning no lead
   identity for a denied object. No other page or UI write opens.
+
+## G-007SR1 accepted; authorization locks released
+
+Date: 2026-08-01
+
+- Sol accepts implementation commit
+  `726765ad7f1eeb9df91dcf7648e837561cda7792`. Researcher owned-list,
+  Explore, detail, metadata, mutation, claim, and atomic SQL lifecycle policies
+  are fail-closed; the admin legacy claim path remains unchanged.
+- Root passed 83/83 focused behavior, static checks, 37-table recovery,
+  coordinator 12 passed/26 Windows-native skipped, build 11/11, and fresh local
+  PostgreSQL G-002 2/2, G-003 6/6, G-004A/P20A 2/2, G-005 1/1, T-029 19/19.
+  Independent architecture/security and test/evidence reviews accept with no
+  P0/P1/P2; implementer self-acceptance is false.
+- The unfiltered and single-exclusion broad test attempts improperly entered
+  the paused Windows G-006 lane and are excluded. The corrected three-file
+  exclusion produced 2,296 passes plus one unrelated unchanged millisecond
+  retention-boundary test failure, isolated at 18/19. No Windows claim changed.
+- All G-007SR1 source, claim, test, metadata, and durable-document locks are
+  released after the acceptance receipt. Counts remain 54/52/2, crosswalk
+  43/19, and sequence `202607310010` remains free. Parent G-007 stays open;
+  P34 remains the next residual and is not opened here.
