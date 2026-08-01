@@ -1322,3 +1322,36 @@ resources are gone. Crosswalk becomes 39/23, G-003 becomes 16/23, counts remain
 Receipt commit `9f55ca6c1c8469b975fe5a0ffe9091787e2b5707` records the
 accepted disposition and releases the durable-document reservation. This
 lineage update opens no next residual family.
+
+## G-007P30 assigned-lead index audit opened
+
+After clean P29 lineage at `48872851107561d36d8d02857369260c50e556e1`,
+Sol opens one read-only PostgreSQL 16 catalog and natural-plan audit for
+`idx_leads_assigned_to_user(assigned_to_user_id, updated_at DESC)`, the next
+unclassified G-003 residual.
+
+The packet measures exact current assigned/unassigned list, workbench, team
+aggregate, local assignee-cleanup, and FK `SET NULL` forms against a physically
+interleaved two-tenant fixture. One active identity must be a valid member of
+both tenants so assignee identity cannot masquerade as tenant authority. Leads
+remain tenant-wide with no workspace. Current readers do not order assigned
+rows by `updated_at`; any such shape is structural control only. PostgreSQL uses
+nullable UUID assignment and must reject empty-string UUID input; SQLite's
+empty-string compatibility branch is not PostgreSQL evidence. Remote Auth user
+deletion is forbidden.
+
+The binding reader matrix covers assigned and NULL-unassigned `getLeads` count
+and score-ordered list at page sizes 1/25/100/200 plus nonzero OFFSET; Kanban at
+100; map at default/max 600/1000; export at default/max 50000/100000; and
+`getNowQueue` output 25 with its exact 500-row candidate bound and source
+multi-key orders. Team/workbench aggregates are canonicalized. Every binding
+list boundary must be unique or use a wholly included canonical tie cohort.
+PK-led assign/claim remain target-neutral controls; suspended/other-tenant and
+empty UUID assignments must reject unchanged. Local cleanup and rollback-only
+local `auth.users` deletion exercise assignment nulling without remote Auth.
+
+Natural JSON EXPLAIN, canonical results, target-only transactional drop, and
+exact rollback restoration are required. Mutation evidence uses rollback-only
+transactions or identical clean clones. No defect, tenant-prefixed candidate,
+migration, test edit, replacement, or removal is assumed. Counts remain 54/52/2,
+crosswalk 39/23 (G-003 16/23), and sequence 010 remains free.

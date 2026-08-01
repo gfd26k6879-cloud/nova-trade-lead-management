@@ -3626,3 +3626,36 @@ Date: 2026-08-01
   local receipt commit; parent G-007 remains open. Receipt commit
   `9f55ca6c1c8469b975fe5a0ffe9091787e2b5707` releases the reservation; this
   lineage update opens no next residual family.
+
+## G-007P30 assigned-lead index audit reservation
+
+Date: 2026-08-01
+
+- After clean G-007P29 lineage at
+  `48872851107561d36d8d02857369260c50e556e1`, Sol reserves the serialized
+  G-007 durable-document surfaces for one read-only PostgreSQL 16 audit of
+  `idx_leads_assigned_to_user(assigned_to_user_id, updated_at DESC)` only.
+- Exact current assigned/unassigned generic lists and counts, workbench queues,
+  team joins/aggregates, local assignee cleanup, and FK `SET NULL` are measured.
+  Current sources do not order assigned rows by `updated_at`; that suffix is a
+  structural control only. The fixture crosses two tenants and reuses one active
+  identity across both, plus tenant-local and null assignees, so actor identity
+  never becomes tenant or workspace authority. Leads have no workspace scope.
+- Binding reads cover `getLeads` page sizes 1/25/100/200 plus nonzero OFFSET,
+  Kanban 100, map 600/1000, export 50000/100000, and `getNowQueue` output 25
+  with candidate bound 500 and exact source order. Lists require unique
+  boundaries or wholly included canonical tie cohorts. Team/workbench aggregates
+  are canonicalized. Assigned/updated structural controls are separately labeled.
+- PostgreSQL assignment is nullable UUID; empty-string UUID input is a rejected
+  portability control, not fixture data. SQLite's empty-string compatibility
+  branch cannot establish PostgreSQL behavior. No remote Auth deletion is
+  authorized. Retained and unclassified sibling indexes remain installed and
+  are labeled accurately.
+- Natural JSON EXPLAIN, canonical results, target-only transactional drop, and
+  exact rollback restoration are required. Mutations use rollback-only phases
+  or identical clean clones. Suspended/other-tenant and empty UUID assignments
+  reject unchanged; PK-led assign/claim are target-neutral controls. Exact local
+  cleanup and rollback-only local `auth.users` deletion exercise nulling without
+  remote Auth. No defect, tenant-prefixed candidate, migration,
+  test edit, replacement, or removal is assumed. Counts remain 54/52/2,
+  crosswalk 39/23 (G-003 16/23), and sequence `202607310010` stays free.
