@@ -1248,3 +1248,24 @@ and P24 controls. ZIP is a compatibility location token, never tenant/workspace
 authority; G-010/G-013/G-017 remain measurement boundaries. No defect,
 candidate, migration, test edit, replacement, or removal is assumed. Counts
 remain 54/52/2, crosswalk 37/25 (G-002 12/1), and sequence 010 remains free.
+
+## G-007P28 accepted; retain/defer status-ZIP compatibility
+
+Sol accepts the combined r3k and exact-geography-supplement evidence. Fresh
+PostgreSQL 16.14 services replayed the exact 54/52/2 chain on corrected
+124,416-row two-tenant fixtures. Results and restored plans are exact across
+target installed/drop/rollback. The exact failed-error reader, complete
+stale-reset/due-retry/atomic-lease flow, all-time and bounded failure statistics,
+and full current geography CTE do not use `idx_crawl_units_status_zip`; accepted
+run, budget, retry, tenant-run, or sequential controls own them. The target is
+retained/deferred for historical PostgreSQL/SQLite compatibility and measured
+mode-filtered or structural-control access only.
+
+Current ZIP joins admit 2,592 platform-cell and 2,592 generalized colliding
+rows beside 5,184 valid legacy rows for the selected run. This is separate
+G-010/G-013 query-semantics debt and a G-017 validation boundary, never tenant
+or workspace authority and not an index defect. No candidate, migration, test
+edit, replacement, necessity, or removal packet opens. Independent reviews
+report no remaining P0/P1/P2. Root gates pass, all task resources are removed,
+counts remain 54/52/2, sequence 010 stays free, the crosswalk becomes 38/24,
+and G-002 is complete at 13/0. Parent G-007 remains open.

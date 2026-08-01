@@ -3553,3 +3553,22 @@ Date: 2026-08-01
   the audit proves a material exact current or durably approved tenant-query
   plan defect. Counts remain 54/52/2, crosswalk 37/25 (G-002 12/1), and
   sequence `202607310010` stays free.
+
+## G-007P28 accepted; retain/defer status-ZIP compatibility
+
+Date: 2026-08-01
+
+- Sol accepts the combined authoritative r3k audit and exact-geography
+  supplement. PostgreSQL 16.14 replayed 54/52/2 migrations on independently
+  crossed 124,416-row fixtures. Exact failed-error, complete reset/lease,
+  all-time/bounded statistics, and full geography queries do not use the target;
+  only mode-filtered status-ZIP and structural controls do.
+- Platform-cell and generalized compatibility tokens contaminate current ZIP
+  joins. That is separate G-010/G-013 query-semantics debt and a G-017 validation
+  boundary, not tenant/workspace authority or a G-007 index defect. No candidate,
+  migration, test edit, replacement, necessity, or removal packet opens.
+- Independent test/evidence and architecture/authority review report no
+  remaining P0/P1/P2 finding. The crosswalk becomes 38/24 and G-002 13/0;
+  counts remain 54/52/2 and sequence 010 stays free. All disposable resources
+  are gone. The durable-document reservation remains only through the
+  attributable local receipt commit.

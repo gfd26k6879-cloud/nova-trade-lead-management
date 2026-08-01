@@ -52,6 +52,9 @@ After the accepted P27 two-index source classification, 37 names are mapped or
 accepted and 25 remain unclassified: G-002 is now 12 classified and 1
 unclassified.
 
+After the accepted P28 plan audit, 38 names are mapped or accepted and 24
+remain unclassified: G-002 is complete at 13 classified and 0 unclassified.
+
 For this reconstruction, an exact audit target or named plan/control owner is
 mapped. Merely appearing as a migration foundation guard does not classify a
 tenant-query family. P18 and P19 each classify two names already inside the 28,
@@ -72,7 +75,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | A:P4 retain | `crawl_units` | `idx_crawl_units_retry_ready(crawl_run_id, status, next_retry_at, created_at) WHERE status='retry_wait'` | retry reset; G-013 |
 | M:P4 RI/current run | `crawl_units` | `idx_crawl_units_run(crawl_run_id)` | run-child RI and compatibility; G-013 |
 | M:P4 plan control | `crawl_units` | `idx_crawl_units_run_status(crawl_run_id, status)` | run/status reads; G-013 |
-| U | `crawl_units` | `idx_crawl_units_status_zip(status, zip)` | unit status/geography; G-010/G-013 |
+| A:P28 retain/defer | `crawl_units` | `idx_crawl_units_status_zip(status, zip)` | healthy PostgreSQL target plus historical PostgreSQL/SQLite compatibility and measured mode-filtered/structural-control support only; exact failed-error, reset/lease, statistics, and full geography paths use accepted siblings or sequential plans; platform/generalized ZIP-token pollution is separate G-010/G-013 semantic debt, never authority or an index defect; no necessity, replacement, or removal claim |
 | A:P27 retain/defer | `user_market_access` | `idx_user_market_access_market(market_id, user_id)` | no current runtime application market-leading reader; test-only market predicates prove no plan ownership; unmeasured non-constraint-owned PostgreSQL CASCADE lookup/maintenance candidate and SQLite NO ACTION enforcement-lookup candidate; never platform-market tenant authority or cross-engine equivalence; retain compatibility and defer live RI/replacement/removal claims |
 | A:P27 retain/defer | `user_market_access` | `idx_user_market_access_user(user_id, market_id)` | current user-led compatibility-query candidate, but no natural plan-owner, identity, uniqueness, necessity, duplication, or removal claim; G-002/frozen identities differ from legacy/current-prepared SQLite; defer scoped query semantics to G-009/G-010/G-011/G-016/G-018 |
 
@@ -345,3 +348,14 @@ remains free.
 G-007P27 receipt commit `0636a4ff3aee28c5c965ac239567523d3c8ced67`
 records the accepted two-index RETAIN/DEFER decision. This lineage update opens
 no next residual family.
+
+G-007P28 classifies the final G-002 residual RETAIN/DEFER. On the authoritative
+124,416-row r3k fixture, exact failed-error, complete reset/lease, all-time and
+bounded statistics, and current ZIP-ledger paths do not use the target. A fresh
+supplement executes the exact full geography CTE; `idx_crawl_units_run` owns it
+and target removal changes neither result nor plan. Only mode-filtered or
+structural controls use the target. Platform-cell and generalized tokens pollute
+current ZIP joins, but that is separate G-010/G-013 semantic debt and never
+tenant/workspace authority or an index defect. No candidate, migration,
+replacement, necessity, or removal packet opens. Counts stay 54/52/2, sequence
+010 stays free, the crosswalk becomes 38/24, and G-002 is complete at 13/0.
