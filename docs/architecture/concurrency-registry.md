@@ -3698,3 +3698,43 @@ Date: 2026-08-01
 - Receipt commit `e3e2c9759f2e8f53cc8299d746237a928fb9674f` records the
   accepted classification and supplement, releases the serialized durable-
   document reservation, and opens no next residual family.
+
+## G-007P31 business-type score-index audit reservation
+
+Date: 2026-08-01
+
+- After clean G-007P30 lineage at
+  `77f7816cb77bbbbfee713e874f6d56a11006c25f`, Sol reserves the serialized
+  G-007 durable-document surfaces for one read-only PostgreSQL 16 audit of
+  `idx_leads_business_type_score(business_type, score DESC)` only.
+- Exact business-type equality plus score order is live by default for the leads
+  table at 25, Kanban at 100, and CSV export at 50000/100000. Explore list 60
+  and its always-fast map route at 200/600 are live score-order shapes only when
+  `sortBy=score`; their defaults use opportunity order. Exact page-two offsets
+  are 25 and 60. GetLeads 1/100/200, normal-map 200/600, and normal-map 1000 are
+  helper/source controls only. Quality, AI, competitor, business-count, and
+  statistics shapes are separately labelled prefix/filter or aggregate controls.
+- The fresh two-tenant fixture has no workspace dimension and must make exact
+  export limits binding with at least 100,001 active/nonexcluded rows for one
+  literal shared business type. Literal `local_services`, SQL NULL, empty text,
+  and other canonical types remain distinct. Equality filters exclude NULL,
+  while count/statistics readers may coalesce it to `local_services`; that is
+  query-semantic debt, never index DDL authority. Tenant-prefixed analogs are
+  measurement-only and business type/score never become tenant authority.
+  At least 1,001 shared-type rows must also have non-NULL coordinates, physically
+  score-interleaved across both tenants, with exact map ranks 200/201, 600/601,
+  and 1000/1001. Exact offset boundaries are required at 25 and 60.
+- Catalog preflight requires exactly one healthy ordinary btree with
+  business-type ASC NULLS LAST using `text_ops` and the resolved column
+  collation, then score DESC NULLS FIRST using `float8_ops`; two key/total
+  attributes; no INCLUDE, predicate, expression, uniqueness, constraint owner,
+  alternate duplicate, spoof, or drift. Name-only `IF NOT EXISTS` replay is not
+  definition proof. Any mismatch stops before EXPLAIN and is not repaired.
+- Natural JSON EXPLAIN, canonical full results, exact kth/k+1 or wholly included
+  tie boundaries, target-only transactional drop, and exact rollback restoration
+  are required. Full result digests must be exact installed/drop/rollback;
+  structures and catalogs must be exact installed/restored, with drop reported
+  honestly. Raw telemetry is noncausal and target selection alone is not
+  necessity. No defect, tenant-prefixed candidate, migration, test edit,
+  replacement, or removal is assumed. Counts remain 54/52/2, crosswalk 40/22
+  (G-003 17/22), and sequence `202607310010` stays free.

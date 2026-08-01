@@ -1399,3 +1399,38 @@ reservation state.
 Receipt commit `e3e2c9759f2e8f53cc8299d746237a928fb9674f` records the
 accepted classification and supplement, releases the durable-document
 reservation, and opens no next residual family.
+
+## G-007P31 business-type score-index audit opened
+
+After clean P30 lineage at `77f7816cb77bbbbfee713e874f6d56a11006c25f`,
+Sol opens one read-only PostgreSQL 16 catalog and natural-plan audit for
+`idx_leads_business_type_score(business_type, score DESC)`, the next
+unclassified G-003 residual.
+
+Exact business-type equality plus score order is live by default for the leads
+table at 25, Kanban 100, and CSV export 50000/100000. Explore list 60 and the
+always-fast map route at 200/600 are live score-order shapes only with explicit
+`sortBy=score`; their defaults use opportunity order. Page-two offsets are
+exactly 25 and 60. GetLeads 1/100/200, normal-map 200/600, and normal-map 1000
+are helper/source controls. Quality, AI, competitor, business-count, and
+statistics readers remain prefix/filter or aggregate controls. The fresh
+two-tenant fixture has no workspace and must make export limits binding with at
+least 100,001 active/nonexcluded rows for one literal shared type. At least
+1,001 must also be coordinate-eligible and score-interleaved across both tenants,
+with exact map ranks 200/201, 600/601, and 1000/1001.
+
+Literal `local_services`, SQL NULL, empty text, and other canonical business
+types remain distinct. Equality filters exclude NULL while counts/statistics may
+coalesce it to `local_services`; that semantic mismatch cannot authorize index
+DDL. Business type and score are selectors only. Tenant-prefixed analogs are
+measurement-only until exact G-011/G-017 contracts.
+
+The live catalog must prove the exact healthy btree definition, collation,
+opclasses, directions, null ordering, and absence of include/predicate/
+expression/constraint/duplicate/spoof drift before EXPLAIN. Natural plans,
+canonical results, exact binding boundaries, target-only transactional drop,
+and rollback restoration are required. Full results must be exact I/D/R;
+structures and catalogs exact I/R, with D reported honestly. Raw telemetry is
+noncausal and target selection alone is not necessity. No defect, candidate,
+migration, test edit, replacement, or removal is assumed. Counts remain
+54/52/2, crosswalk 40/22 (G-003 17/22), and sequence 010 remains free.
