@@ -1613,3 +1613,10 @@ nonexcluded, market-visible leads and repeats lifecycle conditions atomically in
 the update. Admin behavior is preserved. One implementer owns only the bounded
 source/test set; independent architecture/security and test/evidence review are
 required. No migration, tenant-cutover completion, P34, or external action opens.
+
+Independent test review then confirmed a second path within the same detail
+defect: protected lead-detail metadata reads and emits the lead name before the
+page-body authorization check. The bounded repair is amended to include only
+`src/app/(protected)/leads/[id]/page.tsx` and one focused metadata access test.
+Metadata must authenticate and reuse the same read policy; denied and missing
+objects must not disclose a lead identity. No other page or UI scope opens.

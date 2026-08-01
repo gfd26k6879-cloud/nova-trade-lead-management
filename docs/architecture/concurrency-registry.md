@@ -3924,3 +3924,9 @@ Date: 2026-08-01
 - No schema migration, tenant-cutover claim, UI redesign, P34 opening, push, or
   remote activity is authorized. G-011/G-012/G-018/G-019/G-024 must later carry
   these invariants into strict tenant cutover.
+- Independent review found that protected lead-detail `generateMetadata()` reads
+  and emits a lead name before the page-body object check. G-007SR1 therefore
+  extends the same implementer lock only to
+  `src/app/(protected)/leads/[id]/page.tsx` and one focused metadata access test.
+  Metadata must authenticate and apply the same read policy, returning no lead
+  identity for a denied object. No other page or UI write opens.
