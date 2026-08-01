@@ -1730,27 +1730,6 @@ residual `idx_leads_exclusion_score(is_excluded, score DESC)` remains unopened;
 the following card must reserve P35 separately. Main and the handoff tag remain
 unchanged, and no push or external action occurred.
 
-## G-007SR2 stored-exclusion normalization repair opened
-
-At clean baseline `43699d1fca4dede22b04e30df60d67542b769d9f`, Sol opens the
-bounded P1 compatibility repair proven during P35. PostgreSQL and SQLite can
-return schema-valid nonzero `is_excluded` integers such as `2`, `-1`, or `7`,
-while four row mappings treated only exact `1` as excluded. `getLeadById` then
-fed false into the accepted researcher detail, metadata, mutation, worker, and
-scoring lifecycle policy.
-
-One implementer owns a shared fail-closed normalizer, the four query mappings,
-the exact-false researcher lifecycle gate, and focused helper/query/discovery/
-access tests. Only canonical `0` or compatibility boolean `false` means active;
-all other runtime values are excluded. A discovery row with no joined lead
-must remain a directory candidate, and admin behavior remains unchanged.
-
-No migration, schema CHECK, stored-data cleanup, backfill, SQL predicate,
-canonical export/import, index, dependency, tenant-cutover, Windows lane, or
-hosted operation opens. Existing COALESCE lists and atomic researcher claim
-already reject anomalies and remain unchanged. P36 stays blocked until SR2 is
-independently accepted and its serialized locks are released.
-
 ## G-007P35 exclusion/score index audit opened
 
 Sol opens read-only G-007P35 at clean baseline
@@ -1825,3 +1804,50 @@ sequence `202607310010` remains free. Parent G-007 remains open. The separately
 proven P1 normalization repair G-007SR2 must be reserved independently before
 P36; this receipt opens neither task. Main and the handoff tag remain
 unchanged, and no push or external action occurred.
+
+## G-007SR2 stored-exclusion normalization repair opened
+
+At clean baseline `43699d1fca4dede22b04e30df60d67542b769d9f`, Sol opens the
+bounded P1 compatibility repair proven during P35. PostgreSQL and SQLite can
+return schema-valid nonzero `is_excluded` integers such as `2`, `-1`, or `7`,
+while three row mappings treated only exact `1` as excluded and discovery used
+a separate coercive conversion. `getLeadById` then fed false into the accepted
+researcher detail, metadata, mutation, worker, and scoring lifecycle policy.
+
+One implementer owns a shared fail-closed normalizer, the four query mappings,
+the exact-false researcher lifecycle gate, and focused helper/query/discovery/
+access tests. Only canonical `0` or compatibility boolean `false` means active;
+all other runtime values are excluded. A discovery row with no joined lead
+must remain a directory candidate, and admin behavior remains unchanged.
+
+No migration, schema CHECK, stored-data cleanup, backfill, SQL predicate,
+canonical export/import, index, dependency, tenant-cutover, Windows lane, or
+hosted operation opens. Existing COALESCE lists and atomic researcher claim
+already reject anomalies and remain unchanged. P36 stays blocked until SR2 is
+independently accepted and its serialized locks are released.
+
+## G-007SR2 stored-exclusion normalization accepted
+
+Sol accepts implementation commit
+`d4affb65173470415802ea2a8f695ebf3080222b`. A shared normalizer now maps only
+numeric zero or boolean false active; every other runtime value fails closed.
+Canonical rows, Kanban, NowQueue, and discovery use it. Discovery preserves
+no-joined-lead directory candidates, and researcher lifecycle policy requires
+exact false after unchanged admin early returns.
+
+The exact seven-file packet changes no SQL predicate, schema, migration, data,
+CHECK, lead-data import/export, writer, index, dependency, or tenant cutover.
+Real SQLite tests prove stored `0/1/2/-1` parser/list/Kanban/queue/claim/admin
+behavior, discovery anomaly/no-lead behavior, and malformed access rejection.
+
+Root passes 112/112 focused behavior, TypeScript, focused ESLint, recovery 37,
+Fedora coordinator 12 passed/26 Windows-native skipped, and build 11/11.
+Independent architecture/security and test/evidence reviews accept with no
+P0/P1/P2; no implementer self-accepts. Two corrected BigInt test-only failures
+are recorded truthfully. No disposable service was started.
+
+SR2 source and test locks are released; only its durable-document reservation
+remains through lineage. Counts stay 54/52/2, crosswalk 45/17 (G-003 22/17,
+G-002 13/0), original arithmetic 58/318/260, sequence `202607310010` remains
+free, and parent G-007 remains open. Exact next residual P36 is
+`idx_leads_location_cell(location_cell_id, score DESC)` but is not opened here.

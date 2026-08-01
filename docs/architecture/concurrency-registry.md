@@ -4104,3 +4104,28 @@ Date: 2026-08-01
 - Two other agents own independent architecture/security and test/evidence
   review. The implementer cannot self-accept. Stop on unexpected dirty overlap,
   need for schema/data/SQL change, Windows-only evidence, or scope expansion.
+
+## G-007SR2 accepted; source and test locks released
+
+Date: 2026-08-01
+
+- Sol accepts implementation commit
+  `d4affb65173470415802ea2a8f695ebf3080222b`. Only numeric zero or boolean
+  false maps active; all other runtime exclusion values fail closed. Four
+  query mappings and the exact-false researcher lifecycle gate are repaired.
+- Discovery LEFT JOIN misses remain directory candidates, admin early returns
+  remain unchanged, and existing COALESCE list/claim SQL remains unchanged.
+  No schema, migration, data cleanup, index, lead-data import/export, dependency, or
+  tenant-cutover change occurred.
+- Root passed 112/112 focused behavior, TypeScript, focused ESLint, 37-table
+  recovery, Fedora coordinator 12 passed/26 Windows-native skipped, and build
+  11/11. Independent architecture/security and test/evidence reviews accept
+  with no P0/P1/P2; implementer self-acceptance is false.
+- The BigInt title-serialization and ES2017 literal failures were test-only,
+  corrected, and truthfully excluded. No external disposable service,
+  container, listener, or persistent database was started; validation left no
+  task-owned residue.
+- SR2 source/query/access/test locks are released. Counts remain 54/52/2,
+  crosswalk 45/17, sequence `202607310010` remains free, and parent G-007 stays
+  open. Sol retains only the durable-document reservation until lineage commit;
+  P36 remains unopened.
