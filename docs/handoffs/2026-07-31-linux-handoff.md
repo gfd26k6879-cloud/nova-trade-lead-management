@@ -1118,3 +1118,20 @@ migration, test edit, or removal packet is opened. Root behavior tests pass
 and all disposable resources are removed. Receipt commit
 `290c7aee65d16397c896f91eb044e2687fa456b0` records the accepted RETAIN
 decision. This lineage update opens no next residual family.
+
+## G-007P25 cell-status audit opened
+
+After clean P24 lineage at `7843412d850379b3515763502198ecfb809d9e29`,
+Sol opens one read-only PostgreSQL 16 audit for
+`idx_crawl_units_cell_status(location_cell_id, status, category)`. Current
+owners include exact cell coverage and adjacent cell-ledger aggregates, with
+optional run-scoped forms measured against accepted P4 controls.
+
+The audit uses interleaved tenant/run/cell/category/status fixtures, natural
+plans, canonical results, and a transactional target drop. Platform cells are
+never tenant authority; tenant/workspace controls are future G-010/G-013
+measurements only, and generalized null-cell units cannot authorize or pollute
+cell-owned shapes. The target is not constraint-owned and does not cover the
+full market/cell child key. No defect, candidate, migration, test edit, or
+removal is assumed. Counts remain 54/52/2, crosswalk 33/29, and sequence 010
+remains free.

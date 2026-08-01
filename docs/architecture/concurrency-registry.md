@@ -3404,3 +3404,24 @@ Date: 2026-07-31
   resources are removed. Receipt commit
   `290c7aee65d16397c896f91eb044e2687fa456b0` releases the reservation; no next
   residual family is opened by this lineage update.
+
+## G-007P25 cell-status index audit opened
+
+- After clean P24 lineage at `7843412d850379b3515763502198ecfb809d9e29`,
+  Sol opens G-007P25 for exactly
+  `idx_crawl_units_cell_status(location_cell_id, status, category)` and the
+  current cell-coverage/ledger query family.
+- The packet is a read-only PostgreSQL 16 catalog audit with realistic
+  interleaved tenant/run/cell/category/status fixtures, natural
+  EXPLAIN/BUFFERS, canonical result digests, and a transactional target-drop
+  comparison. Run-scoped P4 indexes and the market-status sibling are controls,
+  not reopened or combined families.
+- Platform cell identity never supplies tenant authority. Exact run-ID forms
+  are compatibility/performance evidence; tenant/workspace and null-workspace
+  controls measure future G-010/G-013 contracts without inventing them.
+  Generalized units with null cells are excluded from cell-owned shapes.
+- The target is not constraint-owned and does not cover the full accepted
+  `(market_id, location_cell_id)` child key. Stop before candidate DDL, sequence
+  reservation, migration, test edits, or removal unless a material exact current
+  or durably approved tenant-plan defect is proven. Counts remain 54/52/2,
+  crosswalk 33/29, and sequence `202607310010` stays free.
