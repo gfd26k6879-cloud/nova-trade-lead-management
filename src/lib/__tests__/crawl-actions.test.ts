@@ -397,6 +397,45 @@ describe("crawl discovery item actions", () => {
       "places.id",
       JSON.stringify({ id: "places/directory-place-1" }),
     );
+    testDb.prepare(
+      `INSERT INTO places_master (
+        place_id, name, address, website_uri, maps_uri, categories, rating, user_rating_count,
+        business_status, primary_type, lat, lng, completeness_score, freshness_score
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "excluded-place-2",
+      "Excluded Dentist",
+      "456 Excluded St, Denver, CO 80202",
+      null,
+      "https://maps.example/excluded-place-2",
+      JSON.stringify(["dentist"]),
+      4.5,
+      21,
+      "OPERATIONAL",
+      "dentist",
+      39.76,
+      -104.98,
+      0.6,
+      1,
+    );
+    testDb.prepare(
+      `INSERT INTO leads (id, place_id, score, status, website_status, categories, is_excluded)
+       VALUES ('excluded-lead-2', 'excluded-place-2', 10, 'new', 'none', '[]', 2)`,
+    ).run();
+    testDb.prepare(
+      `INSERT INTO place_observations (
+        id, place_id, crawl_run_id, crawl_unit_id, endpoint, sku, field_mask, raw_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "observation-2",
+      "excluded-place-2",
+      "probe-run",
+      "probe-unit",
+      "places.searchText",
+      "places_text_search_pro",
+      "places.id",
+      JSON.stringify({ id: "places/excluded-place-2" }),
+    );
 
     const result = await getCoverageProbeCandidatesAction("probe-run");
 
@@ -409,8 +448,17 @@ describe("crawl discovery item actions", () => {
         locationCellId: "cell-us-co-80202",
         category: "dentist",
         hasLead: false,
+        leadIsExcluded: false,
         websiteStatusLabel: "No website",
         listingStatus: "Directory candidate",
+      }),
+      expect.objectContaining({
+        placeId: "excluded-place-2",
+        name: "Excluded Dentist",
+        hasLead: true,
+        leadId: "excluded-lead-2",
+        leadIsExcluded: true,
+        listingStatus: "Excluded lead",
       }),
     ]);
   });

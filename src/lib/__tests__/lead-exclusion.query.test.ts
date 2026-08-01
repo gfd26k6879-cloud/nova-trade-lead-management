@@ -20,6 +20,8 @@ import {
   restoreArchivedLead,
   createManualLead,
   getAllLeadsForRecompute,
+  getKanbanLeads,
+  getLeadById,
   getLeadMapPoints,
   getLeads,
   getNowQueue,
@@ -52,6 +54,59 @@ afterEach(() => {
 });
 
 describe("lead exclusion query behavior", () => {
+  it("fails closed for stored nonzero exclusion values across mapped and SQL-filtered surfaces", async () => {
+    const storedValues = [0, 1, 2, -1] as const;
+    const ids = storedValues.map((value, index) => {
+      const id = insertLead(testDb, 910 + index, { score: 20 - index });
+      testDb.prepare(
+        `UPDATE leads
+         SET is_excluded = ?,
+             phone = '303-555-0100',
+             contactability_score = 1,
+             estimated_deal_value = 3500,
+             ai_verification_status = 'no_site_found',
+             ai_website_viability_status = 'directory_only',
+             ai_queue_status = 'verified',
+             quality_bucket = 'ready_to_call',
+             qualification_status = 'qualified'
+         WHERE id = ?`,
+      ).run(value, id);
+      return id;
+    });
+
+    const mapped = await Promise.all(ids.map((id) => getLeadById(id)));
+    expect(mapped.map((lead) => lead?.is_excluded)).toEqual([false, true, true, true]);
+
+    const activeList = await getLeads({ pageSize: 10 });
+    expect(activeList.leads.map((lead) => lead.id)).toEqual([ids[0]]);
+    expect(activeList.leads[0]?.is_excluded).toBe(false);
+
+    const adminList = await getLeads({ includeExcluded: true, pageSize: 10 });
+    expect(new Map(adminList.leads.map((lead) => [lead.id, lead.is_excluded]))).toEqual(new Map([
+      [ids[0], false],
+      [ids[1], true],
+      [ids[2], true],
+      [ids[3], true],
+    ]));
+
+    const kanban = await getKanbanLeads({ includeExcluded: true, pageSize: 10 });
+    expect(new Map(kanban.leads.map((lead) => [lead.id, lead.is_excluded]))).toEqual(new Map([
+      [ids[0], false],
+      [ids[1], true],
+      [ids[2], true],
+      [ids[3], true],
+    ]));
+
+    const queue = await getNowQueue(10);
+    expect(queue.map((lead) => lead.id)).toEqual([ids[0]]);
+    expect(queue[0]?.is_excluded).toBe(false);
+    await expect(claimLeadForUser(ids[0], "researcher-1")).resolves.toBe(1);
+    for (const id of ids.slice(1)) {
+      await expect(claimLeadForUser(id, "researcher-1")).resolves.toBe(0);
+      await expect(claimLeadForUser(id, "admin-1", { preserveAdminSemantics: true })).resolves.toBe(1);
+    }
+  });
+
   it("atomically restricts researcher claims while preserving the legacy admin path", async () => {
     const availableId = insertLead(testDb, 900, { score: 10 });
     const selfOwnedId = insertLead(testDb, 901, { score: 10 });

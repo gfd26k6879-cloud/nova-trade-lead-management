@@ -155,6 +155,17 @@ describe("lead access boundaries", () => {
     expect(dbMocks.userCanAccessMarket).not.toHaveBeenCalled();
   });
 
+  it.each([0, 1, 2, -1, null, undefined, "0", "false", {}, []])(
+    "rejects malformed researcher read exclusion value %j before the market lookup",
+    async (isExcluded) => {
+      await expect(canReadLeadForSession(researcher, {
+        ...activeLead,
+        is_excluded: isExcluded,
+      } as never)).resolves.toBe(false);
+      expect(dbMocks.userCanAccessMarket).not.toHaveBeenCalled();
+    },
+  );
+
   it("allows researchers to claim only unassigned active nonexcluded leads in assigned markets", async () => {
     const unassigned = { ...activeLead, assigned_to_user_id: null };
     dbMocks.userCanAccessMarket.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
@@ -167,6 +178,18 @@ describe("lead access boundaries", () => {
     expect(dbMocks.userCanAccessMarket).toHaveBeenCalledTimes(2);
   });
 
+  it.each([0, 1, 2, -1, null, undefined, "0", "false", {}, []])(
+    "rejects malformed researcher claim exclusion value %j before the market lookup",
+    async (isExcluded) => {
+      await expect(canClaimLeadForSession(researcher, {
+        ...activeLead,
+        assigned_to_user_id: null,
+        is_excluded: isExcluded,
+      } as never)).resolves.toBe(false);
+      expect(dbMocks.userCanAccessMarket).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves unrestricted admin claim capability", async () => {
     await expect(canClaimLeadForSession(admin, {
       archived_at: "2026-08-01T00:00:00.000Z",
@@ -174,6 +197,14 @@ describe("lead access boundaries", () => {
       is_excluded: true,
       market_id: null,
     })).resolves.toBe(true);
+    expect(dbMocks.userCanAccessMarket).not.toHaveBeenCalled();
+  });
+
+  it("preserves admin early returns for malformed exclusion values", async () => {
+    const malformedLead = { ...activeLead, is_excluded: "0" } as never;
+
+    await expect(canReadLeadForSession(admin, malformedLead)).resolves.toBe(true);
+    await expect(canClaimLeadForSession(admin, malformedLead)).resolves.toBe(true);
     expect(dbMocks.userCanAccessMarket).not.toHaveBeenCalled();
   });
 });

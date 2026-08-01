@@ -51,7 +51,7 @@ type ResearcherAccessibleLead = Pick<
 >;
 
 function isActiveNonexcludedLead(lead: Pick<ResearcherAccessibleLead, "archived_at" | "is_excluded">): boolean {
-  return lead.archived_at == null && !lead.is_excluded;
+  return lead.archived_at == null && lead.is_excluded === false;
 }
 
 export async function canReadLeadForSession(

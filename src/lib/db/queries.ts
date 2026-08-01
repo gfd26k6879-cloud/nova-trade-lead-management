@@ -40,6 +40,7 @@ import {
 import type { AppRole } from "@/lib/permissions";
 import { throwIfWorkerAborted } from "@/lib/worker-abort";
 import { readPlaceCacheMetadata } from "@/lib/place-cache-contract";
+import { isLeadExcluded } from "./lead-exclusion";
 
 // ─── Types ───
 
@@ -4295,7 +4296,7 @@ export async function getDiscoveryRunCandidates(runId: string, limit = 100): Pro
 
   return rows.map((row) => {
     const hasLead = Boolean(row.lead_id);
-    const leadIsExcluded = Boolean(Number(row.lead_is_excluded) || row.lead_is_excluded === true);
+    const leadIsExcluded = hasLead ? isLeadExcluded(row.lead_is_excluded) : false;
     return {
       placeId: row.place_id as string,
       name: normalizeNullableText(row.name as string | null),
@@ -5168,7 +5169,7 @@ export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads
     website_status: (row.website_status as string) ?? "none",
     score: (row.score as number) ?? 0,
     status: (row.status as string) ?? "new",
-    is_excluded: ((row.is_excluded as number) ?? 0) === 1,
+    is_excluded: isLeadExcluded(row.is_excluded),
     exclusion_reason: (row.exclusion_reason as string | null) ?? null,
     enrichment_status: (row.enrichment_status as string) ?? "pending",
     primary_type: (row.primary_type as string | null) ?? null,
@@ -7302,7 +7303,7 @@ function parseLeadRow(row: Record<string, unknown>): Lead {
     categories: safeParseJson<string[]>(row.categories, []),
     has_opening_hours: (row.has_opening_hours as number) === 1,
     photo_count: (row.photo_count as number) ?? 0,
-    is_excluded: ((row.is_excluded as number) ?? 0) === 1,
+    is_excluded: isLeadExcluded(row.is_excluded),
     market_id: (row.market_id as string | null) ?? null,
     location_cell_id: (row.location_cell_id as string | null) ?? null,
     country_code: row.country_code ? normalizeCountryCode(row.country_code) : null,
@@ -9688,7 +9689,7 @@ export async function getNowQueue(
     last_contacted_at: (row.last_contacted_at as string | null) ?? null,
     reminder_date: (row.reminder_date as string | null) ?? null,
     status: (row.status as string) ?? "new",
-    is_excluded: ((row.is_excluded as number) ?? 0) === 1,
+    is_excluded: isLeadExcluded(row.is_excluded),
     exclusion_reason: (row.exclusion_reason as string | null) ?? null,
     selling_niche: (row.selling_niche as string | null) ?? null,
     business_type: ((row.business_type as BusinessType | null) ?? "local_services"),
