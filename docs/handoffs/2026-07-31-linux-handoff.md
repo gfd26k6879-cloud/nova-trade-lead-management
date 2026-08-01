@@ -937,3 +937,18 @@ validation receipt. All containers, databases, ports, processes, temporary
 files, candidates, and worktrees are gone. Parent G-007 remains open; no remote
 or external action occurred. The P20 audit receipt commit is
 `ef6d4154d86cbe0e71aac56a55484424db32d77d`.
+
+## G-007P20A implementation packet opened
+
+After clean P20 lineage at `a6b6e504e7af3a8347788ea427e4d00b2896f535`,
+Sol opens G-007P20A for the proven researcher-cap index only. Migration sequence
+`202607310009` and the focused AI PostgreSQL/count-test surfaces are reserved to
+one implementer. Root retains all durable program documents and acceptance.
+
+The exact target is an additive partial btree on
+`ai_usage_events(tenant_id, actor_user_id, created_at DESC)` where actor is
+non-null and source is exactly `researcher_ai_check` or
+`researcher_pitch_pack`. It must preserve current global actor and generic
+alternate-source behavior; G-014 and G-021 remain open. Counts stay 53/51/2
+until acceptance, when the intended full chain would become 54/52/2. No remote
+or hosted action is authorized.

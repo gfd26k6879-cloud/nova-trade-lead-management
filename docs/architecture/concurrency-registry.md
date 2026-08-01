@@ -3211,3 +3211,25 @@ Date: 2026-07-31
   is accepted; its documentation reservation releases with this lineage
   commit. The bounded researcher-cap write packet remains unnumbered and holds
   no lock until Sol opens it separately.
+
+## G-007P20A tenant researcher-cap index packet opened
+
+- Sol opens G-007P20A after clean P20 lineage at
+  `a6b6e504e7af3a8347788ea427e4d00b2896f535`. It is the one bounded,
+  additive PostgreSQL packet proven by P20; it does not complete the generic
+  G-014 actor-query cutover or G-021 budget authorization.
+- Sol exclusively holds `postgres-migration-sequence:202607310009`,
+  `ai-tenant-scope-postgres-test`, `migration-count-expectations`, and the
+  G-007P20A durable-document reservation. One implementer may edit only the
+  reserved migration, focused PostgreSQL test, and five migration-count tests;
+  Sol retains ledger, registry, handoff, crosswalk, integration, and acceptance.
+- The migration must add the exact tenant/actor/created partial btree for the
+  two production researcher sources, be replay-safe and definition-aware, and
+  reject missing, partial, or spoofed foundation/final catalog states before
+  DDL. Current global actor, alternate-source, created-time, model, nullable
+  history, RLS/ACL, and G-004A/R1 behavior must remain intact.
+- Acceptance requires fresh PostgreSQL 16 replay/upgrade/final replay,
+  adversarial catalog guards, rollback with zero partial installation, natural
+  exact-caller index use and identical results, upstream PostgreSQL gates,
+  TypeScript, focused ESLint, recovery verification, Fedora-portable
+  coordinator/release gates, build, diff/JSONL checks, and exact cleanup.
