@@ -22,6 +22,64 @@ describe("explore command filters", () => {
     expect(result.chips.map((chip) => chip.label)).toEqual(["City", "Country", "Website", "Owner"]);
   });
 
+  it("normalizes cell commands to canonical lowercase IDs", () => {
+    const canonicalCellId = "cell-us-co-p36-selective";
+    const commands = [
+      `cell:${canonicalCellId}`,
+      "CELL:CELL-US-CO-P36-SELECTIVE",
+      "CeLl:Cell-US-Co-P36-Selective",
+      "cell:'CELL-US-CO-P36-SELECTIVE'",
+      'cell:"Cell-US-Co-P36-Selective"',
+    ];
+
+    for (const command of commands) {
+      const result = parseExploreCommand(command);
+
+      expect(result.errors).toEqual([]);
+      expect(result.filters.locationCellId).toBe(canonicalCellId);
+      expect(result.chips).toContainEqual({
+        key: "locationCellId",
+        label: "Cell",
+        value: canonicalCellId,
+        removeParams: { locationCellId: null },
+      });
+    }
+  });
+
+  it("passes a parsed cell command through query-state construction", () => {
+    const canonicalCellId = "cell-us-co-p36-selective";
+    const parsed = parseExploreCommand("CELL:CELL-US-CO-P36-SELECTIVE");
+    const queryState = buildExploreQueryState({ locationCellId: parsed.filters.locationCellId ?? undefined });
+
+    expect(queryState.filters.locationCellId).toBe(canonicalCellId);
+  });
+
+  it("preserves direct URL cell ID casing in query state and chips", () => {
+    const mixedCaseCellId = "Cell-US-Co-P36-Selective";
+    const queryState = buildExploreQueryState({ locationCellId: mixedCaseCellId });
+    const chips = buildExploreFilterChips({ locationCellId: mixedCaseCellId });
+
+    expect(queryState.filters.locationCellId).toBe(mixedCaseCellId);
+    expect(chips).toContainEqual({
+      key: "locationCellId",
+      label: "Cell",
+      value: mixedCaseCellId,
+      removeParams: { locationCellId: null },
+    });
+  });
+
+  it("keeps postal command normalization uppercase", () => {
+    const result = parseExploreCommand("postal:m5v");
+
+    expect(result.filters.zip).toBe("M5V");
+    expect(result.chips).toContainEqual({
+      key: "zip",
+      label: "Postal",
+      value: "M5V",
+      removeParams: { zip: null },
+    });
+  });
+
   it("parses numeric threshold commands", () => {
     const result = parseExploreCommand("reviews>50 rating>4.2 score>70");
 

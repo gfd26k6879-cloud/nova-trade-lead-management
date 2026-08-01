@@ -440,7 +440,7 @@ function applyCommandToken(
   if (key === "postal" || key === "postcode" || key === "zip") return applySimple(filters, chips, "zip", "Postal", value.toUpperCase());
   if (key === "market") return applySimple(filters, chips, "marketId", "Market", normalizeMarketId(value));
   if (key === "country") return applySimple(filters, chips, "countryCode", "Country", countryAlias(value));
-  if (key === "cell") return applySimple(filters, chips, "locationCellId", "Cell", value.toUpperCase());
+  if (key === "cell") return applySimple(filters, chips, "locationCellId", "Cell", value);
   if (key === "category") return applySimple(filters, chips, "category", "Category", value);
   if (key === "type") return applySimple(filters, chips, "businessType", "Type", value);
   if (key === "status") return applySimple(filters, chips, "status", "Status", statusAlias(value));
