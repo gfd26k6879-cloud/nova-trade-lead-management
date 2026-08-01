@@ -3695,3 +3695,6 @@ Date: 2026-08-01
   was exact at 38/37/38 indexes and 10 constraints. This closes the helper LIMIT
   contract only; the live CSV route passes no assignment filter. Retain/defer,
   no-DDL/no-removal, authority, counts, and reservation state are unchanged.
+- Receipt commit `e3e2c9759f2e8f53cc8299d746237a928fb9674f` records the
+  accepted classification and supplement, releases the serialized durable-
+  document reservation, and opens no next residual family.

@@ -409,3 +409,8 @@ tenant-wide with no workspace dimension. No tenant defect, candidate, migration,
 replacement, test edit, removal, or fresh SQLite claim opens. Counts stay
 54/52/2, sequence 010 stays free, the crosswalk becomes 40/22, G-003 becomes
 17/22, G-002 remains 13/0, and parent G-007 remains open.
+
+G-007P30 receipt commit `e3e2c9759f2e8f53cc8299d746237a928fb9674f`
+records the accepted RETAIN/DEFER disposition plus the fresh binding-export
+supplement. This lineage update releases the durable reservation and opens no
+next residual family.

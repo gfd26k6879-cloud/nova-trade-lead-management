@@ -1395,3 +1395,7 @@ the result on a second fresh database and the proportional helper suites pass
 14/14. These are helper-capability controls, not live CSV-route evidence. The
 supplement changes no disposition, authority boundary, count, sequence, or
 reservation state.
+
+Receipt commit `e3e2c9759f2e8f53cc8299d746237a928fb9674f` records the
+accepted classification and supplement, releases the durable-document
+reservation, and opens no next residual family.

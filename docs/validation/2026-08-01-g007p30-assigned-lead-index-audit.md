@@ -4,7 +4,9 @@ Date: 2026-08-01
 
 Baseline: `7880f3eecd41420b26be15bece7d459ff80c811f`
 
-Status: accepted RETAIN/DEFER; no migration; pending local receipt commit
+Status: accepted RETAIN/DEFER; no migration
+
+Receipt commit: `e3e2c9759f2e8f53cc8299d746237a928fb9674f`
 
 ## Decision
 
