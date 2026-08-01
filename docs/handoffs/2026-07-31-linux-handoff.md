@@ -986,3 +986,20 @@ is assumed. Parent G-007 and G-004B remain open. G-006 stays paused with native
 Windows evidence preserved; G-006C2B remains unopened. No remote or external
 action occurred. The P20A acceptance commit is
 `c8c3dba2ce980f2bfcbf7e0f6d71e1bf6a7d83d2`.
+
+## G-007P21 crawl-run visibility audit opened
+
+After clean P20A lineage at `7cc9c516334815d333fd97c4085986384819dd00`,
+Sol opens the next exact residual family as G-007P21:
+`idx_crawl_runs_status_created(status, created_at DESC)` and
+`idx_crawl_runs_created_desc(created_at DESC)`. This is a read-only PostgreSQL
+16 catalog, caller, natural-plan, and result audit. No defect, candidate, or
+migration is assumed.
+
+Current newest-running/queued, paused, latest-run, and bounded history queries
+are global compatibility paths. The audit may measure exact tenant/workspace
+controls but may not infer public/platform authority or invent G-013/G-020
+visibility/dispatch contracts. Counts remain 54/52/2; sequence
+`202607310010` is free and no write lock is held. Blocked-run and actual
+market-created indexes remain later separate unnumbered families. Parent G-007,
+G-004B, and the paused G-006 boundary are unchanged.

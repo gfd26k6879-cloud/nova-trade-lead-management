@@ -3258,3 +3258,22 @@ Date: 2026-07-31
 - P20A acceptance commit `c8c3dba2ce980f2bfcbf7e0f6d71e1bf6a7d83d2`
   is final locally; this lineage commit records the release. No P21 card or
   replacement objective is opened.
+
+## G-007P21 read-only crawl-run visibility audit
+
+- After clean P20A lineage at `7cc9c516334815d333fd97c4085986384819dd00`,
+  Sol opens G-007P21 for exactly `idx_crawl_runs_status_created` and
+  `idx_crawl_runs_created_desc`. The former owns current newest-running/queued
+  and newest-paused lookups; the latter owns current newest-run and bounded
+  discovery-history reads.
+- The packet is read-only: source ownership, live PostgreSQL 16 catalog,
+  interleaved two-tenant fixture, natural EXPLAIN/BUFFERS, ordered-result
+  digests, and independent review may run concurrently. Current queries are
+  global compatibility paths, not public/platform authority.
+- Counts remain 54/52/2 and `202607310010` remains free. No migration, sequence,
+  test, or durable-document write lock is held. Tenant/workspace controls may
+  measure the accepted foundation but must not invent workspace visibility or
+  G-013/G-020 dispatch contracts.
+- Stop before DDL unless one exact current or durably approved tenant query
+  proves a material plan defect. `idx_crawl_runs_blocked_created` and the real
+  `idx_crawl_runs_market_created` remain later, separate, unnumbered families.
