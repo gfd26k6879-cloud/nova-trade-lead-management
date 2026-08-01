@@ -3175,3 +3175,17 @@ Date: 2026-07-31
 - P19 receipt and exact crosswalk commit
   `4adc7bd09c84d8890b1950221b78255b0af38564` is accepted; its documentation
   reservation releases with this lineage commit.
+
+## G-007P20 read-only AI-usage query-history audit
+
+- G-007P20 is opened after clean P19 lineage at
+  `75259319ca8927ebf4faed05d3f95f9a796c7f20`. Exact targets are
+  `idx_ai_usage_actor_created`, `idx_ai_usage_created`, and
+  `idx_ai_usage_model_created`.
+- The packet is read-only: live PostgreSQL 16 catalog/query/EXPLAIN evidence,
+  source ownership, and independent acceptance review may run concurrently.
+  No migration or write lock is opened and no hypothetical is assumed.
+- Counts remain 53/51/2 and `202607310009` remains free. Any defect must be
+  proven on a real current or durably approved tenant query before one coherent
+  write packet can be proposed. Current compatibility and named platform-global
+  owners must remain explicit.

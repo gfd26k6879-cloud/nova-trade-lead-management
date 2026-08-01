@@ -889,3 +889,20 @@ containers, databases, ports, processes, candidates, and worktrees are gone.
 Main/tag remain unchanged and no remote or external action occurred. The P19
 receipt and exact crosswalk commit is
 `4adc7bd09c84d8890b1950221b78255b0af38564`.
+
+## G-007P20 AI-usage query-history audit opened
+
+After P19 receipt/lineage commit and clean-state verification, Sol opens the
+next exact crosswalk family as G-007P20:
+`idx_ai_usage_actor_created(actor_user_id,created_at DESC)`,
+`idx_ai_usage_created(created_at DESC)`, and
+`idx_ai_usage_model_created(model,created_at DESC)`. This is a read-only
+PostgreSQL 16 catalog, caller, and natural-EXPLAIN audit. No defect, migration,
+hypothetical, or index disposition is assumed.
+
+Counts remain 53/51/2, sequence `202607310009` remains free, and no serialized
+write lock is held. Current actor/source/time and global compatibility
+aggregates must be separated from approved future tenant/platform query
+contracts. A migration may open only after a real tenant-query plan defect is
+proven for one coherent subfamily. Parent G-007 remains open; G-004B and the
+paused G-006 boundary are unchanged.
