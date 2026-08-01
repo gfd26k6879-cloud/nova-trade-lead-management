@@ -117,7 +117,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | A:P34 retain; tenant forms defer | `leads` | `idx_leads_enrichment(enrichment_status, score DESC)` | healthy PostgreSQL compatibility owner for current stale-running recovery, selected pending/admin Kanban reads, exact lease ordering support, and scheduler status aggregation; lease/score/P6 siblings own broad active lists, exact Quality, CSV, and fallback controls; Explore/map enrichment shapes are query-function controls only; historical sibling catalog fast-path debt recorded; no current tenant-scoped caller, migration, replacement, test edit, or removal |
 | A:P5 defer / M:P6 control | `leads` | `idx_leads_enrichment_lease(enrichment_status, enrichment_next_retry_at, score DESC) WHERE archived_at IS NULL AND COALESCE(is_excluded,0)=0` | enrichment selector/lease; G-013/G-014/G-020 |
 | A:P35 retain/defer | `leads` | `idx_leads_exclusion_score(is_excluded, score DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility mirror; authoritative current predicates use COALESCE and cannot match the raw leading key; exact current selector read-equivalents remain target-neutral or sibling-owned; raw target-selecting anomaly controls are nonauthoritative; full projection/join/subquery/OFFSET EXPLAIN fidelity is expressly not claimed; catalog replay debt and separate stored-anomaly authorization defect recorded; future tenant forms deferred; no candidate, migration, replacement, removal, CHECK, cleanup, test edit, or sequence use |
-| U | `leads` | `idx_leads_location_cell(location_cell_id, score DESC)` | cell reads; G-010/G-011 |
+| A:P36 retain; future tenant analogue defer | `leads` | `idx_leads_location_cell(location_cell_id, score DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definition; exact current Coverage, Explore, map, and Quality cell readers naturally use the target; target-only drop preserves results/order with honest plan changes; cell/market/score never authorize tenant/workspace scope; current market-visible compatibility reads and future tenant forms remain G-009/G-010/G-011 boundaries; separate uppercase Explore command defect recorded; no candidate, migration, replacement, test edit, or removal |
 | U | `leads` | `idx_leads_market_active(market_id, archived_at, score DESC)` | market reads; G-010/G-011 |
 | U | `leads` | `idx_leads_numeric_filters(review_count, rating, score DESC)` | filters; G-011/G-017 |
 | U | `leads` | `idx_leads_phone_quality(phone_verification_status, lead_quality_score DESC)` | quality filtering; G-011/G-017 |
@@ -542,3 +542,24 @@ that repair is `idx_leads_location_cell`.
 G-007P35 acceptance commit `8215c7ee1148a0b6b01125c245b00ce0f9487dfd`
 records this classification locally. Its lineage-only successor releases the
 P35 reservation without opening G-007SR2 or P36.
+
+G-007P36 classifies `idx_leads_location_cell` RETAIN and defers any future
+tenant-prefixed analogue. PostgreSQL 16.14 replayed 54/52/2 over 240,000
+physically interleaved rows. The accepted original artifact captured 26 exact
+current Coverage, Explore, map, and Quality cases with exact I/D/R results and
+source orders, exact I/R structures, and honest target-drop differences. A
+review-required supplement corrected the selective cell to 24,000 tenant-A and
+12,000 tenant-B rows, added exact run-scoped Coverage and researcher Explore
+count/full-page cases, and proved rich installed/restored semantic catalog
+identity plus direct nonconstraint ownership.
+
+The combined matrix isolates wrong definitions, wrong table/access method,
+unique and unhealthy states, semantic duplicates, near siblings, healthy,
+missing, historical name-only replay, and rollback. Platform cell identity and
+market visibility never become tenant authority. No material current or
+durably approved tenant-query defect was proven, so no DDL, replacement,
+removal, repository guard, test edit, or sequence opens. Counts remain
+54/52/2, sequence 010 stays free, crosswalk becomes 46/16, G-003 becomes 23/16,
+G-002 stays 13/0, and parent G-007 remains open. A separately proven uppercase
+Explore cell-command P2 repair precedes residual P37
+`idx_leads_market_active`.

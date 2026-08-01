@@ -4168,3 +4168,30 @@ Date: 2026-08-01
   evidence. Stop before DDL, migration, replacement, removal, test edits, or
   sequence use unless a material exact current or durably approved tenant-plan
   defect is proven.
+
+## G-007P36 accepted; audit resources released
+
+Date: 2026-08-01
+
+- Sol accepts RETAIN for the exact healthy historical PostgreSQL and frozen
+  SQLite `idx_leads_location_cell(location_cell_id, score DESC)` compatibility
+  definition. No candidate, migration, replacement, removal, repository guard,
+  test edit, or sequence use opens.
+- PostgreSQL 16.14 replayed 54/52/2. The reviewed original artifact covers 26
+  exact current cases; v4 adds exact run-scoped Coverage, researcher Explore
+  count/full page, a corrected 24,000/12,000 shared-cell tenant fixture, rich
+  catalog/nonconstraint proof, definition-aware spoof/duplicate behavior,
+  historical name-only replay, and exact rollback.
+- All recorded current results and source orders match installed/drop/restored;
+  installed/restored normalized structures match. Target-drop structures are
+  honest, and telemetry is noncausal. Cell/market/score remain selectors, never
+  tenant or workspace authority.
+- Independent architecture/authority and test/evidence reviews accept with no
+  unresolved P0/P1/P2 evidence defect. No producer self-accepts.
+- All P36 containers, databases, schemas, volumes, listeners, processes,
+  runners, and payloads are removed. No migration, source, test, sequence,
+  service, or worktree lock remains; Sol retains only the durable-document
+  reservation through lineage.
+- Crosswalk is 46/16 (G-003 23/16, G-002 13/0), inventory is 54/52/2,
+  sequence `202607310010` remains free, and parent G-007 remains open. The
+  separate Explore command P2 repair must close before P37.

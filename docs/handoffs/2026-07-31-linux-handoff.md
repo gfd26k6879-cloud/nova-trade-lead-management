@@ -1894,3 +1894,37 @@ empty uppercase result is not index evidence and grants no source edit.
 Conditional classification is 46/16 (G-003 23/16, G-002 13/0), inventory stays
 54/52/2, sequence `202607310010` remains free, and parent G-007 remains open.
 No hosted or external operation opens.
+
+## G-007P36 location-cell/score index audit accepted
+
+Sol accepts RETAIN for the exact healthy historical PostgreSQL and frozen
+SQLite `idx_leads_location_cell(location_cell_id, score DESC)` compatibility
+definition. PostgreSQL 16.14 replayed 54/52/2. The original reviewed artifact
+captured 26 exact current Coverage, Explore, map, and Quality cases; all results
+and source orders matched installed/drop/restored, installed/restored
+structures matched, and drop plans were reported honestly.
+
+A required v4 supplement corrected the exact lowercase cell to contain 24,000
+tenant-A and 12,000 tenant-B rows with 24,000 physical transitions. It added
+exact run-scoped Coverage and researcher Explore count/full-page evidence,
+rich installed/restored catalog and direct nonconstraint proof, isolated wrong
+definition/table/access-method/unique/semantic-duplicate states, healthy and
+missing replay, historical name-only behavior, and rollback-to-missing.
+
+Cell, market, and score remain selectors and never tenant/workspace authority.
+The current compatibility researcher predicate returns both fixture tenants;
+this is recorded truthfully and does not replace G-009/G-010/G-011. Future
+tenant-prefixed forms remain deferred. No candidate, migration, replacement,
+removal, repository guard, test edit, or sequence use opens.
+
+Both independent reviews accept with no unresolved P0/P1/P2 evidence defect;
+the producer does not self-accept. Root passed focused source tests, TypeScript,
+ESLint, recovery 37, Fedora coordinator 12 passed/26 Windows-native skipped,
+build 11/11, and fresh G-002/G-003/G-004A/G-005/T-029 PostgreSQL gates. Every
+P36 container, database, schema, volume, listener, runner, and payload is
+removed.
+
+Crosswalk becomes 46/16 (G-003 23/16, G-002 13/0), inventory remains 54/52/2,
+sequence `202607310010` stays free, original arithmetic remains 58/318/260,
+and parent G-007 remains open. The separately proven Explore command uppercase
+P2 is the next serialized repair; P37 `idx_leads_market_active` follows it.
