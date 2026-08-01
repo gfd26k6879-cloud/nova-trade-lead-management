@@ -409,3 +409,36 @@ audit; no migration is assumed.
 
 The G-007P5 deferred-defect audit receipt commit is
 `f2465e6c6e764f7c02712083e5b89e70f675d8be`.
+
+## G-007P6 continuation receipt
+
+Date: 2026-07-31
+
+G-007P6 proves and corrects one PostgreSQL-only stale-running/due-retry
+enrichment recovery defect. On 100,000 interleaved leads, each tenant-scoped
+baseline considered 35,000 status rows including 17,500 from the wrong tenant.
+The additive 3,736 KiB partial index on
+`(tenant_id,enrichment_status,score DESC)` for only `running/retry_wait`
+eliminates wrong-tenant candidates. Pending-ready G-007P5 and exhausted
+terminalization are structurally excluded.
+
+Both global enrichment indexes remain exact for current unscoped compatibility.
+Paired plans prove current unscoped stale, due, exhausted, ready-list, and
+ready-lease ownership does not change; live runtime repair leaves the complete
+P6 catalog unchanged. Exact replay, rollback, missing/spoofed/unhealthy/non-index
+states, literal-prefix siblings, column/constraint/foundation drift, and later
+authorized global/P5 evolution are covered.
+
+Final independent architecture and quality reviews pass after bounded repairs.
+Root gates pass: G-003/G-007P6 3/3, G-002 2/2, G-004A 1/1, G-005 1/1, T-029
+19/19 and Q-002 1/1 at 49 discovered/47 applied/2 skipped, runtime ownership
+2/2, TypeScript, focused ESLint, recovery over 37 tables, Fedora coordinator 12
+pass/26 Windows-native skip, and production build 11/11. Invalid fixture,
+planner-assertion, host-client, and concurrent Q-002 cleanup invocations remain
+truthfully recorded in the validation receipt.
+
+Parent G-007 remains open and G-007P5 remains deferred to the later tenant
+query/worker cutover. After attributable local commits and lock release, the
+next safe action is a read-only G-007P7 PostgreSQL 16 audit of the single
+website-viability repair read behind `idx_leads_ai_status_checked`. No migration
+is assumed. No remote or external action occurred.

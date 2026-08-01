@@ -13,9 +13,11 @@ import {
 const G002_MIGRATION = "202607290001_add_location_crawl_tenant_scope.sql";
 const G003_MIGRATION = "202607290002_add_lead_crm_tenant_scope.sql";
 const G007P3_MIGRATION = "202607310003_tenant_prefix_lead_ai_queue_indexes.sql";
+const G007P6_MIGRATION = "202607310004_tenant_enrichment_recovery_index.sql";
 const g002Sql = readFileSync(join("supabase", "migrations", G002_MIGRATION), "utf8");
 const g003Sql = readFileSync(join("supabase", "migrations", G003_MIGRATION), "utf8");
 const g007p3Sql = readFileSync(join("supabase", "migrations", G007P3_MIGRATION), "utf8");
+const g007p6Sql = readFileSync(join("supabase", "migrations", G007P6_MIGRATION), "utf8");
 const skipped = new Set(["20260514161714_supabase_ai_verification_cron.sql", "20260514163203_scheduler_v2_sales_ready_pipeline.sql"]);
 const tenantA = "00000000-0000-4000-8000-000000000301";
 const tenantB = "00000000-0000-4000-8000-000000000302";
@@ -35,7 +37,7 @@ const targetTables = ["leads", "lead_notes", "outreach_events", "admin_requests"
 
 type PgClient = ReturnType<typeof postgres>;
 
-async function resetDatabase(client: PgClient, fullChain: boolean, g003Boundary = false): Promise<{ discovered: number; applied: number; skipped: number }> {
+async function resetDatabase(client: PgClient, fullChain: boolean, g003Boundary = false, stopBefore?: string): Promise<{ discovered: number; applied: number; skipped: number }> {
   await client.unsafe(`
     RESET ROLE;
     RESET search_path;
@@ -65,6 +67,7 @@ async function resetDatabase(client: PgClient, fullChain: boolean, g003Boundary 
     if (skipped.has(file)) continue;
     if (!fullChain && file >= G002_MIGRATION) break;
     if (g003Boundary && file > G003_MIGRATION) break;
+    if (stopBefore && file >= stopBefore) break;
     await client.unsafe(readFileSync(join("supabase", "migrations", file), "utf8"));
     applied += 1;
     if (file === "202605110001_full_schema.sql") {
@@ -277,6 +280,138 @@ async function seedG007P3PlanRows(client: PgClient): Promise<void> {
 
     ANALYZE public.leads;
   `);
+}
+
+const G007P6_INDEX = "idx_g007p6_leads_tenant_enrichment_recovery";
+const G007P6_INDEXDEF = "CREATE INDEX idx_g007p6_leads_tenant_enrichment_recovery ON public.leads USING btree (tenant_id, enrichment_status, score DESC) WHERE (enrichment_status = ANY (ARRAY['running'::text, 'retry_wait'::text]))";
+
+async function seedG007P6PlanRows(client: PgClient): Promise<void> {
+  await client.unsafe(`
+    INSERT INTO auth.users(id) VALUES ('${ownerA}'),('${ownerB}');
+    INSERT INTO public.tenants(id,slug,name,status) VALUES
+      ('${tenantA}','g007p6-plan-a','G007P6 Plan A','active'),
+      ('${tenantB}','g007p6-plan-b','G007P6 Plan B','active');
+    INSERT INTO public.workspaces(id,tenant_id,slug,name,status) VALUES
+      ('${workspaceA}','${tenantA}','g007p6-plan-a','G007P6 Plan A','active'),
+      ('${workspaceB}','${tenantB}','g007p6-plan-b','G007P6 Plan B','active');
+    INSERT INTO public.tenant_memberships(id,tenant_id,auth_identity_id,workspace_id,status) VALUES
+      ('${membershipA}','${tenantA}','${ownerA}','${workspaceA}','active'),
+      ('${membershipB}','${tenantB}','${ownerB}','${workspaceB}','active');
+
+    INSERT INTO public.leads(
+      id,tenant_id,place_id,name,enrichment_status,enrichment_attempt_count,
+      enrichment_max_attempts,enrichment_started_at,enrichment_next_retry_at,
+      is_excluded,archived_at,score,updated_at
+    )
+    SELECT
+      'g007p6-'||scope.label||'-'||series.n,
+      scope.tenant_id,
+      'g007p6-place-'||scope.label||'-'||series.n,
+      'G007P6 '||scope.label||' '||series.n,
+      CASE
+        WHEN (series.n-1)%20 BETWEEN 0 AND 3 THEN 'pending'
+        WHEN (series.n-1)%20 BETWEEN 4 AND 10 THEN 'running'
+        WHEN (series.n-1)%20 BETWEEN 11 AND 17 THEN 'retry_wait'
+        ELSE 'enriched'
+      END,
+      CASE
+        WHEN (series.n-1)%20 IN (2,3,10,17) THEN 3
+        ELSE 1
+      END,
+      3,
+      CASE
+        WHEN (series.n-1)%20 BETWEEN 4 AND 6 THEN now()-interval '20 minutes'
+        WHEN (series.n-1)%20 BETWEEN 7 AND 9 THEN now()
+        WHEN (series.n-1)%20 = 10 THEN now()-interval '20 minutes'
+        ELSE NULL
+      END,
+      CASE
+        WHEN (series.n-1)%20 BETWEEN 11 AND 13 THEN now()-interval '5 minutes'
+        WHEN (series.n-1)%20 BETWEEN 14 AND 16 THEN now()+interval '1 hour'
+        WHEN (series.n-1)%20 = 17 THEN now()-interval '5 minutes'
+        ELSE NULL
+      END,
+      0,NULL,50001-series.n,now()-(series.n||' milliseconds')::interval
+    FROM pg_catalog.generate_series(1,50000) series(n)
+    CROSS JOIN (VALUES
+      ('a','${tenantA}'::uuid),
+      ('b','${tenantB}'::uuid)
+    ) scope(label,tenant_id);
+
+    ANALYZE public.leads;
+  `);
+}
+
+async function g007p6CatalogSnapshot(client: PgClient): Promise<Record<string, unknown>> {
+  return {
+    columns: await client.unsafe(`
+      SELECT a.attname,a.atttypid::regtype::text type_name,a.attnotnull,a.attisdropped
+      FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid='public.leads'::regclass
+        AND a.attname IN (
+          'tenant_id','enrichment_status','score','enrichment_attempt_count',
+          'enrichment_max_attempts','enrichment_started_at','enrichment_next_retry_at'
+        )
+      ORDER BY a.attname
+    `),
+    constraints: await client.unsafe(`
+      SELECT c.conname,c.contype,c.convalidated,c.connoinherit,
+        pg_catalog.pg_get_constraintdef(c.oid) definition,
+        CASE WHEN c.conindid<>0 THEN c.conindid::regclass::text ELSE NULL END backing_index,
+        i.relkind,x.indisunique,x.indisvalid,x.indisready,x.indislive
+      FROM pg_catalog.pg_constraint c
+      LEFT JOIN pg_catalog.pg_class i ON i.oid=c.conindid
+      LEFT JOIN pg_catalog.pg_index x ON x.indexrelid=c.conindid
+      WHERE c.connamespace='public'::regnamespace
+        AND c.conrelid='public.leads'::regclass
+        AND c.conname IN ('leads_enrichment_status_check','leads_tenant_id_id_unique')
+      ORDER BY c.conname
+    `),
+    indexes: await client.unsafe(`
+      SELECT i.relname,i.relkind,
+        CASE WHEN i.relkind='i' THEN pg_catalog.pg_get_indexdef(i.oid) ELSE NULL END indexdef,
+        x.indisunique,x.indisvalid,x.indisready,x.indislive
+      FROM pg_catalog.pg_class i
+      JOIN pg_catalog.pg_namespace n ON n.oid=i.relnamespace
+      LEFT JOIN pg_catalog.pg_index x ON x.indexrelid=i.oid
+      WHERE n.nspname='public' AND (
+        i.relname IN ('idx_leads_enrichment','idx_leads_enrichment_lease','idx_g007p5_leads_tenant_enrichment_ready')
+        OR pg_catalog.left(
+          i.relname,
+          pg_catalog.length('idx_g007p6_leads_tenant_enrichment_')
+        ) = 'idx_g007p6_leads_tenant_enrichment_'
+      )
+      ORDER BY i.relname
+    `),
+  };
+}
+
+async function expectG007P6RejectedWithoutChange(client: PgClient, label: string): Promise<void> {
+  const before = await g007p6CatalogSnapshot(client);
+  await client.unsafe("SAVEPOINT g007p6_before_migration");
+  let failure: unknown;
+  try {
+    await client.unsafe(g007p6Sql);
+  } catch (error) {
+    failure = error;
+  }
+  await client.unsafe("ROLLBACK TO SAVEPOINT g007p6_before_migration");
+  expect(failure, label).toBeInstanceOf(Error);
+  expect((failure as Error).message, label).toMatch(/G007P6_INDEX_CATALOG_DRIFT/);
+  expect(await g007p6CatalogSnapshot(client), label).toEqual(before);
+  await client.unsafe("RELEASE SAVEPOINT g007p6_before_migration");
+}
+
+async function explain(client: PgClient, statement: string): Promise<string> {
+  return (await client.unsafe<Record<string, string>[]>(
+    `EXPLAIN (ANALYZE,COSTS OFF,TIMING OFF,SUMMARY OFF,BUFFERS) ${statement}`,
+  )).map((row) => Object.values(row)[0]).join("\n");
+}
+
+async function explainPlanned(client: PgClient, statement: string): Promise<string> {
+  return (await client.unsafe<Record<string, string>[]>(
+    `EXPLAIN (COSTS OFF) ${statement}`,
+  )).map((row) => Object.values(row)[0]).join("\n");
 }
 
 async function targetSnapshot(client: PgClient): Promise<Record<string, unknown>> {
@@ -497,6 +632,240 @@ describe("G-003 lead CRM tenant scope", () => {
   });
 
   it.skipIf(process.env.G003_RUN_DISPOSABLE_PG_TESTS !== "1")(
+    "installs the additive G-007P6 tenant enrichment recovery index with exact guards and compatible plans",
+    async () => {
+      const url = process.env.G003_DATABASE_URL;
+      if (!url) throw new Error("G003_DATABASE_URL is required");
+      const parsed = new URL(url);
+      if (!(parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") || !/^g003_lead_crm_rehearsal_[a-z0-9_]+$/.test(parsed.pathname.slice(1))) throw new Error("G-003 permits only a uniquely named loopback database");
+      const client = postgres(url, { max: 1, onnotice: () => undefined });
+      try {
+        expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
+
+        const full = await resetDatabase(client, true);
+        expect(full).toEqual({ discovered: 49, applied: 47, skipped: 2 });
+        const fullIndexes = (await g007p6CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>;
+        expect(fullIndexes.find((row) => row.relname === G007P6_INDEX)).toEqual({
+          relname: G007P6_INDEX,
+          relkind: "i",
+          indexdef: G007P6_INDEXDEF,
+          indisunique: false,
+          indisvalid: true,
+          indisready: true,
+          indislive: true,
+        });
+        const exactReplayBefore = await g007p6CatalogSnapshot(client);
+        await client.unsafe(g007p6Sql);
+        expect(await g007p6CatalogSnapshot(client)).toEqual(exactReplayBefore);
+
+        const baselineReceipt = await resetDatabase(client, true, false, G007P6_MIGRATION);
+        expect(baselineReceipt).toEqual({ discovered: 49, applied: 46, skipped: 2 });
+        const baselineCatalog = await g007p6CatalogSnapshot(client);
+        expect((baselineCatalog.indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
+          "idx_leads_enrichment",
+          "idx_leads_enrichment_lease",
+        ]);
+
+        await client.unsafe("BEGIN");
+        await client.unsafe("CREATE INDEX idxXg007p6XleadsXtenantXenrichmentXshadow ON public.leads(id)");
+        expect(await g007p6CatalogSnapshot(client)).toEqual(baselineCatalog);
+        await client.unsafe(g007p6Sql);
+        expect(((await g007p6CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
+          G007P6_INDEX,
+          "idx_leads_enrichment",
+          "idx_leads_enrichment_lease",
+        ]);
+        expect((await client.unsafe("SELECT pg_catalog.to_regclass('public.idxXg007p6XleadsXtenantXenrichmentXshadow') IS NOT NULL present"))[0].present).toBe(true);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p6CatalogSnapshot(client)).toEqual(baselineCatalog);
+
+        await client.unsafe("BEGIN");
+        await client.unsafe(g007p6Sql);
+        expect(((await g007p6CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P6_INDEX)?.indexdef).toBe(G007P6_INDEXDEF);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p6CatalogSnapshot(client)).toEqual(baselineCatalog);
+
+        const baselineMutations: Array<[string, string]> = [
+          ["missing_global", "DROP INDEX public.idx_leads_enrichment"],
+          ["global_order_spoof", "DROP INDEX public.idx_leads_enrichment; CREATE INDEX idx_leads_enrichment ON public.leads(score DESC,enrichment_status)"],
+          ["global_lease_predicate_spoof", "DROP INDEX public.idx_leads_enrichment_lease; CREATE INDEX idx_leads_enrichment_lease ON public.leads(enrichment_status,enrichment_next_retry_at,score DESC) WHERE archived_at IS NULL"],
+          ["global_unhealthy", "UPDATE pg_catalog.pg_index SET indisvalid=false WHERE indexrelid='public.idx_leads_enrichment_lease'::regclass"],
+          ["global_non_index", "DROP INDEX public.idx_leads_enrichment; CREATE TABLE public.idx_leads_enrichment(sentinel integer)"],
+          ["p5_candidate_present", "CREATE INDEX idx_g007p5_leads_tenant_enrichment_ready ON public.leads(tenant_id,score DESC,updated_at ASC) WHERE enrichment_status='pending' AND enrichment_attempt_count<enrichment_max_attempts AND score>0 AND archived_at IS NULL AND COALESCE(is_excluded,0)=0"],
+          ["reserved_p6_sibling", "CREATE INDEX idx_g007p6_leads_tenant_enrichment_spoof ON public.leads(id)"],
+          ["tenant_nullable", "ALTER TABLE public.leads ALTER COLUMN tenant_id DROP NOT NULL"],
+          ["attempt_count_nullable", "ALTER TABLE public.leads ALTER COLUMN enrichment_attempt_count DROP NOT NULL"],
+          ["next_retry_not_nullable", "ALTER TABLE public.leads ALTER COLUMN enrichment_next_retry_at SET NOT NULL"],
+          ["started_at_wrong_type", "ALTER TABLE public.leads ALTER COLUMN enrichment_started_at TYPE timestamp without time zone USING enrichment_started_at::timestamp without time zone"],
+          ["status_constraint_set_spoof", "ALTER TABLE public.leads DROP CONSTRAINT leads_enrichment_status_check; ALTER TABLE public.leads ADD CONSTRAINT leads_enrichment_status_check CHECK (enrichment_status IN ('pending','running','retry_wait','enriched','skipped'))"],
+          ["foundation_backing_unhealthy", `UPDATE pg_catalog.pg_index SET indisvalid=false WHERE indexrelid=(SELECT conindid FROM pg_catalog.pg_constraint WHERE connamespace='public'::regnamespace AND conrelid='public.leads'::regclass AND conname='leads_tenant_id_id_unique')`],
+        ];
+        for (const [label, mutation] of baselineMutations) {
+          await client.unsafe("BEGIN");
+          try {
+            await client.unsafe(mutation);
+            await expectG007P6RejectedWithoutChange(client, label);
+          } finally {
+            await client.unsafe("ROLLBACK");
+          }
+          expect(await g007p6CatalogSnapshot(client), label).toEqual(baselineCatalog);
+        }
+
+        await client.unsafe(g007p6Sql);
+        const installedCatalog = await g007p6CatalogSnapshot(client);
+        const finalMutations: Array<[string, string]> = [
+          ["candidate_order_spoof", `DROP INDEX public.${G007P6_INDEX}; CREATE INDEX ${G007P6_INDEX} ON public.leads(enrichment_status,tenant_id,score DESC) WHERE enrichment_status IN ('running','retry_wait')`],
+          ["candidate_direction_spoof", `DROP INDEX public.${G007P6_INDEX}; CREATE INDEX ${G007P6_INDEX} ON public.leads(tenant_id,enrichment_status,score ASC) WHERE enrichment_status IN ('running','retry_wait')`],
+          ["candidate_predicate_spoof", `DROP INDEX public.${G007P6_INDEX}; CREATE INDEX ${G007P6_INDEX} ON public.leads(tenant_id,enrichment_status,score DESC) WHERE enrichment_status IN ('running','retry_wait') AND score>0`],
+          ["candidate_status_set_spoof", `DROP INDEX public.${G007P6_INDEX}; CREATE INDEX ${G007P6_INDEX} ON public.leads(tenant_id,enrichment_status,score DESC) WHERE enrichment_status='running'`],
+          ["candidate_non_index", `DROP INDEX public.${G007P6_INDEX}; CREATE TABLE public.${G007P6_INDEX}(sentinel integer)`],
+          ["candidate_unhealthy", `UPDATE pg_catalog.pg_index SET indisvalid=false WHERE indexrelid='public.${G007P6_INDEX}'::regclass`],
+          ["candidate_reserved_sibling", "CREATE INDEX idx_g007p6_leads_tenant_enrichment_shadow ON public.leads(id)"],
+          ["final_status_constraint_spoof", "ALTER TABLE public.leads DROP CONSTRAINT leads_enrichment_status_check; ALTER TABLE public.leads ADD CONSTRAINT leads_enrichment_status_check CHECK (enrichment_status IN ('pending','running','retry_wait','enriched','skipped'))"],
+        ];
+        for (const [label, mutation] of finalMutations) {
+          await client.unsafe("BEGIN");
+          try {
+            await client.unsafe(mutation);
+            await expectG007P6RejectedWithoutChange(client, label);
+          } finally {
+            await client.unsafe("ROLLBACK");
+          }
+          expect(await g007p6CatalogSnapshot(client), label).toEqual(installedCatalog);
+        }
+
+        await client.unsafe("BEGIN");
+        await client.unsafe(`
+          DROP INDEX public.idx_leads_enrichment;
+          DROP INDEX public.idx_leads_enrichment_lease;
+          CREATE INDEX idx_g007p5_leads_tenant_enrichment_ready
+            ON public.leads(tenant_id,score DESC,updated_at ASC)
+            WHERE enrichment_status='pending'
+              AND enrichment_attempt_count<enrichment_max_attempts
+              AND score>0 AND archived_at IS NULL AND COALESCE(is_excluded,0)=0;
+        `);
+        const forwardCompatibleFinal = await g007p6CatalogSnapshot(client);
+        await client.unsafe(g007p6Sql);
+        expect(await g007p6CatalogSnapshot(client)).toEqual(forwardCompatibleFinal);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p6CatalogSnapshot(client)).toEqual(installedCatalog);
+
+        await resetDatabase(client, true, false, G007P6_MIGRATION);
+        await seedG007P6PlanRows(client);
+        expect((await client.unsafe("SELECT count(*)::integer count FROM public.leads"))[0].count).toBe(100000);
+        expect((await client.unsafe(`SELECT count(*)::integer count FROM public.leads WHERE tenant_id='${tenantA}' AND enrichment_status='running' AND enrichment_attempt_count<enrichment_max_attempts AND enrichment_started_at<=now()-interval '10 minutes'`))[0].count).toBe(7500);
+        expect((await client.unsafe(`SELECT count(*)::integer count FROM public.leads WHERE tenant_id='${tenantA}' AND enrichment_status='retry_wait' AND enrichment_attempt_count<enrichment_max_attempts AND enrichment_next_retry_at<=now()`))[0].count).toBe(7500);
+
+        const scopedStaleSelector = `SELECT id FROM public.leads WHERE tenant_id='${tenantA}' AND enrichment_status='running' AND (enrichment_started_at IS NULL OR enrichment_started_at<=now()-interval '10 minutes') AND enrichment_attempt_count<enrichment_max_attempts ORDER BY score DESC`;
+        const scopedDueSelector = `SELECT id FROM public.leads WHERE tenant_id='${tenantA}' AND enrichment_status='retry_wait' AND enrichment_attempt_count<enrichment_max_attempts AND (enrichment_next_retry_at IS NULL OR enrichment_next_retry_at<=now()) ORDER BY score DESC`;
+        const baselineStalePlan = await explain(client, scopedStaleSelector);
+        const baselineDuePlan = await explain(client, scopedDueSelector);
+        for (const [label, plan] of [["stale", baselineStalePlan], ["due", baselineDuePlan]] as const) {
+          expect(plan, label).toContain("idx_leads_enrichment");
+          expect(plan, label).toMatch(/Filter: .*tenant_id/u);
+          expect(plan, label).toMatch(/Rows Removed by Filter: [1-9][0-9]*/u);
+        }
+
+        const scopedStaleUpdate = `UPDATE public.leads SET enrichment_status='pending',enrichment_started_at=NULL,enrichment_finished_at=now(),updated_at=now() WHERE tenant_id='${tenantA}' AND enrichment_status='running' AND (enrichment_started_at IS NULL OR enrichment_started_at<=now()-interval '10 minutes') AND enrichment_attempt_count<enrichment_max_attempts RETURNING id`;
+        const scopedDueUpdate = `UPDATE public.leads SET enrichment_status='pending',enrichment_next_retry_at=NULL,updated_at=now() WHERE tenant_id='${tenantA}' AND enrichment_status='retry_wait' AND enrichment_attempt_count<enrichment_max_attempts AND (enrichment_next_retry_at IS NULL OR enrichment_next_retry_at<=now()) RETURNING id`;
+        const explainRolledBack = async (statement: string): Promise<string> => {
+          await client.unsafe("BEGIN");
+          try {
+            return await explain(client, statement);
+          } finally {
+            await client.unsafe("ROLLBACK");
+          }
+        };
+        const baselineStaleUpdatePlan = await explainRolledBack(scopedStaleUpdate);
+        const baselineDueUpdatePlan = await explainRolledBack(scopedDueUpdate);
+        for (const [label, plan] of [["stale update", baselineStaleUpdatePlan], ["due update", baselineDueUpdatePlan]] as const) {
+          expect(plan, label).toContain("idx_leads_enrichment");
+          expect(plan, label).toMatch(/Filter: .*tenant_id/u);
+          expect(plan, label).toMatch(/Rows Removed by Filter: [1-9][0-9]*/u);
+        }
+        const affectedIds = async (statement: string): Promise<string[]> => {
+          await client.unsafe("BEGIN");
+          try {
+            return (await client.unsafe<Array<{ id: string }>>(statement)).map((row) => row.id).sort();
+          } finally {
+            await client.unsafe("ROLLBACK");
+          }
+        };
+        const baselineStaleIds = await affectedIds(scopedStaleUpdate);
+        const baselineDueIds = await affectedIds(scopedDueUpdate);
+        expect(baselineStaleIds).toHaveLength(7500);
+        expect(baselineDueIds).toHaveLength(7500);
+        const globalsBefore = ((await g007p6CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>).filter((row) => String(row.relname).startsWith("idx_leads_enrichment"));
+
+        await client.unsafe("VACUUM (ANALYZE) public.leads");
+        const compatibilityStatements = {
+          stale: "UPDATE public.leads SET enrichment_status='pending',enrichment_started_at=NULL,enrichment_finished_at=now(),updated_at=now() WHERE enrichment_status='running' AND (enrichment_started_at IS NULL OR enrichment_started_at<=now()-interval '10 minutes') AND enrichment_attempt_count<enrichment_max_attempts",
+          due: "UPDATE public.leads SET enrichment_status='pending',enrichment_next_retry_at=NULL,updated_at=now() WHERE enrichment_status='retry_wait' AND enrichment_attempt_count<enrichment_max_attempts AND (enrichment_next_retry_at IS NULL OR enrichment_next_retry_at<=now())",
+          exhausted: "UPDATE public.leads SET enrichment_status='error',enrichment_finished_at=now(),enrichment_next_retry_at=NULL,enrichment_last_error=COALESCE(enrichment_last_error,'Max enrichment attempts exhausted.'),enrichment_last_error_code=COALESCE(enrichment_last_error_code,'max_attempts_exhausted'),updated_at=now() WHERE enrichment_status IN ('pending','running','retry_wait') AND enrichment_attempt_count>=enrichment_max_attempts",
+          ready: "SELECT * FROM public.leads WHERE enrichment_status='pending' AND score>0 AND enrichment_attempt_count<enrichment_max_attempts AND COALESCE(is_excluded,0)=0 AND archived_at IS NULL ORDER BY score DESC LIMIT 25",
+          lease: "UPDATE public.leads SET enrichment_status='running',enrichment_attempt_count=enrichment_attempt_count+1,enrichment_started_at=now(),enrichment_finished_at=NULL,enrichment_next_retry_at=NULL,enrichment_last_error=NULL,enrichment_last_error_code=NULL,updated_at=now() WHERE id=(SELECT id FROM public.leads WHERE enrichment_status='pending' AND enrichment_attempt_count<enrichment_max_attempts AND score>0 AND COALESCE(is_excluded,0)=0 AND archived_at IS NULL ORDER BY score DESC,updated_at ASC LIMIT 1) AND enrichment_status='pending' RETURNING id",
+        } as const;
+        const compatibilityBaselinePlans = {
+          stale: await explainPlanned(client, compatibilityStatements.stale),
+          due: await explainPlanned(client, compatibilityStatements.due),
+          exhausted: await explainPlanned(client, compatibilityStatements.exhausted),
+          ready: await explainPlanned(client, compatibilityStatements.ready),
+          lease: await explainPlanned(client, compatibilityStatements.lease),
+        };
+        const compatibilityOwner = (plan: string): "lease" | "global" | "seq" | "other" => {
+          if (plan.includes("idx_leads_enrichment_lease")) return "lease";
+          if (plan.includes("idx_leads_enrichment")) return "global";
+          if (plan.includes("Seq Scan on leads")) return "seq";
+          return "other";
+        };
+        expect(compatibilityOwner(compatibilityBaselinePlans.ready)).toBe("lease");
+        expect(compatibilityOwner(compatibilityBaselinePlans.lease)).toBe("lease");
+        for (const key of ["stale", "due", "exhausted"] as const) {
+          expect(["seq", "global", "lease"], key).toContain(compatibilityOwner(compatibilityBaselinePlans[key]));
+        }
+
+        await client.unsafe(g007p6Sql);
+        const compatibilityFinalPlans = {
+          stale: await explainPlanned(client, compatibilityStatements.stale),
+          due: await explainPlanned(client, compatibilityStatements.due),
+          exhausted: await explainPlanned(client, compatibilityStatements.exhausted),
+          ready: await explainPlanned(client, compatibilityStatements.ready),
+          lease: await explainPlanned(client, compatibilityStatements.lease),
+        };
+        for (const key of ["stale", "due", "exhausted", "ready", "lease"] as const) {
+          expect(compatibilityFinalPlans[key], key).not.toContain(G007P6_INDEX);
+          expect(compatibilityOwner(compatibilityFinalPlans[key]), key).toBe(compatibilityOwner(compatibilityBaselinePlans[key]));
+        }
+        const finalStalePlan = await explain(client, scopedStaleSelector);
+        const finalDuePlan = await explain(client, scopedDueSelector);
+        for (const [label, plan] of [["stale", finalStalePlan], ["due", finalDuePlan]] as const) {
+          expect(plan, label).toContain(G007P6_INDEX);
+          expect(plan, label).toMatch(/Index Cond: .*tenant_id.*enrichment_status/u);
+          expect(plan.split("\n").filter((line) => line.includes("Filter:")).join("\n"), label).not.toContain("tenant_id");
+        }
+        const finalStaleUpdatePlan = await explainRolledBack(scopedStaleUpdate);
+        const finalDueUpdatePlan = await explainRolledBack(scopedDueUpdate);
+        for (const [label, plan] of [["stale update", finalStaleUpdatePlan], ["due update", finalDueUpdatePlan]] as const) {
+          expect(plan, label).toContain(G007P6_INDEX);
+          expect(plan, label).toMatch(/Index Cond: .*tenant_id.*enrichment_status/u);
+          expect(plan.split("\n").filter((line) => line.includes("Filter:")).join("\n"), label).not.toContain("tenant_id");
+        }
+        expect(await affectedIds(scopedStaleUpdate)).toEqual(baselineStaleIds);
+        expect(await affectedIds(scopedDueUpdate)).toEqual(baselineDueIds);
+
+        const finalSnapshot = await g007p6CatalogSnapshot(client);
+        expect((finalSnapshot.indexes as Array<Record<string, unknown>>).filter((row) => String(row.relname).startsWith("idx_leads_enrichment"))).toEqual(globalsBefore);
+        expect((finalSnapshot.indexes as Array<Record<string, unknown>>).some((row) => row.relname === "idx_g007p5_leads_tenant_enrichment_ready")).toBe(false);
+        expect((finalSnapshot.indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P6_INDEX)?.indexdef).toBe(G007P6_INDEXDEF);
+      } finally {
+        await client.unsafe("ROLLBACK").catch(() => undefined);
+        await client.end({ timeout: 5 });
+      }
+    },
+    240000,
+  );
+
+  it.skipIf(process.env.G003_RUN_DISPOSABLE_PG_TESTS !== "1")(
     "rehearses fresh, exact T-028 upgrade, receipt drift, rollback, hostile path, isolation, actors, anon projection, and replay on PostgreSQL 16",
     async () => {
       const url = process.env.G003_DATABASE_URL;
@@ -508,7 +877,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 48, applied: 46, skipped: 2 });
+        expect(full).toEqual({ discovered: 49, applied: 47, skipped: 2 });
         await assertCatalog(client);
 
         const expectedFinalQueueIndexes: LeadAiQueueIndex[] = [
@@ -551,7 +920,9 @@ describe("G-003 lead CRM tenant scope", () => {
           const dbModule = await import("@/lib/db/index");
           resetRuntimeDb = dbModule.resetDbClient;
           const { ensureDbReady } = await import("@/lib/db/queries");
+          const p6RuntimeCatalogBefore = await g007p6CatalogSnapshot(client);
           await ensureDbReady();
+          expect(await g007p6CatalogSnapshot(client)).toEqual(p6RuntimeCatalogBefore);
           expect(await leadAiQueueIndexSnapshot(client)).toEqual(expectedFinalQueueIndexes);
         } finally {
           await resetRuntimeDb?.();

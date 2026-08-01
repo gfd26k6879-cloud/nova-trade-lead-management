@@ -2793,3 +2793,34 @@ Date: 2026-07-31
   open and no later Phase 2 card is unlocked.
 - Audit receipt commit `f2465e6c6e764f7c02712083e5b89e70f675d8be`
   durably records the deferred defect. No G-007P5 lock or resource remains.
+
+## G-007P6 tenant enrichment recovery index packet
+
+- Natural PostgreSQL 16.14 plans over 100,000 interleaved leads prove one
+  bounded stale-running/due-retry defect: each global baseline considered
+  35,000 status rows including 17,500 from the wrong tenant.
+- The accepted candidate is additive and exact:
+  `(tenant_id, enrichment_status, score DESC) WHERE enrichment_status IN
+  ('running','retry_wait')`. It occupied 3,736 KiB in the audit fixture,
+  eliminated wrong-tenant candidates, and did not capture the exact current
+  unscoped recovery, ready-list, or ready-lease plans.
+- Exhausted terminalization remains naturally sequential and is excluded;
+  deferred G-007P5 pending-ready work is not reopened.
+- Sol holds `migration-sequence` and `integration-ledger`. One implementer may
+  edit migration `202607310004_tenant_enrichment_recovery_index.sql`, its
+  owning G-003 harness, runtime-ownership assertion, and migration-count
+  expectations only. Root owns acceptance documents and final review.
+- PostgreSQL globals remain unchanged; no query, runtime repair source, SQLite,
+  worker, route, fairness, provider, or external-action change is authorized.
+- The first completed draft received architecture PASS and quality REPAIR for
+  wildcard protected-family matching and missing live runtime preservation.
+  Literal prefix matching, a wildcard-lookalike control, and an exact live
+  before/after P6 catalog snapshot repair both findings. Final architecture and
+  quality reviews pass.
+- Root acceptance passes G-003/G-007P6 3/3, G-002 2/2, G-004A 1/1, G-005 1/1,
+  T-029 19/19, Q-002 1/1, runtime ownership 2/2, TypeScript, focused ESLint,
+  37-table recovery, Fedora coordinator 12 pass/26 Windows-native skip,
+  production build 11/11 static pages, diff, JSONL, and resource cleanup.
+- G-007P6 is accepted pending attributable local source and lineage commits.
+  The two locks release only after the lineage commit and final clean-resource
+  check. Parent G-007 and deferred G-007P5 remain open; P7 begins read-only.
