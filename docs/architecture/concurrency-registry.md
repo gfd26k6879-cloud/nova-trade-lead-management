@@ -3843,3 +3843,7 @@ Date: 2026-08-01
   TypeScript, ESLint, recovery, coordinator, build, G-002 2/2, G-003 6/6,
   G-004A 2/2, G-005 1/1, and T-029 19/19. The reservation remains held only
   until the attributable local receipt commit.
+- Acceptance commit `ca2a4cf3f0ea93474121c1541f769086311d6291` records the
+  reviewed P32 classification. Its lineage-only successor releases the P32
+  durable-document reservation; it does not open or number the country/admin
+  residual.

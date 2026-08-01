@@ -215,3 +215,7 @@ arithmetic remains 58/318 accepted with 260 remaining, and parent G-007 remains
 open. The next source-order residual is
 `idx_leads_country_admin(country_code, admin_area1, locality)`, but this receipt
 does not open or number it.
+
+Acceptance commit `ca2a4cf3f0ea93474121c1541f769086311d6291` records this
+reviewed RETAIN disposition locally. The following lineage-only commit records
+that immutable receipt hash and releases the P32 durable-document reservation.

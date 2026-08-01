@@ -466,3 +466,7 @@ remain 54/52/2, sequence 010 remains free, crosswalk becomes 42/20, G-003
 becomes 19/20, G-002 stays 13/0, and parent G-007 remains open. The original
 plan remains 58/318 accepted with 260 remaining. The next source-order residual
 is `idx_leads_country_admin`, but P32 does not open or number it.
+
+G-007P32 acceptance commit `ca2a4cf3f0ea93474121c1541f769086311d6291`
+records this classification locally. Its lineage-only successor releases the
+P32 durable reservation without opening or numbering the next residual.

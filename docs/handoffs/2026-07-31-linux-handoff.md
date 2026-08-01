@@ -1532,3 +1532,8 @@ behavior 63/63, TypeScript, focused ESLint, recovery over 37 tables,
 Fedora-portable coordinator 12 passed/26 Windows-native skipped, production
 build 11/11 pages, PostgreSQL G-002 2/2, G-003 6/6, G-004A 2/2, G-005 1/1,
 and T-029 19/19. No hosted or external operation occurred.
+
+P32 acceptance commit `ca2a4cf3f0ea93474121c1541f769086311d6291` records the
+reviewed RETAIN classification locally. Its lineage-only successor releases the
+P32 durable-document reservation without opening or numbering the country/admin
+residual.
