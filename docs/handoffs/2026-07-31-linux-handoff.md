@@ -2030,3 +2030,41 @@ stays 54/52/2, sequence `202607310010` remains free, and parent G-007 remains
 open. Stop before candidate DDL unless material exact current or durably
 approved tenant-query plan evidence proves a defect. No hosted or external
 operation opens.
+
+## G-007P37 market/lifecycle/score index audit accepted
+
+Sol accepts RETAIN for the exact healthy historical PostgreSQL and frozen
+SQLite `idx_leads_market_active(market_id, archived_at, score DESC)`
+compatibility definition. PostgreSQL 16.14 replayed 54/52/2 over 240,000
+physically interleaved two-tenant rows.
+
+Accepted v5 captured 38 exact Coverage, Explore, map, researcher Leads,
+business-count, Quality, and Workbench cases. All complete results and source
+orders matched installed/drop/restored, all installed/restored structures
+matched, and only the two Coverage correlated market counts naturally used the
+target. Exact forced-unassigned filters, AI/quality rank orders, projections,
+subqueries, binds, limits, and offsets were preserved.
+
+Accepted fresh v6 added all-schema same-name `pg_class` and semantic-index
+inventory. Alternate-name duplicates with missing or healthy target, a public
+same-name non-index, and a wrong-schema same-name index reject before DDL or
+workload with unchanged hashes. Healthy, missing, historical name-only replay,
+and rollback controls pass; initial/final full catalog context is exact.
+
+Market IDs and user-only compatibility grants never authorize tenant or
+workspace scope. Future tenant forms remain G-009/G-010/G-011. Coverage's
+all-lifecycle `activeLeads` label mismatch is a separate index-neutral P2 and
+opens no source repair here. No candidate, migration, replacement, removal,
+repository guard, source/test edit, or sequence use opens.
+
+Independent reviews accept with no remaining P0/P1/P2 evidence blocker; the
+producer does not self-accept. Root passed focused 122/122, TypeScript, focused
+ESLint, recovery 37, Fedora coordinator 12 passed/26 Windows-native skipped,
+build 11/11, and fresh G-002/G-003/G-004A/G-005/T-029 PostgreSQL gates. All
+P37 resources and temporary evidence are removed.
+
+Crosswalk becomes 47/15 (G-003 24/15, G-002 13/0), inventory remains 54/52/2,
+sequence `202607310010` stays free, original arithmetic remains 58/318/260,
+and parent G-007 remains open. P38
+`idx_leads_numeric_filters(review_count, rating, score DESC)` is next but
+requires a separate reservation after P37 lineage.

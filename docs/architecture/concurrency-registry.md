@@ -4294,3 +4294,30 @@ Date: 2026-08-01
   unless a material exact current or durably approved tenant-query plan defect
   is proven. Separate authority or query-semantic findings must not become
   index evidence or expand this packet.
+
+## G-007P37 accepted; audit resources released
+
+Date: 2026-08-01
+
+- Sol accepts RETAIN for the exact healthy historical PostgreSQL and frozen
+  SQLite `idx_leads_market_active(market_id, archived_at, score DESC)`
+  compatibility definition. No candidate, migration, replacement, removal,
+  repository guard, source/test edit, or sequence use opens.
+- PostgreSQL 16.14 replayed 54/52/2. Accepted v5 covers 38 exact current/control
+  cases with all I/D/R results and source orders equal and all I/R structures
+  equal; only the two Coverage market counts naturally use the target I/R.
+- Accepted fresh v6 closes catalog-guard evidence with same-name `pg_class`
+  and semantic-index inventory, four fail-closed duplicate/collision cases,
+  healthy/missing/historical controls, and exact rollback/restoration.
+- Market IDs and user-only compatibility grants remain nonauthorizing. Future
+  tenant forms remain G-009/G-010/G-011. Coverage's all-lifecycle
+  `activeLeads` label mismatch is a separate index-neutral P2.
+- Independent source/architecture and test/evidence reviews accept with no
+  remaining P0/P1/P2 evidence blocker. No producer self-accepts.
+- All P37 containers, databases, volumes, listeners, processes, runners, and
+  payloads are removed. No migration, source, test, sequence, service, or
+  worktree lock remains; Sol retains only the durable-document reservation
+  through lineage.
+- Crosswalk is 47/15 (G-003 24/15, G-002 13/0), inventory is 54/52/2,
+  sequence `202607310010` remains free, and parent G-007 remains open. P38
+  `idx_leads_numeric_filters` is next but unopened.

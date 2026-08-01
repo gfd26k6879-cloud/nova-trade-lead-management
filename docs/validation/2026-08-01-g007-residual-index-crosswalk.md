@@ -118,7 +118,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | A:P5 defer / M:P6 control | `leads` | `idx_leads_enrichment_lease(enrichment_status, enrichment_next_retry_at, score DESC) WHERE archived_at IS NULL AND COALESCE(is_excluded,0)=0` | enrichment selector/lease; G-013/G-014/G-020 |
 | A:P35 retain/defer | `leads` | `idx_leads_exclusion_score(is_excluded, score DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility mirror; authoritative current predicates use COALESCE and cannot match the raw leading key; exact current selector read-equivalents remain target-neutral or sibling-owned; raw target-selecting anomaly controls are nonauthoritative; full projection/join/subquery/OFFSET EXPLAIN fidelity is expressly not claimed; catalog replay debt and separate stored-anomaly authorization defect recorded; future tenant forms deferred; no candidate, migration, replacement, removal, CHECK, cleanup, test edit, or sequence use |
 | A:P36 retain; future tenant analogue defer | `leads` | `idx_leads_location_cell(location_cell_id, score DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definition; exact current Coverage, Explore, map, and Quality cell readers naturally use the target; target-only drop preserves results/order with honest plan changes; cell/market/score never authorize tenant/workspace scope; current market-visible compatibility reads and future tenant forms remain G-009/G-010/G-011 boundaries; separate uppercase Explore command defect recorded; no candidate, migration, replacement, test edit, or removal |
-| U | `leads` | `idx_leads_market_active(market_id, archived_at, score DESC)` | market reads; G-010/G-011 |
+| A:P37 retain; future tenant analogue defer | `leads` | `idx_leads_market_active(market_id, archived_at, score DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definition; exact current Coverage market counts naturally use the leading key while complete Explore, map, researcher Leads, business-count, Quality, and Workbench forms remain target-neutral on the reviewed fixture; target-only drop preserves all results/source orders with honest Coverage plan changes; market identity and user-only compatibility grants never authorize tenant/workspace scope; future tenant form remains G-009/G-010/G-011; separate Coverage `activeLeads` all-lifecycle semantic finding recorded; no candidate, migration, replacement, test edit, or removal |
 | U | `leads` | `idx_leads_numeric_filters(review_count, rating, score DESC)` | filters; G-011/G-017 |
 | U | `leads` | `idx_leads_phone_quality(phone_verification_status, lead_quality_score DESC)` | quality filtering; G-011/G-017 |
 | U | `leads` | `idx_leads_primary_type_score(primary_type, score DESC)` | filtering/statistics; G-011/G-017 |
@@ -563,3 +563,23 @@ removal, repository guard, test edit, or sequence opens. Counts remain
 G-002 stays 13/0, and parent G-007 remains open. A separately proven uppercase
 Explore cell-command P2 repair precedes residual P37
 `idx_leads_market_active`.
+
+G-007P37 classifies `idx_leads_market_active` RETAIN and defers any future
+tenant-prefixed analogue. PostgreSQL 16.14 replayed 54/52/2 over 240,000
+physically interleaved rows. Accepted v5 captured 38 exact current/control
+cases across Coverage, Explore, map, researcher Leads, business counts,
+Quality, and Workbench; all complete results and source orders match I/D/R,
+all I/R structures match, and only the two Coverage correlated market counts
+naturally use the target I/R.
+
+Accepted fresh v6 adds full same-name `pg_class` and semantic index inventory.
+Four duplicate/collision states reject before DDL/workload with unchanged
+hashes; healthy, missing, historical replay, and exact rollback controls pass.
+Market identity and user-only compatibility grants remain nonauthorizing and
+future tenant forms stay dependency-bound to G-009/G-010/G-011. The separate
+Coverage all-lifecycle `activeLeads` label mismatch is index-neutral. No
+material target-attributable plan defect was proven, so no DDL, replacement,
+removal, repository guard, test edit, or sequence opens. Counts remain
+54/52/2, sequence 010 stays free, crosswalk becomes 47/15, G-003 becomes 24/15,
+G-002 stays 13/0, parent G-007 remains open, and P38
+`idx_leads_numeric_filters` is next.
