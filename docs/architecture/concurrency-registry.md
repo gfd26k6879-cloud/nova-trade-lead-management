@@ -3905,3 +3905,22 @@ Date: 2026-08-01
 - Acceptance commit `3b069a418b2b144bf39f84709aedd0d82de4fd2c` records the
   reviewed P33 classification. Its lineage-only successor releases the P33
   durable-document reservation without opening the security repair or P34.
+
+## G-007SR1 researcher lifecycle authorization repair reservation
+
+Date: 2026-08-01
+
+- Sol opens a bounded current-compatibility security repair at clean baseline
+  `00e263266ba826160fc8feda01ea56029d16ba41`. It must complete before P34.
+- One implementer exclusively owns `src/lib/lead-access.ts`, the claim action
+  in `src/lib/leads/actions.ts`, atomic claim SQL in `src/lib/db/queries.ts`,
+  and focused access/action/query/page/map tests. Sol owns all durable documents,
+  integration, acceptance, and the serialized lead-access/action/query locks.
+- Required policy: non-admin Explore is server-clamped to active, nonexcluded,
+  unclaimed, market-visible inventory; researcher detail/mutation is owned-only,
+  active, nonexcluded, and market-visible; claim is a separate active,
+  nonexcluded, unassigned, market-visible capability with lifecycle predicates
+  repeated in the atomic UPDATE. Admin behavior remains unchanged.
+- No schema migration, tenant-cutover claim, UI redesign, P34 opening, push, or
+  remote activity is authorized. G-011/G-012/G-018/G-019/G-024 must later carry
+  these invariants into strict tenant cutover.

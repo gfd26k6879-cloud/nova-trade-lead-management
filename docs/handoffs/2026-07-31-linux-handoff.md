@@ -1596,3 +1596,20 @@ low-selectivity; the evidence and RETAIN disposition are unchanged.
 P33 acceptance commit `3b069a418b2b144bf39f84709aedd0d82de4fd2c` records the
 reviewed classification locally. Its lineage-only successor releases the P33
 reservation without opening the security repair or P34.
+
+## G-007SR1 researcher lifecycle authorization repair opened
+
+At clean baseline `00e263266ba826160fc8feda01ea56029d16ba41`, Sol opens a
+bounded compatibility-security repair before P34. Independent triage proved
+that researcher Directory/direct Explore parameters can preserve archived or
+excluded inventory; same-market detail is not owned-only; and claim lacks
+archive/exclusion guards.
+
+The repair separates server policies. Researcher Explore remains available but
+is clamped to active, nonexcluded, unclaimed, market-visible inventory.
+Researcher detail and ordinary mutation require owned, active, nonexcluded,
+market-visible leads. Claim separately permits only unassigned, active,
+nonexcluded, market-visible leads and repeats lifecycle conditions atomically in
+the update. Admin behavior is preserved. One implementer owns only the bounded
+source/test set; independent architecture/security and test/evidence review are
+required. No migration, tenant-cutover completion, P34, or external action opens.
