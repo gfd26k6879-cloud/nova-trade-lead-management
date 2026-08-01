@@ -2914,3 +2914,6 @@ Date: 2026-07-31
 - The obligation transfers explicitly to strict G-017/G-018 statistics/action
   cutover. Reconcile the ownership map's G-020 citation before functional work;
   strict G-020 is the fair worker dispatcher. Parent G-007 remains open.
+- Receipt commit `95c2c7ab2cf726927ba43aef50ef9d816c558217` durably records
+  the deferred defect. No P9 lock, container, listener, process, or worktree
+  remains.

@@ -8,6 +8,8 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: accepted deferred defect; no migration
 
+Receipt commit: `95c2c7ab2cf726927ba43aef50ef9d816c558217`
+
 ## Scope and decision
 
 G-007P9 audited only the active-lead statistics counts. The ranged current form

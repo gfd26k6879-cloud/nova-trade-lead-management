@@ -539,3 +539,6 @@ rerun after the unscoped path is retired or split. The ownership map's G-020
 citation conflicts with strict G-020's worker-dispatch card and must be
 reconciled before caller changes. Parent G-007 and deferred G-007P5 remain open.
 No remote or external action occurred.
+
+The G-007P9 deferred-audit receipt commit is
+`95c2c7ab2cf726927ba43aef50ef9d816c558217`.
