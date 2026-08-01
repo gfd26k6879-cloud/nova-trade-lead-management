@@ -1056,3 +1056,16 @@ used. Counts remain 54/52/2, sequence 010 stays free, and the crosswalk is now
 The accepted receipt commit is
 `2922e32d434ee9f23efb4148da791551a7c3d4ec`. Its documentation reservation is
 released. No P23 card is opened by this lineage update.
+
+## G-007P23 market-created index classification opened
+
+After clean P22 lineage at `b2d929188020685676e64de0354c9e25bdeb56e3`,
+Sol opens a source-only classification for
+`idx_crawl_runs_market_created(market_id, created_at DESC)`. There is no current
+market-filtered run-history reader. The leading market key may support the
+accepted child-side market FK, but source cannot claim live use or health.
+
+Platform markets are shared reference data, not tenant authority. The packet
+must stop before PostgreSQL plans, candidates, DDL, or removal until G-010/G-013
+defines an exact tenant/workspace-scoped market-history contract. Counts remain
+54/52/2 and sequence 010 remains free.

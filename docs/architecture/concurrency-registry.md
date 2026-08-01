@@ -3335,3 +3335,18 @@ Date: 2026-07-31
 - Receipt commit `2922e32d434ee9f23efb4148da791551a7c3d4ec` is final locally.
   The documentation reservation is released; this lineage update opens no P23
   card or other write surface.
+
+## G-007P23 market-created index classification opened
+
+- After clean P22 lineage at `b2d929188020685676e64de0354c9e25bdeb56e3`,
+  Sol opens G-007P23 for exactly
+  `idx_crawl_runs_market_created(market_id, created_at DESC)`.
+- The packet is read-only and source-first. It must distinguish the accepted
+  scope-neutral child-side maintenance candidate for
+  `crawl_runs_market_id_fkey` from unimplemented tenant-safe market/run history.
+  A platform market reference never authorizes a tenant-owned run.
+- Stop before PostgreSQL, EXPLAIN, candidates, DDL, or removal. No exact current
+  or approved G-010/G-013 market-history predicate fixes tenant/workspace/null-
+  workspace visibility, ordering, limit, or tie semantics.
+- Counts remain 54/52/2 and sequence `202607310010` remains free. No migration,
+  test, or durable-document write lock is held after this opening commit.
