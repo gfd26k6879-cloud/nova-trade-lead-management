@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
@@ -17,9 +17,13 @@ const G003 = "202607290002_add_lead_crm_tenant_scope.sql";
 const G004A = "202607290003_add_ai_tenant_scope_worker_envelope.sql";
 const G007P2 = "202607310002_tenant_prefix_ai_verification_indexes.sql";
 const G004AR1 = "202607310008_harden_ai_usage_transitive_lead_delete.sql";
+const G007P20A = "202607310009_tenant_researcher_actor_ai_usage_index.sql";
 const migrationSql = readFileSync(join("supabase", "migrations", G004A), "utf8");
 const g007p2Sql = readFileSync(join("supabase", "migrations", G007P2), "utf8");
 const g004ar1Sql = readFileSync(join("supabase", "migrations", G004AR1), "utf8");
+const g007p20aSql = readFileSync(join("supabase", "migrations", G007P20A), "utf8");
+const actionsSource = readFileSync(join("src", "lib", "leads", "actions.ts"), "utf8");
+const queriesSource = readFileSync(join("src", "lib", "db", "queries.ts"), "utf8");
 const skipped = new Set(["20260514161714_supabase_ai_verification_cron.sql", "20260514163203_scheduler_v2_sales_ready_pipeline.sql"]);
 const pinnedPostgres16 = "postgres@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20";
 const tenantA = "00000000-0000-4000-8000-000000000401";
@@ -239,6 +243,161 @@ async function addTenantB(client: PgClient): Promise<void> {
   `);
 }
 
+async function g007p20aCatalogSnapshot(client: PgClient): Promise<Record<string, unknown>> {
+  return {
+    reservedObjects: await client.unsafe(`
+      SELECT i.relname,i.relkind,r.rolname owner
+      FROM pg_catalog.pg_class i
+      JOIN pg_catalog.pg_namespace n ON n.oid=i.relnamespace
+      JOIN pg_catalog.pg_roles r ON r.oid=i.relowner
+      WHERE n.nspname='public' AND i.relname LIKE 'idx_g007p20a_%'
+      ORDER BY i.relname
+    `),
+    indexes: await client.unsafe(`
+      SELECT i.relname,r.rolname owner,am.amname access_method,
+        pg_catalog.pg_get_indexdef(i.oid) definition,
+        pg_catalog.pg_get_expr(x.indpred,x.indrelid) predicate,
+        x.indclass::text opclasses,x.indcollation::text collations,
+        x.indoption::text options,x.indexprs IS NULL expressions_absent,
+        x.indisunique,x.indisprimary,x.indisexclusion,x.indisreplident,
+        x.indimmediate,x.indcheckxmin,x.indisvalid,x.indisready,x.indislive,
+        x.indnkeyatts,x.indnatts
+      FROM pg_catalog.pg_class i
+      JOIN pg_catalog.pg_namespace n ON n.oid=i.relnamespace
+      JOIN pg_catalog.pg_index x ON x.indexrelid=i.oid
+      JOIN pg_catalog.pg_roles r ON r.oid=i.relowner
+      JOIN pg_catalog.pg_am am ON am.oid=i.relam
+      WHERE n.nspname='public'
+        AND x.indrelid='public.ai_usage_events'::regclass
+      ORDER BY i.relname
+    `),
+    triggers: await client.unsafe(`
+      SELECT tgname,pg_catalog.pg_get_triggerdef(oid) definition,tgenabled
+      FROM pg_catalog.pg_trigger
+      WHERE tgrelid='public.ai_usage_events'::regclass AND NOT tgisinternal
+      ORDER BY tgname
+    `),
+    functions: await client.unsafe(`
+      SELECT oid::regprocedure::text identity,pg_catalog.pg_get_functiondef(oid) definition,
+        proowner,proacl,proconfig,pg_catalog.obj_description(oid,'pg_proc') comment
+      FROM pg_catalog.pg_proc
+      WHERE pronamespace='public'::regnamespace
+        AND proname IN ('novatrade_ai_scope_guard','novatrade_ai_usage_ri_null_normalize')
+      ORDER BY 1
+    `),
+    boundary: await client.unsafe(`
+      SELECT relrowsecurity,relforcerowsecurity,relacl
+      FROM pg_catalog.pg_class WHERE oid='public.ai_usage_events'::regclass
+    `),
+    columnAcls: await client.unsafe(`
+      SELECT attname,attacl FROM pg_catalog.pg_attribute
+      WHERE attrelid='public.ai_usage_events'::regclass
+        AND attnum>0 AND NOT attisdropped AND attacl IS NOT NULL
+      ORDER BY attname
+    `),
+    columns: await client.unsafe(`
+      SELECT a.attname,a.atttypid::regtype::text data_type,a.atttypmod,a.attnotnull,
+        a.atthasdef,a.attidentity,a.attgenerated,
+        pg_catalog.pg_get_expr(d.adbin,d.adrelid) default_expression
+      FROM pg_catalog.pg_attribute a
+      LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+      WHERE a.attrelid='public.ai_usage_events'::regclass
+        AND a.attname IN ('tenant_id','actor_user_id','request_source','created_at','lead_id','verification_id')
+        AND NOT a.attisdropped ORDER BY a.attname
+    `),
+    constraints: await client.unsafe(`
+      SELECT conname,pg_catalog.pg_get_constraintdef(oid) definition,convalidated,
+        confupdtype,confdeltype,confdelsetcols
+      FROM pg_catalog.pg_constraint
+      WHERE conrelid='public.ai_usage_events'::regclass
+        AND conname IN ('ai_usage_events_pkey','ai_usage_events_tenant_id_fkey',
+          'ai_usage_events_tenant_lead_fkey','ai_usage_events_tenant_verification_fkey')
+      ORDER BY conname
+    `),
+    policies: await client.unsafe(`
+      SELECT polname FROM pg_catalog.pg_policy
+      WHERE polrelid='public.ai_usage_events'::regclass ORDER BY polname
+    `),
+  };
+}
+
+async function seedG007P20aUsageFixture(client: PgClient, lowerBound: string): Promise<void> {
+  await client.unsafe(`
+    INSERT INTO auth.users(id) VALUES ('${ownerA}'),('${ownerB}') ON CONFLICT DO NOTHING;
+    INSERT INTO public.tenants(id,slug,name,status) VALUES
+      ('${tenantA}','p20a-a','P20A A','active'),
+      ('${tenantB}','p20a-b','P20A B','active');
+    INSERT INTO public.workspaces(id,tenant_id,slug,name,status) VALUES
+      ('${workspaceA}','${tenantA}','p20a-a','P20A A','active'),
+      ('${workspaceB}','${tenantB}','p20a-b','P20A B','active');
+    INSERT INTO public.tenant_memberships(id,tenant_id,auth_identity_id,workspace_id,status) VALUES
+      ('${membershipA}','${tenantA}','${ownerA}','${workspaceA}','active'),
+      ('${membershipB}','${tenantB}','${ownerA}','${workspaceB}','active'),
+      ('30000000-0000-4000-8000-000000000404','${tenantA}','${ownerB}','${workspaceA}','active'),
+      ('30000000-0000-4000-8000-000000000405','${tenantB}','${ownerB}','${workspaceB}','active');
+  `);
+  await client.unsafe("ALTER TABLE public.ai_usage_events DISABLE TRIGGER USER");
+  await client.unsafe(`
+    INSERT INTO public.ai_usage_events(
+      id,tenant_id,model,actor_user_id,request_source,success,was_cached,
+      input_tokens,output_tokens,total_tokens,estimated_cost,metadata,created_at
+    )
+    SELECT
+      'p20a-bulk-'||i::text,
+      CASE WHEN i%2=0 THEN '${tenantA}'::uuid ELSE '${tenantB}'::uuid END,
+      'model-'||(i%4)::text,
+      CASE WHEN i%11=0 THEN NULL::uuid WHEN i%5 IN (0,1) THEN '${ownerB}'::uuid ELSE '${ownerA}'::uuid END,
+      CASE WHEN i%13=0 THEN NULL WHEN i%17=0 THEN '' WHEN i%7=0 THEN 'worker_verification'
+           WHEN i%3=0 THEN 'researcher_pitch_pack' ELSE 'researcher_ai_check' END,
+      CASE WHEN i%10=0 THEN 0 ELSE 1 END,
+      CASE WHEN i%8=0 THEN 1 ELSE 0 END,
+      i%100,(i*2)%100,(i*3)%200,(i%25)::double precision/10000,
+      pg_catalog.jsonb_build_object('fixture',i),
+      $1::timestamptz+(((i*7919)%120000)-90000)*interval '1 minute'
+    FROM pg_catalog.generate_series(1,120000) i
+  `, [lowerBound]);
+  await client.unsafe(`
+    INSERT INTO public.ai_usage_events(
+      id,tenant_id,model,actor_user_id,request_source,metadata,created_at
+    ) VALUES
+      ('p20a-before','${tenantA}','model-boundary','${ownerA}','researcher_ai_check','{"boundary":"before"}'::jsonb,$1::timestamptz-interval '1 microsecond'),
+      ('p20a-at','${tenantA}','model-boundary','${ownerA}','researcher_pitch_pack','{"boundary":"at"}'::jsonb,$1::timestamptz),
+      ('p20a-empty-source','${tenantA}','model-boundary','${ownerA}','','{"source":"empty"}'::jsonb,$1::timestamptz),
+      ('p20a-null-source','${tenantA}','model-boundary','${ownerA}',NULL,'{"source":"null"}'::jsonb,$1::timestamptz),
+      ('p20a-other-source','${tenantA}','model-boundary','${ownerA}','worker_verification','{"source":"other"}'::jsonb,$1::timestamptz),
+      ('p20a-null-actor','${tenantA}','model-boundary',NULL,'researcher_ai_check','{"actor":"null"}'::jsonb,$1::timestamptz),
+      ('p20a-other-tenant','${tenantB}','model-boundary','${ownerA}','researcher_ai_check','{"tenant":"other"}'::jsonb,$1::timestamptz)
+  `, [lowerBound]);
+  await client.unsafe("ALTER TABLE public.ai_usage_events ENABLE TRIGGER USER; ANALYZE public.ai_usage_events");
+}
+
+async function parameterizedResearcherUsage(
+  client: PgClient,
+  tenantId: string,
+  actorId: string,
+  sources: readonly [string, string],
+  lowerBound: string,
+): Promise<Record<string, unknown>[]> {
+  return client.unsafe(`
+    SELECT id,verification_id,estimated_cost,was_cached,metadata
+    FROM public.ai_usage_events
+    WHERE tenant_id=$1::uuid
+      AND actor_user_id=$2::uuid
+      AND request_source IN ($3::text,$4::text)
+      AND created_at >= $5::timestamptz
+  `, [tenantId, actorId, sources[0], sources[1], lowerBound]);
+}
+
+async function parameterizedPlan(client: PgClient, sql: string, parameters: string[]): Promise<string> {
+  const rows = await client.unsafe<Record<string, string>[]>(`EXPLAIN (ANALYZE,BUFFERS,COSTS OFF) ${sql}`, parameters);
+  return rows.map((row) => Object.values(row)[0]).join("\n");
+}
+
+function stableUsageDigest(rows: Record<string, unknown>[]): string {
+  const ordered = [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  return createHash("sha256").update(JSON.stringify(ordered)).digest("hex");
+}
+
 describe("G-004A AI tenant scope and worker envelope", () => {
   it.skipIf(process.env.G004A_RUN_DISPOSABLE_PG_TESTS !== "1")(
     "executes the full receipt, replay, catalog, isolation, lifecycle, lock, and worker boundary matrix on disposable PostgreSQL 16",
@@ -262,7 +421,7 @@ describe("G-004A AI tenant scope and worker envelope", () => {
         expect(version.version.startsWith("16")).toBe(true);
 
         const full = await resetTo(client);
-        expect(full).toEqual({ discovered: 53, applied: 51, skipped: 2 });
+        expect(full).toEqual({ discovered: 54, applied: 52, skipped: 2 });
         await client.unsafe(g007p2Sql);
         const verificationIndexes = await client.unsafe<Array<{ indexname: string; indexdef: string }>>(`
           SELECT indexname,indexdef FROM pg_catalog.pg_indexes
@@ -632,6 +791,318 @@ describe("G-004A AI tenant scope and worker envelope", () => {
           await r1MigrationClient.end({ timeout: 5 });
           await r1WriterClient.end({ timeout: 5 });
         }
+      } finally {
+        await client?.end({ timeout: 5 }).catch(() => undefined);
+        docker(["stop", container], true);
+        expect(docker(["ps", "-a", "--filter", `name=^/${container}$`, "--format", "{{.ID}}"], true)).toBe("");
+      }
+    },
+    240000,
+  );
+});
+
+describe("G-007P20A tenant researcher actor usage index", () => {
+  it.skipIf(process.env.G004A_RUN_DISPOSABLE_PG_TESTS !== "1")(
+    "guards, replays, rolls back, and naturally serves only the approved tenant-added PostgreSQL proxy",
+    async () => {
+      const suffix = `${process.pid}-${randomUUID().slice(0, 8)}`;
+      const container = `g007p20a-pg16-${suffix}`;
+      const database = `g007p20a_usage_index_${suffix.replaceAll("-", "_")}`;
+      const sources = ["researcher_ai_check", "researcher_pitch_pack"] as const;
+      const lowerBound = "2026-07-31T00:00:00.000Z";
+      const targetIndex = "idx_g007p20a_ai_usage_tenant_actor_created";
+      let client: PgClient | undefined;
+      expect(docker(["ps", "-a", "--filter", `name=^/${container}$`, "--format", "{{.ID}}"], true)).toBe("");
+      try {
+        docker(["run", "--detach", "--rm", "--name", container, "--publish", "127.0.0.1::5432", "--env", "POSTGRES_PASSWORD=postgres", "--env", `POSTGRES_DB=${database}`, pinnedPostgres16]);
+        waitForPostgres(container, database);
+        const port = docker(["port", container, "5432/tcp"]).split(":").at(-1)!;
+        const url = `postgres://postgres:postgres@127.0.0.1:${port}/${database}`;
+        const parsed = new URL(url);
+        expect(parsed.hostname).toBe("127.0.0.1");
+        expect(parsed.pathname).toMatch(/^\/g007p20a_usage_index_[a-z0-9_]+$/);
+        client = postgres(url, { max: 1, prepare: false, onnotice: () => undefined });
+        const [version] = await client.unsafe<Array<{ version: string }>>("SELECT current_setting('server_version_num') version");
+        expect(version.version.startsWith("16")).toBe(true);
+
+        // Pin the accepted source literals while keeping the current helper
+        // explicitly unscoped. G-014 still owns its tenant argument/cutover.
+        expect(actionsSource.match(/const RESEARCHER_AI_REQUEST_SOURCES = \["researcher_ai_check", "researcher_pitch_pack"\];/g)).toHaveLength(1);
+        const budgetSource = actionsSource.slice(
+          actionsSource.indexOf("async function requireResearcherAiBudget("),
+          actionsSource.indexOf("async function", actionsSource.indexOf("async function requireResearcherAiBudget(") + 1),
+        );
+        expect(budgetSource.match(/getAiUsageForActor\(session\.userId, startOfUtcDayIso\(\), RESEARCHER_AI_REQUEST_SOURCES\)/g)).toHaveLength(1);
+        expect(budgetSource.match(/getAiUsageForActor\(session\.userId, startOfUtcMonthIso\(\), RESEARCHER_AI_REQUEST_SOURCES\)/g)).toHaveLength(1);
+        const helperSource = queriesSource.slice(
+          queriesSource.indexOf("export async function getAiUsageForActor("),
+          queriesSource.indexOf("export async function", queriesSource.indexOf("export async function getAiUsageForActor(") + 1),
+        );
+        expect(helperSource.match(/requestSources: string\[\] = \["researcher_ai_check", "researcher_pitch_pack"\]/g)).toHaveLength(1);
+        expect(helperSource).toContain("const params = [actorUserId, ...sources, sinceIso]");
+        const usageSelectStart = helperSource.indexOf("`SELECT id, verification_id, estimated_cost, was_cached, metadata");
+        const usageSelectEnd = helperSource.indexOf(").all(...params)", usageSelectStart) + ").all(...params)".length;
+        expect(usageSelectStart).toBeGreaterThanOrEqual(0);
+        expect(usageSelectEnd).toBeGreaterThan(usageSelectStart);
+        const usageSelectSource = helperSource.slice(usageSelectStart, usageSelectEnd);
+        expect(usageSelectSource).toContain("FROM ai_usage_events");
+        expect(usageSelectSource).toContain("WHERE actor_user_id = ?");
+        expect(usageSelectSource).toContain("request_source IN (${placeholders})");
+        expect(usageSelectSource).toContain("created_at >= ?");
+        expect(usageSelectSource).not.toMatch(/tenant_id|created_at\s*[<]=?/);
+
+        // Fresh empty install and exact final replay.
+        const fresh = await resetTo(client, G007P20A);
+        expect(fresh).toEqual({ discovered: 54, applied: 51, skipped: 2 });
+        expect((await client.unsafe(`SELECT count(*)::integer count FROM pg_catalog.pg_class i
+          JOIN pg_catalog.pg_namespace n ON n.oid=i.relnamespace
+          WHERE n.nspname='public' AND i.relname LIKE 'idx_g007p20a_%'`))[0].count).toBe(0);
+        await client.unsafe(g007p20aSql);
+        const emptyFinal = await g007p20aCatalogSnapshot(client);
+        await client.unsafe(g007p20aSql);
+        expect(await g007p20aCatalogSnapshot(client)).toEqual(emptyFinal);
+
+        // Representative hostile states cover every guarded foundation and
+        // final-index catalog family. Each rejects before install and remains
+        // byte-for-byte hostile after the failed transaction is rolled back.
+        const exactTargetDdl = `CREATE INDEX ${targetIndex}
+          ON public.ai_usage_events(tenant_id,actor_user_id,created_at DESC)
+          WHERE actor_user_id IS NOT NULL
+            AND request_source IN ('researcher_ai_check','researcher_pitch_pack')`;
+        const foundationHostiles = new Set([
+          "missing_actor", "missing_tenant_created", "column_default", "fk",
+          "function", "trigger", "rls", "table_acl", "column_acl",
+        ]);
+        for (const hostile of [
+          ...foundationHostiles,
+          "reserved_index", "reserved_table", "wrong_definition", "owner",
+          "access_method", "direction", "include", "unique", "expression",
+          "health", "immediate", "checkxmin",
+        ]) {
+          await resetTo(client, G007P20A);
+          if (hostile === "missing_actor") await client.unsafe("DROP INDEX public.idx_ai_usage_actor_created");
+          if (hostile === "missing_tenant_created") await client.unsafe("DROP INDEX public.idx_ai_usage_tenant_created");
+          if (hostile === "column_default") await client.unsafe("ALTER TABLE public.ai_usage_events ALTER COLUMN request_source SET DEFAULT 'spoofed'");
+          if (hostile === "fk") await client.unsafe("ALTER TABLE public.ai_usage_events DROP CONSTRAINT ai_usage_events_tenant_verification_fkey");
+          if (hostile === "function") await client.unsafe("ALTER FUNCTION public.novatrade_ai_usage_ri_null_normalize() SET search_path=public");
+          if (hostile === "trigger") await client.unsafe("ALTER TABLE public.ai_usage_events DISABLE TRIGGER trg_novatrade_ai_usage_events_scope");
+          if (hostile === "rls") await client.unsafe("ALTER TABLE public.ai_usage_events DISABLE ROW LEVEL SECURITY");
+          if (hostile === "table_acl") await client.unsafe("GRANT SELECT ON public.ai_usage_events TO authenticated");
+          if (hostile === "column_acl") await client.unsafe("GRANT SELECT(request_source) ON public.ai_usage_events TO authenticated");
+          if (hostile === "reserved_index") await client.unsafe("CREATE INDEX idx_g007p20a_partial ON public.ai_usage_events(tenant_id)");
+          if (hostile === "reserved_table") await client.unsafe("CREATE TABLE public.idx_g007p20a_spoof(id integer)");
+          if (hostile === "wrong_definition") await client.unsafe(`CREATE INDEX ${targetIndex}
+            ON public.ai_usage_events(actor_user_id,tenant_id,created_at)
+            WHERE request_source='researcher_ai_check'`);
+          if (hostile === "owner") {
+            await client.unsafe(exactTargetDdl);
+            await client.unsafe(`UPDATE pg_catalog.pg_class
+              SET relowner=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname='g004a_inherited')
+              WHERE oid='public.${targetIndex}'::regclass`);
+          }
+          if (hostile === "access_method") await client.unsafe(`CREATE INDEX ${targetIndex}
+            ON public.ai_usage_events USING hash(tenant_id)
+            WHERE actor_user_id IS NOT NULL`);
+          if (hostile === "direction") await client.unsafe(`CREATE INDEX ${targetIndex}
+            ON public.ai_usage_events(tenant_id,actor_user_id,created_at)
+            WHERE actor_user_id IS NOT NULL
+              AND request_source IN ('researcher_ai_check','researcher_pitch_pack')`);
+          if (hostile === "include") await client.unsafe(`CREATE INDEX ${targetIndex}
+            ON public.ai_usage_events(tenant_id,actor_user_id,created_at DESC) INCLUDE(request_source)
+            WHERE actor_user_id IS NOT NULL
+              AND request_source IN ('researcher_ai_check','researcher_pitch_pack')`);
+          if (hostile === "unique") await client.unsafe(exactTargetDdl.replace("CREATE INDEX", "CREATE UNIQUE INDEX"));
+          if (hostile === "expression") await client.unsafe(`CREATE INDEX ${targetIndex}
+            ON public.ai_usage_events((tenant_id::text),actor_user_id,created_at DESC)
+            WHERE actor_user_id IS NOT NULL
+              AND request_source IN ('researcher_ai_check','researcher_pitch_pack')`);
+          if (["health", "immediate", "checkxmin"].includes(hostile)) {
+            await client.unsafe(exactTargetDdl);
+            if (hostile === "health") await client.unsafe(`UPDATE pg_catalog.pg_index
+              SET indisvalid=false,indisready=false,indislive=false WHERE indexrelid='public.${targetIndex}'::regclass`);
+            if (hostile === "immediate") await client.unsafe(`UPDATE pg_catalog.pg_index
+              SET indimmediate=false WHERE indexrelid='public.${targetIndex}'::regclass`);
+            if (hostile === "checkxmin") await client.unsafe(`UPDATE pg_catalog.pg_index
+              SET indcheckxmin=true WHERE indexrelid='public.${targetIndex}'::regclass`);
+          }
+          const hostileBefore = await g007p20aCatalogSnapshot(client);
+          let hostileFailure: unknown;
+          try {
+            await client.unsafe(g007p20aSql);
+          } catch (error) {
+            hostileFailure = error;
+            await client.unsafe("ROLLBACK");
+          }
+          expect(hostileFailure, `hostile case ${hostile} must reject`).toBeInstanceOf(Error);
+          expect((hostileFailure as Error).message).toMatch(
+            foundationHostiles.has(hostile) ? /G007P20A_FOUNDATION_CATALOG_DRIFT/ : /G007P20A_INDEX_CATALOG_DRIFT/,
+          );
+          expect(await g007p20aCatalogSnapshot(client)).toEqual(hostileBefore);
+        }
+
+        // A post-install failure rolls the transaction back to zero target
+        // residue and the byte-for-byte accepted baseline catalog.
+        await resetTo(client, G007P20A);
+        const rollbackBefore = await g007p20aCatalogSnapshot(client);
+        await expect(client.unsafe(g007p20aSql.replace(
+          "-- G007P20A_INSTALL_COMPLETE",
+          "-- G007P20A_INSTALL_COMPLETE\nSELECT 1/0;",
+        ))).rejects.toThrow(/division by zero/);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p20aCatalogSnapshot(client)).toEqual(rollbackBefore);
+        expect((await client.unsafe(`SELECT count(*)::integer count FROM pg_catalog.pg_class i
+          JOIN pg_catalog.pg_namespace n ON n.oid=i.relnamespace
+          WHERE n.nspname='public' AND i.relname LIKE 'idx_g007p20a_%'`))[0].count).toBe(0);
+
+        // 009 itself closes table, function, index/prefix, and column/default
+        // catalog races for the full classification/install/postflight span.
+        await resetTo(client, G007P20A);
+        const migrationClient = postgres(url, { max: 1, prepare: false, onnotice: () => undefined });
+        const writerClient = postgres(url, { max: 1, prepare: false, onnotice: () => undefined });
+        let lockedInstall: Promise<unknown> | undefined;
+        try {
+          const [{ pid }] = await migrationClient.unsafe<Array<{ pid: number }>>("SELECT pg_catalog.pg_backend_pid() pid");
+          lockedInstall = Promise.resolve(migrationClient.unsafe(g007p20aSql.replace(
+            "-- G007P20A_LOCKS_ACQUIRED",
+            "-- G007P20A_LOCKS_ACQUIRED\nSELECT pg_catalog.pg_sleep(6);",
+          )));
+          let lockCount = 0;
+          for (let attempt = 0; attempt < 160 && lockCount !== 4; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            lockCount = Number((await client.unsafe(`SELECT count(DISTINCT relation)::integer count
+              FROM pg_catalog.pg_locks WHERE pid=${pid} AND granted AND mode='ShareRowExclusiveLock'
+                AND relation IN ('public.ai_usage_events'::regclass,'pg_catalog.pg_proc'::regclass,
+                  'pg_catalog.pg_class'::regclass,'pg_catalog.pg_attribute'::regclass)`))[0].count);
+          }
+          expect(lockCount).toBe(4);
+          await writerClient.unsafe("SET lock_timeout='250ms'");
+          await expect(writerClient.unsafe("UPDATE public.ai_usage_events SET metadata=metadata WHERE false")).rejects.toThrow(/lock timeout/);
+          await expect(writerClient.unsafe("ALTER FUNCTION public.novatrade_ai_usage_ri_null_normalize() SET search_path=public")).rejects.toThrow(/lock timeout/);
+          await expect(writerClient.unsafe("GRANT SELECT(request_source) ON public.ai_usage_events TO authenticated")).rejects.toThrow(/lock timeout/);
+          await expect(writerClient.unsafe("CREATE INDEX idx_g007p20a_racing ON public.ai_usage_events(tenant_id)")).rejects.toThrow(/lock timeout/);
+          await expect(writerClient.unsafe("ALTER TABLE public.ai_usage_events ALTER COLUMN request_source SET DEFAULT 'racing'")).rejects.toThrow(/lock timeout/);
+          await lockedInstall;
+        } finally {
+          await lockedInstall?.catch(() => undefined);
+          await migrationClient.end({ timeout: 5 });
+          await writerClient.end({ timeout: 5 });
+        }
+        expect((await client.unsafe(`SELECT count(*)::integer count FROM pg_catalog.pg_indexes
+          WHERE schemaname='public' AND indexname='${targetIndex}'`))[0].count).toBe(1);
+
+        // Upgrade a nonempty historical fixture. This is the approved
+        // tenant-added raw PostgreSQL proxy, not a claim that the current
+        // unscoped application caller already uses the tenant index.
+        await resetTo(client, G007P20A);
+        await seedG007P20aUsageFixture(client, lowerBound);
+        const beforeCatalog = await g007p20aCatalogSnapshot(client);
+        const beforeRows = await parameterizedResearcherUsage(client, tenantA, ownerA, sources, lowerBound);
+        const alternateSources = ["worker_verification", "platform_batch"] as const;
+        const beforeTenantAlternate = await parameterizedResearcherUsage(
+          client, tenantA, ownerA, alternateSources, lowerBound,
+        );
+        const beforeDigest = stableUsageDigest(beforeRows);
+        const beforeTenantAlternateDigest = stableUsageDigest(beforeTenantAlternate);
+        const beforeControls = await client.unsafe(`
+          SELECT
+            count(*) FILTER (WHERE actor_user_id IS NULL)::integer null_actor,
+            count(*) FILTER (WHERE request_source IS NULL)::integer null_source,
+            count(*) FILTER (WHERE request_source='')::integer empty_source,
+            count(*) FILTER (WHERE request_source='worker_verification')::integer alternate_source
+          FROM public.ai_usage_events
+        `);
+        const preservedIndexNames = [
+          "idx_ai_usage_actor_created", "idx_ai_usage_created",
+          "idx_ai_usage_model_created", "idx_ai_usage_tenant_created",
+        ];
+        const beforePreservedIndexes = (beforeCatalog.indexes as Array<{ relname: string }>)
+          .filter(({ relname }) => preservedIndexNames.includes(relname));
+        expect(beforeRows.some((row) => row.id === "p20a-at")).toBe(true);
+        expect(beforeRows.some((row) => row.id === "p20a-before")).toBe(false);
+        expect(beforeRows.every((row) => !["p20a-empty-source", "p20a-null-source", "p20a-other-source", "p20a-null-actor", "p20a-other-tenant"].includes(String(row.id)))).toBe(true);
+
+        await client.unsafe(g007p20aSql);
+        await client.unsafe("ANALYZE public.ai_usage_events");
+        const afterRows = await parameterizedResearcherUsage(client, tenantA, ownerA, sources, lowerBound);
+        const afterTenantAlternate = await parameterizedResearcherUsage(
+          client, tenantA, ownerA, alternateSources, lowerBound,
+        );
+        expect(afterRows.sort((a, b) => String(a.id).localeCompare(String(b.id))))
+          .toEqual(beforeRows.sort((a, b) => String(a.id).localeCompare(String(b.id))));
+        expect(stableUsageDigest(afterRows)).toBe(beforeDigest);
+        expect(stableUsageDigest(afterTenantAlternate)).toBe(beforeTenantAlternateDigest);
+        expect(await client.unsafe(`
+          SELECT
+            count(*) FILTER (WHERE actor_user_id IS NULL)::integer null_actor,
+            count(*) FILTER (WHERE request_source IS NULL)::integer null_source,
+            count(*) FILTER (WHERE request_source='')::integer empty_source,
+            count(*) FILTER (WHERE request_source='worker_verification')::integer alternate_source
+          FROM public.ai_usage_events
+        `)).toEqual(beforeControls);
+
+        const afterCatalog = await g007p20aCatalogSnapshot(client);
+        const afterPreservedIndexes = (afterCatalog.indexes as Array<{ relname: string }>)
+          .filter(({ relname }) => preservedIndexNames.includes(relname));
+        expect(afterPreservedIndexes).toEqual(beforePreservedIndexes);
+        expect(afterCatalog.triggers).toEqual(beforeCatalog.triggers);
+        expect(afterCatalog.functions).toEqual(beforeCatalog.functions);
+        expect(afterCatalog.boundary).toEqual(beforeCatalog.boundary);
+        expect(afterCatalog.columnAcls).toEqual(beforeCatalog.columnAcls);
+        expect(afterCatalog.policies).toEqual(beforeCatalog.policies);
+
+        const proxyPlan = await parameterizedPlan(client, `
+          SELECT id,verification_id,estimated_cost,was_cached,metadata
+          FROM public.ai_usage_events
+          WHERE tenant_id=$1::uuid AND actor_user_id=$2::uuid
+            AND request_source IN ($3::text,$4::text)
+            AND created_at >= $5::timestamptz
+        `, [tenantA, ownerA, sources[0], sources[1], lowerBound]);
+        expect(proxyPlan).toContain(targetIndex);
+        expect(proxyPlan).not.toMatch(/^\s*Filter:/m);
+
+        // Current global actor and generic alternate-source queries retain the
+        // global index. Created/model and tenant-time owners are unchanged.
+        const currentPlan = await parameterizedPlan(client, `
+          SELECT id FROM public.ai_usage_events
+          WHERE actor_user_id=$1::uuid AND request_source IN ($2::text,$3::text)
+            AND created_at >= $4::timestamptz
+        `, [ownerA, sources[0], sources[1], lowerBound]);
+        expect(currentPlan).toContain("idx_ai_usage_actor_created");
+        const alternatePlan = await parameterizedPlan(client, `
+          SELECT id FROM public.ai_usage_events
+          WHERE actor_user_id=$1::uuid AND request_source IN ($2::text,$3::text)
+            AND created_at >= $4::timestamptz
+        `, [ownerA, alternateSources[0], alternateSources[1], lowerBound]);
+        expect(alternatePlan).toContain("idx_ai_usage_actor_created");
+        const tenantAlternatePlan = await parameterizedPlan(client, `
+          SELECT id,verification_id,estimated_cost,was_cached,metadata
+          FROM public.ai_usage_events
+          WHERE tenant_id=$1::uuid AND actor_user_id=$2::uuid
+            AND request_source IN ($3::text,$4::text)
+            AND created_at >= $5::timestamptz
+        `, [tenantA, ownerA, alternateSources[0], alternateSources[1], lowerBound]);
+        expect(tenantAlternatePlan).not.toContain(targetIndex);
+        expect(tenantAlternatePlan).toContain("idx_ai_usage_tenant_created");
+        const tenantTimePlan = await parameterizedPlan(client,
+          "SELECT count(*) FROM public.ai_usage_events WHERE tenant_id=$1::uuid AND created_at >= $2::timestamptz",
+          [tenantA, lowerBound]);
+        expect(tenantTimePlan).toContain("idx_ai_usage_tenant_created");
+        const globalTimePlan = await parameterizedPlan(client,
+          "SELECT count(*) FROM public.ai_usage_events WHERE created_at >= $1::timestamptz",
+          [lowerBound]);
+        expect(globalTimePlan).toContain("idx_ai_usage_created");
+        const modelPlan = await parameterizedPlan(client,
+          "SELECT count(*) FROM public.ai_usage_events WHERE model=$1::text AND created_at >= $2::timestamptz",
+          ["model-1", lowerBound]);
+        expect(modelPlan).toContain("idx_ai_usage_model_created");
+
+        // Full-chain replay accounts for exactly one new portable migration,
+        // then the migration itself remains an exact final no-op.
+        const full = await resetTo(client);
+        expect(full).toEqual({ discovered: 54, applied: 52, skipped: 2 });
+        const finalBeforeReplay = await g007p20aCatalogSnapshot(client);
+        await client.unsafe(g007p20aSql);
+        expect(await g007p20aCatalogSnapshot(client)).toEqual(finalBeforeReplay);
       } finally {
         await client?.end({ timeout: 5 }).catch(() => undefined);
         docker(["stop", container], true);

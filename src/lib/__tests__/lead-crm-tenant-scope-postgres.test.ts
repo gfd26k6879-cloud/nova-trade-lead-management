@@ -1039,7 +1039,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 53, applied: 51, skipped: 2 });
+        expect(full).toEqual({ discovered: 54, applied: 52, skipped: 2 });
         const fullIndexes = (await g007p6CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>;
         expect(fullIndexes.find((row) => row.relname === G007P6_INDEX)).toEqual({
           relname: G007P6_INDEX,
@@ -1055,7 +1055,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect(await g007p6CatalogSnapshot(client)).toEqual(exactReplayBefore);
 
         const baselineReceipt = await resetDatabase(client, true, false, G007P6_MIGRATION);
-        expect(baselineReceipt).toEqual({ discovered: 53, applied: 46, skipped: 2 });
+        expect(baselineReceipt).toEqual({ discovered: 54, applied: 46, skipped: 2 });
         const baselineCatalog = await g007p6CatalogSnapshot(client);
         expect((baselineCatalog.indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
           "idx_leads_enrichment",
@@ -1273,7 +1273,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 53, applied: 51, skipped: 2 });
+        expect(full).toEqual({ discovered: 54, applied: 52, skipped: 2 });
         const fullCatalog = await g007p7CatalogSnapshot(client);
         expect((fullCatalog.indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P7_INDEX)).toEqual({
           relname: G007P7_INDEX,
@@ -1288,7 +1288,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect(await g007p7CatalogSnapshot(client)).toEqual(fullCatalog);
 
         const baselineReceipt = await resetDatabase(client, true, false, G007P7_MIGRATION);
-        expect(baselineReceipt).toEqual({ discovered: 53, applied: 47, skipped: 2 });
+        expect(baselineReceipt).toEqual({ discovered: 54, applied: 47, skipped: 2 });
         const baselineCatalog = await g007p7CatalogSnapshot(client);
         expect((baselineCatalog.indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
           G007P6_INDEX,
@@ -1468,7 +1468,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 53, applied: 51, skipped: 2 });
+        expect(full).toEqual({ discovered: 54, applied: 52, skipped: 2 });
         const fullCatalog = await g007p8CatalogSnapshot(client);
         expect((fullCatalog.indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P8_INDEX)).toEqual({
           relname: G007P8_INDEX,
@@ -1483,7 +1483,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect(await g007p8CatalogSnapshot(client)).toEqual(fullCatalog);
 
         const baselineReceipt = await resetDatabase(client, true, false, G007P8_MIGRATION);
-        expect(baselineReceipt).toEqual({ discovered: 53, applied: 48, skipped: 2 });
+        expect(baselineReceipt).toEqual({ discovered: 54, applied: 48, skipped: 2 });
         const baselineCatalog = await g007p8CatalogSnapshot(client);
         expect((baselineCatalog.indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
           G007P6_INDEX,
@@ -1662,7 +1662,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 53, applied: 51, skipped: 2 });
+        expect(full).toEqual({ discovered: 54, applied: 52, skipped: 2 });
         const fullCatalog = await g007p11CatalogSnapshot(client);
         expect((fullCatalog.indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P11_INDEX)).toEqual({
           relname: G007P11_INDEX,
@@ -1677,7 +1677,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect(await g007p11CatalogSnapshot(client)).toEqual(fullCatalog);
 
         const baselineReceipt = await resetDatabase(client, true, false, G007P11_MIGRATION);
-        expect(baselineReceipt).toEqual({ discovered: 53, applied: 49, skipped: 2 });
+        expect(baselineReceipt).toEqual({ discovered: 54, applied: 49, skipped: 2 });
         const baselineCatalog = await g007p11CatalogSnapshot(client);
         expect((baselineCatalog.indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
           "admin_requests_tenant_lead_open_unique",
@@ -1947,7 +1947,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 53, applied: 51, skipped: 2 });
+        expect(full).toEqual({ discovered: 54, applied: 52, skipped: 2 });
         await assertCatalog(client);
 
         const expectedFinalQueueIndexes: LeadAiQueueIndex[] = [

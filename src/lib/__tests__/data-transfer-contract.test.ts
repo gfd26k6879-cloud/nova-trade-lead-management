@@ -969,10 +969,10 @@ async function prepareDisposablePostgres(sql: ReturnType<typeof postgres>) {
       `);
     }
   }
-  expect(migrations).toHaveLength(53);
-  expect(appliedMigrations).toBe(51);
+  expect(migrations).toHaveLength(54);
+  expect(appliedMigrations).toBe(52);
   expect(skippedMigrations.size).toBe(2);
-  console.log("T-029 portable PG16 migration replay: applied=51, skipped=2 (pg_net/pg_cron/Vault runtime migrations)");
+  console.log("T-029 portable PG16 migration replay: applied=52, skipped=2 (pg_net/pg_cron/Vault runtime migrations)");
   const extensions = await sql.unsafe("SELECT extname FROM pg_catalog.pg_extension WHERE extname IN ('pgcrypto', 'pg_net', 'pg_cron')");
   expect(extensions).toEqual([]);
   await sql.unsafe("INSERT INTO auth.users (id) VALUES ('90000000-0000-4000-8000-000000000001'), ('90000000-0000-4000-8000-000000000002'), ('90000000-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING");
