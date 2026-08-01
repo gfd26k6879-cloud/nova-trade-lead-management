@@ -3602,3 +3602,25 @@ Date: 2026-08-01
   migration, test edit, replacement, or removal is assumed. Counts remain
   54/52/2, crosswalk 38/24 (G-003 15/24), and sequence
   `202607310010` stays free.
+
+## G-007P29 accepted; retain/defer archived-active compatibility
+
+Date: 2026-08-01
+
+- PostgreSQL 16.14 replayed the exact 54/52/2 chain on 153,600 independently
+  crossed two-tenant leads. The target was healthy and non-constraint-owned;
+  installed/drop/rollback held 38/37/38 indexes and 10 invariant constraints.
+  All 15 canonical results and structural plan fingerprints were exact across
+  phases, while target removal changed no natural plan or buffer count.
+- Current operational limits use `idx_leads_score_recompute_stale`; the complete
+  limit-100000 form uses sequential scan and sort. Tenant analog inefficiency is
+  accepted G-007P10 evidence, not a P29 target defect. The deferred cutover set
+  remains G-009/G-011/G-012/G-014/G-019/G-020 plus G-017/G-018 projections.
+- Sol accepts RETAIN/DEFER for the healthy historical PostgreSQL catalog
+  definition and the frozen SQLite compatibility definition only; no fresh
+  SQLite validation is claimed. No
+  exact primary owner, necessity, candidate, migration, replacement, removal,
+  or test edit is accepted. Independent reviews report no P0/P1/P2. Counts stay
+  54/52/2, crosswalk becomes 39/23 (G-003 16/23), and sequence 010 stays free.
+  The serialized durable-document reservation remains until the attributable
+  local receipt commit; parent G-007 remains open.

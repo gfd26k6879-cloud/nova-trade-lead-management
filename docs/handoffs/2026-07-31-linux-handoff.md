@@ -1295,3 +1295,27 @@ with the target installed, during target-only transactional drop, and after
 explicit rollback. No defect, tenant-prefixed candidate, migration, test edit,
 replacement, or removal is assumed. Counts remain 54/52/2, crosswalk 38/24
 (G-003 15/24), and sequence 010 remains free.
+
+## G-007P29 accepted; retain/defer archived-active compatibility
+
+Fresh PostgreSQL 16.14 replayed 54/52/2 migrations on a 153,600-row fully
+crossed two-tenant fixture with no workspace dimension. The target was an exact,
+healthy ordinary index with zero constraint owners. Installed/drop/rollback
+catalog counts were 38/37/38 indexes with all 10 constraints invariant. All 15
+canonical results and structural plan fingerprints were identical across the
+three phases, and target-only drop changed no selected plan or buffer count.
+
+`idx_leads_score_recompute_stale` owned current limits 1, 100, and 500; limit
+100000 used sequential scan and sort. The tenant analog read 2.37x buffers at
+100 and 1.96x at 500, with 118 and 513 wrong-tenant eligible rows respectively.
+That remains the accepted G-007P10 cutover defect, not a target-specific P29
+defect. Its full obligation remains G-009/G-011/G-012/G-014/G-019/G-020, with
+G-017/G-018 for dashboard projections.
+
+Sol accepts RETAIN/DEFER for the healthy historical PostgreSQL catalog
+definition plus the frozen SQLite compatibility definition only. This PostgreSQL
+audit does not freshly validate SQLite. The target has no exact primary owner or
+demonstrated necessity, and no removal, replacement, candidate, migration, or
+test edit opens. Independent reviews report no P0/P1/P2. Root gates pass and all
+resources are gone. Crosswalk becomes 39/23, G-003 becomes 16/23, counts remain
+54/52/2, sequence 010 stays free, and parent G-007 remains open.

@@ -55,6 +55,9 @@ unclassified.
 After the accepted P28 plan audit, 38 names are mapped or accepted and 24
 remain unclassified: G-002 is complete at 13 classified and 0 unclassified.
 
+After the accepted P29 plan audit, 39 names are mapped or accepted and 23
+remain unclassified. G-003 is now 16 classified and 23 unclassified.
+
 For this reconstruction, an exact audit target or named plan/control owner is
 mapped. Merely appearing as a migration foundation guard does not classify a
 tenant-query family. P18 and P19 each classify two names already inside the 28,
@@ -93,7 +96,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | M:P13 control | `lead_notes` | `idx_lead_notes_lead_created(lead_id, created_at DESC)` | lead-local notes; G-015 |
 | A:P9 defer | `leads` | `idx_leads_active_discovered_at(archived_at, is_excluded, discovered_at)` | active statistics; G-017/G-018 |
 | A:P7 | `leads` | `idx_leads_ai_status_checked(ai_verification_status, ai_checked_at DESC)` | AI viability/current compatibility; G-011/G-014 |
-| U | `leads` | `idx_leads_archived_active(archived_at, updated_at DESC)` | archive/list; G-011/G-012/G-017 |
+| A:P29 retain/defer | `leads` | `idx_leads_archived_active(archived_at, updated_at DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definitions; no exact primary plan owner or demonstrated necessity; target-only drop was plan/result/buffer neutral; accepted P10 tenant score-recompute defect remains deferred to G-009/G-011/G-012/G-014/G-019/G-020 plus G-017/G-018 projections; no removal, replacement, candidate, or migration |
 | U | `leads` | `idx_leads_assigned_to_user(assigned_to_user_id, updated_at DESC)` | assignment/workbench; G-011/G-012 |
 | U | `leads` | `idx_leads_business_type_score(business_type, score DESC)` | filtering/statistics; G-011/G-017 |
 | U | `leads` | `idx_leads_component_scores(raw_opportunity_score DESC, verification_score DESC)` | quality/scoring; G-011/G-012/G-017 |
@@ -363,3 +366,13 @@ replacement, necessity, or removal packet opens. Counts stay 54/52/2, sequence
 G-007P28 receipt commit `9a01e888a5d90c4133e182c5998f723de1ffc6e4`
 records the accepted RETAIN/DEFER decision and completes the G-002 residual
 partition. This lineage update opens no next residual family.
+
+G-007P29 classifies `idx_leads_archived_active` RETAIN/DEFER. On a 153,600-row
+PostgreSQL 16.14 fixture the healthy target has no exact primary plan owner;
+target-only transactional drop changes none of 15 canonical results, structural
+plans, or buffer counts. Tenant score-recompute inefficiency remains the
+accepted G-007P10 cutover obligation, not a P29 target defect. Historical frozen
+SQLite compatibility is retained without claiming fresh SQLite validation.
+No candidate, migration, replacement, necessity, or removal packet opens.
+Counts stay 54/52/2, sequence 010 stays free, and the crosswalk becomes 39/23
+with G-003 at 16/23. Parent G-007 remains open.
