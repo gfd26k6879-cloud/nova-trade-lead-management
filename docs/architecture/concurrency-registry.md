@@ -2980,3 +2980,19 @@ Date: 2026-07-31
   next lock-free read-only audit and assumes no migration. Counts remain
   52/50/2 and sequence `202607310008` remains unused/available. No P12
   container, listener, database, process, worktree, or lock remains.
+
+## G-007P13 lead-note author-history deferred-defect audit
+
+- A fresh 52/50/2 PostgreSQL 16.14 audit over 160,000 interleaved notes proves
+  a shared author can cause the global LIMIT 100 path to filter 48,000
+  wrong-tenant rows at 2,719 buffers. Author identity is not tenant scope.
+- The 9,469,952-byte full tenant/author/time candidate improves counts/ranges
+  but is not naturally selected for LIMIT 25/100. The 7,110,656-byte active-note
+  partial also misses those limits and captures a current unscoped count owner.
+  `author_user_id` is already NOT NULL; no nonnull partial is legitimate.
+- Independent architecture and quality reviews pass DEFER. No migration,
+  source/test/count change, or lock opened. Both candidates/resources were
+  removed and all four baseline note indexes are healthy.
+- Transfer the unresolved family to strict G015/G017 cutover, with G018 scope
+  propagation. Parent G-007 stays open. Counts remain 52/50/2 and sequence 008
+  stays free. P14 creator-history is the next lock-free read-only audit.

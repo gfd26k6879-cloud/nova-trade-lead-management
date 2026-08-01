@@ -630,3 +630,25 @@ external action occurred.
 
 The G-007P12 deferred-audit receipt commit is
 `7fe3eb2e62dbdfec8f65128571de5331e85c7e16`.
+
+## G-007P13 deferred-defect receipt
+
+G-007P13 proves a shared-author tenant defect but accepts no migration. On
+160,000 interleaved notes, the global author/time LIMIT 100 path removes 48,000
+wrong-tenant rows and reads 2,719 buffers.
+
+The full tenant/author/time candidate improves counts and bounded ranges but
+does not naturally serve LIMIT 25/100. The live-note partial also misses those
+ordered paths and captures the exact current unscoped active-author count.
+Because `author_user_id` is already NOT NULL, no author-nonnull partial can
+supply a smaller legitimate alternative. Independent reviews pass DEFER.
+
+Both hypotheticals and all disposable resources were removed; the four baseline
+indexes remain healthy and the repository stayed clean. Counts remain 52/50/2,
+sequence 008 remains available, and no full upstream matrix was run because no
+source or migration survived. The obligation transfers to strict G-015/G-017
+cutover, with G-018 owning scope propagation. Parent G-007 stays open.
+
+After the local receipt commit, the next action is a separate read-only P14
+audit of `idx_admin_requests_creator_created`. No migration is assumed and no
+remote or external action occurred.
