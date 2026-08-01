@@ -2077,3 +2077,31 @@ reservation is released with no remaining P37 migration, source, test,
 sequence, service, or worktree lock. P38 remains next and unopened pending a
 separate reservation. No push, deployment, hosted migration, or external
 action occurred.
+
+## G-007P38 numeric-filter index audit opened
+
+At clean baseline `50004281bd3c2bd73bc5f0f660b3f535ddb1f6ea`, after complete
+P37 release, Sol opens read-only P38 for exact residual
+`idx_leads_numeric_filters(review_count, rating, score DESC)`. Its historical
+origin is `202605110001_full_schema.sql:303`; SQLite retains a frozen
+compatibility mirror at `src/lib/db/schema.ts:2077`. No migration,
+replacement, removal, source/test edit, or sequence use is assumed.
+
+Fresh PostgreSQL 16 must replay 54/52/2 and compare definition-aware catalog
+and installed/drop/restored exact current Leads, Explore, map, CSV export,
+Kanban, and numeric count/filter/sort forms. Fixtures must physically
+interleave two tenants and vary review/rating/score NULLs, zero, negative,
+fractional, thresholds, independent selectivity, ranges, assignments, grants,
+lifecycle, exclusions, and complete order ties. Range predicates can prevent
+trailing-key order ownership and must be measured honestly.
+
+Current compatibility authority remains role/assignment/market based; numeric
+fields never grant tenant scope. G-011/G-017 future tenant forms are not
+current authority. Fractional review-count parsing, nonpositive omission, and
+command comparison semantics are separate source-contract findings.
+
+Conditional classification is 48/14 (G-003 25/14, G-002 13/0), inventory
+stays 54/52/2, sequence `202607310010` remains free, and parent G-007 remains
+open. Stop before candidate DDL unless material exact current or durably
+approved tenant-query plan evidence proves a defect. No hosted or external
+operation opens.

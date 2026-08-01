@@ -4332,3 +4332,30 @@ Date: 2026-08-01
   test, sequence, service, or worktree lock remains.
 - P38 `idx_leads_numeric_filters` remains next and unopened pending its own
   separate reservation. No remote or external action occurred.
+
+## G-007P38 numeric-filter index audit reservation
+
+Date: 2026-08-01
+
+- Sol opens a read-only audit of exact G-003 residual
+  `idx_leads_numeric_filters(review_count, rating, score DESC)` at clean
+  baseline `50004281bd3c2bd73bc5f0f660b3f535ddb1f6ea`, after complete P37
+  release.
+- Sol exclusively owns registry, ledger, handoff, crosswalk, integration, and
+  acceptance writes. Three agents own disjoint PostgreSQL catalog/EXPLAIN,
+  source/authority, and test/evidence lanes; no producer may self-accept.
+- Exact Leads, Explore, map, export, Kanban, count, and numeric-sort/filter
+  forms must be separated from AI ranking controls and future tenant forms.
+  Numeric fields never authorize tenant or workspace access.
+- Fresh PostgreSQL 16 evidence must compare the installed, dropped, and
+  restored target using complete source SQL, binds, projections, ordering,
+  LIMIT/OFFSET, and adversarial range/selectivity fixtures.
+- Accepted inventory is 54/52/2 and crosswalk 47/15 (G-003 24/15, G-002
+  13/0). Conditional classification would make 48/14 and G-003 25/14.
+  Sequence `202607310010` remains free; no migration is assumed.
+- Fractional `minReviews`, inconsistent parser coercion, omitted nonpositive
+  predicates, and collapsed `>`/`>=` command semantics are separate source-
+  contract findings, not index evidence or permission to expand P38.
+- Stop before DDL migration, replacement, removal, test edits, or sequence use
+  unless a material exact current or durably approved tenant-query plan defect
+  is proven.
