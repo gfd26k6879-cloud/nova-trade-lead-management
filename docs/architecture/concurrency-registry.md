@@ -3315,3 +3315,20 @@ Date: 2026-07-31
 - `idx_crawl_runs_market_created` remains a separate unopened family. No
   migration, test, or durable-document write lock is held after this opening
   commit.
+
+## G-007P22 accepted as source-only retain/defer
+
+- Exact source tracing finds no `ORDER BY blocked_at` or matching current
+  reader. Block/resume/cancel/retry are run-ID scoped; blocked metadata is shown
+  through the P21 created-time history path. Root behavior tests pass 67/67 but
+  do not assert blocked-time ordering or index use.
+- The index remains in the unchanged historical migration from commit
+  `59f8bf0bf75abd2a34a7ea2d171ee81d54320988`; runtime PostgreSQL repair and
+  SQLite do not recreate it. No reader proves use, but source alone also cannot
+  prove a forward drop safe across upgraded/compatibility catalogs.
+- G-013 has no exact blocked-run query contract. G-020 fair dispatch is not a
+  blocked-time owner. Nullable `blocked_at`, implicit descending null order,
+  and no stable tie-break forbid inferred “latest blocked” semantics.
+- Retain/defer requires no PostgreSQL, migration, count update, or lock. Counts
+  remain 54/52/2, sequence `202607310010` stays free, and the crosswalk becomes
+  31 classified/31 unclassified. Market-created remains separate and unopened.

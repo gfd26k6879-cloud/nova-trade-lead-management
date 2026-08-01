@@ -1038,3 +1038,17 @@ The packet may inspect source, migration provenance, tests, and durable
 G-013/G-020 dependencies. It must stop before PostgreSQL candidates or DDL
 unless it finds a real owned blocked-time query. Counts remain 54/52/2,
 sequence 010 stays free, and market-created remains separate and unopened.
+
+## G-007P22 accepted as source-only retain/defer
+
+Sol finds no exact current blocked-time reader. Current lifecycle actions use
+run IDs, generic display orders by created time, and G-013 has not fixed a
+blocked-run query contract. G-020 fair dispatch is not an owner. Root focused
+behavior tests pass 67/67 but do not prove index use.
+
+The partial index remains in the unchanged historical migration, while runtime
+repair and SQLite do not recreate it. Source proves neither use nor safe
+removal, so Sol retains historical replay compatibility and defers plan,
+tenant-prefix, replacement, and removal claims. No PostgreSQL service or DDL was
+used. Counts remain 54/52/2, sequence 010 stays free, and the crosswalk is now
+31/31. Market-created remains separate and unopened; no later card unlocks.

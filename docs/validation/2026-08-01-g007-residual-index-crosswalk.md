@@ -33,6 +33,9 @@ After the accepted P21 dispositions, 30 names are mapped or accepted and 32
 remain unclassified: G-002 is now 5 classified and 8 unclassified; the G-003
 and G-004A partitions are unchanged.
 
+After the accepted P22 source classification, 31 names are mapped or accepted
+and 31 remain unclassified: G-002 is now 6 classified and 7 unclassified.
+
 For this reconstruction, an exact audit target or named plan/control owner is
 mapped. Merely appearing as a migration foundation guard does not classify a
 tenant-query family. P18 and P19 each classify two names already inside the 28,
@@ -43,7 +46,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 
 | Status | Table | Index and ordered keys | Current/future owner |
 |---|---|---|---|
-| U | `crawl_runs` | `idx_crawl_runs_blocked_created(status, blocked_at DESC, created_at DESC) WHERE status='blocked'` | crawl operations; G-013/G-020 |
+| A:P22 retain/defer | `crawl_runs` | `idx_crawl_runs_blocked_created(status, blocked_at DESC, created_at DESC) WHERE status='blocked'` | no exact current reader; PK-scoped lifecycle and created-time display; retain historical replay compatibility, re-audit after exact G-013 contract; G-020 alone is not an owner |
 | A:P21 retain | `crawl_runs` | `idx_crawl_runs_created_desc(created_at DESC)` | exact current global visibility/history owner; future G-013 form deferred |
 | U | `crawl_runs` | `idx_crawl_runs_market_created(market_id, created_at DESC)` | market/run history; G-010/G-013 |
 | A:P21 retain | `crawl_runs` | `idx_crawl_runs_status_created(status, created_at DESC)` | current global status-filter compatibility support; future G-013 form deferred |
@@ -254,3 +257,11 @@ families.
 G-007P21 receipt commit `47ce318a0acf7fd40b41798ee8154915da29bc04`
 records the accepted no-defect disposition. This lineage update does not open
 the next residual family.
+
+G-007P22 classifies the blocked-run partial index RETAIN/DEFER from exact source
+ownership. No current query orders by `blocked_at`; lifecycle operations use
+run IDs and display uses created-time history. Source does not prove safe
+removal of the unchanged historical replay object. No PostgreSQL plan or live
+catalog claim is made. G-020 alone is not an owner; any re-audit waits for an
+exact G-013 blocked-run query contract. Counts stay 54/52/2, sequence 010 stays
+free, and market-created remains a separate unopened family.
