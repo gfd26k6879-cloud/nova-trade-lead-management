@@ -2999,3 +2999,21 @@ Date: 2026-07-31
 - The attributable local receipt is
   `ab18b8e2b103775886cc467a36ff0364eedb6daf`. No P13 resource, process,
   worktree, or lock remains.
+
+## G-007P14 admin-request creator-history deferred-defect audit
+
+- A fresh 52/50/2 PostgreSQL 16.14 audit over 160,000 interleaved requests
+  proves tenant/shared-creator LIMIT 100 filters 44,000 wrong-tenant rows
+  through the global creator index at 3,257 buffers. Creator identity is not
+  tenant authority; 12,000 null creators per tenant exercise real FK SET NULL.
+- Full and creator-nonnull tenant/creator/time candidates improve standalone
+  counts from 5,636 to 318 buffers and bounded ranges to 11 buffers. Neither is
+  naturally selected for LIMIT 25/100, workspace LIMIT 100, or the joined
+  creator-history form, so neither repairs the coherent workflow.
+- Independent architecture and quality reviews pass DEFER/no migration. P11,
+  current creator, team-lead, null-creator, lead-local, tenant-lead, and PK
+  owners remain intact. Both candidates were removed and all eight baseline
+  admin-request indexes are healthy.
+- Transfer the unresolved family to strict G015/G017 cutover, with G018 scope
+  propagation. Parent G-007 stays open. Counts remain 52/50/2, sequence 008 is
+  free, and P15 assigned-admin history is the next lock-free read-only audit.

@@ -655,3 +655,29 @@ remote or external action occurred.
 
 The G-007P13 deferred-audit receipt commit is
 `ab18b8e2b103775886cc467a36ff0364eedb6daf`.
+
+## G-007P14 deferred-defect receipt
+
+G-007P14 proves a tenant/shared-creator defect but accepts no migration. On a
+160,000-row interleaved PostgreSQL 16.14 fixture, the global creator LIMIT 100
+path removes 44,000 wrong-tenant rows and reads 3,257 buffers. Nullable
+creators were exercised through the real auth foreign key's SET NULL behavior.
+
+The 9,240,576-byte full and 8,052,736-byte creator-nonnull candidates improve
+standalone tenant counts to 318 buffers and half-open ranges to 11 buffers, but
+neither naturally serves LIMIT 25/100, workspace LIMIT 100, or the joined
+creator-history form. The current global creator, P11, team-lead, null-creator,
+lead-local, tenant-lead, and PK owners remain intact. Independent architecture
+and quality reviews pass DEFER/no migration.
+
+Both candidates and all disposable resources were removed; all eight baseline
+admin-request indexes are healthy and the repository is clean. Counts remain
+52/50/2, sequence 008 remains available, and no full upstream matrix was run
+because no source or migration survived. The obligation transfers to strict
+G-015/G-017 cutover, with G-018 owning scope propagation. Parent G-007 stays
+open.
+
+After the local receipt commit, the next action is a separate read-only P15
+audit of
+`idx_admin_requests_assigned_created(assigned_admin_user_id,created_at DESC)`.
+No migration is assumed and no remote or external action occurred.
