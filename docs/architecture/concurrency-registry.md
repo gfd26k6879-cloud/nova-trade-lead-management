@@ -3482,3 +3482,23 @@ Date: 2026-07-31
   Counts remain 54/52/2, sequence 010 stays free, and the crosswalk becomes
   35/27. Receipt commit `18e6e7a92bde686ea7e45850e030710a75b68074`
   releases the reservation; this lineage update opens no next residual family.
+
+## G-007P27 user-market-access compatibility family opened
+
+- After clean P26 lineage at `3bf6c4502f0bd2584ee727fd5687f93208a55def`,
+  Sol opens G-007P27 for exactly the coherent pair
+  `idx_user_market_access_user(user_id, market_id)` and
+  `idx_user_market_access_market(market_id, user_id)`.
+- The packet is read-only source/provenance/query/caller/test/identity/lifecycle,
+  authority, and structural-RI classification. User-leading compatibility
+  readers exist, but source alone does not prove exact natural plan ownership.
+  No current market-leading reader is known.
+- G-002 replaced the legacy global PostgreSQL identity with tenant/workspace
+  null-safe uniqueness. Current/frozen SQLite lifecycle distinctions and the
+  paused G-006C2B writer boundary remain explicit. Neither user nor platform
+  market supplies tenant authority.
+- The market-leading target is only an unmeasured PostgreSQL market-FK cascade
+  support candidate; SQLite has different FK action semantics. Stop before
+  PostgreSQL, live claims, candidate DDL, migration, test edits, identity rewrite,
+  replacement, or removal. Counts remain 54/52/2, crosswalk 35/27, and sequence
+  `202607310010` stays free.

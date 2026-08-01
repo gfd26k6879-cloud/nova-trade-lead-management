@@ -1189,3 +1189,20 @@ migration, test edit, replacement, or removal packet is opened. Counts remain
 54/52/2, sequence 010 stays free, and the crosswalk is 35/27. Receipt commit
 `18e6e7a92bde686ea7e45850e030710a75b68074` records the accepted RETAIN/DEFER
 decision. This lineage update opens no next residual family.
+
+## G-007P27 user-market-access compatibility family opened
+
+After clean P26 lineage at `3bf6c4502f0bd2584ee727fd5687f93208a55def`,
+Sol opens one read-only source classification for
+`idx_user_market_access_user(user_id, market_id)` and
+`idx_user_market_access_market(market_id, user_id)`.
+
+The packet distinguishes current user-leading compatibility readers from
+unproven natural plan ownership, the market-leading PostgreSQL FK-cascade
+support candidacy from SQLite's different FK action, and legacy global identity
+from G-002 tenant/workspace null-safe uniqueness. Current, prepared/upgraded,
+and frozen SQLite lifecycle differences remain explicit. User and
+platform-market IDs never authorize tenant grants, and G-006C2B remains
+unopened. No PostgreSQL, live claim, defect, candidate, migration, test edit,
+identity rewrite, replacement, or removal is assumed. Counts remain 54/52/2,
+crosswalk 35/27, and sequence 010 remains free.
