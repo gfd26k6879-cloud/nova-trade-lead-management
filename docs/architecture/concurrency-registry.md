@@ -2954,3 +2954,28 @@ Date: 2026-07-31
   this lineage commit. No P11 container, process, listener, database, worktree,
   or lock remains. Parent G-007 stays open; the next action is lock-free,
   read-only G-007P12 actor-outreach index audit.
+
+## G-007P12 tenant actor outreach-history index packet
+
+- Fresh PostgreSQL 16.14 plans over 160,000 interleaved outreach events prove
+  the future tenant/shared-actor list filters 48,000 wrong-tenant rows through
+  global `idx_outreach_events_actor_created`, reading 3,678 buffers. One auth
+  actor is deliberately active in both tenants; actor identity is not scope.
+- The initial actor-nonnull partial candidate is
+  `(tenant_id,actor_user_id,created_at DESC) WHERE actor_user_id IS NOT NULL`.
+  It is 21.9% smaller than the equivalent full index, but root acceptance could
+  not reproduce its natural selection on the representative interleaved heap.
+- Current actor/global, lead-local, tenant-lead, joined activity, and
+  tenant/workspace-wide paths retain their existing owners. A separate
+  workspace index is rejected as disproportionate and is outside this packet.
+- With tenant correlation about 0.507, PostgreSQL keeps the global at estimated
+  LIMIT cost 29.58 versus candidate-only 35.10 and actually filters 48,000 rows.
+  The candidate wins only on a perfectly tenant-batched heap at correlation 1.0;
+  that physical-order dependency is rejected as overfit.
+- Independent architecture and quality reviews pass DEFER. No migration or
+  test/source change remains. `migration-sequence` and `integration-ledger`
+  release only after the attributable audit receipt and lineage commits.
+  Transfer the
+  obligation to strict G015/G017 cutover; parent G-007 remains open. P13 is the
+  next lock-free read-only audit and assumes no migration. Counts remain
+  52/50/2 and sequence `202607310008` remains unused/available.

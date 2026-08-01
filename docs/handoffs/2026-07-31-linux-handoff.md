@@ -594,3 +594,36 @@ or external action occurred.
 
 The accepted G-007P11 source commit is
 `30eb1b086d7581143487d4997786ac55beed9661`.
+
+## G-007P12 deferred-defect receipt
+
+G-007P12 proves that actor identity is not tenant authority and that the future
+tenant/shared-actor list can filter 48,000 wrong-tenant rows through global
+`idx_outreach_events_actor_created`. It does not accept a migration.
+
+The 7,110,656-byte actor-nonnull tenant candidate looked complete in the initial
+audit, but the fresh implementation harness did not reproduce its natural
+selection on the representative interleaved heap. PostgreSQL chose the global
+at estimated LIMIT cost 29.58 versus candidate-only 35.10, then actually read
+3,029 buffers and removed the same 48,000 rows. The candidate won only after
+changing the heap to perfectly tenant-batched order and tenant correlation 1.0.
+That physical-order dependency is rejected as overfit.
+
+Fresh independent architecture and quality reviews pass DEFER after the
+superseded migration authority was repaired in the durable documents.
+
+All migration/test/count/runtime draft edits were removed. Both candidates,
+the disposable container, listener, database, and task processes are gone;
+the four baseline outreach indexes remain healthy. No full upstream gate was
+run because the decisive corrected-plan requirement failed and there is no
+source to accept. Invalid and rejected setup, diagnostic, and batched-heap
+attempts are recorded in the validation receipt.
+
+The obligation transfers to strict G-015/G-017 cutover, when current global
+actor ownership can be retired or redesigned. Strict G-018 owns scope
+propagation; G-020 is unrelated worker dispatch. Parent G-007 remains open.
+After the local audit receipt and lock release, the next action is a separate
+read-only G-007P13 audit of `idx_lead_notes_author_created`. No migration is
+assumed; counts remain 52/50/2 and sequence `202607310008` remains available.
+Any later proven P13 migration would use 008 and produce 53/51/2. No remote or
+external action occurred.
