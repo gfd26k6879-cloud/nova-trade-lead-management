@@ -681,3 +681,6 @@ After the local receipt commit, the next action is a separate read-only P15
 audit of
 `idx_admin_requests_assigned_created(assigned_admin_user_id,created_at DESC)`.
 No migration is assumed and no remote or external action occurred.
+
+The G-007P14 deferred-audit receipt commit is
+`d4fad818b301d25934bddf760c641dd6cf47ec8e`.

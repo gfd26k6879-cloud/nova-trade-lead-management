@@ -3017,3 +3017,6 @@ Date: 2026-07-31
 - Transfer the unresolved family to strict G015/G017 cutover, with G018 scope
   propagation. Parent G-007 stays open. Counts remain 52/50/2, sequence 008 is
   free, and P15 assigned-admin history is the next lock-free read-only audit.
+- The attributable local receipt is
+  `d4fad818b301d25934bddf760c641dd6cf47ec8e`. No P14 container, listener,
+  database, process, worktree, or lock remains.
