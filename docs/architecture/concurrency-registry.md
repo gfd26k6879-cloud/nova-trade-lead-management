@@ -2894,3 +2894,7 @@ Date: 2026-07-31
   Both locks release only after the lineage commit and final invariant check.
   Parent G-007 and deferred G-007P5 remain open; P9 starts read-only against
   the accepted P8 chain and assumes no migration.
+- Source commit `defaffe73cad4b79c49d914e67b274dfbc35a942` contains the
+  validated packet. `migration-sequence` and `integration-ledger` release with
+  this lineage commit. No P8 container, process, listener, database, worktree,
+  or lock remains.

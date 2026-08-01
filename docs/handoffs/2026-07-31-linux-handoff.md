@@ -513,3 +513,6 @@ G-007P9 PostgreSQL 16 audit of the active statistics
 G-017/G-018 versus ownership-map G-020 functional-owner discrepancy must be
 reconciled before any later statistics caller cutover, but does not block the
 read-only index audit. No remote or external action occurred.
+
+The accepted G-007P8 source commit is
+`defaffe73cad4b79c49d914e67b274dfbc35a942`.
