@@ -3020,3 +3020,22 @@ Date: 2026-07-31
 - The attributable local receipt is
   `d4fad818b301d25934bddf760c641dd6cf47ec8e`. No P14 container, listener,
   database, process, worktree, or lock remains.
+
+## G-007P15 admin-request assignee-history deferred-defect audit
+
+- A fresh 52/50/2 PostgreSQL 16.14 audit over 160,000 interleaved requests
+  proves future tenant/shared-assignee LIMIT 25/100/200 paths each filter
+  44,000 wrong-tenant rows through the global assignee index. Real FK SET NULL
+  produced 16,000 null-assignee rows per tenant.
+- The 9,175,040-byte full candidate improves shared/null counts and null paths,
+  but leaves nonnull bounded/workspace history global. The 7,585,792-byte
+  nonnull partial has the same core failure and cannot serve null semantics.
+  No current SELECT supplies an exact assignee-history caller contract.
+- Independent architecture and quality reviews pass DEFER/no migration. P11,
+  creator, summary, lead-local, tenant-lead, PK, activity, results, and the
+  global cleanup/FK owner remain intact. Both candidates/resources were removed
+  and all eight baseline admin-request indexes are healthy.
+- Transfer the unresolved family to strict G015/G017 cutover, with G018 scope
+  propagation. Parent G-007 stays open. Counts remain 52/50/2 and sequence 008
+  stays free. P16 public-slug classification is next, followed by P17 demos
+  lead-index audit. The withdrawn audit-log proposal was outside G002-G005.

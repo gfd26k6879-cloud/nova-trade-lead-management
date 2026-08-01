@@ -684,3 +684,29 @@ No migration is assumed and no remote or external action occurred.
 
 The G-007P14 deferred-audit receipt commit is
 `d4fad818b301d25934bddf760c641dd6cf47ec8e`.
+
+## G-007P15 deferred-defect receipt
+
+G-007P15 proves a future tenant/shared-assignee defect but accepts no
+migration. On a 160,000-row interleaved PostgreSQL 16.14 fixture, natural
+LIMIT 25/100/200 plans each remove 44,000 wrong-tenant rows through the global
+assignee index. Null assignees were produced through the real auth FK SET NULL
+path, and no current SELECT filters by assignee.
+
+The 9,175,040-byte full candidate improves shared/null counts and null paths,
+but leaves the core nonnull and workspace history on the global index. The
+7,585,792-byte nonnull partial leaves the same core defect and cannot serve
+real null semantics. Independent architecture and quality reviews pass
+DEFER/no migration; exact caller shapes transfer to G-015/G-017, with G-018
+owning scope propagation.
+
+Both candidates and all disposable resources were removed; all eight baseline
+admin-request indexes are healthy and the repository is clean. Counts remain
+52/50/2, sequence 008 remains available, and no full upstream matrix was run
+because no source or migration survived. Parent G-007 stays open.
+
+The catalog appendix's initial audit-log recommendation was corrected because
+T-015 audit logs are outside this G-002 through G-005 lane. After the local
+receipt commit, P16 is the read-only classification of deliberately global
+`idx_demos_public_slug`, followed by P17 read-only audit of
+`idx_demos_lead_id`. No migration or external action is assumed.
