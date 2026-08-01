@@ -380,3 +380,6 @@ resources were removed, and the repository remained clean at
 `ad2ada5744e32dec864aeec4b04dbf8d7254ddd2`. Parent G-007 remains open. The
 next action is another read-only, separately justified G-007P family audit. No
 migration, external action, or downstream dependency unlock is implied.
+
+The G-007P4 no-defect audit receipt commit is
+`b44896a0a23293341d2d44df411337f8eca7b752`.

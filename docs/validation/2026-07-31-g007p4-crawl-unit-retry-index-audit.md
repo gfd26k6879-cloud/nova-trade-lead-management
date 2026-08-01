@@ -8,6 +8,8 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: read-only audit complete; no defect and no migration
 
+Audit receipt commit: `b44896a0a23293341d2d44df411337f8eca7b752`
+
 ## Question
 
 G-007P4 tested whether the existing global run-first `crawl_units` retry index

@@ -2769,3 +2769,5 @@ Date: 2026-07-31
   indexes were healthy, and all task resources were removed.
 - Parent G-007 remains open. The next child must be another separately bounded
   read-only audit; no later Phase 2 write card is unlocked.
+- Audit receipt commit `b44896a0a23293341d2d44df411337f8eca7b752`
+  durably records the no-defect result. No G-007P4 lock or resource remains.
