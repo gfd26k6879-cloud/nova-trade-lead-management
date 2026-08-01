@@ -559,3 +559,37 @@ and no remote or external action occurred.
 
 The G-007P10 deferred-audit receipt commit is
 `0883f9d0764ededcc6de8cf2ebd8023c4cbc6780`.
+
+## G-007P11 continuation receipt
+
+G-007P11 proves and corrects one PostgreSQL-only future tenant-wide open
+admin-request list defect. On 144,000 interleaved requests, every tenant
+baseline scanned and sorted globally and considered 48,000 wrong-tenant open
+rows. The additive 4,800,512-byte tenant/priority-CASE/status-CASE/created
+partial index serves typed and untyped limits 6/50/100/200 with tenant in
+`Index Cond`, no sort, no residual tenant filter, and identical ordered IDs.
+
+The fixture contains exactly 36,000 null-workspace and 36,000 non-null-workspace
+rows per tenant. P11 is tenant-wide only and does not claim workspace authority.
+Current unscoped lists and summary retain their plans and results. Both exact
+current lead-local forms retain `idx_admin_requests_lead_created` and identical
+planned shapes/results. Runtime repair does not own P11.
+
+Replay, rollback, exact definition, literal-prefix, missing/partial/spoofed and
+unhealthy catalog states, foundation drift, later global removal, and unrelated
+index evolution are covered. Initial architecture and quality findings were
+repaired; fresh independent re-reviews pass.
+
+Root gates pass: G-003/P6/P7/P8/P11 6/6, G-002 2/2, G-004A 1/1, G-005 1/1,
+T-029 19/19 at 52/50/2, isolated Q-002 1/1, focused runtime/workbench/actions
+32/32, TypeScript, focused ESLint, 37-table recovery, Fedora coordinator 12
+pass/26 Windows-native skip, and build 11/11. All rejected and invalid setup,
+plan-stability, image-name, database-name, and focused-path attempts are
+truthfully retained in the validation receipt and are not acceptance evidence.
+
+Parent G-007 remains open. After attributable local commits and lock release,
+the next exact action is a read-only G-007P12 PostgreSQL 16 audit of the
+`idx_outreach_events_actor_created` family. No migration is assumed. No remote
+or external action occurred.
+
+The accepted G-007P11 source commit is pending attributable local commit.

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
@@ -16,12 +17,14 @@ const G007P3_MIGRATION = "202607310003_tenant_prefix_lead_ai_queue_indexes.sql";
 const G007P6_MIGRATION = "202607310004_tenant_enrichment_recovery_index.sql";
 const G007P7_MIGRATION = "202607310005_tenant_ai_website_repair_index.sql";
 const G007P8_MIGRATION = "202607310006_tenant_dashboard_discovered_at_index.sql";
+const G007P11_MIGRATION = "202607310007_tenant_open_admin_request_list_index.sql";
 const g002Sql = readFileSync(join("supabase", "migrations", G002_MIGRATION), "utf8");
 const g003Sql = readFileSync(join("supabase", "migrations", G003_MIGRATION), "utf8");
 const g007p3Sql = readFileSync(join("supabase", "migrations", G007P3_MIGRATION), "utf8");
 const g007p6Sql = readFileSync(join("supabase", "migrations", G007P6_MIGRATION), "utf8");
 const g007p7Sql = readFileSync(join("supabase", "migrations", G007P7_MIGRATION), "utf8");
 const g007p8Sql = readFileSync(join("supabase", "migrations", G007P8_MIGRATION), "utf8");
+const g007p11Sql = readFileSync(join("supabase", "migrations", G007P11_MIGRATION), "utf8");
 const skipped = new Set(["20260514161714_supabase_ai_verification_cron.sql", "20260514163203_scheduler_v2_sales_ready_pipeline.sql"]);
 const tenantA = "00000000-0000-4000-8000-000000000301";
 const tenantB = "00000000-0000-4000-8000-000000000302";
@@ -639,6 +642,174 @@ async function expectG007P8RejectedWithoutChange(client: PgClient, label: string
   await client.unsafe("RELEASE SAVEPOINT g007p8_before_migration");
 }
 
+const G007P11_INDEX = "idx_g007p11_admin_tenant_open_priority_status_created";
+const G007P11_INDEXDEF = `CREATE INDEX idx_g007p11_admin_tenant_open_priority_status_created ON public.admin_requests USING btree (tenant_id, (
+CASE priority
+    WHEN 'urgent'::text THEN 0
+    WHEN 'normal'::text THEN 1
+    ELSE 2
+END), (
+CASE status
+    WHEN 'new'::text THEN 0
+    WHEN 'seen'::text THEN 1
+    WHEN 'in_progress'::text THEN 2
+    WHEN 'waiting_on_researcher'::text THEN 3
+    ELSE 4
+END), created_at DESC) WHERE (status = ANY (ARRAY['new'::text, 'seen'::text, 'in_progress'::text, 'waiting_on_researcher'::text]))`;
+const G007P11_OPEN = "'new','seen','in_progress','waiting_on_researcher'";
+
+async function seedG007P11PlanRows(client: PgClient): Promise<void> {
+  await client.unsafe(`
+    INSERT INTO auth.users(id) VALUES ('${ownerA}'),('${ownerB}');
+    INSERT INTO public.tenants(id,slug,name,status) VALUES
+      ('${tenantA}','g007p11-plan-a','G007P11 Plan A','active'),
+      ('${tenantB}','g007p11-plan-b','G007P11 Plan B','active');
+    INSERT INTO public.workspaces(id,tenant_id,slug,name,status) VALUES
+      ('${workspaceA}','${tenantA}','g007p11-plan-a','G007P11 Plan A','active'),
+      ('${workspaceB}','${tenantB}','g007p11-plan-b','G007P11 Plan B','active');
+    INSERT INTO public.tenant_memberships(id,tenant_id,auth_identity_id,status) VALUES
+      ('${membershipA}','${tenantA}','${ownerA}','active'),
+      ('${membershipB}','${tenantB}','${ownerB}','active');
+    INSERT INTO public.app_users(id,user_id,email,display_name,role,status,is_team_lead) VALUES
+      ('g007p11-user-a','${ownerA}','a@g007p11.invalid','Tenant A Admin','admin','active',1),
+      ('g007p11-user-b','${ownerB}','b@g007p11.invalid','Tenant B Admin','admin','active',1);
+
+    INSERT INTO public.leads(id,place_id,name,assigned_to_user_id,tenant_id,created_at,updated_at)
+    SELECT
+      'p11-lead-'||scope.label||'-'||pg_catalog.lpad(series.n::text,6,'0'),
+      'p11-place-'||scope.label||'-'||pg_catalog.lpad(series.n::text,6,'0'),
+      'G007P11 Lead '||scope.label||' '||series.n,
+      scope.owner_id,
+      scope.tenant_id,
+      scope.base_time + series.n * interval '1 microsecond',
+      scope.base_time + series.n * interval '1 microsecond'
+    FROM pg_catalog.generate_series(1,72000) series(n)
+    CROSS JOIN (VALUES
+      ('a','${tenantA}'::uuid,'${ownerA}'::uuid,timestamptz '2026-01-01 00:00:00+00',1),
+      ('b','${tenantB}'::uuid,'${ownerB}'::uuid,timestamptz '2027-01-01 00:00:00+00',2)
+    ) scope(label,tenant_id,owner_id,base_time,ordinal)
+    ORDER BY series.n,scope.ordinal;
+
+    INSERT INTO public.admin_requests(
+      id,lead_id,created_by_user_id,assigned_admin_user_id,request_type,status,
+      priority,summary,workspace_id,tenant_id,created_at,updated_at
+    )
+    SELECT
+      'p11-request-'||scope.label||'-'||pg_catalog.lpad(series.n::text,6,'0'),
+      'p11-lead-'||scope.label||'-'||pg_catalog.lpad(series.n::text,6,'0'),
+      scope.owner_id,
+      scope.owner_id,
+      CASE ((series.n-1)/6)%2 WHEN 0 THEN 'website_request' ELSE 'quote_request' END,
+      (ARRAY['new','seen','in_progress','waiting_on_researcher','done','cancelled'])[((series.n-1)%6)+1],
+      (ARRAY['urgent','normal','low'])[(((series.n-1)/12)%3)+1],
+      'Synthetic G007P11 '||scope.label||' '||series.n,
+      CASE WHEN series.n % 2 = 0 THEN scope.workspace_id ELSE NULL END,
+      scope.tenant_id,
+      scope.base_time + series.n * interval '1 microsecond',
+      scope.base_time + series.n * interval '1 microsecond'
+    FROM pg_catalog.generate_series(1,72000) series(n)
+    CROSS JOIN (VALUES
+      ('a','${tenantA}'::uuid,'${workspaceA}'::uuid,'${ownerA}'::uuid,timestamptz '2026-01-01 00:00:00+00',1),
+      ('b','${tenantB}'::uuid,'${workspaceB}'::uuid,'${ownerB}'::uuid,timestamptz '2027-01-01 00:00:00+00',2)
+    ) scope(label,tenant_id,workspace_id,owner_id,base_time,ordinal)
+    ORDER BY series.n,scope.ordinal;
+  `);
+  await client.unsafe("VACUUM (ANALYZE) public.leads");
+  await client.unsafe("VACUUM (ANALYZE) public.admin_requests");
+  await client.unsafe("VACUUM (ANALYZE) public.app_users");
+}
+
+function g007p11ListQuery(options: { tenant?: string; leadId?: string; requestType?: "website_request" | "quote_request"; limit: number }): string {
+  const predicates = [`ar.status IN (${G007P11_OPEN})`];
+  if (options.tenant) predicates.unshift(`ar.tenant_id='${options.tenant}'`);
+  if (options.leadId) predicates.push(`ar.lead_id='${options.leadId}'`);
+  if (options.requestType) predicates.push(`ar.request_type='${options.requestType}'`);
+  return `SELECT ar.*,
+      l.name AS lead_name,l.phone AS lead_phone,l.address AS lead_address,
+      l.website_status AS lead_website_status,l.assigned_to_user_id AS lead_owner_user_id,
+      owner.email AS lead_owner_email,owner.display_name AS lead_owner_display_name,
+      creator.email AS creator_email,creator.display_name AS creator_display_name,
+      COALESCE(creator.team_lead_user_id,CASE WHEN creator.is_team_lead=1 THEN creator.user_id ELSE NULL END) AS creator_team_lead_user_id,
+      team_lead.email AS creator_team_lead_email,team_lead.display_name AS creator_team_lead_display_name,
+      creator.team_label AS creator_team_label
+    FROM public.admin_requests ar
+    LEFT JOIN public.leads l ON l.id=ar.lead_id
+    LEFT JOIN public.app_users owner ON owner.user_id=l.assigned_to_user_id
+    LEFT JOIN public.app_users creator ON creator.user_id=ar.created_by_user_id
+    LEFT JOIN public.app_users team_lead ON team_lead.user_id=COALESCE(creator.team_lead_user_id,CASE WHEN creator.is_team_lead=1 THEN creator.user_id ELSE NULL END)
+    WHERE ${predicates.join(" AND ")}
+    ORDER BY
+      CASE ar.priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
+      CASE ar.status WHEN 'new' THEN 0 WHEN 'seen' THEN 1 WHEN 'in_progress' THEN 2 WHEN 'waiting_on_researcher' THEN 3 ELSE 4 END,
+      ar.created_at DESC
+    LIMIT ${options.limit}`;
+}
+
+function g007p11IdDigest(rows: Array<{ id: string }>): string {
+  return createHash("sha256").update(rows.map((row) => row.id).join("\n")).digest("hex");
+}
+
+async function g007p11CatalogSnapshot(client: PgClient): Promise<Record<string, unknown>> {
+  return {
+    columns: await client.unsafe(`
+      SELECT a.attname,a.atttypid::regtype::text type_name,a.attnotnull,a.attisdropped
+      FROM pg_catalog.pg_attribute a
+      WHERE a.attrelid='public.admin_requests'::regclass
+        AND a.attname IN ('id','tenant_id','workspace_id','lead_id','request_type','status','priority','created_at')
+      ORDER BY a.attname
+    `),
+    constraints: await client.unsafe(`
+      SELECT c.conrelid::regclass::text table_name,c.conname,c.contype,c.convalidated,c.connoinherit,
+        pg_catalog.pg_get_constraintdef(c.oid) definition,
+        CASE WHEN c.conindid<>0 THEN c.conindid::regclass::text ELSE NULL END backing_index,
+        i.relkind,x.indisunique,x.indisvalid,x.indisready,x.indislive
+      FROM pg_catalog.pg_constraint c
+      LEFT JOIN pg_catalog.pg_class i ON i.oid=c.conindid
+      LEFT JOIN pg_catalog.pg_index x ON x.indexrelid=c.conindid
+      WHERE (c.conrelid,c.conname) IN (
+        ('public.admin_requests'::regclass,'admin_requests_pkey'),
+        ('public.admin_requests'::regclass,'admin_requests_request_type_check'),
+        ('public.admin_requests'::regclass,'admin_requests_status_check'),
+        ('public.admin_requests'::regclass,'admin_requests_priority_check'),
+        ('public.admin_requests'::regclass,'admin_requests_tenant_lead_fkey'),
+        ('public.admin_requests'::regclass,'admin_requests_tenant_workspace_fkey'),
+        ('public.leads'::regclass,'leads_tenant_id_id_unique'),
+        ('public.workspaces'::regclass,'workspaces_tenant_id_id_unique')
+      ) ORDER BY table_name,c.conname
+    `),
+    indexes: await client.unsafe(`
+      SELECT i.relname,i.relkind,
+        CASE WHEN i.relkind='i' THEN pg_catalog.pg_get_indexdef(i.oid) ELSE NULL END indexdef,
+        x.indisunique,x.indisvalid,x.indisready,x.indislive
+      FROM pg_catalog.pg_class i
+      JOIN pg_catalog.pg_namespace n ON n.oid=i.relnamespace
+      LEFT JOIN pg_catalog.pg_index x ON x.indexrelid=i.oid
+      WHERE n.nspname='public' AND (
+        i.relname IN (
+          'idx_admin_requests_status_type_created','idx_admin_requests_tenant_lead_created',
+          'admin_requests_tenant_lead_open_unique','idx_admin_requests_creator_created'
+        ) OR pg_catalog.left(i.relname,pg_catalog.length('idx_g007p11_'))='idx_g007p11_'
+      ) ORDER BY i.relname
+    `),
+  };
+}
+
+async function expectG007P11RejectedWithoutChange(client: PgClient, label: string): Promise<void> {
+  const before = await g007p11CatalogSnapshot(client);
+  await client.unsafe("SAVEPOINT g007p11_before_migration");
+  let failure: unknown;
+  try {
+    await client.unsafe(g007p11Sql);
+  } catch (error) {
+    failure = error;
+  }
+  await client.unsafe("ROLLBACK TO SAVEPOINT g007p11_before_migration");
+  expect(failure, label).toBeInstanceOf(Error);
+  expect((failure as Error).message, label).toMatch(/G007P11_INDEX_CATALOG_DRIFT/);
+  expect(await g007p11CatalogSnapshot(client), label).toEqual(before);
+  await client.unsafe("RELEASE SAVEPOINT g007p11_before_migration");
+}
+
 async function targetSnapshot(client: PgClient): Promise<Record<string, unknown>> {
   const snapshot: Record<string, unknown> = {};
   for (const table of targetTables) {
@@ -868,7 +1039,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 51, applied: 49, skipped: 2 });
+        expect(full).toEqual({ discovered: 52, applied: 50, skipped: 2 });
         const fullIndexes = (await g007p6CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>;
         expect(fullIndexes.find((row) => row.relname === G007P6_INDEX)).toEqual({
           relname: G007P6_INDEX,
@@ -884,7 +1055,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect(await g007p6CatalogSnapshot(client)).toEqual(exactReplayBefore);
 
         const baselineReceipt = await resetDatabase(client, true, false, G007P6_MIGRATION);
-        expect(baselineReceipt).toEqual({ discovered: 51, applied: 46, skipped: 2 });
+        expect(baselineReceipt).toEqual({ discovered: 52, applied: 46, skipped: 2 });
         const baselineCatalog = await g007p6CatalogSnapshot(client);
         expect((baselineCatalog.indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
           "idx_leads_enrichment",
@@ -1102,7 +1273,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 51, applied: 49, skipped: 2 });
+        expect(full).toEqual({ discovered: 52, applied: 50, skipped: 2 });
         const fullCatalog = await g007p7CatalogSnapshot(client);
         expect((fullCatalog.indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P7_INDEX)).toEqual({
           relname: G007P7_INDEX,
@@ -1117,7 +1288,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect(await g007p7CatalogSnapshot(client)).toEqual(fullCatalog);
 
         const baselineReceipt = await resetDatabase(client, true, false, G007P7_MIGRATION);
-        expect(baselineReceipt).toEqual({ discovered: 51, applied: 47, skipped: 2 });
+        expect(baselineReceipt).toEqual({ discovered: 52, applied: 47, skipped: 2 });
         const baselineCatalog = await g007p7CatalogSnapshot(client);
         expect((baselineCatalog.indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
           G007P6_INDEX,
@@ -1297,7 +1468,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 51, applied: 49, skipped: 2 });
+        expect(full).toEqual({ discovered: 52, applied: 50, skipped: 2 });
         const fullCatalog = await g007p8CatalogSnapshot(client);
         expect((fullCatalog.indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P8_INDEX)).toEqual({
           relname: G007P8_INDEX,
@@ -1312,7 +1483,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect(await g007p8CatalogSnapshot(client)).toEqual(fullCatalog);
 
         const baselineReceipt = await resetDatabase(client, true, false, G007P8_MIGRATION);
-        expect(baselineReceipt).toEqual({ discovered: 51, applied: 48, skipped: 2 });
+        expect(baselineReceipt).toEqual({ discovered: 52, applied: 48, skipped: 2 });
         const baselineCatalog = await g007p8CatalogSnapshot(client);
         expect((baselineCatalog.indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
           G007P6_INDEX,
@@ -1480,6 +1651,291 @@ describe("G-003 lead CRM tenant scope", () => {
   );
 
   it.skipIf(process.env.G003_RUN_DISPOSABLE_PG_TESTS !== "1")(
+    "installs the additive G-007P11 tenant open-admin list index with exact guards and natural plans",
+    async () => {
+      const url = process.env.G003_DATABASE_URL;
+      if (!url) throw new Error("G003_DATABASE_URL is required");
+      const parsed = new URL(url);
+      if (!(parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") || !/^g003_lead_crm_rehearsal_[a-z0-9_]+$/.test(parsed.pathname.slice(1))) throw new Error("G-003 permits only a uniquely named loopback database");
+      const client = postgres(url, { max: 1, onnotice: () => undefined });
+      try {
+        expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
+
+        const full = await resetDatabase(client, true);
+        expect(full).toEqual({ discovered: 52, applied: 50, skipped: 2 });
+        const fullCatalog = await g007p11CatalogSnapshot(client);
+        expect((fullCatalog.indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P11_INDEX)).toEqual({
+          relname: G007P11_INDEX,
+          relkind: "i",
+          indexdef: G007P11_INDEXDEF,
+          indisunique: false,
+          indisvalid: true,
+          indisready: true,
+          indislive: true,
+        });
+        await client.unsafe(g007p11Sql);
+        expect(await g007p11CatalogSnapshot(client)).toEqual(fullCatalog);
+
+        const baselineReceipt = await resetDatabase(client, true, false, G007P11_MIGRATION);
+        expect(baselineReceipt).toEqual({ discovered: 52, applied: 49, skipped: 2 });
+        const baselineCatalog = await g007p11CatalogSnapshot(client);
+        expect((baselineCatalog.indexes as Array<Record<string, unknown>>).map((row) => row.relname)).toEqual([
+          "admin_requests_tenant_lead_open_unique",
+          "idx_admin_requests_creator_created",
+          "idx_admin_requests_status_type_created",
+          "idx_admin_requests_tenant_lead_created",
+        ]);
+
+        await client.unsafe("BEGIN");
+        await client.unsafe("CREATE INDEX idxXg007p11XadminXtenantXopenXshadow ON public.admin_requests(id)");
+        const wildcardBefore = await g007p11CatalogSnapshot(client);
+        await client.unsafe(g007p11Sql);
+        expect((await client.unsafe("SELECT pg_catalog.to_regclass('public.idxXg007p11XadminXtenantXopenXshadow') IS NOT NULL present"))[0].present).toBe(true);
+        expect(((await g007p11CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P11_INDEX)?.indexdef).toBe(G007P11_INDEXDEF);
+        expect((wildcardBefore.indexes as Array<Record<string, unknown>>).some((row) => row.relname === G007P11_INDEX)).toBe(false);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p11CatalogSnapshot(client)).toEqual(baselineCatalog);
+
+        await client.unsafe("BEGIN");
+        await client.unsafe(g007p11Sql);
+        expect(((await g007p11CatalogSnapshot(client)).indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P11_INDEX)?.indexdef).toBe(G007P11_INDEXDEF);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p11CatalogSnapshot(client)).toEqual(baselineCatalog);
+
+        await client.unsafe("BEGIN");
+        await client.unsafe("DROP TABLE public.admin_requests CASCADE");
+        await expect(client.unsafe(g007p11Sql)).rejects.toThrow(/G007P11_REQUIRED_TABLE_MISSING/);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p11CatalogSnapshot(client)).toEqual(baselineCatalog);
+
+        await client.unsafe("BEGIN");
+        await client.unsafe("DROP INDEX public.idx_admin_requests_creator_created; CREATE INDEX idx_admin_requests_creator_created ON public.admin_requests(created_at)");
+        const unrelatedBefore = await g007p11CatalogSnapshot(client);
+        await client.unsafe(g007p11Sql);
+        const unrelatedAfter = await g007p11CatalogSnapshot(client);
+        expect(unrelatedAfter.columns).toEqual(unrelatedBefore.columns);
+        expect(unrelatedAfter.constraints).toEqual(unrelatedBefore.constraints);
+        expect((unrelatedAfter.indexes as Array<Record<string, unknown>>).filter((row) => row.relname !== G007P11_INDEX)).toEqual(unrelatedBefore.indexes);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p11CatalogSnapshot(client)).toEqual(baselineCatalog);
+
+        const baselineMutations: Array<[string, string]> = [
+          ["missing_global", "DROP INDEX public.idx_admin_requests_status_type_created"],
+          ["global_spoof", "DROP INDEX public.idx_admin_requests_status_type_created; CREATE INDEX idx_admin_requests_status_type_created ON public.admin_requests(request_type,status,created_at DESC)"],
+          ["global_non_index", "DROP INDEX public.idx_admin_requests_status_type_created; CREATE TABLE public.idx_admin_requests_status_type_created(sentinel integer)"],
+          ["global_unhealthy", "UPDATE pg_catalog.pg_index SET indisvalid=false WHERE indexrelid='public.idx_admin_requests_status_type_created'::regclass"],
+          ["reserved_p11_sibling", "CREATE INDEX idx_g007p11_admin_tenant_open_shadow ON public.admin_requests(id)"],
+          ["tenant_nullable", "ALTER TABLE public.admin_requests ALTER COLUMN tenant_id DROP NOT NULL"],
+          ["workspace_not_nullable", "ALTER TABLE public.admin_requests ALTER COLUMN workspace_id SET NOT NULL"],
+          ["created_nullable", "ALTER TABLE public.admin_requests ALTER COLUMN created_at DROP NOT NULL"],
+          ["created_type", "ALTER TABLE public.admin_requests ALTER COLUMN created_at DROP DEFAULT; ALTER TABLE public.admin_requests ALTER COLUMN created_at TYPE timestamp without time zone USING created_at AT TIME ZONE 'UTC'"],
+          ["priority_check_missing", "ALTER TABLE public.admin_requests DROP CONSTRAINT admin_requests_priority_check"],
+          ["status_check_missing", "ALTER TABLE public.admin_requests DROP CONSTRAINT admin_requests_status_check"],
+          ["request_type_check_missing", "ALTER TABLE public.admin_requests DROP CONSTRAINT admin_requests_request_type_check"],
+          ["primary_renamed", "ALTER TABLE public.admin_requests RENAME CONSTRAINT admin_requests_pkey TO admin_requests_pkey_spoof"],
+          ["primary_backing_unhealthy", "UPDATE pg_catalog.pg_index SET indisvalid=false WHERE indexrelid=(SELECT conindid FROM pg_catalog.pg_constraint WHERE conrelid='public.admin_requests'::regclass AND conname='admin_requests_pkey')"],
+          ["lead_unique_renamed", "ALTER TABLE public.leads RENAME CONSTRAINT leads_tenant_id_id_unique TO leads_tenant_id_id_unique_spoof"],
+          ["workspace_unique_renamed", "ALTER TABLE public.workspaces RENAME CONSTRAINT workspaces_tenant_id_id_unique TO workspaces_tenant_id_id_unique_spoof"],
+          ["tenant_lead_fk_renamed", "ALTER TABLE public.admin_requests RENAME CONSTRAINT admin_requests_tenant_lead_fkey TO admin_requests_tenant_lead_fkey_spoof"],
+          ["tenant_workspace_fk_renamed", "ALTER TABLE public.admin_requests RENAME CONSTRAINT admin_requests_tenant_workspace_fkey TO admin_requests_tenant_workspace_fkey_spoof"],
+          ["tenant_lead_index_missing", "DROP INDEX public.idx_admin_requests_tenant_lead_created"],
+          ["tenant_lead_index_spoof", "DROP INDEX public.idx_admin_requests_tenant_lead_created; CREATE INDEX idx_admin_requests_tenant_lead_created ON public.admin_requests(tenant_id,created_at DESC,lead_id)"],
+          ["tenant_open_unique_missing", "DROP INDEX public.admin_requests_tenant_lead_open_unique"],
+          ["tenant_open_unique_unhealthy", "UPDATE pg_catalog.pg_index SET indisvalid=false WHERE indexrelid='public.admin_requests_tenant_lead_open_unique'::regclass"],
+        ];
+        for (const [label, mutation] of baselineMutations) {
+          await client.unsafe("BEGIN");
+          try {
+            await client.unsafe(mutation);
+            await expectG007P11RejectedWithoutChange(client, label);
+          } finally {
+            await client.unsafe("ROLLBACK");
+          }
+          expect(await g007p11CatalogSnapshot(client), label).toEqual(baselineCatalog);
+        }
+
+        await client.unsafe(g007p11Sql);
+        const installedCatalog = await g007p11CatalogSnapshot(client);
+        const finalMutations: Array<[string, string]> = [
+          ["candidate_key_order", `DROP INDEX public.${G007P11_INDEX}; CREATE INDEX ${G007P11_INDEX} ON public.admin_requests(created_at DESC,tenant_id)`],
+          ["candidate_priority_case", `DROP INDEX public.${G007P11_INDEX}; CREATE INDEX ${G007P11_INDEX} ON public.admin_requests(tenant_id,(CASE priority WHEN 'low' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END),(CASE status WHEN 'new' THEN 0 WHEN 'seen' THEN 1 WHEN 'in_progress' THEN 2 WHEN 'waiting_on_researcher' THEN 3 ELSE 4 END),created_at DESC) WHERE status IN (${G007P11_OPEN})`],
+          ["candidate_status_case", `DROP INDEX public.${G007P11_INDEX}; CREATE INDEX ${G007P11_INDEX} ON public.admin_requests(tenant_id,(CASE priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END),(CASE status WHEN 'seen' THEN 0 WHEN 'new' THEN 1 WHEN 'in_progress' THEN 2 WHEN 'waiting_on_researcher' THEN 3 ELSE 4 END),created_at DESC) WHERE status IN (${G007P11_OPEN})`],
+          ["candidate_predicate", `DROP INDEX public.${G007P11_INDEX}; CREATE INDEX ${G007P11_INDEX} ON public.admin_requests(tenant_id,(CASE priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END),(CASE status WHEN 'new' THEN 0 WHEN 'seen' THEN 1 WHEN 'in_progress' THEN 2 WHEN 'waiting_on_researcher' THEN 3 ELSE 4 END),created_at DESC) WHERE status IN ('new','seen')`],
+          ["candidate_collation", `DROP INDEX public.${G007P11_INDEX}; CREATE INDEX ${G007P11_INDEX} ON public.admin_requests(tenant_id,(((CASE priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END)::text) COLLATE "C"),(CASE status WHEN 'new' THEN 0 WHEN 'seen' THEN 1 WHEN 'in_progress' THEN 2 WHEN 'waiting_on_researcher' THEN 3 ELSE 4 END),created_at DESC) WHERE status IN (${G007P11_OPEN})`],
+          ["candidate_include", `DROP INDEX public.${G007P11_INDEX}; CREATE INDEX ${G007P11_INDEX} ON public.admin_requests(tenant_id,(CASE priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END),(CASE status WHEN 'new' THEN 0 WHEN 'seen' THEN 1 WHEN 'in_progress' THEN 2 WHEN 'waiting_on_researcher' THEN 3 ELSE 4 END),created_at DESC) INCLUDE(request_type) WHERE status IN (${G007P11_OPEN})`],
+          ["candidate_unique", `DROP INDEX public.${G007P11_INDEX}; CREATE UNIQUE INDEX ${G007P11_INDEX} ON public.admin_requests(tenant_id,(CASE priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END),(CASE status WHEN 'new' THEN 0 WHEN 'seen' THEN 1 WHEN 'in_progress' THEN 2 WHEN 'waiting_on_researcher' THEN 3 ELSE 4 END),created_at DESC) WHERE status IN (${G007P11_OPEN})`],
+          ["candidate_wrong_table", `DROP INDEX public.${G007P11_INDEX}; CREATE INDEX ${G007P11_INDEX} ON public.leads(tenant_id,id)`],
+          ["candidate_non_index", `DROP INDEX public.${G007P11_INDEX}; CREATE TABLE public.${G007P11_INDEX}(sentinel integer)`],
+          ["candidate_unhealthy", `UPDATE pg_catalog.pg_index SET indisvalid=false WHERE indexrelid='public.${G007P11_INDEX}'::regclass`],
+          ["candidate_reserved_sibling", "CREATE INDEX idx_g007p11_admin_tenant_open_extra ON public.admin_requests(id)"],
+          ["final_foundation_drift", "ALTER TABLE public.admin_requests DROP CONSTRAINT admin_requests_status_check"],
+        ];
+        for (const [label, mutation] of finalMutations) {
+          await client.unsafe("BEGIN");
+          try {
+            await client.unsafe(mutation);
+            await expectG007P11RejectedWithoutChange(client, label);
+          } finally {
+            await client.unsafe("ROLLBACK");
+          }
+          expect(await g007p11CatalogSnapshot(client), label).toEqual(installedCatalog);
+        }
+
+        await client.unsafe("BEGIN");
+        await client.unsafe("DROP INDEX public.idx_admin_requests_status_type_created; CREATE INDEX idx_admin_requests_status_type_created ON public.admin_requests(created_at DESC)");
+        const forwardCompatibleFinal = await g007p11CatalogSnapshot(client);
+        await client.unsafe(g007p11Sql);
+        expect(await g007p11CatalogSnapshot(client)).toEqual(forwardCompatibleFinal);
+        await client.unsafe("ROLLBACK");
+        expect(await g007p11CatalogSnapshot(client)).toEqual(installedCatalog);
+
+        await resetDatabase(client, true, false, G007P11_MIGRATION);
+        await seedG007P11PlanRows(client);
+        expect(await client.unsafe(`
+          SELECT count(*)::integer total,
+            count(*) FILTER (WHERE status IN (${G007P11_OPEN}))::integer open,
+            count(DISTINCT created_at)::integer unique_created,
+            count(*) FILTER (WHERE tenant_id IS NULL)::integer tenantless
+          FROM public.admin_requests
+        `)).toEqual([{ total: 144000, open: 96000, unique_created: 144000, tenantless: 0 }]);
+        expect(await client.unsafe(`
+          SELECT tenant_id::text tenant,count(*)::integer total,
+            count(*) FILTER (WHERE status IN (${G007P11_OPEN}))::integer open,
+            count(*) FILTER (WHERE status IN (${G007P11_OPEN}) AND request_type='website_request')::integer website_open,
+            count(*) FILTER (WHERE status IN (${G007P11_OPEN}) AND request_type='quote_request')::integer quote_open,
+            count(*) FILTER (WHERE workspace_id IS NULL)::integer workspace_null,
+            count(*) FILTER (WHERE workspace_id IS NOT NULL)::integer workspace_nonnull
+          FROM public.admin_requests GROUP BY tenant_id ORDER BY tenant_id
+        `)).toEqual([
+          { tenant: tenantA, total: 72000, open: 48000, website_open: 24000, quote_open: 24000, workspace_null: 36000, workspace_nonnull: 36000 },
+          { tenant: tenantB, total: 72000, open: 48000, website_open: 24000, quote_open: 24000, workspace_null: 36000, workspace_nonnull: 36000 },
+        ]);
+        expect(await client.unsafe(`
+          SELECT count(*)::integer other_tenant_open
+          FROM public.admin_requests
+          WHERE tenant_id<>'${tenantA}' AND status IN (${G007P11_OPEN})
+        `)).toEqual([{ other_tenant_open: 48000 }]);
+        expect((await client.unsafe<Array<{ tenant: string }>>("SELECT tenant_id::text tenant FROM public.admin_requests ORDER BY ctid LIMIT 6")).map((row) => row.tenant)).toEqual([
+          tenantA,tenantB,tenantA,tenantB,tenantA,tenantB,
+        ]);
+
+        const forms = [undefined, "website_request", "quote_request"] as const;
+        const limits = [6, 50, 100, 200] as const;
+        const baselineResults = new Map<string, { digest: string; first: string; last: string }>();
+        const baselineTenantPlans = new Map<string, string>();
+        const baselineCurrentPlans = new Map<string, string>();
+        for (const requestType of forms) {
+          for (const limit of limits) {
+            const tenantQuery = g007p11ListQuery({ tenant: tenantA, requestType, limit });
+            const currentQuery = g007p11ListQuery({ requestType, limit });
+            const tenantRows = await client.unsafe<Array<{ id: string }>>(tenantQuery);
+            const currentRows = await client.unsafe<Array<{ id: string }>>(currentQuery);
+            const tenantPlan = await explain(client, tenantQuery);
+            const currentPlan = await explain(client, currentQuery);
+            const tenantPlanned = await explainPlanned(client, tenantQuery);
+            const tenantKey = `tenant:${requestType ?? "all"}:${limit}`;
+            const currentKey = `current:${requestType ?? "all"}:${limit}`;
+            baselineResults.set(tenantKey, { digest: g007p11IdDigest(tenantRows), first: tenantRows[0].id, last: tenantRows.at(-1)!.id });
+            baselineResults.set(currentKey, { digest: g007p11IdDigest(currentRows), first: currentRows[0].id, last: currentRows.at(-1)!.id });
+            baselineTenantPlans.set(tenantKey, tenantPlanned);
+            baselineCurrentPlans.set(currentKey, await explainPlanned(client, currentQuery));
+            expect(tenantRows).toHaveLength(limit);
+            expect(currentRows).toHaveLength(limit);
+            expect(tenantRows.every((row) => row.id.startsWith("p11-request-a-"))).toBe(true);
+            expect(currentRows.every((row) => row.id.startsWith("p11-request-b-"))).toBe(true);
+            expect(tenantPlanned).toContain("Seq Scan on admin_requests ar");
+            expect(tenantPlanned).toContain("Sort");
+            expect(tenantPlanned).not.toMatch(/Index Cond: .*tenant_id/u);
+            expect(tenantPlanned).not.toContain(G007P11_INDEX);
+            expect(tenantPlan).not.toContain(G007P11_INDEX);
+            expect(currentPlan).not.toContain(G007P11_INDEX);
+          }
+        }
+        expect(baselineResults.get("tenant:all:6")).toEqual({
+          digest: "97835e9550e2e9dbee25f9cdd5afec2f33de311ae73a587ae1383fdc6a954d7d",
+          first: "p11-request-a-071971",
+          last: "p11-request-a-071893",
+        });
+        expect(baselineResults.get("current:all:6")).toEqual({
+          digest: "0550692d233fcb12a00449b5fb39518b1754715433480e5e3e705d870118f271",
+          first: "p11-request-b-071971",
+          last: "p11-request-b-071893",
+        });
+
+        const summaryQuery = `SELECT
+          COALESCE(SUM(CASE WHEN status IN (${G007P11_OPEN}) THEN 1 ELSE 0 END),0)::integer open_total,
+          COALESCE(SUM(CASE WHEN status IN (${G007P11_OPEN}) AND request_type='website_request' THEN 1 ELSE 0 END),0)::integer website_open,
+          COALESCE(SUM(CASE WHEN status IN (${G007P11_OPEN}) AND request_type='quote_request' THEN 1 ELSE 0 END),0)::integer quote_open,
+          COALESCE(SUM(CASE WHEN status='waiting_on_researcher' THEN 1 ELSE 0 END),0)::integer waiting_on_researcher,
+          COALESCE(SUM(CASE WHEN status IN (${G007P11_OPEN}) AND due_at IS NOT NULL AND due_at<=now() THEN 1 ELSE 0 END),0)::integer overdue,
+          COALESCE(SUM(CASE WHEN status='new' THEN 1 ELSE 0 END),0)::integer new_requests
+          FROM public.admin_requests`;
+        const leadDetailQuery = g007p11ListQuery({ leadId: "p11-lead-a-000001", limit: 1 });
+        const currentOpenForLeadQuery = `SELECT ar.id FROM public.admin_requests ar
+          WHERE ar.lead_id='p11-lead-a-000001'
+            AND ar.request_type='website_request'
+            AND ar.status IN (${G007P11_OPEN})
+          ORDER BY ar.created_at DESC LIMIT 1`;
+        const baselineSummary = await client.unsafe(summaryQuery);
+        const baselineSummaryPlan = await explainPlanned(client, summaryQuery);
+        const baselineLeadDetail = await client.unsafe<Array<{ id: string }>>(leadDetailQuery);
+        const baselineLeadDetailPlan = await explainPlanned(client, leadDetailQuery);
+        const baselineCurrentOpenForLead = await client.unsafe(currentOpenForLeadQuery);
+        const baselineCurrentOpenForLeadPlan = await explainPlanned(client, currentOpenForLeadQuery);
+        expect(baselineSummary).toEqual([{ open_total: 96000, website_open: 48000, quote_open: 48000, waiting_on_researcher: 24000, overdue: 0, new_requests: 24000 }]);
+        expect(baselineLeadDetail.map((row) => row.id)).toEqual(["p11-request-a-000001"]);
+        expect(baselineLeadDetailPlan).toContain("idx_admin_requests_lead_created");
+        expect(baselineLeadDetailPlan).not.toContain(G007P11_INDEX);
+        expect(baselineCurrentOpenForLead).toEqual([{ id: "p11-request-a-000001" }]);
+        expect(baselineCurrentOpenForLeadPlan).toContain("idx_admin_requests_lead_created");
+        expect(baselineCurrentOpenForLeadPlan).not.toContain(G007P11_INDEX);
+
+        const preservedBefore = await g007p11CatalogSnapshot(client);
+        await client.unsafe(g007p11Sql);
+        for (const requestType of forms) {
+          for (const limit of limits) {
+            const tenantQuery = g007p11ListQuery({ tenant: tenantA, requestType, limit });
+            const currentQuery = g007p11ListQuery({ requestType, limit });
+            const tenantRows = await client.unsafe<Array<{ id: string }>>(tenantQuery);
+            const currentRows = await client.unsafe<Array<{ id: string }>>(currentQuery);
+            const tenantPlan = await explain(client, tenantQuery);
+            const currentPlan = await explain(client, currentQuery);
+            const tenantKey = `tenant:${requestType ?? "all"}:${limit}`;
+            const currentKey = `current:${requestType ?? "all"}:${limit}`;
+            expect(baselineTenantPlans.get(tenantKey)).toContain("Seq Scan on admin_requests ar");
+            expect({ digest: g007p11IdDigest(tenantRows), first: tenantRows[0].id, last: tenantRows.at(-1)!.id }).toEqual(baselineResults.get(tenantKey));
+            expect({ digest: g007p11IdDigest(currentRows), first: currentRows[0].id, last: currentRows.at(-1)!.id }).toEqual(baselineResults.get(currentKey));
+            expect(tenantPlan).toContain(G007P11_INDEX);
+            expect(tenantPlan.split("\n").find((line) => line.includes("Index Cond:"))).toContain("tenant_id");
+            expect(tenantPlan).not.toContain("Sort");
+            expect(tenantPlan).not.toMatch(/Filter: .*tenant_id/u);
+            expect(currentPlan).not.toContain(G007P11_INDEX);
+            expect(await explainPlanned(client, currentQuery)).toBe(baselineCurrentPlans.get(currentKey));
+          }
+        }
+        expect(await client.unsafe(summaryQuery)).toEqual(baselineSummary);
+        expect(await explainPlanned(client, summaryQuery)).toBe(baselineSummaryPlan);
+        expect((await client.unsafe<Array<{ id: string }>>(leadDetailQuery)).map((row) => row.id)).toEqual(baselineLeadDetail.map((row) => row.id));
+        expect(await explainPlanned(client, leadDetailQuery)).toBe(baselineLeadDetailPlan);
+        expect(await explain(client, leadDetailQuery)).not.toContain(G007P11_INDEX);
+        expect(await client.unsafe(currentOpenForLeadQuery)).toEqual(baselineCurrentOpenForLead);
+        expect(await explainPlanned(client, currentOpenForLeadQuery)).toBe(baselineCurrentOpenForLeadPlan);
+        expect(await explain(client, currentOpenForLeadQuery)).not.toContain(G007P11_INDEX);
+
+        const finalPreserved = await g007p11CatalogSnapshot(client);
+        expect(finalPreserved.columns).toEqual(preservedBefore.columns);
+        expect(finalPreserved.constraints).toEqual(preservedBefore.constraints);
+        expect((finalPreserved.indexes as Array<Record<string, unknown>>).filter((row) => row.relname !== G007P11_INDEX)).toEqual(preservedBefore.indexes);
+        expect((finalPreserved.indexes as Array<Record<string, unknown>>).find((row) => row.relname === G007P11_INDEX)?.indexdef).toBe(G007P11_INDEXDEF);
+      } finally {
+        await client.unsafe("ROLLBACK").catch(() => undefined);
+        await client.end({ timeout: 5 });
+      }
+    },
+    360000,
+  );
+
+  it.skipIf(process.env.G003_RUN_DISPOSABLE_PG_TESTS !== "1")(
     "rehearses fresh, exact T-028 upgrade, receipt drift, rollback, hostile path, isolation, actors, anon projection, and replay on PostgreSQL 16",
     async () => {
       const url = process.env.G003_DATABASE_URL;
@@ -1491,7 +1947,7 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 51, applied: 49, skipped: 2 });
+        expect(full).toEqual({ discovered: 52, applied: 50, skipped: 2 });
         await assertCatalog(client);
 
         const expectedFinalQueueIndexes: LeadAiQueueIndex[] = [
@@ -1537,10 +1993,12 @@ describe("G-003 lead CRM tenant scope", () => {
           const p6RuntimeCatalogBefore = await g007p6CatalogSnapshot(client);
           const p7RuntimeCatalogBefore = await g007p7CatalogSnapshot(client);
           const p8RuntimeCatalogBefore = await g007p8CatalogSnapshot(client);
+          const p11RuntimeCatalogBefore = await g007p11CatalogSnapshot(client);
           await ensureDbReady();
           expect(await g007p6CatalogSnapshot(client)).toEqual(p6RuntimeCatalogBefore);
           expect(await g007p7CatalogSnapshot(client)).toEqual(p7RuntimeCatalogBefore);
           expect(await g007p8CatalogSnapshot(client)).toEqual(p8RuntimeCatalogBefore);
+          expect(await g007p11CatalogSnapshot(client)).toEqual(p11RuntimeCatalogBefore);
           expect(await leadAiQueueIndexSnapshot(client)).toEqual(expectedFinalQueueIndexes);
         } finally {
           await resetRuntimeDb?.();

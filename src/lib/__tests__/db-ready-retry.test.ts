@@ -66,6 +66,7 @@ describe("ensureDbReady", () => {
       "idx_g007p6_leads_tenant_enrichment_recovery",
       "idx_g007p7_leads_tenant_ai_viability_repair",
       "idx_g007p8_leads_tenant_discovered_at",
+      "idx_g007p11_admin_tenant_open_priority_status_created",
     ]) {
       expect(emitted.some((statement) => statement.includes(removedName)), removedName).toBe(false);
     }

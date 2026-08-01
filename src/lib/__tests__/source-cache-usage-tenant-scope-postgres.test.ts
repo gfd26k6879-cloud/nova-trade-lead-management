@@ -249,7 +249,7 @@ describe("G-005 source cache and usage tenant scope", () => {
         expect(version.version.startsWith("16")).toBe(true);
 
         const full = await resetTo(client);
-        expect(full).toEqual({ discovered: 51, applied: 49, skipped: 2 });
+        expect(full).toEqual({ discovered: 52, applied: 50, skipped: 2 });
         await client.unsafe(g007p1Sql);
         await client.unsafe(migrationSql);
         const [catalog] = await client.unsafe<Array<{ source_columns: number; tenant_columns: number; primary_keys: number; source_checks: number; tenant_indexes: number; global_indexes: number; triggers: number; rls_tables: number; policies: number }>>(`

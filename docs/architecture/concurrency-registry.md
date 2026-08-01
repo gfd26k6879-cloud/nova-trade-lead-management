@@ -2932,3 +2932,23 @@ Date: 2026-07-31
   open and current runtime/global ownership remains unchanged.
 - Receipt commit `0883f9d0764ededcc6de8cf2ebd8023c4cbc6780` durably records
   the deferral. No P10 lock or resource remains.
+
+## G-007P11 tenant-wide open admin-request list index packet
+
+- Fresh PostgreSQL 16.14 plans over 144,000 interleaved requests prove every
+  future tenant list baseline scans/sorts globally and considers 48,000 open
+  wrong-tenant rows. A 4,800,512-byte tenant/open/CASE-order partial index
+  removes wrong-tenant work and Sort for typed and untyped limits 6/50/100/200.
+- Exact current unscoped typed/untyped lists and the adjacent fulfillment
+  summary retain their original plans, resources, results, and ordering; the
+  candidate is absent. The runtime-owned global remains unchanged.
+- Migration `202607310007_tenant_open_admin_request_list_index.sql`, the owning
+  G003 PostgreSQL harness, runtime non-ownership assertion, and six count
+  consumers pass root validation. Fresh independent architecture and quality
+  reviews pass after the required fixture and compatibility repairs.
+- This packet is tenant-wide list DDL only. Workspace-scoped authority, summary
+  correction, lead-local lookup, mutation, caller/session, G015/G016 ownership
+  reconciliation, runtime repair, SQLite, UI, and workbench behavior are barred.
+- Sol retains `migration-sequence` and `integration-ledger` only through the
+  attributable local source and lineage commits. Parent G-007 remains open;
+  the next lock-free action is read-only G-007P12 actor-outreach index audit.
