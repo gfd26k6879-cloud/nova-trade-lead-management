@@ -442,3 +442,6 @@ query/worker cutover. After attributable local commits and lock release, the
 next safe action is a read-only G-007P7 PostgreSQL 16 audit of the single
 website-viability repair read behind `idx_leads_ai_status_checked`. No migration
 is assumed. No remote or external action occurred.
+
+The accepted G-007P6 source commit is
+`672f14a99aa9224d307ebfe2e0bd25b11e884507`.

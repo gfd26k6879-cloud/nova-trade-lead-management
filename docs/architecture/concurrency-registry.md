@@ -2824,3 +2824,7 @@ Date: 2026-07-31
 - G-007P6 is accepted pending attributable local source and lineage commits.
   The two locks release only after the lineage commit and final clean-resource
   check. Parent G-007 and deferred G-007P5 remain open; P7 begins read-only.
+- Source commit `672f14a99aa9224d307ebfe2e0bd25b11e884507` contains the
+  validated packet. `migration-sequence` and `integration-ledger` release after
+  this lineage commit. No P6 container, process, listener, database, worktree,
+  or lock remains.
