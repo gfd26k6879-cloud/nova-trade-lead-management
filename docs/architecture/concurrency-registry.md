@@ -3295,3 +3295,6 @@ Date: 2026-07-31
   defect. Root current compatibility tests pass 16/16. All disposable resources
   are removed. The receipt reservation is held only through its local commit;
   blocked-created and market-created remain separate unopened families.
+- Receipt commit `47ce318a0acf7fd40b41798ee8154915da29bc04` is final locally.
+  The durable-document reservation is released; no G-007P22 or replacement
+  objective is opened by this lineage update.

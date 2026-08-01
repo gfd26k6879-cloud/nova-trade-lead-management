@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: no tenant-query plan defect proven; retain both global compatibility indexes
 
-Receipt commit: pending
+Receipt commit: `47ce318a0acf7fd40b41798ee8154915da29bc04`
 
 ## Scope and source ownership
 

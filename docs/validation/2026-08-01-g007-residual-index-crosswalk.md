@@ -250,3 +250,7 @@ selected. Six transactional tenant/workspace candidates prove no material
 defect and roll back without residue. Both globals are retained, sequence 010
 remains free, and blocked-created plus market-created remain separate unopened
 families.
+
+G-007P21 receipt commit `47ce318a0acf7fd40b41798ee8154915da29bc04`
+records the accepted no-defect disposition. This lineage update does not open
+the next residual family.

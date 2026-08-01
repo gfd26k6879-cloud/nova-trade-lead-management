@@ -1021,3 +1021,7 @@ authorized. Counts remain 54/52/2 and sequence 010 remains free. Independent
 readiness and test audits agree; root current compatibility tests pass 16/16.
 All disposable resources are removed. Blocked-created and market-created remain
 separate unopened families; parent G-007 stays open.
+
+The accepted receipt commit is
+`47ce318a0acf7fd40b41798ee8154915da29bc04`. Its documentation reservation is
+released. This lineage update does not open or number the next residual audit.
