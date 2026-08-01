@@ -3189,3 +3189,21 @@ Date: 2026-07-31
   proven on a real current or durably approved tenant query before one coherent
   write packet can be proposed. Current compatibility and named platform-global
   owners must remain explicit.
+
+## G-007P20 defect proven; actor write packet pending
+
+- Fresh PostgreSQL 16.14 evidence over 300,000 interleaved rows proves the exact
+  lower-bound-only researcher-cap form with tenant added filters 31,796 rows
+  through tenant-created. The fixed two-source partial three-key candidate
+  eliminates residual filtering, preserves exact results, and improves
+  9.752 ms to 4.623 ms naturally.
+- P20 closes read-only as DEFECT PROVEN / migration deferred. Retain global
+  actor for current compatibility, retain global/tenant created-time owners,
+  and retain/defer model because no drop basis or approved query owner exists.
+- No migration lock is held yet. Counts stay 53/51/2 and sequence
+  `202607310009` stays free until Sol opens the researcher-cap write packet.
+  DDL must pin the exact two-source predicate, preserve current and generic
+  alternate-source owners, and reject catalog/source-ownership spoofing.
+- Independent architecture and quality reviews pass with no remaining
+  P0/P1/P2 finding. Candidate rollback, exact digests, residue, repository, and
+  disposable-resource cleanup pass. Parent G-007 remains open.

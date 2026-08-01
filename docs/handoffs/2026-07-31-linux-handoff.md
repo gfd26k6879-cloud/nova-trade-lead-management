@@ -906,3 +906,34 @@ aggregates must be separated from approved future tenant/platform query
 contracts. A migration may open only after a real tenant-query plan defect is
 proven for one coherent subfamily. Parent G-007 remains open; G-004B and the
 paused G-006 boundary are unchanged.
+
+## G-007P20 actor-plan defect receipt
+
+P20 proves one bounded researcher-cap/budget defect and defers its migration to
+a separate write packet. On 300,000 interleaved usage rows with null sources,
+the exact lower-bound-only tenant/shared-actor/two-source form uses
+tenant-created, returns 12,845, and filters 31,796 same-tenant nonowner/source
+rows at 3,177 buffers and 9.752 ms. The smallest fixed-source partial three-key
+candidate returns the identical digest with zero filtering at 3,057 buffers and
+4.623 ms, 52.6% faster.
+
+Retain the global actor index for the current unscoped compatibility query.
+Retain global created-time; existing tenant-created owns the G-017 tenant-time
+form. Retain/defer model because P20 proves neither a drop basis nor an exact
+approved query owner. Independent architecture and quality review pass
+DEFECT PROVEN / migration deferred with no remaining P0/P1/P2 finding.
+
+The write packet is narrowly the current researcher cap and must pin
+`request_source IN ('researcher_ai_check','researcher_pitch_pack')`. It must
+preserve global actor/current and generic alternate-source owners; broader
+G-014 actor optimization remains open. It may use guarded, replay-safe migration
+sequence `202607310009` only after its source-value ownership regression passes.
+Counts remain 53/51/2 and 009 remains free at P20 audit close.
+
+All candidate DDL rolled back; fixture/catalog/foundation digests match and
+residue is zero. The rejected half-open actor evidence, exact lower-only rerun,
+fixed-source comparison, and all corrected invocations are retained in the
+validation receipt. All containers, databases, ports, processes, temporary
+files, candidates, and worktrees are gone. Parent G-007 remains open; no remote
+or external action occurred. The receipt commit is recorded by the following
+lineage update.

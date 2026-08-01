@@ -106,16 +106,17 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | M | `ai_feedback_events` | `idx_ai_feedback_events_kind_verdict(feedback_kind, verdict, created_at DESC)` | feedback evaluation; G-014/G-020 |
 | M:P18 control | `ai_feedback_events` | `idx_ai_feedback_events_lead_created(lead_id, created_at DESC)` | lead history; G-014 |
 | A:P18 retain | `ai_feedback_events` | `idx_ai_feedback_events_verification_id(verification_id)` | scope-neutral verification SET NULL maintenance |
-| M:next family | `ai_usage_events` | `idx_ai_usage_actor_created(actor_user_id, created_at DESC)` | actor totals; G-014/G-020 |
-| M:next family | `ai_usage_events` | `idx_ai_usage_created(created_at DESC)` | time-window aggregate; G-017/G-020 |
+| A:P20 retain + cap defect owner | `ai_usage_events` | `idx_ai_usage_actor_created(actor_user_id, created_at DESC)` | current actor totals; researcher cap G-021; generic G-014 remains open |
+| A:P20 retain | `ai_usage_events` | `idx_ai_usage_created(created_at DESC)` | current time-window aggregate; tenant form G-017 |
 | A:P19 retain | `ai_usage_events` | `idx_ai_usage_events_lead_id(lead_id)` | scope-neutral lead SET NULL maintenance |
 | A:P19 retain | `ai_usage_events` | `idx_ai_usage_events_verification_id(verification_id)` | scope-neutral verification SET NULL maintenance |
-| M:next family | `ai_usage_events` | `idx_ai_usage_model_created(model, created_at DESC)` | named platform/model aggregate; G-020 |
+| A:P20 retain/defer | `ai_usage_events` | `idx_ai_usage_model_created(model, created_at DESC)` | no drop basis and no approved query owner |
 
-G-005 contributes zero residual indexes under this definition. The exact next
-bounded work is the unnumbered read-only AI-usage query-history family of
-`idx_ai_usage_actor_created`, `idx_ai_usage_created`, and
-`idx_ai_usage_model_created`. This appendix does not open or invent a P20 card.
+G-005 contributes zero residual indexes under this definition. G-007P20 audits
+the AI-usage query-history family and proves one bounded future tenant-actor
+defect while retaining current global owners. The next unclassified read-only
+family, after the actor write packet, is the four `crawl_runs` indexes; no P21
+card is opened by this appendix.
 
 ## Origin mapping and replay correction
 
