@@ -3521,3 +3521,35 @@ Date: 2026-07-31
   crosswalk becomes 37/25. Receipt commit
   `0636a4ff3aee28c5c965ac239567523d3c8ced67` releases the reservation; this
   lineage update opens no next residual family.
+
+## G-007P28 status-ZIP crawl-unit audit reservation
+
+Date: 2026-08-01
+
+- After clean G-007P27 lineage at
+  `db8f3940fbb8255e39cd775ffc314573c43498d4`, Sol reserves the serialized
+  G-007 durable-document surfaces for one read-only PostgreSQL 16 audit of
+  `idx_crawl_units_status_zip(status, zip)` only. It is the sole remaining
+  unclassified G-002 residual.
+- The packet measures the complete current lease reset-and-selection flow,
+  failed-error and failed-count shapes, and exact ZIP/county/state/geography
+  controls against the target, accepted P4 siblings, and accepted P24 budget
+  index. A fresh full-chain fixture must independently cross two tenants, named
+  and null workspaces, all three location modes, runs, statuses, and categories.
+  Legacy-ZIP rows use only their exact active ZIP reference; platform-cell and
+  generalized rows each include colliding and noncolliding compatibility-token
+  controls.
+- Natural `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`, canonical results, exact
+  installed/drop/rollback digests and plan fingerprints, and a transactional
+  target-only drop with explicit rollback are required. Lease identity is
+  deterministic; failed-error ordering guarantees nondecreasing ZIP only, so
+  ties and unordered aggregates are canonicalized before comparison.
+- ZIP is a compatibility location token across `legacy_zip`, `platform_cell`,
+  and `generalized` modes, never tenant or workspace authority. Persisted
+  `location_mode` governs location shape; an active non-ZIP cell is required
+  for platform-cell rows but never grants tenant authority. G-010/G-013/
+  G-017 are measurement boundaries only. No defect, candidate, migration, test
+  edit, replacement, or removal is assumed. Stop before any write packet unless
+  the audit proves a material exact current or durably approved tenant-query
+  plan defect. Counts remain 54/52/2, crosswalk 37/25 (G-002 12/1), and
+  sequence `202607310010` stays free.

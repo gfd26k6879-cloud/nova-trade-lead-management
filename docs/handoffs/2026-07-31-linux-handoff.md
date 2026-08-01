@@ -1225,3 +1225,26 @@ equivalence claim is opened. Counts remain 54/52/2, sequence 010 stays free,
 and the crosswalk is 37/25. Receipt commit
 `0636a4ff3aee28c5c965ac239567523d3c8ced67` records the accepted RETAIN/DEFER
 decision. This lineage update opens no next residual family.
+
+## G-007P28 status-ZIP crawl-unit audit opened
+
+After clean P27 lineage at `db8f3940fbb8255e39cd775ffc314573c43498d4`,
+Sol opens one read-only PostgreSQL 16 catalog and natural-plan audit for the
+sole remaining G-002 residual,
+`idx_crawl_units_status_zip(status, zip)`.
+
+The bounded packet measures the complete current lease reset-and-selection
+flow, failed-error and failed-count shapes, and exact ZIP/county/state/geography
+controls. Its fresh full-chain fixture independently crosses two tenants, named
+and null workspaces, all three location modes, runs, statuses, and categories.
+Legacy-ZIP rows use exact active ZIP references only; platform-cell and
+generalized rows each include colliding and noncolliding compatibility-token
+controls. Persisted `location_mode` governs location shape, and a platform-cell
+reference never grants tenant authority. The audit compares deterministic or
+canonicalized results and natural JSON plan fingerprints with the target
+installed, during a
+transactional target-only drop, and after explicit rollback, using accepted P4
+and P24 controls. ZIP is a compatibility location token, never tenant/workspace
+authority; G-010/G-013/G-017 remain measurement boundaries. No defect,
+candidate, migration, test edit, replacement, or removal is assumed. Counts
+remain 54/52/2, crosswalk 37/25 (G-002 12/1), and sequence 010 remains free.
