@@ -4129,3 +4129,16 @@ Date: 2026-08-01
   crosswalk 45/17, sequence `202607310010` remains free, and parent G-007 stays
   open. Sol retains only the durable-document reservation until lineage commit;
   P36 remains unopened.
+
+## G-007SR2 durable-document release
+
+Date: 2026-08-01
+
+- Acceptance receipt commit `a9d11c23be99b429edc9f98291576a2de100b5db`
+  durably records the reviewed repair and releases the remaining SR2 document
+  reservation.
+- No SR2 source, query, access, test, document, migration, sequence,
+  disposable-service, process, payload, or worktree lock remains.
+- Counts remain 54/52/2, crosswalk 45/17, sequence `202607310010` remains
+  free, and parent G-007 remains open. P36 is not opened by this receipt and
+  requires a separate reservation.

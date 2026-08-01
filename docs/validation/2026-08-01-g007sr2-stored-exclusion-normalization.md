@@ -111,5 +111,7 @@ open or number P36. No push or external action occurs.
 
 ## Lineage
 
-The following lineage-only commit will record the SR2 acceptance receipt hash
-and release the remaining durable-document reservation without opening P36.
+Acceptance receipt commit `a9d11c23be99b429edc9f98291576a2de100b5db`
+durably records the reviewed repair. The following lineage-only commit releases
+the remaining SR2 durable-document reservation without opening P36. No
+task-owned resource or lock remains, and no push or external action occurs.

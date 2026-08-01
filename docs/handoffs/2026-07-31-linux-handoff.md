@@ -1851,3 +1851,16 @@ remains through lineage. Counts stay 54/52/2, crosswalk 45/17 (G-003 22/17,
 G-002 13/0), original arithmetic 58/318/260, sequence `202607310010` remains
 free, and parent G-007 remains open. Exact next residual P36 is
 `idx_leads_location_cell(location_cell_id, score DESC)` but is not opened here.
+
+## G-007SR2 lineage receipt
+
+Acceptance receipt commit `a9d11c23be99b429edc9f98291576a2de100b5db`
+durably closes G-007SR2 and releases its remaining document reservation. No
+source, query, access, test, migration, sequence, disposable-service, process,
+payload, or worktree lock remains.
+
+Inventory stays 54/52/2, crosswalk 45/17 (G-003 22/17, G-002 13/0), and
+sequence `202607310010` remains free. Parent G-007 remains open. Exact residual
+`idx_leads_location_cell(location_cell_id, score DESC)` requires a separate P36
+reservation; this receipt does not open it. Main and the handoff tag remain
+unchanged, and no push or external action occurred.
