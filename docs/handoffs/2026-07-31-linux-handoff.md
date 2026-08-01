@@ -837,11 +837,12 @@ Independent security/catalog and quality reviewers report no remaining
 P0/P1/P2 findings.
 
 The inventory is now 53 discovered / 51 applied / 2 runtime-only skipped.
-Sequence `202607310008` is consumed and `202607310009` is next available. The
-source commit is recorded by the following lineage update. P19 is unblocked
-and resumes read-only on a fresh chain; it still has no RETAIN, DEFER, or
-migration disposition. Parent G-007 and G-004 stay open, and G-004B remains a
-separate runtime correlation/redaction card.
+Sequence `202607310008` is consumed and `202607310009` is next available.
+Source and validation receipt commit
+`e6e72b2cb04189ef1b445e74ad57e5204685f316` contains the accepted repair. P19
+is unblocked and resumes read-only on a fresh chain; it still has no RETAIN,
+DEFER, or migration disposition. Parent G-007 and G-004 stay open, and G-004B
+remains a separate runtime correlation/redaction card.
 
 The invalid Fedora invocation of the Windows-only release lane is retained in
 the validation receipt and supplies no Windows evidence. The historical native

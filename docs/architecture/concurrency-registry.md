@@ -3143,3 +3143,6 @@ Date: 2026-07-31
 - G-007P19 resumes read-only against a fresh 53/51/2 chain and still has no
   index disposition. G-004B remains open and separate. The paused native
   Windows/NTFS G-006 lane and unopened G-006C2B boundary are unchanged.
+- Source and validation receipt commit
+  `e6e72b2cb04189ef1b445e74ad57e5204685f316` is accepted. The repair locks and
+  durable-document reservation are released by this lineage commit.

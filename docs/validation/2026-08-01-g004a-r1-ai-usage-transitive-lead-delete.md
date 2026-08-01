@@ -8,8 +8,10 @@ Baseline: `b34ecd87db57a5750128cf2e2d62bbb34e897199`
 
 Branch: `codex/nova-multitenant-integration`
 
-Status: accepted forward repair; local source commit recorded by the lineage
-update following this receipt
+Status: accepted forward repair
+
+Source and validation receipt commit:
+`e6e72b2cb04189ef1b445e74ad57e5204685f316`
 
 ## Scope and implementation
 
