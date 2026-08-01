@@ -3868,3 +3868,37 @@ Date: 2026-08-01
   grant tenant/workspace authority.
 - Stop before candidate DDL, migration, replacement, removal, or test edits
   unless an exact current or durably approved tenant-query defect is proven.
+
+## G-007P33 accepted; retain country/admin target and defer tenant analogue
+
+Date: 2026-08-01
+
+- Sol accepts RETAIN for exact healthy historical PostgreSQL
+  `idx_leads_country_admin(country_code, admin_area1, locality)` and its frozen
+  SQLite compatibility definition. Selective current Explore, Quality, and map
+  country filters naturally use the leading key; target-only drop materially
+  increases scan, filter, sort, and buffer work. Common US, suffix-only,
+  anomaly, and actual country-neutral CSV shapes are controls.
+- Faraday proved 24/24 exact canonical result identities I/D/R and 24/24 exact
+  normalized structures I/R on 200,000 rows. Root independently proved 13/13
+  and 13/13 on a fresh 120,000-row fixture. Distinct lead-index catalogs restore
+  38/37/38 and constraints remain unchanged. Healthy replay is a no-op;
+  definition guards reject name-only spoof states before workload.
+- No current reader owns the country/admin prefix, full key, or trailing
+  admin/locality as authority. Future tenant forms remain measurements until
+  G-009/G-010/G-011. Geography never supplies tenant/workspace authority. No
+  candidate, migration, replacement, test edit, or removal opens; sequence
+  `202607310010` remains free.
+- Root gates pass: behavior 67/67 plus CSV 2/2, TypeScript, focused ESLint,
+  recovery, coordinator, build, PostgreSQL G-002 2/2, G-003 6/6, G-004A 2/2,
+  G-005 1/1, and T-029 19/19. All P33 resources are removed. Crosswalk becomes
+  43/19 (G-003 20/19, G-002 13/0); parent G-007 remains open.
+- A separate P1 compatibility-security defect was independently reproduced:
+  researcher Explore constraints preserve archived/direct excluded selectors,
+  detail checks are market-only, and claim lacks lifecycle guards. It is not a
+  P33 index defect. A serialized repair must complete before P34 or any later
+  residual audit. Sol retains the shared lead-access/action/query/test locks.
+- Independent architecture and test/evidence reviews accept the repaired P33
+  packet with no remaining P0/P1/P2. The producer factual cross-check closes
+  without self-acceptance. The sole P2 changed common US from high- to low-
+  selectivity; no evidence or disposition changed.

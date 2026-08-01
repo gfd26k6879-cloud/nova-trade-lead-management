@@ -1556,3 +1556,39 @@ test edit, replacement, or removal is authorized without a proven exact
 tenant-query defect. Country/admin/locality are selectors, never tenant or
 workspace authority; future tenant-prefixed forms remain measurements until
 G-010/G-011 and exact downstream ownership.
+
+## G-007P33 accepted; retain country/admin target and defer tenant analogue
+
+Sol accepts RETAIN for the exact healthy PostgreSQL
+`idx_leads_country_admin(country_code, admin_area1, locality)` definition and
+frozen SQLite compatibility mirror. Selective current country-filtered Explore,
+Quality, and map shapes naturally use the leading key and materially regress on
+target-only drop. Common US, suffix-only, storage-anomaly, and actual country-
+neutral CSV shapes are target-neutral controls. No current country/admin,
+full-key, or trailing-key owner authorizes a replacement. Future tenant forms
+remain measurements until G-009/G-010/G-011; geography is never authority.
+
+Faraday's fresh PostgreSQL 16.14 audit proves 24/24 exact canonical result
+identities I/D/R and 24/24 exact normalized structures I/R on 200,000 rows.
+Root independently proves 13/13 and 13/13 on a fresh 120,000-row fixture after
+discarding two invalid databases. Both restore 38/37/38 distinct lead-index
+catalogs and unchanged constraints. Healthy replay is a no-op and definition
+checks reject name-only spoofs. No migration, candidate, replacement, test edit,
+or removal opens; counts stay 54/52/2 and sequence 010 stays free.
+
+Root gates pass: behavior 67/67 plus CSV 2/2, TypeScript, focused ESLint,
+recovery over 37 tables, Fedora coordinator 12 passed/26 Windows-native skipped,
+build 11/11 pages, PostgreSQL G-002 2/2, G-003 6/6, G-004A 2/2, G-005 1/1,
+and T-029 19/19. All P33 resources are removed. Crosswalk becomes 43/19,
+G-003 becomes 20/19, G-002 stays 13/0, and parent G-007 remains open.
+
+A separate P1 compatibility-security defect was independently reproduced:
+researcher Explore can preserve archived/direct excluded selectors, same-market
+detail is not owned-only, and claim lacks archive/exclusion guards. This is not
+an index defect. A bounded serialized repair takes precedence over P34; neither
+P34 nor the repair is opened by this P33 receipt.
+
+Independent architecture and test/evidence reviews accept the repaired P33
+packet with no remaining P0/P1/P2. The producer factual cross-check closes
+without self-acceptance. One P2 wording repair correctly labels common US as
+low-selectivity; the evidence and RETAIN disposition are unchanged.

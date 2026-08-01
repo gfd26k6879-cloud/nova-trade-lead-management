@@ -67,6 +67,9 @@ remain unclassified. G-003 is now 18 classified and 21 unclassified.
 After the accepted P32 plan audit, 42 names are mapped or accepted and 20
 remain unclassified. G-003 is now 19 classified and 20 unclassified.
 
+After the accepted P33 plan audit, 43 names are mapped or accepted and 19
+remain unclassified. G-003 is now 20 classified and 19 unclassified.
+
 For this reconstruction, an exact audit target or named plan/control owner is
 mapped. Merely appearing as a migration foundation guard does not classify a
 tenant-query family. P18 and P19 each classify two names already inside the 28,
@@ -109,7 +112,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | A:P30 retain/defer | `leads` | `idx_leads_assigned_to_user(assigned_to_user_id, updated_at DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definition; exact local assignee-null cleanup naturally uses the target, but target-only drop shows no material necessity; ordinary assignment readers and helper-capability export controls do not use it, the live CSV route supplies no assignment filter, and no current reader owns the `updated_at` order; visible parent-delete plan cannot attribute nested FK support; assignee is never tenant/workspace authority; no tenant defect, candidate, migration, replacement, test edit, or removal |
 | A:P31 retain | `leads` | `idx_leads_business_type_score(business_type, score DESC)` | healthy exact PostgreSQL catalog and frozen SQLite compatibility definition; ordinary shared-plumbing live route plans use accepted siblings, while the independently reproduced measured reachable canonical `local_services` equality-plus-score query-function shape at limit 100 naturally uses this target and target-only drop materially increases buffers and filtered rows; NULL/empty/COALESCE semantic debt is not an index defect; business type/score never authorize tenant/workspace scope; no target-attributable tenant index defect, tenant candidate, migration, replacement, test edit, or removal |
 | A:P32 retain; future tenant analogue defer | `leads` | `idx_leads_component_scores(raw_opportunity_score DESC, verification_score DESC)` | healthy exact PostgreSQL catalog and frozen SQLite compatibility definition; independently reproduced current direct raw-opportunity ASC/DESC readers naturally use the target and target-only drop materially increases buffer work and requires scan/sort; verification-only, default opportunity/map, queue, backfill, candidate, and repair shapes are target-neutral; future tenant prefix remains measurement-only until G-009/G-011 and exact downstream owners; component scores never authorize tenant/workspace scope; no target-attributable tenant defect, candidate, migration, replacement, test edit, or removal |
-| U | `leads` | `idx_leads_country_admin(country_code, admin_area1, locality)` | geography; G-010/G-011 |
+| A:P33 retain; future tenant analogue defer | `leads` | `idx_leads_country_admin(country_code, admin_area1, locality)` | healthy exact PostgreSQL catalog and frozen SQLite compatibility definition; independently reproduced selective current Explore, Quality, and map country filters naturally use the leading country key, while target-only drop materially increases scan/filter/sort/buffer work; common US, city-only, admin/locality suffix, stored-anomaly, and live country-neutral CSV controls are target-neutral; no current country/admin, full-key, or trailing-key authority owner; future tenant prefix remains measurement-only until G-009/G-010/G-011; geography never authorizes tenant/workspace scope; no target-attributable defect, candidate, migration, replacement, test edit, or removal |
 | A:P8 | `leads` | `idx_leads_discovered_at(discovered_at)` | discovery counts; G-011/G-017 |
 | U | `leads` | `idx_leads_enrichment(enrichment_status, score DESC)` | legacy enrichment; G-013/G-014 |
 | A:P5 defer / M:P6 control | `leads` | `idx_leads_enrichment_lease(enrichment_status, enrichment_next_retry_at, score DESC) WHERE archived_at IS NULL AND COALESCE(is_excluded,0)=0` | enrichment selector/lease; G-013/G-014/G-020 |
@@ -152,10 +155,11 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 
 G-005 contributes zero residual indexes under this definition. G-007P20A adds
 `idx_g007p20a_ai_usage_tenant_actor_created` outside the 62-name residual set
-and leaves the retained global owners intact. After accepted P32, the next
+and leaves the retained global owners intact. After accepted P33, the next
 unclassified read-only family in exact residual order is
-`idx_leads_country_admin(country_code, admin_area1, locality)`; this appendix
-does not open or number that audit.
+`idx_leads_enrichment(enrichment_status, score DESC)`; the separately proven
+P1 researcher archive/exclusion authorization repair takes precedence. This
+appendix does not open or number either packet.
 
 ## Origin mapping and replay correction
 
@@ -470,3 +474,21 @@ is `idx_leads_country_admin`, but P32 does not open or number it.
 G-007P32 acceptance commit `ca2a4cf3f0ea93474121c1541f769086311d6291`
 records this classification locally. Its lineage-only successor releases the
 P32 durable reservation without opening or numbering the next residual.
+
+G-007P33 classifies `idx_leads_country_admin` RETAIN and defers any future
+tenant-prefixed analogue. Faraday's fresh PostgreSQL 16.14 audit used a
+200,000-row, physically interleaved two-tenant fixture and proved 24/24 exact
+canonical result identities I/D/R plus 24/24 exact normalized structures I/R.
+Root independently reproduced the disposition on a fresh 120,000-row fixture
+with 13/13 exact results and 13/13 exact restored structures. Both audits
+restored 38/37/38 distinct lead-index catalogs and unchanged constraints.
+
+Selective current country-filtered Explore, Quality, and map shapes naturally
+use the target. Common US, suffix-only, stored anomaly, and actual country-
+neutral CSV shapes are controls. No current country/admin, full-key, or
+trailing-key owner authorizes a replacement; tenant forms remain measurements
+until G-009/G-010/G-011. Counts remain 54/52/2, sequence 010 stays free,
+crosswalk becomes 43/19, G-003 becomes 20/19, G-002 stays 13/0, and parent
+G-007 remains open. The next residual is `idx_leads_enrichment`, but a separately
+proven P1 researcher archive/exclusion authorization repair takes precedence;
+neither is opened or numbered here.
