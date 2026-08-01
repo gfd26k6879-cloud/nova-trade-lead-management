@@ -114,7 +114,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | A:P32 retain; future tenant analogue defer | `leads` | `idx_leads_component_scores(raw_opportunity_score DESC, verification_score DESC)` | healthy exact PostgreSQL catalog and frozen SQLite compatibility definition; independently reproduced current direct raw-opportunity ASC/DESC readers naturally use the target and target-only drop materially increases buffer work and requires scan/sort; verification-only, default opportunity/map, queue, backfill, candidate, and repair shapes are target-neutral; future tenant prefix remains measurement-only until G-009/G-011 and exact downstream owners; component scores never authorize tenant/workspace scope; no target-attributable tenant defect, candidate, migration, replacement, test edit, or removal |
 | A:P33 retain; future tenant analogue defer | `leads` | `idx_leads_country_admin(country_code, admin_area1, locality)` | healthy exact PostgreSQL catalog and frozen SQLite compatibility definition; independently reproduced selective current Explore, Quality, and map country filters naturally use the leading country key, while target-only drop materially increases scan/filter/sort/buffer work; common US, city-only, admin/locality suffix, stored-anomaly, and live country-neutral CSV controls are target-neutral; no current country/admin, full-key, or trailing-key authority owner; future tenant prefix remains measurement-only until G-009/G-010/G-011; geography never authorizes tenant/workspace scope; no target-attributable defect, candidate, migration, replacement, test edit, or removal |
 | A:P8 | `leads` | `idx_leads_discovered_at(discovered_at)` | discovery counts; G-011/G-017 |
-| U | `leads` | `idx_leads_enrichment(enrichment_status, score DESC)` | legacy enrichment; G-013/G-014 |
+| A:P34 retain; tenant forms defer | `leads` | `idx_leads_enrichment(enrichment_status, score DESC)` | healthy PostgreSQL compatibility owner for current stale-running recovery, selected pending/admin Kanban reads, exact lease ordering support, and scheduler status aggregation; lease/score/P6 siblings own broad active lists, exact Quality, CSV, and fallback controls; Explore/map enrichment shapes are query-function controls only; historical sibling catalog fast-path debt recorded; no current tenant-scoped caller, migration, replacement, test edit, or removal |
 | A:P5 defer / M:P6 control | `leads` | `idx_leads_enrichment_lease(enrichment_status, enrichment_next_retry_at, score DESC) WHERE archived_at IS NULL AND COALESCE(is_excluded,0)=0` | enrichment selector/lease; G-013/G-014/G-020 |
 | U | `leads` | `idx_leads_exclusion_score(is_excluded, score DESC)` | exclusion/aggregates; G-011/G-012/G-017 |
 | U | `leads` | `idx_leads_location_cell(location_cell_id, score DESC)` | cell reads; G-010/G-011 |
@@ -496,3 +496,23 @@ neither is opened or numbered here.
 G-007P33 acceptance commit `3b069a418b2b144bf39f84709aedd0d82de4fd2c`
 records this classification locally. Its lineage-only successor releases the
 P33 reservation without opening the security repair or P34.
+
+G-007P34 classifies `idx_leads_enrichment` RETAIN and defers tenant forms.
+Three fresh PostgreSQL 16.14 remedy fixtures plus the initial producer audit
+replayed 54/52/2. The final retained manifests provide exact I/D/R results and
+I/R structures for all reserved limits, exact current lease ordering, live
+admin Kanban selector semantics, source-order-correct Quality selectors, all
+six enrichment states, aggregates, and a complete tie cohort. The target owns
+current stale-running recovery and selected pending/status reads; target-only
+drop uses accepted P6 or score fallbacks with exact results. Broad active lists,
+CSV 50,000/100,000, exact Quality, direct Explore/map controls, and most larger
+pages use accepted lease/score siblings.
+
+Explore/map routes cannot express enrichment. No measured current shape is
+tenant-scoped, and fixture tenant diversity grants no authority. The origin's
+name-only statement and the installed P6 fast path leave explicitly recorded
+historical sibling catalog-guard debt, not a P34 tenant-query defect or DDL
+grant. Counts remain 54/52/2, sequence 010 stays free, crosswalk becomes 44/18,
+G-003 becomes 21/18, G-002 stays 13/0, and parent G-007 remains open. Original
+plan arithmetic stays 58/318 accepted with 260 remaining. The next source-order
+residual is `idx_leads_exclusion_score`, but P34 does not open or number P35.

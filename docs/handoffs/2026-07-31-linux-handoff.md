@@ -1673,3 +1673,45 @@ tenant-query delta.
 Crosswalk is 43/19 (G-003 20/19, G-002 13/0); conditional classification is
 44/18 (G-003 21/18). Sequence `202607310010` remains free. P34 is read-only,
 parent G-007 remains open, and no hosted or external action opens.
+
+## G-007P34 enrichment-status/score index audit accepted
+
+Sol accepts RETAIN for
+`idx_leads_enrichment(enrichment_status, score DESC)`. The exact healthy
+PostgreSQL definition remains a current global compatibility owner for
+stale-running enrichment recovery and selected pending/status-ordered reads.
+The partial lease, score, and accepted P6 indexes remain distinct owners for
+broad active-list, exact Quality, CSV, and fallback shapes. No migration,
+candidate, replacement, test edit, or removal opens.
+
+The initial producer packet and first two evidence iterations received
+truthful independent evidence/source rejections without rejecting RETAIN.
+Three corrective PostgreSQL 16.14 fixtures then closed exact lease
+`score DESC, updated_at ASC`, live admin Kanban include-excluded selector,
+source-order Quality WHERE/order at 50/100, LIMIT 1000, complete-tie, full
+I/D/R result, I/R structure, 38/37/38 catalog, replay/spoof, and cleanup
+requirements. Evidence payload SHA-256 values are
+`4aec196cdb42718f2d33c81670a731f37d82a687ce420fe05ce7bcb5f5a3b1f0`,
+`e7509b0cb1c1bddb9926db2459306881bcb9d4828b6380e8f6bc58c28518013e`,
+and `47fd6467cdf62e21dbc1d900a9596d1bbfac04d0a46ec3760cfe3791bccf3556`.
+All were root-inspected and removed after independent review.
+
+Explore/map cannot express enrichment and remain query-function controls.
+No measured shape is tenant-scoped; fixture tenant diversity and enrichment
+selectors grant no authority. Historical origin/P6 sibling fast-path catalog
+debt is recorded separately and grants no P34 DDL authority. Independent
+architecture/authority and test/evidence rereviews accept with no remaining
+P0/P1/P2 and no producer self-acceptance.
+
+Root validation passes under Node 24.13.1/npm 11.8.0: focused 51/51,
+TypeScript, focused ESLint, recovery 37, Fedora coordinator 12 passed/26
+Windows-native skipped, build 11/11, and fresh G-002 2/2, G-003 6/6,
+G-004A/G-007P20A 2/2, G-005 1/1, T-029 19/19 at 54/52/2. All disposable
+containers, databases, ports, processes, runners, and temporary payloads are
+removed. Historical Windows evidence is not replaced.
+
+Crosswalk is now 44/18 (G-003 21/18, G-002 13/0), sequence
+`202607310010` remains free, original-plan arithmetic stays 58/318 accepted
+with 260 remaining, and parent G-007 remains open. Exact next residual
+`idx_leads_exclusion_score(is_excluded, score DESC)` remains unopened. Sol's
+P34 durable-document reservation remains held until the lineage-only receipt.

@@ -3869,6 +3869,35 @@ Date: 2026-08-01
 - Stop before candidate DDL, migration, replacement, removal, or test edits
   unless an exact current or durably approved tenant-query defect is proven.
 
+## G-007P34 enrichment-status/score index audit accepted
+
+Date: 2026-08-01
+
+- Sol accepts RETAIN for exact
+  `idx_leads_enrichment(enrichment_status, score DESC)`. No candidate,
+  migration, replacement, test edit, or removal opens.
+- Fresh PostgreSQL 16.14 evidence replayed 54/52/2 and closed all reserved
+  boundaries through three reviewed corrective manifests. Exact current lease
+  score/updated ordering, live admin Kanban selector semantics, source-order
+  Quality selectors, all states, aggregates, tie handling, and catalog restore
+  are preserved. Initial and v1/v2 evidence gaps are recorded truthfully.
+- The target remains a current global compatibility owner for stale-running
+  recovery and selected pending/status reads. Accepted lease, score, and P6
+  siblings own broad active-list, exact Quality, CSV, and fallback shapes.
+- Explore/map enrichment queries are controls only. No measured caller is
+  tenant-scoped; selector keys and fixture tenant diversity grant no authority.
+  G-007P5 and tenant-aware caller/worker cutovers remain dependency-bound.
+- Historical name-only origin replay and P6's installed-final sibling fast path
+  leave recorded target catalog-guard debt. This is not a P34 tenant-plan
+  defect or DDL grant.
+- Independent architecture/authority and test/evidence reviews accept with no
+  P0/P1/P2; no producer self-accepts. All disposable resources and retained
+  evidence payloads are removed. Sol retains only the durable-document
+  reservation until the lineage-only receipt commit.
+- Crosswalk is 44/18 (G-003 21/18, G-002 13/0), inventory stays 54/52/2,
+  sequence `202607310010` remains free, parent G-007 remains open, and exact
+  next residual `idx_leads_exclusion_score` is not opened or numbered.
+
 ## G-007P33 accepted; retain country/admin target and defer tenant analogue
 
 Date: 2026-08-01
