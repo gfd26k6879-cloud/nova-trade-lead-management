@@ -16,8 +16,10 @@ const G002 = "202607290001_add_location_crawl_tenant_scope.sql";
 const G003 = "202607290002_add_lead_crm_tenant_scope.sql";
 const G004A = "202607290003_add_ai_tenant_scope_worker_envelope.sql";
 const G007P2 = "202607310002_tenant_prefix_ai_verification_indexes.sql";
+const G004AR1 = "202607310008_harden_ai_usage_transitive_lead_delete.sql";
 const migrationSql = readFileSync(join("supabase", "migrations", G004A), "utf8");
 const g007p2Sql = readFileSync(join("supabase", "migrations", G007P2), "utf8");
+const g004ar1Sql = readFileSync(join("supabase", "migrations", G004AR1), "utf8");
 const skipped = new Set(["20260514161714_supabase_ai_verification_cron.sql", "20260514163203_scheduler_v2_sales_ready_pipeline.sql"]);
 const pinnedPostgres16 = "postgres@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20";
 const tenantA = "00000000-0000-4000-8000-000000000401";
@@ -200,7 +202,7 @@ async function catalogSnapshot(client: PgClient): Promise<Record<string, unknown
     constraints: await client.unsafe(`SELECT conrelid::regclass::text table_name,conname,pg_catalog.pg_get_constraintdef(oid) definition,convalidated,condeferrable,condeferred FROM pg_catalog.pg_constraint WHERE conrelid=ANY($1::regclass[]) ORDER BY 1,2`, [aiTables.map((table) => `public.${table}`)]),
     indexes: await client.unsafe(`SELECT indexname,indexdef FROM pg_catalog.pg_indexes WHERE schemaname='public' AND tablename=ANY($1) ORDER BY 1`, [aiTables]),
     triggers: await client.unsafe(`SELECT tgrelid::regclass::text table_name,tgname,pg_catalog.pg_get_triggerdef(oid) definition,tgenabled FROM pg_catalog.pg_trigger WHERE NOT tgisinternal AND tgrelid=ANY($1::regclass[]) ORDER BY 1,2`, [aiTables.map((table) => `public.${table}`)]),
-    functions: await client.unsafe(`SELECT oid::regprocedure::text identity,pg_catalog.pg_get_functiondef(oid) definition,proowner,proacl,proconfig,pg_catalog.obj_description(oid,'pg_proc') comment FROM pg_catalog.pg_proc WHERE pronamespace='public'::regnamespace AND proname='novatrade_ai_scope_guard' ORDER BY 1`),
+    functions: await client.unsafe(`SELECT oid::regprocedure::text identity,pg_catalog.pg_get_functiondef(oid) definition,proowner,proacl,proconfig,pg_catalog.obj_description(oid,'pg_proc') comment FROM pg_catalog.pg_proc WHERE pronamespace='public'::regnamespace AND proname IN ('novatrade_ai_scope_guard','novatrade_ai_usage_ri_null_normalize') ORDER BY 1`),
     rls: await client.unsafe(`SELECT relname,relrowsecurity,relforcerowsecurity,relacl FROM pg_catalog.pg_class WHERE oid=ANY($1::regclass[]) ORDER BY 1`, [aiTables.map((table) => `public.${table}`)]),
     policies: await client.unsafe(`SELECT polname,polrelid::regclass::text table_name FROM pg_catalog.pg_policy WHERE polrelid=ANY($1::regclass[]) ORDER BY 1`, [aiTables.map((table) => `public.${table}`)]),
   };
@@ -210,6 +212,16 @@ async function expectMigrationRejectedWithoutResidue(client: PgClient, pattern: 
   const before = await catalogSnapshot(client);
   let failure: unknown;
   try { await client.unsafe(migrationSql); } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(Error);
+  expect((failure as Error).message).toMatch(pattern);
+  await client.unsafe("ROLLBACK");
+  expect(await catalogSnapshot(client)).toEqual(before);
+}
+
+async function expectG004AR1RejectedWithoutResidue(client: PgClient, pattern: RegExp): Promise<void> {
+  const before = await catalogSnapshot(client);
+  let failure: unknown;
+  try { await client.unsafe(g004ar1Sql); } catch (error) { failure = error; }
   expect(failure).toBeInstanceOf(Error);
   expect((failure as Error).message).toMatch(pattern);
   await client.unsafe("ROLLBACK");
@@ -250,7 +262,7 @@ describe("G-004A AI tenant scope and worker envelope", () => {
         expect(version.version.startsWith("16")).toBe(true);
 
         const full = await resetTo(client);
-        expect(full).toEqual({ discovered: 52, applied: 50, skipped: 2 });
+        expect(full).toEqual({ discovered: 53, applied: 51, skipped: 2 });
         await client.unsafe(g007p2Sql);
         const verificationIndexes = await client.unsafe<Array<{ indexname: string; indexdef: string }>>(`
           SELECT indexname,indexdef FROM pg_catalog.pg_indexes
@@ -333,6 +345,35 @@ describe("G-004A AI tenant scope and worker envelope", () => {
         await client.unsafe("RESET search_path");
         expect(await catalogSnapshot(client)).toEqual(replayBefore);
 
+        // R1 installs additively, preserves the accepted v2 function byte-for-
+        // byte, replays exactly under a hostile path, and remains compatible
+        // with historical G-004A replay.
+        const [v2Before] = await client.unsafe<Array<{ definition: string }>>(
+          "SELECT pg_catalog.pg_get_functiondef('public.novatrade_ai_scope_guard()'::regprocedure) definition",
+        );
+        expect((await client.unsafe("SELECT pg_catalog.to_regprocedure('public.novatrade_ai_usage_ri_null_normalize()') identity"))[0].identity).toBeNull();
+        await client.unsafe(g004ar1Sql);
+        const [v2After] = await client.unsafe<Array<{ definition: string }>>(
+          "SELECT pg_catalog.pg_get_functiondef('public.novatrade_ai_scope_guard()'::regprocedure) definition",
+        );
+        expect(v2After.definition).toBe(v2Before.definition);
+        expect((await client.unsafe<Array<{ tgname: string }>>(`
+          SELECT tgname FROM pg_catalog.pg_trigger
+          WHERE tgrelid='public.ai_usage_events'::regclass AND NOT tgisinternal
+            AND tgname IN ('trg_novatrade_ai_usage_events_a_ri_null_normalize','trg_novatrade_ai_usage_events_scope')
+          ORDER BY tgname
+        `)).map(({ tgname }) => tgname)).toEqual([
+          "trg_novatrade_ai_usage_events_a_ri_null_normalize",
+          "trg_novatrade_ai_usage_events_scope",
+        ]);
+        const r1ReplayBefore = await catalogSnapshot(client);
+        await client.unsafe("SET search_path=g004a_shadow,public");
+        await client.unsafe(g004ar1Sql);
+        await client.unsafe("RESET search_path");
+        expect(await catalogSnapshot(client)).toEqual(r1ReplayBefore);
+        await client.unsafe(migrationSql);
+        expect(await catalogSnapshot(client)).toEqual(r1ReplayBefore);
+
         // Runtime guards: omitted/mismatched tenant, workspace, references,
         // inactive attribution, equivalent inputs, and immutable scope.
         await client.unsafe(`INSERT INTO public.ai_lead_verifications(id,lead_id,workspace_id,model,status,recommendation,requested_by_user_id) VALUES ('verification-b','lead-b',NULL,'same-model','queued','review','${ownerB}')`);
@@ -354,11 +395,25 @@ describe("G-004A AI tenant scope and worker envelope", () => {
         await expect(client.unsafe("INSERT INTO public.ai_usage_events(id,model) VALUES ('new-unlinked','m')")).rejects.toThrow(/G004A_USAGE_RUNTIME_CORRELATION_REQUIRED/);
         await client.unsafe("INSERT INTO public.ai_usage_events(id,lead_id,model) VALUES ('usage-lead-b','lead-b','m')");
         await client.unsafe("INSERT INTO public.ai_usage_events(id,verification_id,model) VALUES ('usage-verification-b','verification-b','m')");
+        await client.unsafe(`
+          INSERT INTO public.leads(id,tenant_id,place_id,name) VALUES ('lead-b-combined','${tenantB}','place-b-combined','Combined Reference');
+          INSERT INTO public.ai_lead_verifications(id,lead_id,model,status,recommendation,requested_by_user_id)
+            VALUES ('verification-b-combined','lead-b-combined','m','queued','review','${ownerB}');
+          INSERT INTO public.ai_usage_events(id,lead_id,verification_id,model,actor_user_id,input_tokens,output_tokens,total_tokens,metadata)
+            VALUES ('usage-b-combined','lead-b-combined','verification-b-combined','m','${ownerB}',11,7,18,'{"sentinel":"preserve"}'::jsonb);
+        `);
         await expect(client.unsafe("INSERT INTO public.ai_usage_events(id,lead_id,verification_id,model) VALUES ('usage-cross','lead-a','verification-b','m')")).rejects.toThrow(/G004A_USAGE_REFERENCE_SCOPE_INVALID/);
         await expect(client.unsafe("UPDATE public.ai_usage_events SET lead_id='lead-a' WHERE id='usage-lead-b'")).rejects.toThrow(/G004A_USAGE_SCOPE_IMMUTABLE/);
+        await expect(client.unsafe("UPDATE public.ai_usage_events SET lead_id=NULL WHERE id='usage-lead-b'")).rejects.toThrow(/G004A_USAGE_SCOPE_IMMUTABLE/);
+        await expect(client.unsafe("UPDATE public.ai_usage_events SET verification_id=NULL WHERE id='usage-verification-b'")).rejects.toThrow(/G004A_USAGE_SCOPE_IMMUTABLE/);
+        await expect(client.unsafe("UPDATE public.ai_usage_events SET lead_id=NULL,verification_id=NULL WHERE id='usage-b-combined'")).rejects.toThrow(/G004A_USAGE_SCOPE_IMMUTABLE/);
         expect((await client.unsafe("SELECT tenant_id FROM public.ai_usage_events WHERE id IN ('usage-lead-b','usage-verification-b') ORDER BY id")).map((row) => row.tenant_id)).toEqual([tenantB, tenantB]);
 
         // PG16 column-list SET NULL preserves required tenant_id.
+        const [combinedBefore] = await client.unsafe<Record<string, unknown>[]>("SELECT * FROM public.ai_usage_events WHERE id='usage-b-combined'");
+        await client.unsafe("DELETE FROM public.leads WHERE id='lead-b-combined'");
+        const [combinedAfter] = await client.unsafe<Record<string, unknown>[]>("SELECT * FROM public.ai_usage_events WHERE id='usage-b-combined'");
+        expect(combinedAfter).toEqual({ ...combinedBefore, lead_id: null, verification_id: null });
         await client.unsafe("DELETE FROM public.ai_lead_verifications WHERE id='verification-b'");
         expect((await client.unsafe("SELECT tenant_id,verification_id FROM public.ai_feedback_events WHERE id='feedback-b'"))[0]).toEqual({ tenant_id: tenantB, verification_id: null });
         expect((await client.unsafe("SELECT tenant_id,verification_id FROM public.ai_usage_events WHERE id='usage-verification-b'"))[0]).toEqual({ tenant_id: tenantB, verification_id: null });
@@ -366,6 +421,69 @@ describe("G-004A AI tenant scope and worker envelope", () => {
         expect((await client.unsafe("SELECT tenant_id,artifact_id FROM public.ai_feedback_events WHERE id='feedback-b'"))[0]).toEqual({ tenant_id: tenantB, artifact_id: null });
         await client.unsafe("DELETE FROM public.leads WHERE id='lead-b'");
         expect((await client.unsafe("SELECT tenant_id,lead_id FROM public.ai_usage_events WHERE id='usage-lead-b'"))[0]).toEqual({ tenant_id: tenantB, lead_id: null });
+
+        // The transitive delete is independent of FK creation order, and an
+        // unrelated nested trigger cannot use trigger depth to spoof RI work.
+        await resetTo(client);
+        await addTenantB(client);
+        await client.unsafe(`
+          ALTER TABLE public.ai_usage_events DROP CONSTRAINT ai_usage_events_tenant_lead_fkey;
+          ALTER TABLE public.ai_usage_events DROP CONSTRAINT ai_usage_events_tenant_verification_fkey;
+          ALTER TABLE public.ai_lead_verifications DROP CONSTRAINT ai_lead_verifications_tenant_lead_fkey;
+          ALTER TABLE public.ai_usage_events ADD CONSTRAINT ai_usage_events_tenant_lead_fkey
+            FOREIGN KEY(tenant_id,lead_id) REFERENCES public.leads(tenant_id,id) ON UPDATE RESTRICT ON DELETE SET NULL (lead_id);
+          ALTER TABLE public.ai_usage_events ADD CONSTRAINT ai_usage_events_tenant_verification_fkey
+            FOREIGN KEY(tenant_id,verification_id) REFERENCES public.ai_lead_verifications(tenant_id,id) ON UPDATE RESTRICT ON DELETE SET NULL (verification_id);
+          ALTER TABLE public.ai_lead_verifications ADD CONSTRAINT ai_lead_verifications_tenant_lead_fkey
+            FOREIGN KEY(tenant_id,lead_id) REFERENCES public.leads(tenant_id,id) ON UPDATE RESTRICT ON DELETE CASCADE;
+          INSERT INTO public.leads(id,tenant_id,place_id,name) VALUES ('lead-b-reversed','${tenantB}','place-b-reversed','Reversed Constraints');
+          INSERT INTO public.ai_lead_verifications(id,lead_id,model,status,recommendation)
+            VALUES ('verification-b-reversed','lead-b-reversed','m','queued','review');
+          INSERT INTO public.ai_usage_events(id,lead_id,verification_id,model,metadata)
+            VALUES ('usage-b-reversed','lead-b-reversed','verification-b-reversed','m','{"sentinel":"reverse"}'::jsonb);
+          CREATE SCHEMA g004a_shadow;
+          CREATE FUNCTION g004a_shadow.nested_usage_null_spoof() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN
+            UPDATE public.ai_usage_events SET lead_id=NULL,metadata='{"spoof":true}'::jsonb WHERE lead_id=OLD.id;
+            RETURN OLD;
+          END $$;
+          CREATE TRIGGER trg_nested_usage_null_spoof BEFORE DELETE ON public.leads
+            FOR EACH ROW EXECUTE FUNCTION g004a_shadow.nested_usage_null_spoof();
+        `);
+        await expect(client.unsafe("DELETE FROM public.leads WHERE id='lead-b-reversed'")).rejects.toThrow(/G004AR1_USAGE_RI_NULL_SHAPE_INVALID/);
+        await client.unsafe(`CREATE OR REPLACE FUNCTION g004a_shadow.nested_usage_null_spoof() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN
+            UPDATE public.ai_usage_events SET lead_id=NULL WHERE lead_id=OLD.id;
+            RETURN OLD;
+          END $$`);
+        await expect(client.unsafe("DELETE FROM public.leads WHERE id='lead-b-reversed'")).rejects.toThrow(/G004AR1_USAGE_RI_NULL_PARENT_PRESENT/);
+        await client.unsafe(`
+          DROP TRIGGER trg_nested_usage_null_spoof ON public.leads;
+          DROP FUNCTION g004a_shadow.nested_usage_null_spoof();
+          DELETE FROM public.leads WHERE id='lead-b-reversed';
+        `);
+        expect((await client.unsafe("SELECT tenant_id,lead_id,verification_id,metadata FROM public.ai_usage_events WHERE id='usage-b-reversed'"))[0]).toEqual({
+          tenant_id: tenantB,
+          lead_id: null,
+          verification_id: null,
+          metadata: { sentinel: "reverse" },
+        });
+
+        // Existing both-linked rows are revalidated under the migration locks;
+        // a constraint-bypassed historical mismatch cannot be grandfathered.
+        await resetTo(client);
+        await addTenantB(client);
+        await client.unsafe(`
+          INSERT INTO public.leads(id,tenant_id,place_id,name) VALUES ('lead-b-other','${tenantB}','place-b-other','Other Lead');
+          INSERT INTO public.ai_lead_verifications(id,lead_id,model,status,recommendation)
+            VALUES ('verification-b-one','lead-b','m','queued','review'),('verification-b-other','lead-b-other','m','queued','review');
+          INSERT INTO public.ai_usage_events(id,lead_id,verification_id,model)
+            VALUES ('usage-b-historical-mismatch','lead-b','verification-b-one','m');
+          ALTER TABLE public.ai_usage_events DISABLE TRIGGER ALL;
+          UPDATE public.ai_usage_events SET verification_id='verification-b-other' WHERE id='usage-b-historical-mismatch';
+          ALTER TABLE public.ai_usage_events ENABLE TRIGGER ALL;
+        `);
+        await expectG004AR1RejectedWithoutResidue(client, /G004AR1_EXISTING_USAGE_REFERENCE_SCOPE_INVALID/);
 
         // Definition-aware spoof matrix rolls back without repairing anything.
         for (const spoof of ["function_body", "function_acl", "overload", "trigger", "index", "constraint", "nullable_tenant", "column_acl"] as const) {
@@ -380,6 +498,37 @@ describe("G-004A AI tenant scope and worker envelope", () => {
           if (spoof === "column_acl") await client.unsafe("GRANT SELECT(id) ON public.ai_usage_events TO authenticated");
           await expectMigrationRejectedWithoutResidue(client, /G004A_PARTIAL_OR_SPOOFED_CATALOG/);
         }
+
+        // R1 rejects partial, spoofed, and drifted baseline/final states before
+        // DDL, leaving each hostile catalog byte-for-byte unchanged.
+        for (const spoof of ["partial_function", "partial_trigger", "function_body", "function_acl", "function_config", "function_comment", "function_owner", "overload", "trigger", "extra_trigger", "extra_binding", "v2_body", "constraint"] as const) {
+          await resetTo(client, spoof.startsWith("partial_") ? G004AR1 : undefined);
+          if (spoof === "partial_function") await client.unsafe("CREATE FUNCTION public.novatrade_ai_usage_ri_null_normalize() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$");
+          if (spoof === "partial_trigger") await client.unsafe("CREATE TRIGGER trg_novatrade_ai_usage_events_a_ri_null_normalize BEFORE UPDATE ON public.ai_usage_events FOR EACH ROW EXECUTE FUNCTION public.novatrade_ai_scope_guard()");
+          if (spoof === "function_body") await client.unsafe("CREATE OR REPLACE FUNCTION public.novatrade_ai_usage_ri_null_normalize() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public AS $$ BEGIN RETURN NEW; END $$");
+          if (spoof === "function_acl") await client.unsafe("GRANT EXECUTE ON FUNCTION public.novatrade_ai_usage_ri_null_normalize() TO g004a_inherited; GRANT g004a_inherited TO authenticated");
+          if (spoof === "function_config") await client.unsafe("ALTER FUNCTION public.novatrade_ai_usage_ri_null_normalize() SET search_path=public");
+          if (spoof === "function_comment") await client.unsafe("COMMENT ON FUNCTION public.novatrade_ai_usage_ri_null_normalize() IS 'spoofed'");
+          if (spoof === "function_owner") await client.unsafe("ALTER FUNCTION public.novatrade_ai_usage_ri_null_normalize() OWNER TO g004a_inherited");
+          if (spoof === "overload") await client.unsafe("CREATE FUNCTION public.novatrade_ai_usage_ri_null_normalize(integer) RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT $1'");
+          if (spoof === "trigger") await client.unsafe("DROP TRIGGER trg_novatrade_ai_usage_events_a_ri_null_normalize ON public.ai_usage_events; CREATE TRIGGER trg_novatrade_ai_usage_events_a_ri_null_normalize AFTER UPDATE ON public.ai_usage_events FOR EACH ROW EXECUTE FUNCTION public.novatrade_ai_usage_ri_null_normalize()");
+          if (spoof === "extra_trigger") await client.unsafe("CREATE TRIGGER trg_novatrade_ai_usage_events_interposed BEFORE UPDATE ON public.ai_usage_events FOR EACH ROW EXECUTE FUNCTION public.novatrade_ai_scope_guard()");
+          if (spoof === "extra_binding") await client.unsafe("CREATE TRIGGER trg_novatrade_ai_usage_helper_extra BEFORE UPDATE ON public.ai_feedback_events FOR EACH ROW EXECUTE FUNCTION public.novatrade_ai_usage_ri_null_normalize()");
+          if (spoof === "v2_body") await client.unsafe("CREATE OR REPLACE FUNCTION public.novatrade_ai_scope_guard() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public AS $$ BEGIN RETURN NEW; END $$");
+          if (spoof === "constraint") await client.unsafe("ALTER TABLE public.ai_usage_events DROP CONSTRAINT ai_usage_events_tenant_lead_fkey; ALTER TABLE public.ai_usage_events ADD CONSTRAINT ai_usage_events_tenant_lead_fkey FOREIGN KEY(tenant_id,lead_id) REFERENCES public.leads(tenant_id,id) ON DELETE SET NULL (lead_id) NOT VALID");
+          await expectG004AR1RejectedWithoutResidue(client, spoof === "v2_body" || spoof === "constraint" || spoof === "extra_trigger" ? /G004AR1_G004A_V2_FOUNDATION_DRIFT/ : /G004AR1_NORMALIZER_CATALOG_DRIFT/);
+        }
+
+        // A failure after helper/trigger creation rolls the whole installation
+        // back to the exact accepted pre-R1 state.
+        await resetTo(client, G004AR1);
+        const rollbackBefore = await catalogSnapshot(client);
+        await expect(client.unsafe(g004ar1Sql.replace(
+          "-- G004AR1_INSTALL_COMPLETE",
+          "-- G004AR1_INSTALL_COMPLETE\nSELECT 1/0;",
+        ))).rejects.toThrow(/division by zero/);
+        await client.unsafe("ROLLBACK");
+        expect(await catalogSnapshot(client)).toEqual(rollbackBefore);
 
         // Pre-install column ACLs are not silently cleared during activation.
         await prepareUpgrade(client);
@@ -439,6 +588,49 @@ describe("G-004A AI tenant scope and worker envelope", () => {
           await replay?.catch(() => undefined);
           await migrationClient.end({ timeout: 5 });
           await writerClient.end({ timeout: 5 });
+        }
+
+        // R1 serializes both table writers and pg_proc function definition,
+        // owner/config, and ACL mutations for its complete classification span.
+        await resetTo(client);
+        const r1MigrationClient = postgres(url, { max: 1, onnotice: () => undefined });
+        const r1WriterClient = postgres(url, { max: 1, onnotice: () => undefined });
+        let r1Replay: Promise<unknown> | undefined;
+        try {
+          const [{ pid }] = await r1MigrationClient.unsafe<Array<{ pid: number }>>("SELECT pg_catalog.pg_backend_pid() pid");
+          r1Replay = Promise.resolve(r1MigrationClient.unsafe(g004ar1Sql.replace(
+            "-- G004AR1_OBJECT_LOCKS_ACQUIRED",
+            "-- G004AR1_OBJECT_LOCKS_ACQUIRED\nSELECT pg_catalog.pg_sleep(6);",
+          )));
+          let lockCount = 0;
+          for (let attempt = 0; attempt < 80 && lockCount !== 10; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            lockCount = Number((await client.unsafe(`SELECT count(*)::integer count FROM pg_catalog.pg_locks
+              WHERE pid=${pid} AND granted AND mode='ShareRowExclusiveLock'
+                AND relation IN ('pg_catalog.pg_proc'::regclass,'pg_catalog.pg_class'::regclass,'pg_catalog.pg_attribute'::regclass,
+                  'public.workspaces'::regclass,'public.tenant_memberships'::regclass,
+                  'public.leads'::regclass,'public.ai_lead_verifications'::regclass,'public.lead_ai_artifacts'::regclass,
+                  'public.ai_feedback_events'::regclass,'public.ai_usage_events'::regclass)`))[0].count);
+          }
+          expect(lockCount).toBe(10);
+          await r1WriterClient.unsafe("SET lock_timeout='250ms'");
+          await expect(r1WriterClient.unsafe("UPDATE public.ai_usage_events SET metadata=metadata WHERE false")).rejects.toThrow(/lock timeout/);
+          await expect(r1WriterClient.unsafe("CREATE OR REPLACE FUNCTION public.novatrade_ai_usage_ri_null_normalize() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$")).rejects.toThrow(/lock timeout/);
+          await expect(r1WriterClient.unsafe("COMMENT ON FUNCTION public.novatrade_ai_usage_ri_null_normalize() IS 'racing'")).rejects.toThrow(/lock timeout/);
+          await expect(r1WriterClient.unsafe("GRANT EXECUTE ON FUNCTION public.novatrade_ai_usage_ri_null_normalize() TO authenticated")).rejects.toThrow(/lock timeout/);
+          await expect(r1WriterClient.unsafe("REVOKE EXECUTE ON FUNCTION public.novatrade_ai_usage_ri_null_normalize() FROM postgres")).rejects.toThrow(/lock timeout/);
+          await expect(r1WriterClient.unsafe("ALTER FUNCTION public.novatrade_ai_usage_ri_null_normalize() SET search_path=public")).rejects.toThrow(/lock timeout/);
+          await expect(r1WriterClient.unsafe("ALTER FUNCTION public.novatrade_ai_usage_ri_null_normalize() OWNER TO postgres")).rejects.toThrow(/lock timeout/);
+          await expect(r1WriterClient.unsafe("DROP FUNCTION public.novatrade_ai_usage_ri_null_normalize() CASCADE")).rejects.toThrow(/lock timeout/);
+          await expect(r1WriterClient.unsafe("GRANT SELECT ON public.ai_usage_events TO authenticated")).rejects.toThrow(/lock timeout/);
+          await expect(r1WriterClient.unsafe("REVOKE SELECT ON public.ai_usage_events FROM postgres")).rejects.toThrow(/lock timeout/);
+          await expect(r1WriterClient.unsafe("GRANT SELECT(id) ON public.ai_usage_events TO authenticated")).rejects.toThrow(/lock timeout/);
+          await expect(r1WriterClient.unsafe("REVOKE SELECT(id) ON public.ai_usage_events FROM postgres")).rejects.toThrow(/lock timeout/);
+          await r1Replay;
+        } finally {
+          await r1Replay?.catch(() => undefined);
+          await r1MigrationClient.end({ timeout: 5 });
+          await r1WriterClient.end({ timeout: 5 });
         }
       } finally {
         await client?.end({ timeout: 5 }).catch(() => undefined);

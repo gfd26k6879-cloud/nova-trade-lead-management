@@ -816,3 +816,36 @@ reviews run. No external action is assumed.
 
 The G-007P19 blocker discovery receipt commit is
 `50a96cd13feb3a852e526c59815b3d3e7bd2d71a`.
+
+## G-004A-R1 forward repair acceptance receipt
+
+G-004A-R1 is accepted as a forward-only PostgreSQL repair. Migration
+`202607310008_harden_ai_usage_transitive_lead_delete.sql` makes the legitimate
+combined lead/verification SET NULL sequence order-independent without editing
+accepted G-004A migration `202607290003` or weakening its immutable-reference
+rules. Direct mutations, cross-tenant references, attribution changes,
+catalog spoofing, partial installation, hostile concurrent DDL/ACL changes,
+and existing reference mismatches still reject.
+
+Both foreign-key creation orders, exact replay and rollback, full non-reference
+row preservation, trigger binding/order, RLS/ACL, and ten-lock serialization
+pass on PostgreSQL 16.14. The corrected implementer matrix passed 1/1 in
+128.31 seconds and the independent Sol rerun passed 1/1 in 128.07 seconds.
+G-002, G-003, G-005, T-029, canonical tenant fixtures, TypeScript, focused
+ESLint, recovery verification, production build, and diff checks pass.
+Independent security/catalog and quality reviewers report no remaining
+P0/P1/P2 findings.
+
+The inventory is now 53 discovered / 51 applied / 2 runtime-only skipped.
+Sequence `202607310008` is consumed and `202607310009` is next available. The
+source commit is recorded by the following lineage update. P19 is unblocked
+and resumes read-only on a fresh chain; it still has no RETAIN, DEFER, or
+migration disposition. Parent G-007 and G-004 stay open, and G-004B remains a
+separate runtime correlation/redaction card.
+
+The invalid Fedora invocation of the Windows-only release lane is retained in
+the validation receipt and supplies no Windows evidence. The historical native
+Windows/NTFS 111/111 acceptance remains authoritative, that lane remains
+paused, and G-006C2B remains unopened. All repair containers, listeners,
+processes, databases, worktrees, and locks are released with the lineage
+commit. No remote or external action occurred.

@@ -3123,3 +3123,23 @@ Date: 2026-07-31
   `50a96cd13feb3a852e526c59815b3d3e7bd2d71a`. No P19 container, listener,
   database, process, candidate, or worktree remains; the repair locks above
   remain held by Sol.
+
+## G-004A-R1 accepted and G-007P19 resumed
+
+- G-004A-R1 is independently accepted on PostgreSQL 16.14. Exact install and
+  replay, both foreign-key orders, full-row preservation, direct and nested
+  spoof rejection, rollback, catalog/RLS/ACL guards, and hostile ten-lock
+  serialization pass. The implementer matrix passed 1/1 in 128.31 seconds and
+  Sol's independent matrix passed 1/1 in 128.07 seconds; security/catalog and
+  quality reviewers report no remaining P0/P1/P2 findings.
+- The authoritative migration inventory is 53 discovered / 51 applied / 2
+  runtime-only skipped. Sequence `202607310008` is consumed and
+  `202607310009` is available.
+- With the local lineage commit, Sol releases
+  `postgres-migration-sequence:202607310008`, `ai-scope-guard`,
+  `ai-tenant-scope-postgres-test`, and the G-004A-R1 exclusive durable-document
+  reservation. No repair implementer lock, container, listener, process,
+  database, temporary worktree, or candidate remains.
+- G-007P19 resumes read-only against a fresh 53/51/2 chain and still has no
+  index disposition. G-004B remains open and separate. The paused native
+  Windows/NTFS G-006 lane and unopened G-006C2B boundary are unchanged.
