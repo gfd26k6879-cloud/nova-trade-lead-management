@@ -29,6 +29,10 @@ The P17 partition is reproduced as 28 mapped or queued and 34 unclassified:
 - mapped/queued: G-002 3 + G-003 15 + G-004A 10 = 28;
 - unclassified: G-002 10 + G-003 24 = 34.
 
+After the accepted P21 dispositions, 30 names are mapped or accepted and 32
+remain unclassified: G-002 is now 5 classified and 8 unclassified; the G-003
+and G-004A partitions are unchanged.
+
 For this reconstruction, an exact audit target or named plan/control owner is
 mapped. Merely appearing as a migration foundation guard does not classify a
 tenant-query family. P18 and P19 each classify two names already inside the 28,
@@ -40,9 +44,9 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | Status | Table | Index and ordered keys | Current/future owner |
 |---|---|---|---|
 | U | `crawl_runs` | `idx_crawl_runs_blocked_created(status, blocked_at DESC, created_at DESC) WHERE status='blocked'` | crawl operations; G-013/G-020 |
-| U | `crawl_runs` | `idx_crawl_runs_created_desc(created_at DESC)` | discovery history; G-013 |
+| A:P21 retain | `crawl_runs` | `idx_crawl_runs_created_desc(created_at DESC)` | exact current global visibility/history owner; future G-013 form deferred |
 | U | `crawl_runs` | `idx_crawl_runs_market_created(market_id, created_at DESC)` | market/run history; G-010/G-013 |
-| U | `crawl_runs` | `idx_crawl_runs_status_created(status, created_at DESC)` | run selection/history; G-013 |
+| A:P21 retain | `crawl_runs` | `idx_crawl_runs_status_created(status, created_at DESC)` | current global status-filter compatibility support; future G-013 form deferred |
 | U | `crawl_units` | `idx_crawl_units_budget_pages(crawl_run_id, status, pages_fetched, max_pages)` | run budget calculation; G-013/G-021 |
 | U | `crawl_units` | `idx_crawl_units_cell_status(location_cell_id, status, category)` | cell coverage; G-010/G-013 |
 | U | `crawl_units` | `idx_crawl_units_market_status(market_id, status, category)` | market coverage; G-010/G-013 |
@@ -237,3 +241,12 @@ G-007P20A acceptance commit
 `c8c3dba2ce980f2bfcbf7e0f6d71e1bf6a7d83d2` consumes sequence 009 and
 accepts the separate tenant-cap support index. The next crawl-run visibility
 audit remains unnumbered and no migration is assumed.
+
+G-007P21 audits the current crawl-run visibility pair on a fresh 54/52/2
+PostgreSQL 16.14 chain. `idx_crawl_runs_created_desc` naturally serves every
+exact current global query in the representative fixture. The status-leading
+index remains logical compatibility filter support but was not naturally
+selected. Six transactional tenant/workspace candidates prove no material
+defect and roll back without residue. Both globals are retained, sequence 010
+remains free, and blocked-created plus market-created remain separate unopened
+families.

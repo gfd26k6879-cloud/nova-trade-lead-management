@@ -3263,9 +3263,9 @@ Date: 2026-07-31
 
 - After clean P20A lineage at `7cc9c516334815d333fd97c4085986384819dd00`,
   Sol opens G-007P21 for exactly `idx_crawl_runs_status_created` and
-  `idx_crawl_runs_created_desc`. The former owns current newest-running/queued
-  and newest-paused lookups; the latter owns current newest-run and bounded
-  discovery-history reads.
+  `idx_crawl_runs_created_desc`. The pair supports current newest-running,
+  newest-paused, newest-run, and bounded discovery-history compatibility reads;
+  measured natural ownership is resolved by the audit receipt below.
 - The packet is read-only: source ownership, live PostgreSQL 16 catalog,
   interleaved two-tenant fixture, natural EXPLAIN/BUFFERS, ordered-result
   digests, and independent review may run concurrently. Current queries are
@@ -3277,3 +3277,21 @@ Date: 2026-07-31
 - Stop before DDL unless one exact current or durably approved tenant query
   proves a material plan defect. `idx_crawl_runs_blocked_created` and the real
   `idx_crawl_runs_market_created` remain later, separate, unnumbered families.
+
+## G-007P21 accepted without migration
+
+- Fresh PostgreSQL 16.14 replay passes at 54/52/2. On 280,000 interleaved
+  two-tenant rows, `idx_crawl_runs_created_desc` naturally serves all four exact
+  global caller shapes; the status-leading index has zero measured scans and is
+  retained as logical compatibility support, not claimed natural ownership.
+- Six transactional tenant/workspace candidates produce no material plan gain.
+  PostgreSQL selects only a workspace-paused candidate, duplicating the exact
+  accepted G-002 plan at four buffers. All 11 result digests match and every
+  candidate rolls back with zero residue.
+- G-009/G-013 has not fixed tenant/workspace/null-workspace visibility or query
+  ordering, so synthetic controls cannot authorize DDL. Counts stay 54/52/2,
+  sequence `202607310010` remains free, and no migration/test lock is acquired.
+- Independent source/dependency and test/acceptance reviews agree with retain/no
+  defect. Root current compatibility tests pass 16/16. All disposable resources
+  are removed. The receipt reservation is held only through its local commit;
+  blocked-created and market-created remain separate unopened families.

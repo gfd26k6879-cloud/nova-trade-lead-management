@@ -1003,3 +1003,21 @@ visibility/dispatch contracts. Counts remain 54/52/2; sequence
 `202607310010` is free and no write lock is held. Blocked-run and actual
 market-created indexes remain later separate unnumbered families. Parent G-007,
 G-004B, and the paused G-006 boundary are unchanged.
+
+## G-007P21 accepted without migration
+
+Sol accepts the crawl-run visibility audit at open baseline
+`f3be206fa64ba69efd0fd0414dfe9e7f12518506`. Fresh PostgreSQL 16.14 replayed
+54/52/2 and measured 280,000 interleaved rows. The created-time index naturally
+served processing, paused, latest, and bounded-history global compatibility
+queries. The status-leading index had zero measured scans and is retained as
+logical compatibility support; the earlier opening wording is not a natural
+ownership claim.
+
+Six transactional tenant/workspace candidates provided no material gain, all
+11 result digests matched, and rollback left no candidate residue. G-009/G-013
+has not fixed the exact tenant/workspace visibility contract, so no DDL is
+authorized. Counts remain 54/52/2 and sequence 010 remains free. Independent
+readiness and test audits agree; root current compatibility tests pass 16/16.
+All disposable resources are removed. Blocked-created and market-created remain
+separate unopened families; parent G-007 stays open.
