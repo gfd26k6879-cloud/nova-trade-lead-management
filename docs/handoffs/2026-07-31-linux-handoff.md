@@ -1957,7 +1957,35 @@ mixed-case, and quoted command values, preserve lowercase query state/chips,
 prove direct URL case remains unchanged, and preserve postal uppercase and
 unrelated command behavior.
 
-No client, page, query, access, permission, schema, migration, dependency,
-data, index, tenant-cutover, or visual change opens. Counts stay 54/52/2,
-crosswalk 46/16, sequence `202607310010` remains free, parent G-007 remains
-open, and P37 stays blocked until SR3 acceptance and lineage release.
+No client, page, database-query implementation/SQL, access, permission,
+schema, migration, dependency, data, index, tenant-cutover, or visual change
+opens. Counts stay 54/52/2, crosswalk 46/16, sequence `202607310010` remains
+free, parent G-007 remains open, and P37 stays blocked until SR3 acceptance and
+lineage release.
+
+## G-007SR3 Explore cell-command normalization accepted
+
+Sol accepts exact two-file implementation commit
+`b1bb12c34952cdfd3a5ebb8d227980962365b9ed`. The `cell:` branch now uses the
+command parser's already unquoted/lowercased value instead of uppercasing it.
+Canonical lowercase platform cell IDs reach the unchanged exact parameterized
+SQL equality predicate.
+
+Tests cover lowercase, uppercase, mixed-case, single/double-quoted commands,
+lowercase chips/query state, direct mixed-case URL/chip preservation, and
+postal uppercase. No client, page, database-query implementation/SQL, access,
+permission, schema, migration, dependency, data, index, tenant-cutover, or
+visual change occurred.
+
+Root passed focused Explore 29/29, TypeScript, focused ESLint, recovery 37,
+Fedora coordinator 12 passed/26 Windows-native skipped, and build 11/11. Two
+broader Vitest attempts improperly crossed Windows-dependent G006/G006C lanes
+on Fedora; their missing-PowerShell failures are invalid environment evidence,
+not regressions, and are excluded. They left no residue and do not replace the
+historical Windows 111/111 evidence.
+
+Independent architecture/security and test/evidence reviews accept with no
+P0/P1/P2; the implementer does not self-accept. Source/test locks are released,
+counts stay 54/52/2, crosswalk stays 46/16, sequence `202607310010` remains
+free, original arithmetic stays 58/318/260, and parent G-007 remains open.
+P37 `idx_leads_market_active` is next but remains unopened until lineage.

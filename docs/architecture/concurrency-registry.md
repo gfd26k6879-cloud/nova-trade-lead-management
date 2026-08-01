@@ -4223,10 +4223,10 @@ Date: 2026-08-01
   lowercased by `normalizeCommandValue`; `cell:` must preserve that canonical
   lowercase value instead of uppercasing it. Canonical, uppercase, mixed-case,
   and quoted command inputs must resolve to the lowercase platform cell ID.
-- Direct URL values and URL chips remain trim-only/case-preserving. Postal
-  commands remain uppercase. No client/page/query/access/permission/schema,
-  migration, dependency, data, index, tenant-cutover, or UI redesign change is
-  authorized.
+- Direct URL query-state remains trim-only; URL/chip casing remains
+  case-preserving. Postal commands remain uppercase. No client/page/database-
+  query implementation or SQL, access, permission, schema, migration,
+  dependency, data, index, tenant-cutover, or UI redesign change is authorized.
 - Two other agents own independent architecture/security and test/evidence
   review. The implementer cannot self-accept. Stop on unexpected dirty overlap,
   mixed-case canonical source truth, broader URL normalization, any SQL/access/
@@ -4234,3 +4234,25 @@ Date: 2026-08-01
 - Counts remain 54/52/2; crosswalk remains 46/16 (G-003 23/16, G-002 13/0),
   sequence `202607310010` remains free, P37 remains blocked, and parent G-007
   remains open.
+
+## G-007SR3 accepted; parser and test locks released
+
+Date: 2026-08-01
+
+- Sol accepts implementation commit
+  `b1bb12c34952cdfd3a5ebb8d227980962365b9ed`. The `cell:` command uses the
+  already normalized lowercase value; canonical command IDs now reach the
+  unchanged exact parameterized SQL predicate.
+- The exact two-file packet preserves direct URL/chip casing and postal
+  uppercase behavior. No client, page, database-query implementation/SQL,
+  access, permission, schema, migration, dependency, data, index,
+  tenant-cutover, or visual change occurs.
+- Root passed focused Explore 29/29, TypeScript, focused ESLint, recovery 37,
+  Fedora coordinator 12 passed/26 Windows-native skipped, and build 11/11.
+  Two broader Vitest invocations crossed current Windows-dependent G006/G006C
+  lanes on Fedora and are truthfully excluded as invalid environment evidence.
+- Independent architecture/security and test/evidence reviews accept with no
+  P0/P1/P2; implementer self-acceptance is false.
+- SR3 parser/test locks are released. Counts remain 54/52/2, crosswalk 46/16,
+  sequence `202607310010` remains free, and parent G-007 stays open. Sol retains
+  only the durable-document reservation through lineage; P37 remains unopened.
