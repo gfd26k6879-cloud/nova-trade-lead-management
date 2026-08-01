@@ -3042,3 +3042,19 @@ Date: 2026-07-31
 - The attributable local receipt is
   `6f3279dbd6af85ce05df731f6a3071216a2c72f9`. No P15 container, listener,
   database, process, worktree, or lock remains.
+
+## G-007P16 deliberate public demo-slug classification
+
+- A fresh 52/50/2 PostgreSQL 16.14 audit over 100,008 demos confirms public
+  resolution accepts one globally unique slug and has no tenant input. Natural
+  lookup uses unique `demos_slug_key` at 4 demo/5 total buffers.
+- The 8,249,344-byte `idx_demos_public_slug` remains deliberately global. Its
+  nonselection is not a tenant defect; tenant-prefixing cannot serve the anon
+  route, and removal would be a separate cleanup decision.
+- RLS, base-table revokes, exact SECURITY DEFINER owner/search-path/ACL,
+  bounded projection, private-key stripping, lifecycle negatives, result
+  digests, and cross-tenant duplicate rejection pass. Independent architecture
+  and quality reviews pass RETAIN/no migration.
+- Catalog is unchanged, resources are removed, counts remain 52/50/2, and
+  sequence 008 stays free. P17 demos lead-index audit is next but not terminal;
+  later G004 and G002/G005 retained families require explicit classification.

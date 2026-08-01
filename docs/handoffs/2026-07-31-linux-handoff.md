@@ -713,3 +713,27 @@ receipt commit, P16 is the read-only classification of deliberately global
 
 The G-007P15 deferred-audit receipt commit is
 `6f3279dbd6af85ce05df731f6a3071216a2c72f9`.
+
+## G-007P16 deliberate-public-index receipt
+
+G-007P16 retains `idx_demos_public_slug` with no migration. On a 100,008-row
+PostgreSQL 16.14 fixture, the approved anonymous function accepts only a
+globally unique slug and naturally resolves it through unique
+`demos_slug_key` in 4 demo/5 total buffers. No tenant predicate belongs in this
+public contract. Nonselection of the larger public-slug composite is not a
+tenant defect, and removing it would require a separate cleanup packet.
+
+The exact function owner, fixed search path, ACL, RLS/base-table denials,
+bounded projection, private-key stripping, lifecycle negatives, duplicate-slug
+rejection, and stable result/catalog digests all pass. Independent architecture
+and quality reviews pass RETAIN/no migration. The current broad direct-table
+application lookup remains a separate G-015/G-024 privacy cutover obligation.
+
+All disposable resources were removed and the repository is clean. Counts
+remain 52/50/2, sequence 008 remains available, and no full upstream matrix was
+run because no source or migration survived. Parent G-007 stays open.
+
+After the local receipt commit, P17 is the read-only audit of
+`idx_demos_lead_id`. P17 is not terminal: P18/P19 reference families and later
+AI query-history and G002/G005 residual families still require explicit
+classification. No migration or external action is assumed.
