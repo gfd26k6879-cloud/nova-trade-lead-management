@@ -3623,4 +3623,6 @@ Date: 2026-08-01
   or test edit is accepted. Independent reviews report no P0/P1/P2. Counts stay
   54/52/2, crosswalk becomes 39/23 (G-003 16/23), and sequence 010 stays free.
   The serialized durable-document reservation remains until the attributable
-  local receipt commit; parent G-007 remains open.
+  local receipt commit; parent G-007 remains open. Receipt commit
+  `9f55ca6c1c8469b975fe5a0ffe9091787e2b5707` releases the reservation; this
+  lineage update opens no next residual family.

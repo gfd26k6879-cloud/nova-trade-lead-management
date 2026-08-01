@@ -376,3 +376,7 @@ SQLite compatibility is retained without claiming fresh SQLite validation.
 No candidate, migration, replacement, necessity, or removal packet opens.
 Counts stay 54/52/2, sequence 010 stays free, and the crosswalk becomes 39/23
 with G-003 at 16/23. Parent G-007 remains open.
+
+G-007P29 receipt commit `9f55ca6c1c8469b975fe5a0ffe9091787e2b5707`
+records the accepted RETAIN/DEFER disposition. This lineage update opens no next
+residual family.

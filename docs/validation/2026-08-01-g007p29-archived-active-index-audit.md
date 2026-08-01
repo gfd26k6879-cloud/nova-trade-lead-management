@@ -6,6 +6,8 @@ Baseline: `90a840b75640c38224db5cc98b98e695520b26c5`
 
 Status: accepted RETAIN/DEFER; no migration
 
+Receipt commit: `9f55ca6c1c8469b975fe5a0ffe9091787e2b5707`
+
 ## Decision
 
 On fresh PostgreSQL 16.14 after the accepted 54/52/2 portable migration

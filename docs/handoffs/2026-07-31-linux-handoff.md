@@ -1319,3 +1319,6 @@ demonstrated necessity, and no removal, replacement, candidate, migration, or
 test edit opens. Independent reviews report no P0/P1/P2. Root gates pass and all
 resources are gone. Crosswalk becomes 39/23, G-003 becomes 16/23, counts remain
 54/52/2, sequence 010 stays free, and parent G-007 remains open.
+Receipt commit `9f55ca6c1c8469b975fe5a0ffe9091787e2b5707` records the
+accepted disposition and releases the durable-document reservation. This
+lineage update opens no next residual family.
