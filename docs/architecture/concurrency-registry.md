@@ -2917,3 +2917,16 @@ Date: 2026-07-31
 - Receipt commit `95c2c7ab2cf726927ba43aef50ef9d816c558217` durably records
   the deferred defect. No P9 lock, container, listener, process, or worktree
   remains.
+
+## G-007P10 score-recompute stale deferred-defect audit
+
+- A fresh 51/49/2 PostgreSQL 16.14 audit over 180,000 interleaved leads proves
+  severe wrong-tenant work in the ordered score-recompute selector.
+- Only the covering archive-partial tenant index corrects limits through 100000
+  and the tenant stale count. It also captures the current limit-100000 selector
+  and both current count owners; smaller candidates are incomplete or capture.
+- Independent architecture and quality reviews pass DEFER. No migration/lock
+  opens; all candidates/resources were removed and 38/38 indexes are healthy.
+- Transfer the obligation to G-009/G-011/G-012/G-014/G-019/G-020, with
+  G-017/G-018 governing any ordinary dashboard projection. Parent G-007 stays
+  open and current runtime/global ownership remains unchanged.

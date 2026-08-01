@@ -542,3 +542,17 @@ No remote or external action occurred.
 
 The G-007P9 deferred-audit receipt commit is
 `95c2c7ab2cf726927ba43aef50ef9d816c558217`.
+
+## G-007P10 deferred-defect receipt
+
+G-007P10 proves a score-recompute tenant-plan defect but opens no migration.
+On 180,000 adversarially ordered leads, the global selector removed 90,000
+newer wrong-tenant rows at limit 1. Only a covering archive-partial tenant index
+fixed all supported limits and the stale count, but it captured the current
+limit-100000 selector and both scheduler count owners. Other candidates were
+incomplete or also captured current paths. Independent reviews pass DEFER.
+
+The obligation transfers to G-009/G-011/G-012/G-014/G-019/G-020, with
+G-017/G-018 applying to any ordinary dashboard projection. All candidates and
+resources were removed; 38/38 indexes are healthy. Parent G-007 remains open,
+and no remote or external action occurred.
