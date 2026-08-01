@@ -3659,3 +3659,39 @@ Date: 2026-08-01
   remote Auth. No defect, tenant-prefixed candidate, migration,
   test edit, replacement, or removal is assumed. Counts remain 54/52/2,
   crosswalk 39/23 (G-003 16/23), and sequence `202607310010` stays free.
+
+## G-007P30 accepted; retain/defer assigned-lead compatibility
+
+Date: 2026-08-01
+
+- Fresh PostgreSQL 16.14 replayed the 54/52/2 chain over 368,640 physically
+  interleaved two-tenant leads. The target and exact SET NULL FK were healthy;
+  installed/drop/rollback held 38/37/38 lead indexes and 10 invariant
+  constraints. All 33 canonical results were exact across phases and all 33
+  installed plan fingerprints were restored after rollback. Drop-phase plans
+  are not asserted equal.
+- Ordinary assigned/unassigned lists, maps, Kanban, NowQueue, workbench, team,
+  and query-function export-control shapes did not select the target; the live
+  CSV route supplies no assignment filter. Three assigned-plus-
+  updated structural controls selected it but have no current reader. The exact
+  local lead cleanup changed 61,440 assignments and selected the target;
+  post-`VACUUM FULL` drop comparison showed no material buffer or runtime
+  advantage. The rollback-only local Auth deletion proved SET NULL outcome but
+  exposed only `users_pkey`; nested RI target support remains unproven.
+- Sol accepts RETAIN/DEFER for the healthy historical PostgreSQL catalog and
+  frozen SQLite compatibility definition. Assignee is a selector, never tenant
+  or workspace authority; leads have no workspace. No tenant defect, candidate,
+  DDL, migration, replacement, test edit, removal, remote Auth, or fresh SQLite
+  claim is accepted. Independent reviews report no P0/P1/P2.
+- Counts stay 54/52/2, crosswalk becomes 40/22 (G-003 17/22; G-002 13/0),
+  sequence 010 stays free, and parent G-007 remains open. The serialized durable
+  reservation remains held until the attributable local receipt commit.
+- The primary export-helper rows were nonbinding complete sets at 30,720 rows.
+  A separate fresh PostgreSQL 16.14 54/52/2 replay seeded 100,005 assigned and
+  100,005 SQL-NULL eligible leads across two tenants. Exact 50,000/50,001 and
+  100,000/100,001 boundaries had unique scores; all four full-row and ordered
+  digests were exact installed/drop/rollback. Natural plans stayed on
+  `idx_leads_enrichment_lease` with the target absent, and catalog restoration
+  was exact at 38/37/38 indexes and 10 constraints. This closes the helper LIMIT
+  contract only; the live CSV route passes no assignment filter. Retain/defer,
+  no-DDL/no-removal, authority, counts, and reservation state are unchanged.

@@ -58,6 +58,9 @@ remain unclassified: G-002 is complete at 13 classified and 0 unclassified.
 After the accepted P29 plan audit, 39 names are mapped or accepted and 23
 remain unclassified. G-003 is now 16 classified and 23 unclassified.
 
+After the accepted P30 plan audit, 40 names are mapped or accepted and 22
+remain unclassified. G-003 is now 17 classified and 22 unclassified.
+
 For this reconstruction, an exact audit target or named plan/control owner is
 mapped. Merely appearing as a migration foundation guard does not classify a
 tenant-query family. P18 and P19 each classify two names already inside the 28,
@@ -97,7 +100,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | A:P9 defer | `leads` | `idx_leads_active_discovered_at(archived_at, is_excluded, discovered_at)` | active statistics; G-017/G-018 |
 | A:P7 | `leads` | `idx_leads_ai_status_checked(ai_verification_status, ai_checked_at DESC)` | AI viability/current compatibility; G-011/G-014 |
 | A:P29 retain/defer | `leads` | `idx_leads_archived_active(archived_at, updated_at DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definitions; no exact primary plan owner or demonstrated necessity; target-only drop was plan/result/buffer neutral; accepted P10 tenant score-recompute defect remains deferred to G-009/G-011/G-012/G-014/G-019/G-020 plus G-017/G-018 projections; no removal, replacement, candidate, or migration |
-| U | `leads` | `idx_leads_assigned_to_user(assigned_to_user_id, updated_at DESC)` | assignment/workbench; G-011/G-012 |
+| A:P30 retain/defer | `leads` | `idx_leads_assigned_to_user(assigned_to_user_id, updated_at DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definition; exact local assignee-null cleanup naturally uses the target, but target-only drop shows no material necessity; ordinary assignment readers and helper-capability export controls do not use it, the live CSV route supplies no assignment filter, and no current reader owns the `updated_at` order; visible parent-delete plan cannot attribute nested FK support; assignee is never tenant/workspace authority; no tenant defect, candidate, migration, replacement, test edit, or removal |
 | U | `leads` | `idx_leads_business_type_score(business_type, score DESC)` | filtering/statistics; G-011/G-017 |
 | U | `leads` | `idx_leads_component_scores(raw_opportunity_score DESC, verification_score DESC)` | quality/scoring; G-011/G-012/G-017 |
 | U | `leads` | `idx_leads_country_admin(country_code, admin_area1, locality)` | geography; G-010/G-011 |
@@ -380,3 +383,29 @@ with G-003 at 16/23. Parent G-007 remains open.
 G-007P29 receipt commit `9f55ca6c1c8469b975fe5a0ffe9091787e2b5707`
 records the accepted RETAIN/DEFER disposition. This lineage update opens no next
 residual family.
+
+G-007P30 classifies `idx_leads_assigned_to_user` RETAIN/DEFER. Fresh PostgreSQL
+16.14 replayed 54/52/2 migrations over 368,640 physically interleaved
+two-tenant leads. The healthy target and exact SET NULL FK restored identically;
+catalog counts were 38/37/38 indexes and 10 invariant constraints. All 33
+canonical results were exact installed/drop/rollback and all 33 installed plan
+fingerprints restored after rollback. Ordinary assigned/unassigned readers and
+query-function export controls did not select the target; the live CSV route
+does not supply assignment filters. Structural assigned-plus-updated controls selected it,
+but are not current readers. Exact local assignment-null cleanup selected the
+target; target-only drop after `VACUUM FULL` showed no material advantage.
+Nested FK maintenance was not visible in the parent-delete plan.
+
+The factorial fixture's 50,000/100,000 assigned and NULL export-helper controls
+were nonbinding full sets at 30,720 rows. A separate fresh 200,010-row PostgreSQL
+16.14 supplement closed all four exact LIMIT boundaries: full-row and ordered
+digests were exact installed/drop/rollback, every natural plan remained owned
+by `idx_leads_enrichment_lease`, and the target was absent. These are shared
+helper-capability controls, not live CSV-route behavior; the route passes no
+assignment filter. The supplement changes no disposition or arithmetic.
+
+Assignee remains a selector, never tenant or workspace authority; leads remain
+tenant-wide with no workspace dimension. No tenant defect, candidate, migration,
+replacement, test edit, removal, or fresh SQLite claim opens. Counts stay
+54/52/2, sequence 010 stays free, the crosswalk becomes 40/22, G-003 becomes
+17/22, G-002 remains 13/0, and parent G-007 remains open.
