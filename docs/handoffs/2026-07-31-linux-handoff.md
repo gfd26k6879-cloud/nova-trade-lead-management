@@ -1052,3 +1052,7 @@ removal, so Sol retains historical replay compatibility and defers plan,
 tenant-prefix, replacement, and removal claims. No PostgreSQL service or DDL was
 used. Counts remain 54/52/2, sequence 010 stays free, and the crosswalk is now
 31/31. Market-created remains separate and unopened; no later card unlocks.
+
+The accepted receipt commit is
+`2922e32d434ee9f23efb4148da791551a7c3d4ec`. Its documentation reservation is
+released. No P23 card is opened by this lineage update.

@@ -265,3 +265,7 @@ removal of the unchanged historical replay object. No PostgreSQL plan or live
 catalog claim is made. G-020 alone is not an owner; any re-audit waits for an
 exact G-013 blocked-run query contract. Counts stay 54/52/2, sequence 010 stays
 free, and market-created remains a separate unopened family.
+
+G-007P22 receipt commit `2922e32d434ee9f23efb4148da791551a7c3d4ec`
+records the accepted retain/defer classification. This lineage update does not
+open the market-created family.

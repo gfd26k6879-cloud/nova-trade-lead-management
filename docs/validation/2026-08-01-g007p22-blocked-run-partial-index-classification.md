@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: retain/defer from source ownership; no migration or plan claim
 
-Receipt commit: pending
+Receipt commit: `2922e32d434ee9f23efb4148da791551a7c3d4ec`
 
 ## Exact scope and provenance
 

@@ -3332,3 +3332,6 @@ Date: 2026-07-31
 - Retain/defer requires no PostgreSQL, migration, count update, or lock. Counts
   remain 54/52/2, sequence `202607310010` stays free, and the crosswalk becomes
   31 classified/31 unclassified. Market-created remains separate and unopened.
+- Receipt commit `2922e32d434ee9f23efb4148da791551a7c3d4ec` is final locally.
+  The documentation reservation is released; this lineage update opens no P23
+  card or other write surface.
