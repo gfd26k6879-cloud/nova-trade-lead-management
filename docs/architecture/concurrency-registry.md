@@ -3298,3 +3298,20 @@ Date: 2026-07-31
 - Receipt commit `47ce318a0acf7fd40b41798ee8154915da29bc04` is final locally.
   The durable-document reservation is released; no G-007P22 or replacement
   objective is opened by this lineage update.
+
+## G-007P22 blocked-run partial-index classification opened
+
+- After clean P21 lineage at `19f004bbb26f8c8ff4745083622274849cd2cf2f`,
+  Sol opens G-007P22 for exactly
+  `idx_crawl_runs_blocked_created(status, blocked_at DESC, created_at DESC)
+  WHERE status='blocked'`.
+- This packet is read-only and source-first. It traces every caller, migration
+  origin, test owner, and G-013/G-020 dependency. No exact current query orders
+  blocked rows by `blocked_at`; current block/resume/cancel operations use the
+  primary key and display uses P21 created-time history.
+- Stop before a disposable database, candidate, DDL, sequence reservation, or
+  migration unless an exact current or durably approved blocked-time query is
+  found. Counts stay 54/52/2 and sequence `202607310010` remains free.
+- `idx_crawl_runs_market_created` remains a separate unopened family. No
+  migration, test, or durable-document write lock is held after this opening
+  commit.

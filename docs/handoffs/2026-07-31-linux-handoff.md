@@ -1025,3 +1025,16 @@ separate unopened families; parent G-007 stays open.
 The accepted receipt commit is
 `47ce318a0acf7fd40b41798ee8154915da29bc04`. Its documentation reservation is
 released. This lineage update does not open or number the next residual audit.
+
+## G-007P22 blocked-run index classification opened
+
+After clean P21 lineage at `19f004bbb26f8c8ff4745083622274849cd2cf2f`,
+Sol opens one source-only classification for
+`idx_crawl_runs_blocked_created`. Current block, resume, cancel, and retry
+operations select by run primary key; generic display uses created-time history,
+and no current query orders by `blocked_at`.
+
+The packet may inspect source, migration provenance, tests, and durable
+G-013/G-020 dependencies. It must stop before PostgreSQL candidates or DDL
+unless it finds a real owned blocked-time query. Counts remain 54/52/2,
+sequence 010 stays free, and market-created remains separate and unopened.
