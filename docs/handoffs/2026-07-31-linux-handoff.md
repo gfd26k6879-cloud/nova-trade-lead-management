@@ -813,3 +813,6 @@ All P19 containers, databases, listeners, and processes were removed. Counts
 remain 52/50/2 until the repair is accepted. Sol holds the serialized migration,
 guard, focused test, and durable-document surfaces while read-only design
 reviews run. No external action is assumed.
+
+The G-007P19 blocker discovery receipt commit is
+`50a96cd13feb3a852e526c59815b3d3e7bd2d71a`.

@@ -3119,3 +3119,7 @@ Date: 2026-07-31
   test, proven migration-count expectations, and one repair receipt. No
   runtime-repair, SQLite, G-004B, provider, hosted, or external surface is in
   scope. P19 resumes only after independent repair acceptance and cleanup.
+- The attributable local discovery receipt is
+  `50a96cd13feb3a852e526c59815b3d3e7bd2d71a`. No P19 container, listener,
+  database, process, candidate, or worktree remains; the repair locks above
+  remain held by Sol.

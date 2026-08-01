@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: P19 stopped before index disposition; G-004A-R1 forward repair required
 
-Discovery receipt commit: pending attributable local commit
+Discovery receipt commit: `50a96cd13feb3a852e526c59815b3d3e7bd2d71a`
 
 ## Scope and stop condition
 
