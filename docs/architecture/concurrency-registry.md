@@ -3955,3 +3955,23 @@ Date: 2026-08-01
 - Acceptance receipt commit `6780d3b6131bb9fce9dd1d66865688250310f05e`
   durably closes G-007SR1. Its lineage-only successor records this release and
   does not open P34.
+
+## G-007P34 enrichment-status/score index audit reservation
+
+Date: 2026-08-01
+
+- Sol opens a read-only audit of exact G-003 residual
+  `idx_leads_enrichment(enrichment_status, score DESC)` at clean baseline
+  `1a45da3274359380c29473ca9e6bbb73734fa90e`.
+- Sol exclusively owns registry, ledger, handoff, crosswalk, integration, and
+  acceptance writes. Three agents own disjoint read-only catalog/EXPLAIN,
+  source/authority, and test/evidence lanes; no producer may self-accept.
+- The audit must distinguish the target from partial
+  `idx_leads_enrichment_lease`, tenant recovery
+  `idx_g007p6_leads_tenant_enrichment_recovery`, score/order siblings, and
+  worker/list/count shapes. Target selection alone is not necessity.
+- Accepted inventory is 54/52/2 and crosswalk 43/19 (G-003 20/19, G-002
+  13/0). Conditional classification would make 44/18 and G-003 21/18.
+  Sequence `202607310010` remains free; no migration is assumed.
+- Stop before candidate DDL, migration, replacement, removal, or test edits
+  unless an exact current or durably approved tenant-query defect is proven.

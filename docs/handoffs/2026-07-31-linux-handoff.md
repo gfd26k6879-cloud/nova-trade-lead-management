@@ -1651,3 +1651,25 @@ this receipt.
 G-007SR1 acceptance receipt commit
 `6780d3b6131bb9fce9dd1d66865688250310f05e` closes the bounded repair and
 releases its serialized locks. The lineage-only successor does not open P34.
+
+## G-007P34 enrichment-status/score index audit opened
+
+At clean baseline `1a45da3274359380c29473ca9e6bbb73734fa90e`, Sol opens a
+read-only audit of exact residual
+`idx_leads_enrichment(enrichment_status, score DESC)` from the historical full
+schema. The audit must measure current Leads, Kanban, Explore/map, CSV, Quality,
+scheduler/backlog, and enrichment-worker shapes on fresh PostgreSQL 16 after
+the full 54/52/2 chain.
+
+Evidence must distinguish the target from `idx_leads_enrichment_lease`, the
+accepted G-007P6 tenant recovery index, and score/order siblings across all six
+enrichment states, lifecycle eligibility, attempt/retry state, tenant, score
+boundaries, NULL/anomaly controls, and list/export/map limits. Exact results and
+normalized structures must match installed/drop/restored states. Target use is
+not by itself a defect or retention proof; no migration, replacement, removal,
+or test edit is authorized without a material exact current or durably approved
+tenant-query delta.
+
+Crosswalk is 43/19 (G-003 20/19, G-002 13/0); conditional classification is
+44/18 (G-003 21/18). Sequence `202607310010` remains free. P34 is read-only,
+parent G-007 remains open, and no hosted or external action opens.
