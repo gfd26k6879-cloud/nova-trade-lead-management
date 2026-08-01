@@ -516,3 +516,7 @@ grant. Counts remain 54/52/2, sequence 010 stays free, crosswalk becomes 44/18,
 G-003 becomes 21/18, G-002 stays 13/0, and parent G-007 remains open. Original
 plan arithmetic stays 58/318 accepted with 260 remaining. The next source-order
 residual is `idx_leads_exclusion_score`, but P34 does not open or number P35.
+
+G-007P34 acceptance commit `f61379c998df912abdbdb7a95a1a37836c89637c`
+records this classification locally. Its lineage-only successor releases the
+P34 reservation without opening or numbering P35.

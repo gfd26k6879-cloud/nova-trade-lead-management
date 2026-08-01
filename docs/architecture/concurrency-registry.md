@@ -3869,6 +3869,20 @@ Date: 2026-08-01
 - Stop before candidate DDL, migration, replacement, removal, or test edits
   unless an exact current or durably approved tenant-query defect is proven.
 
+## G-007P34 enrichment-status/score index audit release
+
+Date: 2026-08-01
+
+- Acceptance commit `f61379c998df912abdbdb7a95a1a37836c89637c`
+  records the independently reviewed RETAIN decision locally.
+- Sol releases the P34 durable-document reservation. No source, test,
+  migration, sequence, process, container, worktree, or payload lock remains.
+- Counts remain 54/52/2; crosswalk is 44/18 (G-003 21/18, G-002 13/0),
+  sequence `202607310010` remains free, and parent G-007 remains open.
+- The next exact residual is
+  `idx_leads_exclusion_score(is_excluded, score DESC)`. This lineage receipt
+  does not open or number P35.
+
 ## G-007P34 enrichment-status/score index audit accepted
 
 Date: 2026-08-01

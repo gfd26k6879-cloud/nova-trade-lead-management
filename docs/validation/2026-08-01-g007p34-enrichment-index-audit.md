@@ -282,3 +282,11 @@ The exact next source-order residual is
 open or number P35. The acceptance commit records this reviewed RETAIN decision
 locally; a following lineage-only commit will record its immutable hash and
 release the P34 durable reservation. No push or external action occurs.
+
+## Lineage
+
+Acceptance commit `f61379c998df912abdbdb7a95a1a37836c89637c`
+records this reviewed RETAIN decision locally. The following lineage-only
+commit releases the P34 durable reservation without opening or numbering P35.
+No task-owned disposable resource or lock remains, and no push or external
+action occurs.

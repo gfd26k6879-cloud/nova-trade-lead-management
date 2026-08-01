@@ -1715,3 +1715,17 @@ Crosswalk is now 44/18 (G-003 21/18, G-002 13/0), sequence
 with 260 remaining, and parent G-007 remains open. Exact next residual
 `idx_leads_exclusion_score(is_excluded, score DESC)` remains unopened. Sol's
 P34 durable-document reservation remains held until the lineage-only receipt.
+
+## G-007P34 lineage receipt
+
+Acceptance commit `f61379c998df912abdbdb7a95a1a37836c89637c`
+durably records the reviewed P34 RETAIN decision. This lineage-only successor
+releases the P34 durable-document reservation. No source, test, migration,
+sequence, disposable-service, worktree, process, or temporary-payload lock
+remains.
+
+Inventory stays 54/52/2, crosswalk 44/18 (G-003 21/18, G-002 13/0), and
+sequence `202607310010` remains free. Parent G-007 remains open. Exact next
+residual `idx_leads_exclusion_score(is_excluded, score DESC)` remains unopened;
+the following card must reserve P35 separately. Main and the handoff tag remain
+unchanged, and no push or external action occurred.
