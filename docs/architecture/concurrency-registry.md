@@ -3952,3 +3952,6 @@ Date: 2026-08-01
   released after the acceptance receipt. Counts remain 54/52/2, crosswalk
   43/19, and sequence `202607310010` remains free. Parent G-007 stays open;
   P34 remains the next residual and is not opened here.
+- Acceptance receipt commit `6780d3b6131bb9fce9dd1d66865688250310f05e`
+  durably closes G-007SR1. Its lineage-only successor records this release and
+  does not open P34.

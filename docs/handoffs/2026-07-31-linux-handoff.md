@@ -1647,3 +1647,7 @@ arithmetic 58/318 accepted and 260 remaining, and sequence `202607310010` is
 free. Parent G-007 remains open. The exact next residual is
 `idx_leads_enrichment(enrichment_status, score DESC)`; P34 is not opened by
 this receipt.
+
+G-007SR1 acceptance receipt commit
+`6780d3b6131bb9fce9dd1d66865688250310f05e` closes the bounded repair and
+releases its serialized locks. The lineage-only successor does not open P34.
