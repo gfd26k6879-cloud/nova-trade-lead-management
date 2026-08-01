@@ -3847,3 +3847,24 @@ Date: 2026-08-01
   reviewed P32 classification. Its lineage-only successor releases the P32
   durable-document reservation; it does not open or number the country/admin
   residual.
+
+## G-007P33 country/admin index audit reservation
+
+Date: 2026-08-01
+
+- Sol opens a read-only audit of exact G-003 residual
+  `idx_leads_country_admin(country_code, admin_area1, locality)` from
+  `20260602193000_international_markets_and_territories.sql` at clean baseline
+  `3dcbe7f6cfdbae0e2c3543a336180f6bdc411046`.
+- Sol exclusively holds registry, ledger, handoff, crosswalk, integration, and
+  acceptance writes. Three agents own disjoint read-only catalog/EXPLAIN,
+  source/authority, and test/evidence lanes; no producer may self-accept.
+- The accepted inventory is 54/52/2 and crosswalk 42/20 (G-003 19/20,
+  G-002 13/0). Conditional classification would make it 43/19 and G-003
+  20/19. Sequence `202607310010` remains free; no migration is assumed.
+- Fresh evidence must distinguish leading-country ownership from unused
+  trailing admin/locality keys, skew/selectivity effects, NULL/empty/case
+  semantics, and future tenant-prefixed measurement. Geography selectors never
+  grant tenant/workspace authority.
+- Stop before candidate DDL, migration, replacement, removal, or test edits
+  unless an exact current or durably approved tenant-query defect is proven.

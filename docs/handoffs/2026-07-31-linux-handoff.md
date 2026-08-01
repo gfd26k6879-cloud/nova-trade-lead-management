@@ -1537,3 +1537,22 @@ P32 acceptance commit `ca2a4cf3f0ea93474121c1541f769086311d6291` records the
 reviewed RETAIN classification locally. Its lineage-only successor releases the
 P32 durable-document reservation without opening or numbering the country/admin
 residual.
+
+## G-007P33 country/admin index audit opened
+
+From clean baseline `3dcbe7f6cfdbae0e2c3543a336180f6bdc411046`, Sol opens a
+read-only PostgreSQL 16 catalog and real-EXPLAIN audit of
+`idx_leads_country_admin(country_code, admin_area1, locality)`. Its PostgreSQL
+origin is `20260602193000_international_markets_and_territories.sql`, origin
+commit `fe07602ccfb47f529c8aeb62e249217c8fb1828d`, file SHA-256
+`af73cd9d955a69266bac9140eebf981df1e289110ced3d3f1d2e41433ec28372`;
+the SQLite mirror is frozen compatibility evidence only.
+
+Three read-only lanes own formal catalog/EXPLAIN, source/authority, and
+test/evidence work. Sol alone owns durable writes and acceptance. Starting
+state is 54/52/2 migrations and crosswalk 42/20 (G-003 19/20, G-002 13/0);
+conditional classification is 43/19 and G-003 20/19. No migration, candidate,
+test edit, replacement, or removal is authorized without a proven exact
+tenant-query defect. Country/admin/locality are selectors, never tenant or
+workspace authority; future tenant-prefixed forms remain measurements until
+G-010/G-011 and exact downstream ownership.
