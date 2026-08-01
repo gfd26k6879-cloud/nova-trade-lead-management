@@ -3350,3 +3350,20 @@ Date: 2026-07-31
   workspace visibility, ordering, limit, or tie semantics.
 - Counts remain 54/52/2 and sequence `202607310010` remains free. No migration,
   test, or durable-document write lock is held after this opening commit.
+
+## G-007P23 accepted as source-only retain/defer
+
+- Exact source review finds no market-filtered crawl-run history reader. Current
+  reads use run IDs or global status/created-time visibility and only project a
+  platform market label. No direct index or RI-plan test exists.
+- The separately created btree's leading `market_id` is structurally suitable
+  as scope-neutral child-side support for accepted
+  `crawl_runs_market_id_fkey` UPDATE/DELETE RESTRICT checks. It is not
+  constraint-owned; live selection, health, necessity, and performance remain
+  unmeasured.
+- Platform market references never grant tenant run authority. G-010/G-013 has
+  not defined exact tenant/workspace/null-workspace market-history semantics,
+  so no synthetic plan, tenant-prefix, replacement, DDL, or removal is allowed.
+- Historical PostgreSQL replay and accepted SQLite schema retain the index.
+  Counts remain 54/52/2, sequence 010 stays free, and the crosswalk becomes
+  32 classified/30 unclassified. No later card unlocks.

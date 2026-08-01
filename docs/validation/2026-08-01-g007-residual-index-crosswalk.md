@@ -36,6 +36,9 @@ and G-004A partitions are unchanged.
 After the accepted P22 source classification, 31 names are mapped or accepted
 and 31 remain unclassified: G-002 is now 6 classified and 7 unclassified.
 
+After the accepted P23 source classification, 32 names are mapped or accepted
+and 30 remain unclassified: G-002 is now 7 classified and 6 unclassified.
+
 For this reconstruction, an exact audit target or named plan/control owner is
 mapped. Merely appearing as a migration foundation guard does not classify a
 tenant-query family. P18 and P19 each classify two names already inside the 28,
@@ -48,7 +51,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 |---|---|---|---|
 | A:P22 retain/defer | `crawl_runs` | `idx_crawl_runs_blocked_created(status, blocked_at DESC, created_at DESC) WHERE status='blocked'` | no exact current reader; PK-scoped lifecycle and created-time display; retain historical replay compatibility, re-audit after exact G-013 contract; G-020 alone is not an owner |
 | A:P21 retain | `crawl_runs` | `idx_crawl_runs_created_desc(created_at DESC)` | exact current global visibility/history owner; future G-013 form deferred |
-| U | `crawl_runs` | `idx_crawl_runs_market_created(market_id, created_at DESC)` | market/run history; G-010/G-013 |
+| A:P23 retain/defer | `crawl_runs` | `idx_crawl_runs_market_created(market_id, created_at DESC)` | scope-neutral child-side FK-maintenance support candidate for accepted `crawl_runs_market_id_fkey`; not constraint-owned or measured; platform market is not tenant authority; no exact current market-history reader; retain PostgreSQL/SQLite compatibility and defer tenant history to an exact G-010/G-013 contract |
 | A:P21 retain | `crawl_runs` | `idx_crawl_runs_status_created(status, created_at DESC)` | current global status-filter compatibility support; future G-013 form deferred |
 | U | `crawl_units` | `idx_crawl_units_budget_pages(crawl_run_id, status, pages_fetched, max_pages)` | run budget calculation; G-013/G-021 |
 | U | `crawl_units` | `idx_crawl_units_cell_status(location_cell_id, status, category)` | cell coverage; G-010/G-013 |
@@ -269,3 +272,12 @@ free, and market-created remains a separate unopened family.
 G-007P22 receipt commit `2922e32d434ee9f23efb4148da791551a7c3d4ec`
 records the accepted retain/defer classification. This lineage update does not
 open the market-created family.
+
+G-007P23 classifies the market-created index RETAIN/DEFER. Its leading market
+key is structurally suitable for scope-neutral child-side maintenance of the
+accepted market FK, but the index is not constraint-owned and no live use,
+health, or performance is claimed. Platform markets never authorize tenant
+runs, and no exact market-history reader exists. Historical PostgreSQL and
+SQLite compatibility is retained; tenant-history, replacement, and removal
+wait for exact G-010/G-013 authority or measured RI evidence. Counts stay
+54/52/2 and sequence 010 remains free.

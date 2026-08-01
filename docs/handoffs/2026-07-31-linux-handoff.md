@@ -1069,3 +1069,17 @@ Platform markets are shared reference data, not tenant authority. The packet
 must stop before PostgreSQL plans, candidates, DDL, or removal until G-010/G-013
 defines an exact tenant/workspace-scoped market-history contract. Counts remain
 54/52/2 and sequence 010 remains free.
+
+## G-007P23 accepted as source-only retain/defer
+
+Sol finds no current market-filtered crawl-run history reader. The separate
+market/created btree is structurally suitable as scope-neutral child-side
+support for the accepted market FK's RESTRICT checks, but it is not
+constraint-owned and no live use, health, necessity, or performance is claimed.
+
+Shared platform markets never authorize tenant-owned runs, and G-010/G-013 has
+not fixed an exact tenant/workspace market-history contract. Historical
+PostgreSQL replay and accepted SQLite schema retain the index, so Sol retains
+compatibility and defers tenant-history, replacement, and removal claims. No
+PostgreSQL service, test, candidate, or DDL was used. Counts remain 54/52/2,
+sequence 010 stays free, the crosswalk is 32/30, and no later card unlocks.
