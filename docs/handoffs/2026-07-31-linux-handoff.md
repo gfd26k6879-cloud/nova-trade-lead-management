@@ -1790,3 +1790,17 @@ data-cleanup, or SQL-predicate authority. Crosswalk is 45/17 (G-003 22/17,
 G-002 13/0), inventory stays 54/52/2, original-card arithmetic stays 58/318
 accepted and 260 remaining, sequence `202607310010` is free, and parent G-007
 remains open. P35's durable reservation remains held until lineage commit.
+
+## G-007P35 lineage receipt
+
+Acceptance commit `8215c7ee1148a0b6b01125c245b00ce0f9487dfd` durably
+records the independently reviewed P35 RETAIN/DEFER decision. This lineage-only
+successor releases the P35 durable-document reservation. No source, test,
+migration, sequence, disposable-service, worktree, process, or temporary-
+payload lock remains.
+
+Inventory stays 54/52/2, crosswalk 45/17 (G-003 22/17, G-002 13/0), and
+sequence `202607310010` remains free. Parent G-007 remains open. The separately
+proven P1 normalization repair G-007SR2 must be reserved independently before
+P36; this receipt opens neither task. Main and the handoff tag remain
+unchanged, and no push or external action occurred.

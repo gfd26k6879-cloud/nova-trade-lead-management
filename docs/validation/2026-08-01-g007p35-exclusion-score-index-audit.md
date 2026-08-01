@@ -201,5 +201,8 @@ records the acceptance hash and releases it. No push or external action occurs.
 
 ## Lineage
 
-The following lineage-only commit will record the P35 acceptance commit and
-release the durable-document reservation. It will not open G-007SR2 or P36.
+Acceptance commit `8215c7ee1148a0b6b01125c245b00ce0f9487dfd` records this
+reviewed RETAIN/DEFER decision locally. The following lineage-only commit
+releases the P35 durable-document reservation without opening G-007SR2 or P36.
+No task-owned disposable resource or lock remains, and no push or external
+action occurs.

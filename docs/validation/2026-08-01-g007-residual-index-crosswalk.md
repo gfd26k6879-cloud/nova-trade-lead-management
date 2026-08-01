@@ -538,3 +538,7 @@ sequence 010 stays free, crosswalk becomes 45/17, G-003 becomes 22/17, G-002
 stays 13/0, and parent G-007 remains open. A separate P1 stored-exclusion
 normalization repair G-007SR2 must precede P36; the next source residual after
 that repair is `idx_leads_location_cell`.
+
+G-007P35 acceptance commit `8215c7ee1148a0b6b01125c245b00ce0f9487dfd`
+records this classification locally. Its lineage-only successor releases the
+P35 reservation without opening G-007SR2 or P36.

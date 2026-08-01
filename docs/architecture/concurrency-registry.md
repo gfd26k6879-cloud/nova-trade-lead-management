@@ -4065,3 +4065,16 @@ Date: 2026-08-01
 - Crosswalk is 45/17 (G-003 22/17, G-002 13/0), inventory is 54/52/2,
   sequence `202607310010` remains free, and parent G-007 remains open. Sol
   retains only the P35 durable-document reservation until lineage commit.
+
+## G-007P35 exclusion/score index audit release
+
+Date: 2026-08-01
+
+- Acceptance commit `8215c7ee1148a0b6b01125c245b00ce0f9487dfd`
+  records the independently reviewed RETAIN/DEFER decision locally.
+- Sol releases the P35 durable-document reservation. No source, test,
+  migration, sequence, process, container, worktree, or payload lock remains.
+- Counts remain 54/52/2; crosswalk is 45/17 (G-003 22/17, G-002 13/0),
+  sequence `202607310010` remains free, and parent G-007 remains open.
+- The separate P1 normalization repair G-007SR2 remains unopened by this
+  lineage receipt and must precede residual P36.
