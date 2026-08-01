@@ -855,3 +855,36 @@ Windows/NTFS 111/111 acceptance remains authoritative, that lane remains
 paused, and G-006C2B remains unopened. All repair containers, listeners,
 processes, databases, worktrees, and locks are released with the lineage
 commit. No remote or external action occurred.
+
+## G-007P19 no-defect continuation receipt
+
+G-007P19 resumes on the repaired 53/51/2 chain and retains
+`idx_ai_usage_events_lead_id` and
+`idx_ai_usage_events_verification_id` as scope-neutral child-side maintenance
+indexes for the exact composite SET NULL foreign keys. No current or approved
+usage read filters either reference. Parent IDs are globally unique, so adding
+tenant first cannot narrow a valid maintenance set.
+
+On 160,002 interleaved usage rows, both valid reference paths naturally use
+their target, return six rows with zero filtering, and touch four buffers. A
+real rolled-back combined lead delete increments each target by one scan/six
+tuples, succeeds after G-004A-R1, and restores all rows. Separate fresh
+verification-only and lead-only deletes preserve every nonreference field and
+tenant B, then restore exact data/catalog/constraint digests on rollback.
+
+Independent architecture and quality reviews pass RETAIN/no defect/no
+migration with no P0/P1/P2 finding. No hypothetical or candidate remains.
+Counts stay 53/51/2 and sequence `202607310009` stays free. Parent G-007 remains
+open.
+
+The exact 62-name residual appendix now makes the former 28/34 summary
+reproducible: G-002 13 + G-003 39 + G-004A 10 + G-005 0; 28 mapped/queued and
+34 unclassified. The next bounded work is the unnumbered read-only AI-usage
+query-history family `idx_ai_usage_actor_created`, `idx_ai_usage_created`, and
+`idx_ai_usage_model_created`. No P20 identifier is opened yet.
+
+The first crosswalk bootstrap omitted `auth`; its entire container and partial
+catalog were rejected and removed. The fresh corrected replay passed. All P19
+containers, databases, ports, processes, candidates, and worktrees are gone.
+Main/tag remain unchanged and no remote or external action occurred. The P19
+receipt and crosswalk commit are recorded by the following lineage update.

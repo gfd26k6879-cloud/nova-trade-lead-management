@@ -3150,3 +3150,25 @@ Date: 2026-07-31
   `e6e72b2cb04189ef1b445e74ad57e5204685f316`. The corrected object above is the
   parent of lineage commit `69e6f9a6e51c4807f7c7542ad91921db19b6786e`;
   the append-only ledger retains a superseding correction event.
+
+## G-007P19 accepted RETAIN and residual queue made exact
+
+- P19 independently passes RETAIN/no tenant-query-plan defect/no migration for
+  `idx_ai_usage_events_lead_id` and
+  `idx_ai_usage_events_verification_id`. Fresh PostgreSQL 16.14 natural plans,
+  combined and isolated parent actions, exact rollback/data/catalog/constraint
+  digests, composite-FK ownership, G-004A-R1 behavior, and cleanup pass with no
+  P0/P1/P2 finding.
+- No migration or source/test/count edit is authorized. Counts stay 53/51/2,
+  sequence `202607310009` remains free, and no G-007 write lock is held.
+- The exact residual appendix records 62 names: G-002 13, G-003 39, G-004A 10,
+  and G-005 zero. The reconstructed partition is 28 mapped/queued and 34
+  unclassified. P18 and P19 classify names already inside the 28.
+- The next exact dependency-safe family is an unnumbered read-only audit of
+  `idx_ai_usage_actor_created`, `idx_ai_usage_created`, and
+  `idx_ai_usage_model_created`. Opening and numbering that packet belongs to
+  Sol's next durable transition; this receipt does not invent P20.
+- The invalid auth-missing crosswalk bootstrap was destroyed; the corrected
+  fresh 53/51/2 replay is authoritative. No P19 container, database, listener,
+  process, candidate, worktree, or lock remains. G-004B and the paused native
+  Windows/NTFS G-006 boundary remain unchanged.
