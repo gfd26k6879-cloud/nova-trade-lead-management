@@ -3401,4 +3401,6 @@ Date: 2026-07-31
   No defect, migration, test edit, or removal packet is opened.
 - Root behavior tests pass 60/60. Counts remain 54/52/2, sequence 010 stays
   free, and the crosswalk becomes 33 classified/29 unclassified. All disposable
-  resources are removed; the receipt reservation remains only through commit.
+  resources are removed. Receipt commit
+  `290c7aee65d16397c896f91eb044e2687fa456b0` releases the reservation; no next
+  residual family is opened by this lineage update.

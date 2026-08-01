@@ -1115,4 +1115,6 @@ Sol retains the exact current compatibility owner. Tenant/workspace controls do
 not complete G-013 and G-021 is not a current owner. No defect, candidate,
 migration, test edit, or removal packet is opened. Root behavior tests pass
 60/60. Counts remain 54/52/2, sequence 010 stays free, the crosswalk is 33/29,
-and all disposable resources are removed.
+and all disposable resources are removed. Receipt commit
+`290c7aee65d16397c896f91eb044e2687fa456b0` records the accepted RETAIN
+decision. This lineage update opens no next residual family.

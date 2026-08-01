@@ -295,3 +295,7 @@ transactional drop preserves the exact scalar digest but materially regresses
 to P4 run-status bitmap/heap plans; rollback restores the target definition,
 digest, and plan. No defect, candidate, migration, or removal packet is opened.
 Counts stay 54/52/2 and sequence 010 remains free.
+
+G-007P24 receipt commit `290c7aee65d16397c896f91eb044e2687fa456b0`
+records the accepted RETAIN decision. This lineage update opens no next
+residual family.
