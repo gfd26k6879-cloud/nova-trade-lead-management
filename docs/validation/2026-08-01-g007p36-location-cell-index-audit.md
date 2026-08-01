@@ -185,3 +185,11 @@ packet. After it closes, the next source-order residual is
 `idx_leads_market_active(market_id, archived_at, score DESC)` for P37. P36's
 durable-document reservation remains held until a lineage-only commit records
 the acceptance hash and releases it. No push or external action occurs.
+
+## Lineage
+
+Acceptance commit `cdf61e9601c8ad3489686077ba1fb791b4f8c153` records this
+reviewed RETAIN decision locally. The following lineage-only commit releases
+the P36 durable-document reservation without opening the parser repair or P37.
+No task-owned disposable resource or lock remains, and no push or external
+action occurs.

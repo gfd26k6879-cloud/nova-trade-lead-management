@@ -4195,3 +4195,17 @@ Date: 2026-08-01
 - Crosswalk is 46/16 (G-003 23/16, G-002 13/0), inventory is 54/52/2,
   sequence `202607310010` remains free, and parent G-007 remains open. The
   separate Explore command P2 repair must close before P37.
+
+## G-007P36 durable-document release
+
+Date: 2026-08-01
+
+- Acceptance commit `cdf61e9601c8ad3489686077ba1fb791b4f8c153`
+  durably records the reviewed RETAIN decision and releases the remaining P36
+  document reservation.
+- No P36 source, test, document, migration, sequence, disposable-service,
+  process, payload, volume, or worktree lock remains.
+- Counts remain 54/52/2, crosswalk is 46/16 (G-003 23/16, G-002 13/0),
+  sequence `202607310010` remains free, and parent G-007 remains open.
+- The separate Explore command P2 repair remains unopened by this receipt and
+  must close before residual P37.

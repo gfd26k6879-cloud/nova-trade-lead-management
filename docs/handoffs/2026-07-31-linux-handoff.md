@@ -1928,3 +1928,16 @@ Crosswalk becomes 46/16 (G-003 23/16, G-002 13/0), inventory remains 54/52/2,
 sequence `202607310010` stays free, original arithmetic remains 58/318/260,
 and parent G-007 remains open. The separately proven Explore command uppercase
 P2 is the next serialized repair; P37 `idx_leads_market_active` follows it.
+
+## G-007P36 lineage receipt
+
+Acceptance commit `cdf61e9601c8ad3489686077ba1fb791b4f8c153` durably closes
+P36 and releases its remaining document reservation. No source, test,
+migration, sequence, service, process, payload, volume, or worktree lock
+remains.
+
+Inventory stays 54/52/2, crosswalk 46/16 (G-003 23/16, G-002 13/0), and
+sequence `202607310010` remains free. Parent G-007 remains open. The separate
+Explore command lowercase repair requires its own reservation; this receipt
+does not open it or P37. Main and the handoff tag remain unchanged, and no push
+or external action occurred.
