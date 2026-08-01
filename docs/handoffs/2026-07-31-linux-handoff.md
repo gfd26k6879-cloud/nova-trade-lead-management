@@ -740,3 +740,28 @@ classification. No migration or external action is assumed.
 
 The G-007P16 retain/classification receipt commit is
 `dfac6a1b5716e2bfab716a54c4ba2fbf8e01dac5`.
+
+## G-007P17 no-defect receipt
+
+G-007P17 retains `idx_demos_lead_id` for current unscoped compatibility with
+no migration. The legacy single-column FK is gone; exact
+`idx_demos_tenant_lead(tenant_id,lead_id)` owns the operative composite cascade
+and future scoped reads.
+
+On 100,000 interleaved demos with a realistic mostly-one lifecycle and a
+sixteen-row high-churn tail, future tenant+lead reads use both composite keys,
+read 3–19 buffers, and filter zero wrong-tenant rows. Counts and cascade use
+the same index. History sorts remain bounded to sixteen rows/26 KiB, so no
+three-key hypothetical or DDL is justified. Digests, half-open/workspace/join
+controls, cascade rollback, exact catalog, and independent reviews pass.
+
+All resources were removed and the repository is clean. Counts remain 52/50/2
+and sequence 008 remains available. Retain the global until G-015/G-018 scopes
+current callers; re-audit if unbounded history or materially larger real churn
+appears. Parent G-007 stays open.
+
+P18 AI-feedback references are next. The reconciled source inventory contains
+62 retained non-tenant-leading/non-constraint secondary indexes: 28 are
+mapped/queued and 34 G-002/G-003 names remain unclassified. G-005 has zero
+residual globals, correcting earlier broad G002/G005 wording. No migration or
+external action is assumed.

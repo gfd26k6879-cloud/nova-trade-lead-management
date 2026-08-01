@@ -3061,3 +3061,20 @@ Date: 2026-07-31
 - The attributable local receipt is
   `dfac6a1b5716e2bfab716a54c4ba2fbf8e01dac5`. No P16 container, listener,
   database, process, worktree, or lock remains.
+
+## G-007P17 demo lead-index no-defect audit
+
+- A fresh 52/50/2 PostgreSQL 16.14 audit covers 100,000 interleaved demos over
+  a realistic mostly-one history distribution with a sixteen-row churn tail.
+  The global lead index remains the current lead-only compatibility owner.
+- Future tenant+lead reads naturally use exact `idx_demos_tenant_lead` with
+  both keys, 3–19 buffers, and zero tenant filtering. Counts and composite
+  cascade use the same index; bounded histories sort at most sixteen rows in
+  26 KiB. No three-key hypothetical or migration is justified.
+- Independent architecture and quality reviews pass RETAIN/no defect. Catalog,
+  digests, half-open/workspace/join controls, cascade rollback, cleanup, and
+  clean/diff checks pass. Sequence 008 stays free.
+- Retain the global for current compatibility until G015/G018 cutover. Re-audit
+  if callers add unbounded history or real churn grows materially. P18 is next.
+  The 62-name crosswalk has 28 mapped/queued and 34 unclassified; G005 has no
+  residual global secondary index, so P17 is not terminal.
