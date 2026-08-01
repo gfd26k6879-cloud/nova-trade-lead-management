@@ -2949,6 +2949,8 @@ Date: 2026-07-31
 - This packet is tenant-wide list DDL only. Workspace-scoped authority, summary
   correction, lead-local lookup, mutation, caller/session, G015/G016 ownership
   reconciliation, runtime repair, SQLite, UI, and workbench behavior are barred.
-- Sol retains `migration-sequence` and `integration-ledger` only through the
-  attributable local source and lineage commits. Parent G-007 remains open;
-  the next lock-free action is read-only G-007P12 actor-outreach index audit.
+- Source commit `30eb1b086d7581143487d4997786ac55beed9661` contains the
+  validated packet. `migration-sequence` and `integration-ledger` release with
+  this lineage commit. No P11 container, process, listener, database, worktree,
+  or lock remains. Parent G-007 stays open; the next action is lock-free,
+  read-only G-007P12 actor-outreach index audit.

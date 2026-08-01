@@ -592,4 +592,5 @@ the next exact action is a read-only G-007P12 PostgreSQL 16 audit of the
 `idx_outreach_events_actor_created` family. No migration is assumed. No remote
 or external action occurred.
 
-The accepted G-007P11 source commit is pending attributable local commit.
+The accepted G-007P11 source commit is
+`30eb1b086d7581143487d4997786ac55beed9661`.

@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: accepted locally
 
-Source commit: pending attributable local commit
+Source commit: `30eb1b086d7581143487d4997786ac55beed9661`
 
 ## Scope and decision
 
