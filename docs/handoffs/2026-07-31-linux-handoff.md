@@ -406,3 +406,6 @@ compatibility boundary. All hypotheticals and disposable services were removed,
 `b548172286e1d0dbb7cd5345dbd4f3b2d1427928`. Parent G-007 remains open. The
 next safe action is a separately bounded, read-only G-007P6 recovery-family
 audit; no migration is assumed.
+
+The G-007P5 deferred-defect audit receipt commit is
+`f2465e6c6e764f7c02712083e5b89e70f675d8be`.

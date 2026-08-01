@@ -2791,3 +2791,5 @@ Date: 2026-07-31
 - All hypothetical indexes, containers, ports, and processes were removed; 35
   of 35 baseline lead indexes are valid, ready, and live. Parent G-007 remains
   open and no later Phase 2 card is unlocked.
+- Audit receipt commit `f2465e6c6e764f7c02712083e5b89e70f675d8be`
+  durably records the deferred defect. No G-007P5 lock or resource remains.

@@ -8,6 +8,8 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: tenant-query defect proven; migration deferred at compatibility boundary
 
+Audit receipt commit: `f2465e6c6e764f7c02712083e5b89e70f675d8be`
+
 ## Question
 
 G-007P5 tested the tenant-scoped future form of the current lead enrichment
