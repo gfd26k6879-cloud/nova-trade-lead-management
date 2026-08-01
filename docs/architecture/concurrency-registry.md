@@ -3100,3 +3100,22 @@ Date: 2026-07-31
 - The attributable local receipt is
   `3f624aac0ef7aa43672942aa0a4d3c4ba1d9c392`. No P18 container, listener,
   database, process, worktree, or lock remains.
+
+## G-007P19 stop and G-004A-R1 serialized repair
+
+- P19's required combined-cascade control reproduced an accepted-G-004A
+  defect on a fresh 52/50/2 PostgreSQL 16.14 chain. Deleting a lead whose usage
+  event holds both lead and verification references fails atomically with
+  `G004A_VERIFICATION_PARENT_REQUIRED`. The exact six-row graph and tenant-B
+  sentinel are unchanged after rollback.
+- P19 stopped before index disposition. The defect is in the order-dependent
+  scope guard, not an index plan. G-004A-R1 is the next dependency repair and
+  must be a forward-only migration; open G-004B remains separate.
+- Sol exclusively holds `postgres-migration-sequence:202607310008`,
+  `ai-scope-guard`, `ai-tenant-scope-postgres-test`, and the serialized durable
+  documentation surfaces. Three agents may perform read-only design/review;
+  at most one implementer may write after reconciliation.
+- The initial ceiling is one new migration, the existing G-004A PostgreSQL
+  test, proven migration-count expectations, and one repair receipt. No
+  runtime-repair, SQLite, G-004B, provider, hosted, or external surface is in
+  scope. P19 resumes only after independent repair acceptance and cleanup.

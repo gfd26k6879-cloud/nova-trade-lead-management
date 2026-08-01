@@ -793,3 +793,23 @@ assumed.
 
 The G-007P18 no-defect receipt commit is
 `3f624aac0ef7aa43672942aa0a4d3c4ba1d9c392`.
+
+## G-007P19 stopped on G-004A combined-cascade defect
+
+P19 did not reach an index disposition. On a fresh PostgreSQL 16.14 chain, a
+minimal legal two-tenant graph proved that deleting a lead with a both-linked
+usage event fails atomically with `G004A_VERIFICATION_PARENT_REQUIRED`. The
+complete six-row digest remains
+`d75d4ab85520fe063d6597686577bdae4cb45349e4e188b0f1d7fa8309aafdc0`
+and tenant B is untouched after rollback.
+
+Existing tests cover independent lead-only and verification-only SET NULL
+actions, not the combined path. This is a G-004A guard-order defect, not an
+index defect. P19 remains open and must resume only after an accepted
+G-004A-R1 forward repair. The repair may use reserved migration sequence
+`202607310008`; it must not edit the accepted migration or absorb open G-004B.
+
+All P19 containers, databases, listeners, and processes were removed. Counts
+remain 52/50/2 until the repair is accepted. Sol holds the serialized migration,
+guard, focused test, and durable-document surfaces while read-only design
+reviews run. No external action is assumed.
