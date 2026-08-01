@@ -3097,3 +3097,6 @@ Date: 2026-07-31
 - Independent architecture and quality reviews pass RETAIN/no defect. No DDL
   ran; final exact catalog reread and cleanup pass. Counts stay 52/50/2,
   sequence 008 remains free, and P19 AI-usage references are next.
+- The attributable local receipt is
+  `3f624aac0ef7aa43672942aa0a4d3c4ba1d9c392`. No P18 container, listener,
+  database, process, worktree, or lock remains.

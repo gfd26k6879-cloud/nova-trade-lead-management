@@ -790,3 +790,6 @@ equal; exact final catalog reread, no DDL, cleanup, clean tree, and unchanged
 refs pass. Counts remain 52/50/2 and sequence 008 remains available. Parent
 G-007 stays open; P19 AI-usage references are next. No external action is
 assumed.
+
+The G-007P18 no-defect receipt commit is
+`3f624aac0ef7aa43672942aa0a4d3c4ba1d9c392`.

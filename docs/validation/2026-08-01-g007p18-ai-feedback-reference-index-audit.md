@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: no tenant-query-plan defect; retained with no migration
 
-Receipt commit: pending attributable local commit
+Receipt commit: `3f624aac0ef7aa43672942aa0a4d3c4ba1d9c392`
 
 ## Scope and source ownership
 
