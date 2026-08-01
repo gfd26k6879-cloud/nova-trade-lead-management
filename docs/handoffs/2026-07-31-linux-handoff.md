@@ -1271,3 +1271,27 @@ counts remain 54/52/2, sequence 010 stays free, the crosswalk becomes 38/24,
 and G-002 is complete at 13/0. Parent G-007 remains open. Receipt commit
 `9a01e888a5d90c4133e182c5998f723de1ffc6e4` records the accepted RETAIN/DEFER
 decision. This lineage update opens no next residual family.
+
+## G-007P29 archived-active lead-index audit opened
+
+After clean P28 lineage at `552e123f49a9ad7aed3fc58731df9594f8c4a503`,
+Sol opens one read-only PostgreSQL 16 catalog and natural-plan audit for
+`idx_leads_archived_active(archived_at, updated_at DESC)`, the first remaining
+G-003 residual.
+
+The bounded packet measures the exact current stale-quality recompute reader,
+bound to accepted G-007P10 semantics: `archived_at IS NULL AND
+(last_quality_scored_at IS NULL OR julianday(updated_at) >
+julianday(last_quality_scored_at)) ORDER BY updated_at DESC LIMIT ?` in SQLite,
+and the faithful PostgreSQL text-timestamp analog using
+`(updated_at)::timestamptz > (last_quality_scored_at)::timestamptz`. It must
+exercise limits 1, 100, 500, and 100000, including unique LIMIT boundaries and
+canonicalized complete tie groups at every limit. Active/archived list and
+aggregate shapes are controls on a fresh, independently crossed two-tenant
+fixture. Leads are tenant-wide and have no workspace dimension.
+Retained stale-score, score, workbench, discovered-time, exclusion, and quality
+indexes remain installed as controls. Results and natural plans are compared
+with the target installed, during target-only transactional drop, and after
+explicit rollback. No defect, tenant-prefixed candidate, migration, test edit,
+replacement, or removal is assumed. Counts remain 54/52/2, crosswalk 38/24
+(G-003 15/24), and sequence 010 remains free.

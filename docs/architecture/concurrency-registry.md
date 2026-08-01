@@ -3574,3 +3574,31 @@ Date: 2026-08-01
   attributable local receipt commit. Receipt commit
   `9a01e888a5d90c4133e182c5998f723de1ffc6e4` releases the reservation; this
   lineage update opens no next residual family.
+
+## G-007P29 archived-active lead-index audit reservation
+
+Date: 2026-08-01
+
+- After clean G-007P28 lineage at
+  `552e123f49a9ad7aed3fc58731df9594f8c4a503`, Sol reserves the serialized
+  G-007 durable-document surfaces for one read-only PostgreSQL 16 audit of
+  `idx_leads_archived_active(archived_at, updated_at DESC)` only. It is the
+  first remaining unclassified G-003 residual.
+- The packet measures the exact current stale-quality recompute reader under
+  the accepted G-007P10 timestamp and LIMIT contract. SQLite's exact predicate
+  is `archived_at IS NULL AND (last_quality_scored_at IS NULL OR
+  julianday(updated_at) > julianday(last_quality_scored_at)) ORDER BY
+  updated_at DESC LIMIT ?`; PostgreSQL must use the faithful analog
+  `(updated_at)::timestamptz > (last_quality_scored_at)::timestamptz`.
+  Limits 1, 100, 500, and 100000 must each cover unique boundaries and
+  canonicalized complete tie groups. Active/archived list or aggregate shapes
+  remain controls against the target and retained stale-score, score,
+  workbench, discovered-time, exclusion, and quality siblings. A fresh
+  full-chain fixture must independently cross two tenants, active/archived
+  state, stale/fresh score state, exclusion, timestamps, and stable ordering
+  ties. Leads are tenant-wide and have no workspace scope.
+- Natural JSON EXPLAIN, canonical results, target-only transactional drop, and
+  exact rollback restoration are required. No defect, tenant-prefixed candidate,
+  migration, test edit, replacement, or removal is assumed. Counts remain
+  54/52/2, crosswalk 38/24 (G-003 15/24), and sequence
+  `202607310010` stays free.
