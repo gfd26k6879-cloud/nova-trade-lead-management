@@ -3492,7 +3492,7 @@ Date: 2026-07-31
 - The packet is read-only source/provenance/query/caller/test/identity/lifecycle,
   authority, and structural-RI classification. User-leading compatibility
   readers exist, but source alone does not prove exact natural plan ownership.
-  No current market-leading reader is known.
+  No current runtime application market-leading reader is known.
 - G-002 replaced the legacy global PostgreSQL identity with tenant/workspace
   null-safe uniqueness. Current/frozen SQLite lifecycle distinctions and the
   paused G-006C2B writer boundary remain explicit. Neither user nor platform
@@ -3502,3 +3502,20 @@ Date: 2026-07-31
   PostgreSQL, live claims, candidate DDL, migration, test edits, identity rewrite,
   replacement, or removal. Counts remain 54/52/2, crosswalk 35/27, and sequence
   `202607310010` stays free.
+
+## G-007P27 accepted; retain/defer user-market-access pair
+
+- The user-leading target supports current compatibility-query shapes, but
+  source cannot prove natural plan ownership. It is not the final PostgreSQL or
+  frozen SQLite tenant/workspace identity, uniqueness, or authorization owner.
+- The market-leading target has no current runtime application market-led
+  reader. It remains an unmeasured, non-constraint-owned PostgreSQL CASCADE
+  support candidate and only a SQLite NO ACTION enforcement-lookup candidate;
+  engines are not equivalent.
+- Legacy/current/prepared/frozen identity lifecycles remain distinct.
+  G-006C2B stays unopened, and G-009/G-010/G-011/G-016/G-018 retain their
+  future scoped contracts. No writer safety or SQLite activation is inferred.
+- No PostgreSQL service or live catalog/plan claim was used. No defect,
+  candidate, migration, test edit, identity rewrite, replacement, or removal
+  packet opens. Counts remain 54/52/2, sequence 010 stays free, and the
+  crosswalk becomes 37/25. The receipt reservation remains only through commit.

@@ -48,6 +48,10 @@ unclassified: G-002 is now 9 classified and 4 unclassified.
 After the accepted P26 source classification, 35 names are mapped or accepted
 and 27 remain unclassified: G-002 is now 10 classified and 3 unclassified.
 
+After the accepted P27 two-index source classification, 37 names are mapped or
+accepted and 25 remain unclassified: G-002 is now 12 classified and 1
+unclassified.
+
 For this reconstruction, an exact audit target or named plan/control owner is
 mapped. Merely appearing as a migration foundation guard does not classify a
 tenant-query family. P18 and P19 each classify two names already inside the 28,
@@ -69,8 +73,8 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | M:P4 RI/current run | `crawl_units` | `idx_crawl_units_run(crawl_run_id)` | run-child RI and compatibility; G-013 |
 | M:P4 plan control | `crawl_units` | `idx_crawl_units_run_status(crawl_run_id, status)` | run/status reads; G-013 |
 | U | `crawl_units` | `idx_crawl_units_status_zip(status, zip)` | unit status/geography; G-010/G-013 |
-| U | `user_market_access` | `idx_user_market_access_market(market_id, user_id)` | market access membership; G-010/G-016 |
-| U | `user_market_access` | `idx_user_market_access_user(user_id, market_id)` | user access list/check; G-010/G-016 |
+| A:P27 retain/defer | `user_market_access` | `idx_user_market_access_market(market_id, user_id)` | no current runtime application market-leading reader; test-only market predicates prove no plan ownership; unmeasured non-constraint-owned PostgreSQL CASCADE lookup/maintenance candidate and SQLite NO ACTION enforcement-lookup candidate; never platform-market tenant authority or cross-engine equivalence; retain compatibility and defer live RI/replacement/removal claims |
+| A:P27 retain/defer | `user_market_access` | `idx_user_market_access_user(user_id, market_id)` | current user-led compatibility-query candidate, but no natural plan-owner, identity, uniqueness, necessity, duplication, or removal claim; G-002/frozen identities differ from legacy/current-prepared SQLite; defer scoped query semantics to G-009/G-010/G-011/G-016/G-018 |
 
 ## G-003 — 39 indexes
 
@@ -329,3 +333,11 @@ necessity, duplicate, replacement, or removal claim is made. Counts stay
 G-007P26 receipt commit `18e6e7a92bde686ea7e45850e030710a75b68074`
 records the accepted RETAIN/DEFER decision. This lineage update opens no next
 residual family.
+
+G-007P27 classifies both historical user-market-access indexes RETAIN/DEFER.
+The user-leading target is only a compatibility-query candidate; the
+market-leading target is an unmeasured PostgreSQL CASCADE and SQLite NO ACTION
+enforcement candidate. Identity lifecycles differ, neither key authorizes a
+tenant grant, and no live plan, necessity, cross-engine equivalence,
+replacement, or removal claim is made. Counts stay 54/52/2 and sequence 010
+remains free.

@@ -1206,3 +1206,20 @@ platform-market IDs never authorize tenant grants, and G-006C2B remains
 unopened. No PostgreSQL, live claim, defect, candidate, migration, test edit,
 identity rewrite, replacement, or removal is assumed. Counts remain 54/52/2,
 crosswalk 35/27, and sequence 010 remains free.
+
+## G-007P27 accepted; retain/defer user-market-access pair
+
+The user-leading target remains only a current compatibility-query candidate;
+source does not prove natural plan ownership, and it is not final
+tenant/workspace identity, uniqueness, or authorization. The market-leading
+target has no current runtime application market-led reader and remains an
+unmeasured PostgreSQL CASCADE support candidate versus a SQLite NO ACTION
+enforcement candidate.
+
+Sol keeps legacy/current/prepared/frozen lifecycle differences explicit.
+G-006C2B stays unopened; user and platform-market IDs never authorize grants;
+future scoped contracts remain with G-009/G-010/G-011/G-016/G-018. No
+PostgreSQL service, live claim, defect, candidate, migration, test edit, identity
+rewrite, replacement, removal, writer-safety, SQLite-activation, or cross-engine
+equivalence claim is opened. Counts remain 54/52/2, sequence 010 stays free,
+and the crosswalk is 37/25.
