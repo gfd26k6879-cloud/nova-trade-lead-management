@@ -3233,3 +3233,25 @@ Date: 2026-07-31
   exact-caller index use and identical results, upstream PostgreSQL gates,
   TypeScript, focused ESLint, recovery verification, Fedora-portable
   coordinator/release gates, build, diff/JSONL checks, and exact cleanup.
+
+## G-007P20A accepted; serialized resources released
+
+- Sol accepts source commit `5076979cdef1c43f2ed404cd10c511f727ec642f`
+  after exact-diff inspection and independent architecture/quality review with
+  no P0/P1/P2 finding. The packet adds only guarded migration 009, its focused
+  PostgreSQL harness, five count updates, and the validation receipt.
+- Root fresh PostgreSQL 16 reruns pass G-004A/P20A 2/2, G-002 2/2, G-003 6/6,
+  G-005 1/1, and T-029 19/19 at 54/52/2. Root static/caller/recovery,
+  Fedora-portable coordinator, build, diff, and JSONL gates pass. Current
+  unscoped/global and generic alternate-source owners remain; G-014 and G-021
+  are not completed.
+- Sequence `202607310009` is consumed and `202607310010` is next available.
+  Sol releases `postgres-migration-sequence:202607310009`,
+  `ai-tenant-scope-postgres-test`, `migration-count-expectations`, and the
+  G-007P20A durable-document reservation. No task container, listener, process,
+  worktree, or lock remains.
+- The next read-only residual audit remains unnumbered. Its first coherent
+  current-visibility family is `idx_crawl_runs_status_created` plus
+  `idx_crawl_runs_created_desc`; no migration is assumed. Parent G-007,
+  G-004B, the native Windows G-006 lane, and G-006C2B remain open/paused as
+  previously recorded.

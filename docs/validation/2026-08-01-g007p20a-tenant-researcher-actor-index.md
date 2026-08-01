@@ -4,9 +4,10 @@ Date: 2026-08-01
 
 Baseline: `2b0f2e2` (`codex/nova-multitenant-integration`)
 
-Status: implementation candidate; Sol acceptance and lineage pending
+Status: accepted locally by Sol; acceptance lineage pending
 
-The attributable implementation commit is the commit containing this receipt.
+Implementation commit: `5076979cdef1c43f2ed404cd10c511f727ec642f`
+
 Sol owns the root-only ledger, registry, handoff, crosswalk, and acceptance
 lineage updates.
 
@@ -100,7 +101,9 @@ Implementer validation on Node 24.13.1 and npm 11.8.0:
   54/52/2;
 - default six reserved test files: 20/20 passed, 11 opt-in PostgreSQL cases
   skipped as designed;
-- caller/adapter regressions: 30/30 passed;
+- implementer runtime caller/query regressions: 30/30 passed
+  (`researcher-ai.actions` 6, `ai-verification.query` 13, and
+  `scheduler.query` 11);
 - Fedora-portable SQLite coordinator: 12 passed and 26 Windows-native cases
   skipped; historical native Windows 111/111 evidence is unchanged;
 - recovery verification: all 37 application tables match SQLite and tracked
@@ -108,8 +111,14 @@ Implementer validation on Node 24.13.1 and npm 11.8.0:
 - production build: passed with 11/11 static pages; and
 - TypeScript, focused ESLint, JSONL parsing, and `git diff --check`: passed.
 
-Sol must still independently inspect and rerun proportional acceptance; the
-implementer does not accept its own work.
+Sol independently accepted the exact committed diff after architecture and
+quality review reported no P0/P1/P2 finding. Root reruns passed G-004A/P20A
+2/2 in 203.57 seconds, G-002 2/2, G-003 6/6, G-005 1/1, and T-029 19/19 at
+54/52/2. Root also passed the exact preflight caller/adapter set 23/23
+(`researcher-ai.actions`, `ai-verification.query`, and `db-postgres-client`),
+the default reserved set 20/20 with 11 opt-in skips, TypeScript, focused
+ESLint, recovery verification, Fedora-portable coordinator 12 with 26 native
+Windows skips, production build, JSONL parsing, and diff checks.
 
 ## Truthful retries and cleanup
 
@@ -130,7 +139,17 @@ An explicit captured-error assertion then identified `owner`: normal
 The disposable catalog test now creates the otherwise unreachable owner spoof
 directly, as it does for health/immediacy/checkxmin flags. An initial G-002
 opt-in invocation omitted its required URL and failed before database access;
-only its fresh correctly named loopback retry is evidence.
+only its fresh correctly named loopback retry is evidence. Root's first T-029
+invocation used a unique database suffix,
+but that test requires `/t029_tenant_foundation_rehearsal`; it failed before
+the PostgreSQL rehearsal, was removed, and the fresh exact-name retry passed.
+
+The first implementation commit command failed before creating an object
+because Git `user.name` and `user.email` were unset. No repository or global
+configuration changed. The successful retry supplied the established
+`Masih Hedayati <Masihhedayati@icloud.com>` identity one-shot, produced
+`5076979cdef1c43f2ed404cd10c511f727ec642f`, and did not rewrite history; local
+identity configuration remains unset.
 Two initial G-003 containers used `pg_isready`, which returned against the
 image entrypoint's temporary bootstrap server before the requested database
 was created. The expected bootstrap fast shutdown then produced `ECONNRESET`

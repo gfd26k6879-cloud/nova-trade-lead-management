@@ -952,3 +952,37 @@ non-null and source is exactly `researcher_ai_check` or
 alternate-source behavior; G-014 and G-021 remain open. Counts stay 53/51/2
 until acceptance, when the intended full chain would become 54/52/2. No remote
 or hosted action is authorized.
+
+## G-007P20A accepted locally
+
+Sol accepts implementation commit
+`5076979cdef1c43f2ed404cd10c511f727ec642f`. Independent architecture and
+quality reviews report no P0/P1/P2 finding. The exact committed write set is
+migration 009, the focused AI PostgreSQL harness, five migration-count tests,
+and its validation receipt; no caller, authorization, provider, SQLite, or
+compatibility cutover changed.
+
+Root fresh PostgreSQL 16 reruns pass G-004A/P20A 2/2 in 203.57 seconds,
+G-002 2/2, G-003 6/6, G-005 1/1, and corrected T-029 19/19. Counts are now
+54 discovered, 52 portable applied, and two runtime-only skipped. Root also
+passes the exact caller/adapter preflight 23/23, default reserved tests 20/20
+with 11 opt-in skips, TypeScript, focused ESLint, 37-table recovery,
+Fedora-portable coordinator 12 with 26 native Windows skips, production build,
+JSONL parsing, and diff checks. Historical Windows 111/111 evidence remains
+unchanged and was not rerun on Fedora.
+
+The initial root T-029 URL used a unique database suffix, conflicting with the
+test's exact database-name assertion; it failed before PostgreSQL rehearsal and
+the fresh exact-name retry passed. The first implementation commit command
+failed before object creation because Git identity was unset; no configuration
+changed, and a one-shot established identity created the source commit without
+history rewrite. Both events are retained in the validation receipt/ledger.
+
+Sequence 009 is consumed; 010 is next available. All P20A locks and disposable
+resources are released. The next residual audit remains unnumbered and begins,
+after a fresh catalog, with the current crawl-run visibility pair
+`idx_crawl_runs_status_created` and `idx_crawl_runs_created_desc`; no migration
+is assumed. Parent G-007 and G-004B remain open. G-006 stays paused with native
+Windows evidence preserved; G-006C2B remains unopened. No remote or external
+action occurred. The acceptance commit is recorded by the following lineage
+update.
