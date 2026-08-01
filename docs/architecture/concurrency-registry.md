@@ -2858,3 +2858,7 @@ Date: 2026-07-31
   Both locks release only after the lineage commit and final invariant check.
   Parent G-007 and deferred G-007P5 remain open; P8 starts read-only with the
   dashboard `idx_leads_discovered_at` family and assumes no migration.
+- Source commit `8eccf9108211c0a45878f50214bd6fff19fbec9d` contains the
+  validated packet. `migration-sequence` and `integration-ledger` release with
+  this lineage commit. No P7 container, process, listener, database, worktree,
+  or lock remains.

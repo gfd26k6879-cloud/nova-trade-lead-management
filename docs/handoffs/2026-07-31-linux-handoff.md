@@ -476,3 +476,6 @@ Parent G-007 remains open and G-007P5 remains deferred. After attributable
 local commits and lock release, the next exact action is a read-only G-007P8
 PostgreSQL 16 audit of the dashboard `idx_leads_discovered_at` family. No
 migration is assumed. No remote or external action occurred.
+
+The accepted G-007P7 source commit is
+`8eccf9108211c0a45878f50214bd6fff19fbec9d`.

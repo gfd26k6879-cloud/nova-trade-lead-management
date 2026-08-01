@@ -6,7 +6,9 @@ Baseline: `9d38b66f4e1d2187be84b10ecab1a85410216d2f`
 
 Branch: `codex/nova-multitenant-integration`
 
-Status: accepted locally, source commit pending
+Status: accepted locally
+
+Source commit: `8eccf9108211c0a45878f50214bd6fff19fbec9d`
 
 ## Scope and decision
 
