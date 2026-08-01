@@ -359,3 +359,7 @@ current ZIP joins, but that is separate G-010/G-013 semantic debt and never
 tenant/workspace authority or an index defect. No candidate, migration,
 replacement, necessity, or removal packet opens. Counts stay 54/52/2, sequence
 010 stays free, the crosswalk becomes 38/24, and G-002 is complete at 13/0.
+
+G-007P28 receipt commit `9a01e888a5d90c4133e182c5998f723de1ffc6e4`
+records the accepted RETAIN/DEFER decision and completes the G-002 residual
+partition. This lineage update opens no next residual family.

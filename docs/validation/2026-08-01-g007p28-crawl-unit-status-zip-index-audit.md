@@ -10,7 +10,7 @@ Audit opening commit: `2dccf7dff2efbda557d1cd14d9082a6ce37c02e5`
 
 Status: accepted RETAIN/DEFER classification; no migration
 
-Receipt commit: pending
+Receipt commit: `9a01e888a5d90c4133e182c5998f723de1ffc6e4`
 
 ## Scope and decision
 

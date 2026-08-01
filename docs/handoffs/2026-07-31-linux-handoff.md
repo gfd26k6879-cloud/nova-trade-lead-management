@@ -1268,4 +1268,6 @@ or workspace authority and not an index defect. No candidate, migration, test
 edit, replacement, necessity, or removal packet opens. Independent reviews
 report no remaining P0/P1/P2. Root gates pass, all task resources are removed,
 counts remain 54/52/2, sequence 010 stays free, the crosswalk becomes 38/24,
-and G-002 is complete at 13/0. Parent G-007 remains open.
+and G-002 is complete at 13/0. Parent G-007 remains open. Receipt commit
+`9a01e888a5d90c4133e182c5998f723de1ffc6e4` records the accepted RETAIN/DEFER
+decision. This lineage update opens no next residual family.

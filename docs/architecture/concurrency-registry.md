@@ -3571,4 +3571,6 @@ Date: 2026-08-01
   remaining P0/P1/P2 finding. The crosswalk becomes 38/24 and G-002 13/0;
   counts remain 54/52/2 and sequence 010 stays free. All disposable resources
   are gone. The durable-document reservation remains only through the
-  attributable local receipt commit.
+  attributable local receipt commit. Receipt commit
+  `9a01e888a5d90c4133e182c5998f723de1ffc6e4` releases the reservation; this
+  lineage update opens no next residual family.
