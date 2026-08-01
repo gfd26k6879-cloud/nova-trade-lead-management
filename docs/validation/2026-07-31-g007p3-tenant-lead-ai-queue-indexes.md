@@ -6,7 +6,9 @@ Baseline: `d4a1a538e1d6f381954393e28036aeb857b2df6f`
 
 Branch: `codex/nova-multitenant-integration`
 
-Status: locally implemented and validated; source commit pending
+Status: locally implemented, validated, and committed
+
+Source commit: `5a16a2602cb02e36b61e5c8dc2881902d80a7816`
 
 ## Scope and finding
 
@@ -95,8 +97,7 @@ then passed both fresh database lanes.
 
 ## Disposition
 
-G-007P3 is accepted as a child milestone pending its attributable local source
-and lineage commits. Parent G-007 remains open. The next evidence-only audit
+G-007P3 is accepted as a child milestone. Parent G-007 remains open. The next evidence-only audit
 candidate is one separately bounded G-007P4 family; no migration is justified
 without another real tenant-query plan defect. G-006 remains paused on its
 Windows-native boundary, G-006C2B is unopened, and G-008/G-009/G-004B remain

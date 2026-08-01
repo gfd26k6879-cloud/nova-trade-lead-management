@@ -2743,3 +2743,11 @@ Date: 2026-07-31
 - G-007P3 is accepted pending attributable local source and lineage commits.
   Parent G-007 remains open. The three held locks release only after the
   acceptance-lineage commit and final clean-resource check.
+- Source commit `5a16a2602cb02e36b61e5c8dc2881902d80a7816` contains the
+  validated packet. `migration-sequence`, `integration-ledger`, and
+  `database-adapter` are released after the lineage commit. No task-owned
+  container, process, database, worktree, or lock remains.
+- The next permissible action is a new read-only G-007P4 real-EXPLAIN audit.
+  Source preflight ranks the single `crawl_units` retry-ready family as the
+  clearest independently bounded candidate; it is not yet a proven defect and
+  holds no migration lock.

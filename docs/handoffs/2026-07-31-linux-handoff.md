@@ -358,3 +358,8 @@ G-007P audit; no later Phase 2 write card is unlocked by this child alone.
 G-006 remains paused, G-006C2B is unopened, and historical Windows evidence is
 unchanged. No hosted Supabase, remote migration, push, PR, deployment,
 production, provider, credential, customer-data, or outreach action occurred.
+
+The accepted G-007P3 source commit is
+`5a16a2602cb02e36b61e5c8dc2881902d80a7816`. The next exact action is a
+read-only G-007P4 PostgreSQL 16 EXPLAIN audit of one separately bounded family,
+starting with the `crawl_units` retry-ready candidate. No migration is assumed.
