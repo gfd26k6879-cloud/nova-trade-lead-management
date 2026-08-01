@@ -226,3 +226,8 @@ was bootstrapped with `auth.users`, local `anon`/`authenticated` roles,
 tests before replay. That fresh catalog produced the 53/51/2 and 62-name
 evidence above. Both containers and ports were removed; no process, database,
 candidate, or worktree remains.
+
+G-007P20 audit receipt commit
+`ef6d4154d86cbe0e71aac56a55484424db32d77d` accepts the three AI-usage
+query-history dispositions. The bounded researcher-cap write packet remains
+unnumbered; this crosswalk does not open it or a P21 audit.

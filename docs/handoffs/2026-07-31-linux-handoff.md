@@ -935,5 +935,5 @@ residue is zero. The rejected half-open actor evidence, exact lower-only rerun,
 fixed-source comparison, and all corrected invocations are retained in the
 validation receipt. All containers, databases, ports, processes, temporary
 files, candidates, and worktrees are gone. Parent G-007 remains open; no remote
-or external action occurred. The receipt commit is recorded by the following
-lineage update.
+or external action occurred. The P20 audit receipt commit is
+`ef6d4154d86cbe0e71aac56a55484424db32d77d`.

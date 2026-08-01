@@ -3207,3 +3207,7 @@ Date: 2026-07-31
 - Independent architecture and quality reviews pass with no remaining
   P0/P1/P2 finding. Candidate rollback, exact digests, residue, repository, and
   disposable-resource cleanup pass. Parent G-007 remains open.
+- P20 audit receipt commit `ef6d4154d86cbe0e71aac56a55484424db32d77d`
+  is accepted; its documentation reservation releases with this lineage
+  commit. The bounded researcher-cap write packet remains unnumbered and holds
+  no lock until Sol opens it separately.

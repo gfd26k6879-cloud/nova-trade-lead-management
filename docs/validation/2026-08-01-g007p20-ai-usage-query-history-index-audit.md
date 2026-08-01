@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: actor defect proven; migration deferred to one bounded write packet
 
-Receipt commit: recorded by the following lineage update
+Receipt commit: `ef6d4154d86cbe0e71aac56a55484424db32d77d`
 
 ## Scope and dispositions
 
