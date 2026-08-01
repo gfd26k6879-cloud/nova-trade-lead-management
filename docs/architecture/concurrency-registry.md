@@ -4269,3 +4269,28 @@ Date: 2026-08-01
 - Counts remain 54/52/2, crosswalk is 46/16 (G-003 23/16, G-002 13/0),
   sequence `202607310010` remains free, and parent G-007 remains open.
 - P37 remains unopened by this receipt and requires its own reservation.
+
+## G-007P37 market/lifecycle/score index audit reservation
+
+Date: 2026-08-01
+
+- Sol opens a read-only audit of exact G-003 residual
+  `idx_leads_market_active(market_id, archived_at, score DESC)` at clean
+  baseline `fd46f2efebee3fc7b07e3be3868d24e7c3240f43` after SR3 release.
+- Sol exclusively owns registry, ledger, handoff, crosswalk, integration, and
+  acceptance writes. Three agents own disjoint PostgreSQL catalog/EXPLAIN,
+  source/authority, and test/evidence lanes; no producer may self-accept.
+- Exact live Coverage, Explore, map, business-type, Quality, and Researcher
+  Workbench families must be distinguished from CSV/Kanban/query-helper
+  controls and future tenant forms. Market selectors do not grant tenant or
+  workspace authority; researcher access remains `user_market_access` based.
+- Fresh PostgreSQL 16 evidence must compare the installed, dropped, and
+  restored target using full current SQL, source projection, joins,
+  subqueries, ordering, LIMIT/OFFSET, and adversarial shared-market fixtures.
+- Accepted inventory is 54/52/2 and crosswalk 46/16 (G-003 23/16, G-002
+  13/0). Conditional classification would make 47/15 and G-003 24/15.
+  Sequence `202607310010` remains free; no migration is assumed.
+- Stop before DDL migration, replacement, removal, test edits, or sequence use
+  unless a material exact current or durably approved tenant-query plan defect
+  is proven. Separate authority or query-semantic findings must not become
+  index evidence or expand this packet.

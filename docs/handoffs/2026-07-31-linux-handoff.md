@@ -2002,3 +2002,31 @@ sequence `202607310010` remains free. Parent G-007 remains open. Exact residual
 P37 `idx_leads_market_active(market_id, archived_at, score DESC)` requires its
 own reservation; this receipt does not open it. Main and the handoff tag remain
 unchanged, and no push or external action occurred.
+
+## G-007P37 market/lifecycle/score index audit opened
+
+At clean baseline `fd46f2efebee3fc7b07e3be3868d24e7c3240f43`, after complete
+SR3 lock release, Sol opens read-only P37 for exact residual
+`idx_leads_market_active(market_id, archived_at, score DESC)`. Its origin is
+`20260602193000_international_markets_and_territories.sql`; SQLite retains a
+frozen compatibility mirror. No migration, replacement, removal, test edit,
+or sequence use is assumed.
+
+Fresh PostgreSQL 16 must replay 54/52/2, prove the definition-aware catalog,
+and compare installed/drop/restored full current Coverage, Explore, map,
+business-type, Quality, and Researcher Workbench SQL with exact projection,
+joins, correlated subqueries, LIMIT/OFFSET, source ordering, and tie
+boundaries. CSV, Kanban, and uncited helper capabilities remain controls.
+
+Fixtures must interleave tenants in shared platform markets and include
+selective/common/single/absent markets, granted and ungranted researchers,
+active/archived/empty lifecycle states, score ties, NULL/empty/orphan/case
+variants, geography mismatches, assignments, exclusions, coordinates, and
+quality states. Market and score selectors never authorize tenant/workspace
+scope; future tenant forms under G-009/G-011 are not current authority.
+
+Conditional classification is 47/15 (G-003 24/15, G-002 13/0), inventory
+stays 54/52/2, sequence `202607310010` remains free, and parent G-007 remains
+open. Stop before candidate DDL unless material exact current or durably
+approved tenant-query plan evidence proves a defect. No hosted or external
+operation opens.
