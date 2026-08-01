@@ -1496,3 +1496,39 @@ classification would be 42/20 and G-003 19/20. No candidate, migration, test
 edit, replacement, or removal is authorized unless the audit first proves an
 exact tenant-query plan defect. P32 does not change the original 58/318
 accepted-card arithmetic, and parent G-007 remains open.
+
+## G-007P32 accepted; retain historical target and defer tenant analogue
+
+Sol accepts RETAIN for the healthy historical PostgreSQL
+`idx_leads_component_scores(raw_opportunity_score DESC,
+verification_score DESC)` catalog definition and frozen SQLite compatibility
+definition. Current direct raw-opportunity ASC/DESC readers are independently
+reproduced plan owners. Target-only drop preserves results but materially
+increases shared-buffer work and requires scan/sort. Verification-only,
+default opportunity/map, queue, backfill, candidate, and repair families are
+target-neutral controls.
+
+No current lead reader is tenant-scoped. Future tenant-prefixed component-score
+forms remain measurement-only until G-009/G-011 and exact downstream ownership;
+component scores never establish tenant/workspace authority. No target-
+attributable tenant defect, candidate, migration, replacement, test edit, or
+removal is accepted, and sequence 010 stays free.
+
+Faraday’s fresh PostgreSQL 16.14 audit used 160,000 alternating two-tenant rows
+and 16 exact I/D/R shapes. Root independently reproduced the disposition on a
+fresh 100,019-row fixture with 18 exact canonical result sets and ordered score
+sequences I/D/R, exact I/R structures, 38/37/38 catalog rollback, unchanged
+constraints, statement
+replay no-op, and reversed-key spoof rejection. Invalid root attempts were
+discarded and are recorded in the validation receipt. All P32 resources are
+removed. Crosswalk becomes 42/20, G-003 becomes 19/20, G-002 remains 13/0,
+counts remain 54/52/2, original-plan arithmetic remains 58/318 accepted with
+260 remaining, and parent G-007 stays open. The next source-order residual is
+`idx_leads_country_admin`, but P32 does not open or number it.
+
+Independent architecture/authority and test/evidence reviews accept the P32
+receipt with no P0/P1/P2. Root gates pass under Node 24.13.1 and npm 11.8.0:
+behavior 63/63, TypeScript, focused ESLint, recovery over 37 tables,
+Fedora-portable coordinator 12 passed/26 Windows-native skipped, production
+build 11/11 pages, PostgreSQL G-002 2/2, G-003 6/6, G-004A 2/2, G-005 1/1,
+and T-029 19/19. No hosted or external operation occurred.

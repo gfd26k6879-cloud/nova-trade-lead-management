@@ -3808,3 +3808,38 @@ Date: 2026-08-01
   unless a material exact current or durably approved tenant-query defect is
   proven with fresh PostgreSQL 16 catalog and real EXPLAIN evidence. Component
   scores remain selectors, never tenant or workspace authority.
+
+## G-007P32 accepted; retain historical target and defer tenant analogue
+
+Date: 2026-08-01
+
+- Sol accepts RETAIN for the exact healthy historical PostgreSQL
+  `idx_leads_component_scores(raw_opportunity_score DESC,
+  verification_score DESC)` definition and frozen SQLite compatibility
+  definition. Independently reproduced current raw-opportunity ASC/DESC
+  readers naturally select the target; target-only drop preserves results but
+  materially increases buffer work and requires scan/sort.
+- Verification-only, default opportunity/map, AI queue, backfill, candidate,
+  and repair shapes are target-neutral controls. No current query uses the
+  exact two-column order, but the leading raw key has a current direct route
+  owner. The target is retained, not ambiguous or removal-eligible.
+- Future tenant-prefixed component-score forms remain measurements only until
+  G-009/G-011 and their exact downstream owner authorize real signatures.
+  Component scores never grant tenant/workspace authority. No candidate,
+  migration, replacement, removal, or test edit opens; sequence
+  `202607310010` stays free.
+- Fresh PostgreSQL 16.14 evidence used 160,000 and independently generated
+  100,019-row two-tenant fixtures. Faraday had 16 exact I/D/R results and exact
+  I/R structures. Root retry 3 had 18 exact canonical result sets and ordered
+  score sequences I/D/R, exact I/R structures, 38/37/38 catalog restoration,
+  unchanged 10-constraint
+  catalog, statement replay no-op, and reversed-key spoof rejection. Earlier
+  root attempts are excluded and recorded truthfully.
+- All P32 containers, databases, ports, scripts, processes, and temporary
+  artifacts are removed. Counts remain 54/52/2; crosswalk becomes 42/20
+  (G-003 19/20, G-002 13/0); original-card arithmetic remains 58/318 accepted
+  and 260 remaining; parent G-007 stays open. Independent architecture and
+  test/evidence reviews report no P0/P1/P2. Root gates pass: behavior 63/63,
+  TypeScript, ESLint, recovery, coordinator, build, G-002 2/2, G-003 6/6,
+  G-004A 2/2, G-005 1/1, and T-029 19/19. The reservation remains held only
+  until the attributable local receipt commit.
