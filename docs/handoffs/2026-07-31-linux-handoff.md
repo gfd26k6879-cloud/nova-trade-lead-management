@@ -1157,3 +1157,18 @@ proportional gates pass. Counts remain 54/52/2, sequence 010 stays free, the
 crosswalk is 34/28, and all disposable resources are removed. Receipt commit
 `381ff0a45fcf03677fdb90dbfd06984287b5bff8` records the accepted RETAIN
 decision. This lineage update opens no next residual family.
+
+## G-007P26 market-status source classification opened
+
+After clean P25 lineage at `f3e403aea62b7ff90f10465f5a982c264493b87a`,
+Sol opens one read-only source classification for
+`idx_crawl_units_market_status(market_id, status, category)`. Current coverage
+readers join units by cell rather than `crawl_units.market_id`; the compatibility
+geography backfill writer is not an exact target-index reader.
+
+The packet traces provenance, PostgreSQL/SQLite retention, current callers,
+tests, G-010/G-013 authority, and the single-column market FK versus incomplete
+compound market/cell coverage. Platform markets never authorize tenant units.
+No PostgreSQL service, live catalog/plan claim, defect, candidate, migration,
+test edit, replacement, or removal is assumed. Counts remain 54/52/2,
+crosswalk 34/28, and sequence 010 remains free.

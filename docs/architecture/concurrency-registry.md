@@ -3445,3 +3445,23 @@ Date: 2026-07-31
   crosswalk becomes 34/28. All task resources are removed; the receipt
   commit is `381ff0a45fcf03677fdb90dbfd06984287b5bff8`. The reservation is released,
   and this lineage update opens no next residual family.
+
+## G-007P26 market-status source classification opened
+
+- After clean P25 lineage at `f3e403aea62b7ff90f10465f5a982c264493b87a`,
+  Sol opens G-007P26 for exactly
+  `idx_crawl_units_market_status(market_id, status, category)`.
+- The packet is read-only source/provenance/query/caller/test/authority and
+  structural-RI classification. Current market coverage joins units by cell,
+  not `crawl_units.market_id`; the geography backfill writes market identity but
+  is not an exact target-index reader.
+- Platform markets never supply tenant authority. G-010/G-013 have not fixed an
+  exact tenant/workspace market-unit predicate, and G-021 is not a current owner.
+  The target may be a scope-neutral child-side support candidate for the
+  single-column market FK, but it is not constraint-owned and does not cover the
+  full market/cell child key.
+- No live catalog, plan, health, use, performance, necessity, duplicate, or safe
+  removal claim is authorized. Stop before PostgreSQL, candidate DDL, sequence
+  reservation, migration, test edits, replacement, or removal absent an exact
+  approved query or separately authorized RI workload. Counts remain 54/52/2,
+  crosswalk 34/28, and sequence `202607310010` stays free.
