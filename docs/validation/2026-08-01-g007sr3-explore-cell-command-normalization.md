@@ -82,3 +82,10 @@ sequence `202607310010` remains free, original-plan arithmetic remains
 P37 `idx_leads_market_active(market_id, archived_at, score DESC)`. SR3's
 durable-document reservation remains held until a lineage-only commit records
 the acceptance hash and releases it. No push or external action occurs.
+
+## Lineage
+
+Acceptance commit `b9292f7a51a8caa177062a705b59500a6176acd7` records this
+reviewed repair locally. The following lineage-only commit releases the SR3
+durable-document reservation without opening P37. No task-owned disposable
+resource or lock remains, and no push or external action occurs.

@@ -4256,3 +4256,16 @@ Date: 2026-08-01
 - SR3 parser/test locks are released. Counts remain 54/52/2, crosswalk 46/16,
   sequence `202607310010` remains free, and parent G-007 stays open. Sol retains
   only the durable-document reservation through lineage; P37 remains unopened.
+
+## G-007SR3 durable-document release
+
+Date: 2026-08-01
+
+- Acceptance commit `b9292f7a51a8caa177062a705b59500a6176acd7`
+  durably records the reviewed repair and releases the remaining SR3 document
+  reservation.
+- No SR3 source, test, document, migration, sequence, service, process,
+  payload, volume, or worktree lock remains.
+- Counts remain 54/52/2, crosswalk is 46/16 (G-003 23/16, G-002 13/0),
+  sequence `202607310010` remains free, and parent G-007 remains open.
+- P37 remains unopened by this receipt and requires its own reservation.

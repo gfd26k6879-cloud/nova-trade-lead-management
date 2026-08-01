@@ -1989,3 +1989,16 @@ P0/P1/P2; the implementer does not self-accept. Source/test locks are released,
 counts stay 54/52/2, crosswalk stays 46/16, sequence `202607310010` remains
 free, original arithmetic stays 58/318/260, and parent G-007 remains open.
 P37 `idx_leads_market_active` is next but remains unopened until lineage.
+
+## G-007SR3 lineage receipt
+
+Acceptance commit `b9292f7a51a8caa177062a705b59500a6176acd7` durably closes
+SR3 and releases its remaining document reservation. No source, test,
+migration, sequence, service, process, payload, volume, or worktree lock
+remains.
+
+Inventory stays 54/52/2, crosswalk 46/16 (G-003 23/16, G-002 13/0), and
+sequence `202607310010` remains free. Parent G-007 remains open. Exact residual
+P37 `idx_leads_market_active(market_id, archived_at, score DESC)` requires its
+own reservation; this receipt does not open it. Main and the handoff tag remain
+unchanged, and no push or external action occurred.
