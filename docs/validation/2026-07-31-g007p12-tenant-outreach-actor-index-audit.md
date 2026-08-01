@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: defect proven; migration deferred
 
-Receipt commit: pending attributable local commit
+Receipt commit: `7fe3eb2e62dbdfec8f65128571de5331e85c7e16`
 
 ## Scope and decision
 

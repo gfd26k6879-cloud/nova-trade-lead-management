@@ -627,3 +627,6 @@ read-only G-007P13 audit of `idx_lead_notes_author_created`. No migration is
 assumed; counts remain 52/50/2 and sequence `202607310008` remains available.
 Any later proven P13 migration would use 008 and produce 53/51/2. No remote or
 external action occurred.
+
+The G-007P12 deferred-audit receipt commit is
+`7fe3eb2e62dbdfec8f65128571de5331e85c7e16`.

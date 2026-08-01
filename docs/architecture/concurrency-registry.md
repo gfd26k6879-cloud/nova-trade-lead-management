@@ -2972,10 +2972,11 @@ Date: 2026-07-31
   LIMIT cost 29.58 versus candidate-only 35.10 and actually filters 48,000 rows.
   The candidate wins only on a perfectly tenant-batched heap at correlation 1.0;
   that physical-order dependency is rejected as overfit.
-- Independent architecture and quality reviews pass DEFER. No migration or
-  test/source change remains. `migration-sequence` and `integration-ledger`
-  release only after the attributable audit receipt and lineage commits.
-  Transfer the
+- Independent architecture and quality reviews pass DEFER. Receipt commit
+  `7fe3eb2e62dbdfec8f65128571de5331e85c7e16` records the result. No migration
+  or test/source change remains; `migration-sequence` and `integration-ledger`
+  release with this lineage commit. Transfer the
   obligation to strict G015/G017 cutover; parent G-007 remains open. P13 is the
   next lock-free read-only audit and assumes no migration. Counts remain
-  52/50/2 and sequence `202607310008` remains unused/available.
+  52/50/2 and sequence `202607310008` remains unused/available. No P12
+  container, listener, database, process, worktree, or lock remains.
