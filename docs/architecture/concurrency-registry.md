@@ -3370,3 +3370,20 @@ Date: 2026-07-31
 - Receipt commit `e9ac62457d874d8f3fa5d9aa4f4354d90acec593` is final locally.
   The documentation reservation is released and no next residual card is
   opened by this lineage update.
+
+## G-007P24 budget-pages aggregate index audit opened
+
+- After clean P23 lineage at `0158101797063d2fa420658371d4c5489a2bf0e2`,
+  Sol opens G-007P24 for exactly
+  `idx_crawl_units_budget_pages(crawl_run_id, status, pages_fetched,
+  max_pages)` and the three-mode current remaining-search-call aggregate.
+- The packet is read-only PostgreSQL 16 catalog, realistic interleaved fixture,
+  natural EXPLAIN/BUFFERS, scalar-result digest, and transactional target-drop
+  comparison. P4 run, run-status, retry-ready, and tenant-run-status indexes are
+  controls, not reopened families.
+- Current run-ID-only behavior is compatibility/performance evidence, not tenant
+  authorization. Tenant/workspace controls measure future G-013 form without
+  inventing it; G-021 is not a current query owner.
+- Stop before candidate DDL, sequence reservation, migration, test edits, or
+  removal unless a material exact current or durably approved tenant-plan defect
+  is proven. Counts remain 54/52/2 and sequence `202607310010` stays free.

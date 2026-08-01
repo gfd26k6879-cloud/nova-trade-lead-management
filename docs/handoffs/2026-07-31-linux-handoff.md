@@ -1087,3 +1087,17 @@ sequence 010 stays free, the crosswalk is 32/30, and no later card unlocks.
 The accepted receipt commit is
 `e9ac62457d874d8f3fa5d9aa4f4354d90acec593`. Its documentation reservation is
 released. This lineage update opens no next residual card.
+
+## G-007P24 budget-pages aggregate audit opened
+
+After clean P23 lineage at `0158101797063d2fa420658371d4c5489a2bf0e2`,
+Sol opens one read-only PostgreSQL 16 audit for
+`idx_crawl_units_budget_pages`. The exact current query filters one run plus
+mode-specific statuses and sums positive `max_pages - pages_fetched` before
+resume/retry safety checks.
+
+The audit compares natural plans and exact scalar results with P4 sibling
+indexes and a transactional target drop. Run-ID-only behavior is current
+compatibility, not tenant authority; G-013 controls are measurements and G-021
+is not a current owner. No defect, candidate, migration, or removal is assumed.
+Counts remain 54/52/2 and sequence 010 remains free.
