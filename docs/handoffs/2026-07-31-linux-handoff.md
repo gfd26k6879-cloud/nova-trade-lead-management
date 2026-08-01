@@ -1222,4 +1222,6 @@ future scoped contracts remain with G-009/G-010/G-011/G-016/G-018. No
 PostgreSQL service, live claim, defect, candidate, migration, test edit, identity
 rewrite, replacement, removal, writer-safety, SQLite-activation, or cross-engine
 equivalence claim is opened. Counts remain 54/52/2, sequence 010 stays free,
-and the crosswalk is 37/25.
+and the crosswalk is 37/25. Receipt commit
+`0636a4ff3aee28c5c965ac239567523d3c8ced67` records the accepted RETAIN/DEFER
+decision. This lineage update opens no next residual family.

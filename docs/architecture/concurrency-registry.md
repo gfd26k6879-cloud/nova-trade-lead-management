@@ -3518,4 +3518,6 @@ Date: 2026-07-31
 - No PostgreSQL service or live catalog/plan claim was used. No defect,
   candidate, migration, test edit, identity rewrite, replacement, or removal
   packet opens. Counts remain 54/52/2, sequence 010 stays free, and the
-  crosswalk becomes 37/25. The receipt reservation remains only through commit.
+  crosswalk becomes 37/25. Receipt commit
+  `0636a4ff3aee28c5c965ac239567523d3c8ced67` releases the reservation; this
+  lineage update opens no next residual family.

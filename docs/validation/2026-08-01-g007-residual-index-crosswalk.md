@@ -341,3 +341,7 @@ enforcement candidate. Identity lifecycles differ, neither key authorizes a
 tenant grant, and no live plan, necessity, cross-engine equivalence,
 replacement, or removal claim is made. Counts stay 54/52/2 and sequence 010
 remains free.
+
+G-007P27 receipt commit `0636a4ff3aee28c5c965ac239567523d3c8ced67`
+records the accepted two-index RETAIN/DEFER decision. This lineage update opens
+no next residual family.

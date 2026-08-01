@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: retain/defer source classification; no migration
 
-Receipt commit: pending
+Receipt commit: `0636a4ff3aee28c5c965ac239567523d3c8ced67`
 
 ## Scope and provenance
 
