@@ -439,3 +439,7 @@ cannot authorize P31 DDL. Counts stay 54/52/2, sequence 010 stays free, the
 crosswalk becomes 41/21, G-003 becomes 18/21, G-002 remains 13/0, and parent
 G-007 remains open. The original-card total remains 58/318 accepted with 260
 remaining.
+
+G-007P31 receipt commit `8c724ff7ef74f6a3f1a4b42015c5bea98bfadeb5`
+records this accepted RETAIN disposition and releases its durable reservation
+without opening or numbering P32.

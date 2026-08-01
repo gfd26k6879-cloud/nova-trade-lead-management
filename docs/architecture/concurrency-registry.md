@@ -3779,3 +3779,6 @@ Date: 2026-08-01
   accepted and 260 remaining, and parent G-007 remains open. The serialized
   durable-document reservation is released by the attributable local receipt
   commit; no P32 reservation is opened by this receipt.
+- Receipt commit `8c724ff7ef74f6a3f1a4b42015c5bea98bfadeb5` records the
+  accepted P31 classification locally and releases the durable-document
+  reservation.

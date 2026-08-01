@@ -6,6 +6,8 @@ Baseline: `68df67d9c7aad416e6cab1a12675a01c44da1b76`
 
 Status: accepted RETAIN; no migration
 
+Receipt commit: `8c724ff7ef74f6a3f1a4b42015c5bea98bfadeb5`
+
 ## Decision
 
 Sol accepts RETAIN for the exact healthy historical PostgreSQL definition and

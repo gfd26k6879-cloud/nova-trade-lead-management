@@ -1472,3 +1472,7 @@ becomes 41/21, G-003 becomes 18/21, G-002 stays 13/0, counts remain 54/52/2,
 sequence 010 stays free, original-plan arithmetic remains 58/318 accepted with
 260 remaining, and parent G-007 remains open. This receipt releases the durable
 reservation and deliberately does not open or number P32.
+
+Receipt commit `8c724ff7ef74f6a3f1a4b42015c5bea98bfadeb5` records the
+accepted P31 RETAIN classification locally and releases its serialized
+documentation reservation.
