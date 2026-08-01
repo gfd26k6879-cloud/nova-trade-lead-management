@@ -383,3 +383,26 @@ migration, external action, or downstream dependency unlock is implied.
 
 The G-007P4 no-defect audit receipt commit is
 `b44896a0a23293341d2d44df411337f8eca7b752`.
+
+## G-007P5 deferred-defect receipt
+
+Date: 2026-07-31
+
+G-007P5 proves a real tenant-query defect in the lead enrichment-ready family
+but does not open a migration. On PostgreSQL 16.14 with the complete 48/46/2
+chain and 100,000 interleaved leads, the global ready path considered 12,500
+wrong-tenant rows. The exact 984 KiB tenant-ready candidate reduced the scoped
+selector to 3 buffers with no filtering.
+
+A required fresh compatibility replay rejected that standalone candidate. The
+exact current unscoped query naturally chose the new tenant-first index even
+while both globals remained healthy, scanned all 20,000 eligible cross-tenant
+rows, and sorted them at 2,231 buffers and 22.227 ms. Removing the globals or
+editing current callers would cross the later tenant-query/worker cutover.
+
+The migration is therefore deferred to the G-011/G-012/G-014/G-019/G-020
+compatibility boundary. All hypotheticals and disposable services were removed,
+35/35 baseline lead indexes were healthy, and the repository stayed clean at
+`b548172286e1d0dbb7cd5345dbd4f3b2d1427928`. Parent G-007 remains open. The
+next safe action is a separately bounded, read-only G-007P6 recovery-family
+audit; no migration is assumed.

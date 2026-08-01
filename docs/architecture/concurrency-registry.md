@@ -2771,3 +2771,23 @@ Date: 2026-07-31
   read-only audit; no later Phase 2 write card is unlocked.
 - Audit receipt commit `b44896a0a23293341d2d44df411337f8eca7b752`
   durably records the no-defect result. No G-007P4 lock or resource remains.
+
+## G-007P5 lead enrichment-ready deferred-defect audit
+
+- Read-only source, architecture, test, and PostgreSQL 16.14 lanes reconciled
+  the exact future tenant-ready selector and tenant-guarded atomic lease.
+  `leads.tenant_id` is required; `leads.workspace_id` is deliberately absent.
+- On 100,000 interleaved leads, the global partial enrichment index considered
+  25,000 candidates and removed 12,500 wrong-tenant plus 2,500 same-tenant
+  exhausted rows. The tenant-query plan defect is proven.
+- A 984 KiB ready-only candidate naturally reduced the scoped selector to 3
+  buffers with tenant in `Index Cond` and zero filtering. However, a fresh
+  standalone run proved that the same additive index captured the exact current
+  unscoped compatibility query, scanned all 20,000 eligible cross-tenant rows,
+  and sorted them at 2,231 buffers and 22.227 ms despite both globals remaining.
+- No migration or lock is opened. Installing the index, removing the global
+  indexes, or editing callers would cross the G-011/G-012/G-014/G-019/G-020
+  compatibility cutover boundary. Recovery remains a separate G-007P6 audit.
+- All hypothetical indexes, containers, ports, and processes were removed; 35
+  of 35 baseline lead indexes are valid, ready, and live. Parent G-007 remains
+  open and no later Phase 2 card is unlocked.
