@@ -2068,3 +2068,12 @@ sequence `202607310010` stays free, original arithmetic remains 58/318/260,
 and parent G-007 remains open. P38
 `idx_leads_numeric_filters(review_count, rating, score DESC)` is next but
 requires a separate reservation after P37 lineage.
+
+## G-007P37 lineage receipt
+
+The attributable local P37 acceptance commit is
+`83af27ec2c32cc366288059f7576f92200809620`. The durable-document
+reservation is released with no remaining P37 migration, source, test,
+sequence, service, or worktree lock. P38 remains next and unopened pending a
+separate reservation. No push, deployment, hosted migration, or external
+action occurred.

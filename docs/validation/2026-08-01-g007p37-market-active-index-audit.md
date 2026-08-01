@@ -189,3 +189,10 @@ The exact next residual is
 P38 read-only audit. P37's durable-document reservation remains held until a
 lineage-only commit records the acceptance hash and releases it. No push or
 external action occurs.
+
+## Lineage receipt
+
+The attributable local acceptance commit is
+`83af27ec2c32cc366288059f7576f92200809620`. This lineage-only receipt
+releases P37's durable-document reservation. P38 remains unopened until its
+own separate reservation; no remote or external action occurred.

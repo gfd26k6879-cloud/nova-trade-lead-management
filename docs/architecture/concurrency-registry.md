@@ -4321,3 +4321,14 @@ Date: 2026-08-01
 - Crosswalk is 47/15 (G-003 24/15, G-002 13/0), inventory is 54/52/2,
   sequence `202607310010` remains free, and parent G-007 remains open. P38
   `idx_leads_numeric_filters` is next but unopened.
+
+## G-007P37 lineage recorded; durable-document reservation released
+
+Date: 2026-08-01
+
+- Local acceptance commit:
+  `83af27ec2c32cc366288059f7576f92200809620`.
+- The P37 durable-document reservation is released. No migration, source,
+  test, sequence, service, or worktree lock remains.
+- P38 `idx_leads_numeric_filters` remains next and unopened pending its own
+  separate reservation. No remote or external action occurred.
