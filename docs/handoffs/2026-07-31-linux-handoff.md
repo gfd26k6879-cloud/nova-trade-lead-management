@@ -1101,3 +1101,18 @@ indexes and a transactional target drop. Run-ID-only behavior is current
 compatibility, not tenant authority; G-013 controls are measurements and G-021
 is not a current owner. No defect, candidate, migration, or removal is assumed.
 Counts remain 54/52/2 and sequence 010 remains free.
+
+## G-007P24 accepted; retain exact aggregate owner
+
+Fresh PostgreSQL 16.14 replayed 54/52/2 and measured 120,000 interleaved units.
+All three aggregate modes naturally used the budget-pages index through
+index-only scans with zero heap fetches and 5-20 buffers. Transactional removal
+kept the 24-result scalar digest exact but regressed to 2,503-2,750-buffer
+bitmap/heap plans; explicit rollback restored the exact definition, digest, and
+plan.
+
+Sol retains the exact current compatibility owner. Tenant/workspace controls do
+not complete G-013 and G-021 is not a current owner. No defect, candidate,
+migration, test edit, or removal packet is opened. Root behavior tests pass
+60/60. Counts remain 54/52/2, sequence 010 stays free, the crosswalk is 33/29,
+and all disposable resources are removed.

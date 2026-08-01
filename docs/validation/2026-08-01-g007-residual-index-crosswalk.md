@@ -39,6 +39,9 @@ and 31 remain unclassified: G-002 is now 6 classified and 7 unclassified.
 After the accepted P23 source classification, 32 names are mapped or accepted
 and 30 remain unclassified: G-002 is now 7 classified and 6 unclassified.
 
+After the accepted P24 plan audit, 33 names are mapped or accepted and 29 remain
+unclassified: G-002 is now 8 classified and 5 unclassified.
+
 For this reconstruction, an exact audit target or named plan/control owner is
 mapped. Merely appearing as a migration foundation guard does not classify a
 tenant-query family. P18 and P19 each classify two names already inside the 28,
@@ -53,7 +56,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | A:P21 retain | `crawl_runs` | `idx_crawl_runs_created_desc(created_at DESC)` | exact current global visibility/history owner; future G-013 form deferred |
 | A:P23 retain/defer | `crawl_runs` | `idx_crawl_runs_market_created(market_id, created_at DESC)` | scope-neutral child-side FK-maintenance support candidate for accepted `crawl_runs_market_id_fkey`; not constraint-owned or measured; platform market is not tenant authority; no exact current market-history reader; retain PostgreSQL/SQLite compatibility and defer tenant history to an exact G-010/G-013 contract |
 | A:P21 retain | `crawl_runs` | `idx_crawl_runs_status_created(status, created_at DESC)` | current global status-filter compatibility support; future G-013 form deferred |
-| U | `crawl_units` | `idx_crawl_units_budget_pages(crawl_run_id, status, pages_fetched, max_pages)` | run budget calculation; G-013/G-021 |
+| A:P24 retain | `crawl_units` | `idx_crawl_units_budget_pages(crawl_run_id, status, pages_fetched, max_pages)` | exact current remaining-search-call aggregate owner; natural index-only plans use 5-20 buffers and zero heap fetches; transactional drop regresses to 2,503-2,750-buffer heap plans; future tenant/workspace form deferred to exact G-013/G-021 contract |
 | U | `crawl_units` | `idx_crawl_units_cell_status(location_cell_id, status, category)` | cell coverage; G-010/G-013 |
 | U | `crawl_units` | `idx_crawl_units_market_status(market_id, status, category)` | market coverage; G-010/G-013 |
 | A:P4 retain | `crawl_units` | `idx_crawl_units_retry_ready(crawl_run_id, status, next_retry_at, created_at) WHERE status='retry_wait'` | retry reset; G-013 |
@@ -285,3 +288,10 @@ wait for exact G-010/G-013 authority or measured RI evidence. Counts stay
 G-007P23 receipt commit `e9ac62457d874d8f3fa5d9aa4f4354d90acec593`
 records the accepted retain/defer classification. This lineage update opens no
 next residual family.
+
+G-007P24 retains the budget-pages index as the exact current aggregate owner.
+All three modes naturally use index-only scans with zero heap fetches. A
+transactional drop preserves the exact scalar digest but materially regresses
+to P4 run-status bitmap/heap plans; rollback restores the target definition,
+digest, and plan. No defect, candidate, migration, or removal packet is opened.
+Counts stay 54/52/2 and sequence 010 remains free.

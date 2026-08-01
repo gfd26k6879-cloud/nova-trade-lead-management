@@ -3387,3 +3387,18 @@ Date: 2026-07-31
 - Stop before candidate DDL, sequence reservation, migration, test edits, or
   removal unless a material exact current or durably approved tenant-plan defect
   is proven. Counts remain 54/52/2 and sequence `202607310010` stays free.
+
+## G-007P24 accepted; retain exact aggregate owner
+
+- Fresh PostgreSQL 16.14 replay passes 54/52/2. On 120,000 interleaved units,
+  every exact mode naturally uses the target through an index-only scan with
+  zero heap fetches, 5-20 buffers, and correct scalar results.
+- Transactional target removal preserves the 24-result scalar digest but
+  regresses to P4 run-status bitmap/heap plans with 2,503-2,750 buffers. Explicit
+  rollback restores the exact target definition, result digest, and plan.
+- Tenant/workspace controls are G-013 measurements only and authorize no
+  candidate. G-021 is not a current owner; P4 control dispositions are unchanged.
+  No defect, migration, test edit, or removal packet is opened.
+- Root behavior tests pass 60/60. Counts remain 54/52/2, sequence 010 stays
+  free, and the crosswalk becomes 33 classified/29 unclassified. All disposable
+  resources are removed; the receipt reservation remains only through commit.
