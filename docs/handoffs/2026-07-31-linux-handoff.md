@@ -768,3 +768,25 @@ external action is assumed.
 
 The G-007P17 no-defect receipt commit is
 `ff44228dc0205943f5b427db15d769b3fcdc4bc8`.
+
+## G-007P18 no-defect receipt
+
+G-007P18 retains `idx_ai_feedback_events_verification_id` and
+`idx_ai_feedback_events_artifact_id` with no migration. They are scope-neutral
+lookup aids for G-004A's exact composite SET NULL constraints. The referenced
+IDs remain globally unique, so tenant-prefixing cannot reduce a valid lookup
+set and no current or approved feedback read filters by either reference.
+
+On 160,000 interleaved feedback rows, valid hot 20,000-row tenant/reference
+paths use the globals with zero filtering. Real parent deletes null exactly the
+target 20,000 references, preserve the other reference, and roll back to the
+exact row digest. Executable wrong-tenant guessed-ID probes filter 20,000 rows,
+but a matching relationship cannot survive the accepted FK/guard and no caller
+owns that query. Cross-tenant mutations reject with zero residue.
+
+Independent reviews pass RETAIN/no defect. P18 did not repeat G-004A's live
+ACL/RLS gate, and differently constructed catalog digests are not presented as
+equal; exact final catalog reread, no DDL, cleanup, clean tree, and unchanged
+refs pass. Counts remain 52/50/2 and sequence 008 remains available. Parent
+G-007 stays open; P19 AI-usage references are next. No external action is
+assumed.

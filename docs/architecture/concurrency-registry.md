@@ -3081,3 +3081,19 @@ Date: 2026-07-31
 - The attributable local receipt is
   `ff44228dc0205943f5b427db15d769b3fcdc4bc8`. No P17 container, listener,
   database, process, worktree, or lock remains.
+
+## G-007P18 AI-feedback reference-index no-defect audit
+
+- A fresh 52/50/2 PostgreSQL 16.14 audit covers 160,000 physically
+  interleaved feedback rows across two tenants. The verification and artifact
+  globals are scope-neutral lookup aids for the exact composite SET NULL FKs;
+  globally unique parent IDs make a tenant prefix non-selective.
+- Valid hot 20,000-row paths use the existing indexes with zero filtering.
+  Real verification/artifact deletes null exactly their own 20,000 references,
+  preserve the other reference, and roll back to the exact row digest.
+- Executable guessed wrong-tenant probes filter 20,000 rows, but a matching
+  cross-tenant relationship is invalid and no current/approved caller owns the
+  query. Cross-tenant insert/update controls reject without residue.
+- Independent architecture and quality reviews pass RETAIN/no defect. No DDL
+  ran; final exact catalog reread and cleanup pass. Counts stay 52/50/2,
+  sequence 008 remains free, and P19 AI-usage references are next.
