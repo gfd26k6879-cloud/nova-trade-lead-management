@@ -2751,3 +2751,21 @@ Date: 2026-07-31
   Source preflight ranks the single `crawl_units` retry-ready family as the
   clearest independently bounded candidate; it is not yet a proven defect and
   holds no migration lock.
+
+## G-007P4 crawl-unit retry-ready no-defect audit
+
+- Read-only source, dependency, test, and PostgreSQL 16.14 lanes reconciled the
+  exact future due-retry reset as tenant plus explicit nullable workspace plus
+  globally unique run plus retry status/due time. No lock was held.
+- The corrective real-plan fixture used 120,000 interleaved units across two
+  tenants, exact-workspace and tenant-wide runs, due/future retries, pending,
+  and terminal noise. Parent-inherited scope mismatches were zero.
+- Natural baseline plans inspected only the exact run's 7,500 retry rows and
+  filtered only 3,750 future rows. A 5,088 KiB hypothetical tenant/run retry
+  index was never selected naturally and did not improve either workspace
+  form. No wrong-tenant or wrong-workspace candidate was observed.
+- G-007P4 closes with no defect, migration, lock, test-count change, runtime
+  repair, or application edit. The hypothetical was dropped, all 12 baseline
+  indexes were healthy, and all task resources were removed.
+- Parent G-007 remains open. The next child must be another separately bounded
+  read-only audit; no later Phase 2 write card is unlocked.

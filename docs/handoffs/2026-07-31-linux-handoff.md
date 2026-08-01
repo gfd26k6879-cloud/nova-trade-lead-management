@@ -363,3 +363,20 @@ The accepted G-007P3 source commit is
 `5a16a2602cb02e36b61e5c8dc2881902d80a7816`. The next exact action is a
 read-only G-007P4 PostgreSQL 16 EXPLAIN audit of one separately bounded family,
 starting with the `crawl_units` retry-ready candidate. No migration is assumed.
+
+## G-007P4 no-defect receipt
+
+Date: 2026-07-31
+
+The `crawl_units` retry-ready candidate does not require a migration. Natural
+PostgreSQL 16.14 plans over 120,000 interleaved rows and both explicit workspace
+forms inspected only the globally unique target run. No wrong-tenant or
+wrong-workspace candidate appeared; filtered rows were future retries only.
+The proposed 5,088 KiB tenant/run retry index was not selected naturally and
+did not improve the read or UPDATE plans.
+
+The hypothetical was dropped, all 12 baseline indexes were healthy, all audit
+resources were removed, and the repository remained clean at
+`ad2ada5744e32dec864aeec4b04dbf8d7254ddd2`. Parent G-007 remains open. The
+next action is another read-only, separately justified G-007P family audit. No
+migration, external action, or downstream dependency unlock is implied.
