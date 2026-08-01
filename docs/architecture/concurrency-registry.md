@@ -3144,5 +3144,9 @@ Date: 2026-07-31
   index disposition. G-004B remains open and separate. The paused native
   Windows/NTFS G-006 lane and unopened G-006C2B boundary are unchanged.
 - Source and validation receipt commit
-  `e6e72b2cb04189ef1b445e74ad57e5204685f316` is accepted. The repair locks and
+  `e6e72b213e840af7365fd08bd26ed4e493f97386` is accepted. The repair locks and
   durable-document reservation are released by this lineage commit.
+- The prior lineage expansion of short hash `e6e72b2` named nonexistent object
+  `e6e72b2cb04189ef1b445e74ad57e5204685f316`. The corrected object above is the
+  parent of lineage commit `69e6f9a6e51c4807f7c7542ad91921db19b6786e`;
+  the append-only ledger retains a superseding correction event.

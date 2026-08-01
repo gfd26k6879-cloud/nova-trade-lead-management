@@ -11,7 +11,12 @@ Branch: `codex/nova-multitenant-integration`
 Status: accepted forward repair
 
 Source and validation receipt commit:
-`e6e72b2cb04189ef1b445e74ad57e5204685f316`
+`e6e72b213e840af7365fd08bd26ed4e493f97386`
+
+Lineage correction: the first lineage commit expanded short hash `e6e72b2` to
+a nonexistent object. Commit `69e6f9a6e51c4807f7c7542ad91921db19b6786e`
+has the exact source commit above as its parent; the append-only ledger retains
+and supersedes the erroneous value explicitly.
 
 ## Scope and implementation
 
