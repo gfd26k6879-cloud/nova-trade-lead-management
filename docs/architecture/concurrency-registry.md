@@ -3738,3 +3738,44 @@ Date: 2026-08-01
   necessity. No defect, tenant-prefixed candidate, migration, test edit,
   replacement, or removal is assumed. Counts remain 54/52/2, crosswalk 40/22
   (G-003 17/22), and sequence `202607310010` stays free.
+
+## G-007P31 accepted; retain measured local-services plan owner
+
+Date: 2026-08-01
+
+- Sol accepts RETAIN for the exact healthy historical PostgreSQL
+  `idx_leads_business_type_score(business_type, score DESC)` definition and its
+  frozen SQLite compatibility definition. The target is the sole exact healthy
+  semantic candidate. Ordinary shared-plumbing admin Leads/Kanban/Explore/map/
+  CSV and researcher Leads/Explore/map shapes use accepted sibling indexes, but
+  the independently reproduced measured reachable canonical `local_services`
+  equality-plus-score query-function shape at limit 100 naturally selects this
+  target and materially regresses in buffers and filtered rows when it is
+  transactionally absent. Researcher Kanban/export remain source negatives.
+- Fresh PostgreSQL 16.14 replayed 54/52/2 migrations over 160,010 physically
+  interleaved two-tenant leads. The corrected 21-shape live/session matrix and
+  broader 31-shape family matrix had exact installed/drop/restored results and
+  exact installed/restored structures. Catalogs restored at 38 indexes and 10
+  constraints. Twelve isolated spoof states rejected before workload.
+- Root independently reproduced the classification on a separately generated
+  100,019-row fresh PostgreSQL 16.14 fixture: 18 representative shapes were
+  exact I/D/R, catalog and structures restored exactly, healthy replay was a
+  semantic no-op, and a reversed-key same-name spoof failed preflight before
+  workload.
+- Business type, score, assignment, and market visibility remain selectors,
+  never tenant or workspace authority. Future tenant-filtered analogs are
+  measurement-only until G-011/G-017. No target-attributable tenant index defect
+  was proven; generic tenant-plan debt remains deferred. NULL/empty/COALESCE
+  semantic debt cannot authorize index DDL. No candidate, migration,
+  replacement, test edit,
+  removal, or fresh SQLite/Windows acceptance opens.
+- Root gates pass: proportional behavior 42/42, TypeScript, focused ESLint,
+  recovery over 37 tables, Fedora-portable coordinator 12 passed/26 Windows-
+  native skipped, build 11/11 pages, fresh PostgreSQL G-002 2/2, G-003 6/6,
+  and T-029 19/19. All containers, ports, scripts, processes, temporary
+  artifacts, and extra worktrees are gone.
+- Counts remain 54/52/2, sequence `202607310010` stays free, crosswalk becomes
+  41/21 (G-003 18/21; G-002 13/0), original-plan arithmetic remains 58/318
+  accepted and 260 remaining, and parent G-007 remains open. The serialized
+  durable-document reservation is released by the attributable local receipt
+  commit; no P32 reservation is opened by this receipt.

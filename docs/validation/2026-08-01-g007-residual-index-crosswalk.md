@@ -61,6 +61,9 @@ remain unclassified. G-003 is now 16 classified and 23 unclassified.
 After the accepted P30 plan audit, 40 names are mapped or accepted and 22
 remain unclassified. G-003 is now 17 classified and 22 unclassified.
 
+After the accepted P31 plan audit, 41 names are mapped or accepted and 21
+remain unclassified. G-003 is now 18 classified and 21 unclassified.
+
 For this reconstruction, an exact audit target or named plan/control owner is
 mapped. Merely appearing as a migration foundation guard does not classify a
 tenant-query family. P18 and P19 each classify two names already inside the 28,
@@ -101,7 +104,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | A:P7 | `leads` | `idx_leads_ai_status_checked(ai_verification_status, ai_checked_at DESC)` | AI viability/current compatibility; G-011/G-014 |
 | A:P29 retain/defer | `leads` | `idx_leads_archived_active(archived_at, updated_at DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definitions; no exact primary plan owner or demonstrated necessity; target-only drop was plan/result/buffer neutral; accepted P10 tenant score-recompute defect remains deferred to G-009/G-011/G-012/G-014/G-019/G-020 plus G-017/G-018 projections; no removal, replacement, candidate, or migration |
 | A:P30 retain/defer | `leads` | `idx_leads_assigned_to_user(assigned_to_user_id, updated_at DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definition; exact local assignee-null cleanup naturally uses the target, but target-only drop shows no material necessity; ordinary assignment readers and helper-capability export controls do not use it, the live CSV route supplies no assignment filter, and no current reader owns the `updated_at` order; visible parent-delete plan cannot attribute nested FK support; assignee is never tenant/workspace authority; no tenant defect, candidate, migration, replacement, test edit, or removal |
-| U | `leads` | `idx_leads_business_type_score(business_type, score DESC)` | filtering/statistics; G-011/G-017 |
+| A:P31 retain | `leads` | `idx_leads_business_type_score(business_type, score DESC)` | healthy exact PostgreSQL catalog and frozen SQLite compatibility definition; ordinary shared-plumbing live route plans use accepted siblings, while the independently reproduced measured reachable canonical `local_services` equality-plus-score query-function shape at limit 100 naturally uses this target and target-only drop materially increases buffers and filtered rows; NULL/empty/COALESCE semantic debt is not an index defect; business type/score never authorize tenant/workspace scope; no target-attributable tenant index defect, tenant candidate, migration, replacement, test edit, or removal |
 | U | `leads` | `idx_leads_component_scores(raw_opportunity_score DESC, verification_score DESC)` | quality/scoring; G-011/G-012/G-017 |
 | U | `leads` | `idx_leads_country_admin(country_code, admin_area1, locality)` | geography; G-010/G-011 |
 | A:P8 | `leads` | `idx_leads_discovered_at(discovered_at)` | discovery counts; G-011/G-017 |
@@ -146,10 +149,10 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 
 G-005 contributes zero residual indexes under this definition. G-007P20A adds
 `idx_g007p20a_ai_usage_tenant_actor_created` outside the 62-name residual set
-and leaves the retained global owners intact. The next unclassified read-only
-family starts with the `crawl_runs` current-visibility pair
-`idx_crawl_runs_status_created` and `idx_crawl_runs_created_desc`; this
-appendix does not open or number that audit.
+and leaves the retained global owners intact. After accepted P31, the next
+unclassified read-only family in exact residual order is
+`idx_leads_component_scores(raw_opportunity_score DESC, verification_score
+DESC)`; this appendix does not open or number that audit.
 
 ## Origin mapping and replay correction
 
@@ -414,3 +417,25 @@ G-007P30 receipt commit `e3e2c9759f2e8f53cc8299d746237a928fb9674f`
 records the accepted RETAIN/DEFER disposition plus the fresh binding-export
 supplement. This lineage update releases the durable reservation and opens no
 next residual family.
+
+G-007P31 classifies `idx_leads_business_type_score` RETAIN. Fresh PostgreSQL
+16.14 replayed the 54/52/2 migration chain over a 160,010-row two-tenant
+fixture. Corrected admin/researcher bindings, exact 50,000/100,000 exports,
+maps through 1,000, semantic controls, and broader quality/AI/aggregate readers
+were exact installed/drop/restored; installed plan structures and the 38-index,
+10-constraint catalog restored exactly. Shared-plumbing live routes selected
+accepted siblings. The independently reproduced measured reachable canonical
+literal `local_services` equality-plus-score query-function shape at limit 100
+naturally selected the target and materially regressed when it was
+transactionally dropped, so removal is not authorized.
+
+Twelve isolated spoof states rejected before workload. Root independently
+reproduced the disposition on a different fresh 100,019-row fixture with exact
+I/D/R results, exact rollback, unchanged replay, and a separately rejected
+reversed-key spoof. Business type, score, assignment, and market visibility are
+selectors only; future tenant analogs remain G-011/G-017 measurements, and no
+target-attributable tenant index defect was proven. Generic tenant-plan debt
+cannot authorize P31 DDL. Counts stay 54/52/2, sequence 010 stays free, the
+crosswalk becomes 41/21, G-003 becomes 18/21, G-002 remains 13/0, and parent
+G-007 remains open. The original-card total remains 58/318 accepted with 260
+remaining.

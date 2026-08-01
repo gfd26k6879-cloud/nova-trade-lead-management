@@ -1434,3 +1434,41 @@ structures and catalogs exact I/R, with D reported honestly. Raw telemetry is
 noncausal and target selection alone is not necessity. No defect, candidate,
 migration, test edit, replacement, or removal is assumed. Counts remain
 54/52/2, crosswalk 40/22 (G-003 17/22), and sequence 010 remains free.
+
+## G-007P31 accepted; retain measured local-services score plan owner
+
+Sol accepts RETAIN for the healthy historical PostgreSQL
+`idx_leads_business_type_score(business_type, score DESC)` catalog definition
+and frozen SQLite compatibility definition. Fresh PostgreSQL 16.14 replayed the
+54/52/2 chain over 160,010 physically interleaved two-tenant leads. The final
+21-shape admin/researcher session matrix and broader 31-shape family matrix had
+exact installed/drop/restored results, exact installed/restored structures, and
+exact catalog rollback at 38 indexes and 10 constraints. Twelve isolated spoof
+states rejected before workload.
+
+Shared-plumbing admin Leads/Kanban/Explore/fast-map/CSV and researcher Leads/
+Explore/fast-map shapes naturally use accepted siblings. Researcher Kanban
+redirect and researcher export denial remain source negatives, not executed
+SQL. The independently reproduced, measured, reachable canonical
+`local_services` equality-plus-score query-function shape at limit 100 uses the
+target; target-only drop materially increases buffers and filtered rows, so
+redundancy/removal is not proven. Root independently reproduced this
+classification on a different fresh 100,019-row fixture with 18 exact I/D/R
+shapes, exact rollback, unchanged replay, and an independently rejected
+reversed-key spoof.
+
+Business type, score, assignment, and market visibility are selectors only.
+Future tenant analogs remain measurement-only until G-011/G-017; no target-
+attributable tenant index defect was proven, and generic tenant-plan debt stays
+deferred. NULL/empty/COALESCE semantic debt is not an index defect. No
+candidate, migration, replacement, test edit, removal, fresh SQLite claim, or
+Fedora-for-Windows substitution opens.
+
+Root gates pass: proportional behavior 42/42, TypeScript, focused ESLint,
+recovery over 37 tables, Fedora-portable coordinator 12 passed/26 Windows-
+native skipped, production build 11/11 pages, fresh PostgreSQL G-002 2/2,
+G-003 6/6, and T-029 19/19. All P31 and root resources are removed. Crosswalk
+becomes 41/21, G-003 becomes 18/21, G-002 stays 13/0, counts remain 54/52/2,
+sequence 010 stays free, original-plan arithmetic remains 58/318 accepted with
+260 remaining, and parent G-007 remains open. This receipt releases the durable
+reservation and deliberately does not open or number P32.
