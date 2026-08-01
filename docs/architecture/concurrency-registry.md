@@ -3782,3 +3782,29 @@ Date: 2026-08-01
 - Receipt commit `8c724ff7ef74f6a3f1a4b42015c5bea98bfadeb5` records the
   accepted P31 classification locally and releases the durable-document
   reservation.
+
+## G-007P32 component-score index audit reservation
+
+Date: 2026-08-01
+
+- Sol opens a read-only audit of the exact remaining G-003 family
+  `idx_leads_component_scores(raw_opportunity_score DESC,
+  verification_score DESC)` from
+  `202605130002_ai_verified_quality_pipeline.sql`. The baseline is
+  `436506064a411eaa443493b4292ce433c7469cbc`.
+- Sol exclusively holds the serialized registry, ledger, handoff, and
+  crosswalk surfaces. Three independent agents own non-writing catalog/real
+  EXPLAIN, source/authority, and test/acceptance lanes. No agent may edit the
+  repository or accept its own work.
+- Current dynamic readers can independently request raw-opportunity or
+  verification score ordering through shared lead query functions; the AI
+  queue places sales-priority ahead of raw opportunity and is only a sibling
+  control. Exact route reachability, permissions, bindings, limits, and
+  target ownership must be proven rather than inferred from the allowlist.
+- The accepted inventory is 54/52/2 and the crosswalk is 41/21 (G-003 18/21,
+  G-002 13/0). Conditional acceptance would make it 42/20 (G-003 19/20);
+  sequence `202607310010` remains free and no migration is assumed.
+- Stop before candidate DDL, migration, test edits, replacement, or removal
+  unless a material exact current or durably approved tenant-query defect is
+  proven with fresh PostgreSQL 16 catalog and real EXPLAIN evidence. Component
+  scores remain selectors, never tenant or workspace authority.

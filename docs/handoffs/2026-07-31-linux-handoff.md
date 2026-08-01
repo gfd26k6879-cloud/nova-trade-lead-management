@@ -1476,3 +1476,23 @@ reservation and deliberately does not open or number P32.
 Receipt commit `8c724ff7ef74f6a3f1a4b42015c5bea98bfadeb5` records the
 accepted P31 RETAIN classification locally and releases its serialized
 documentation reservation.
+
+## G-007P32 component-score index audit opened
+
+Sol opens G-007P32 from clean baseline
+`436506064a411eaa443493b4292ce433c7469cbc` as a read-only PostgreSQL 16
+catalog and real-EXPLAIN audit of
+`idx_leads_component_scores(raw_opportunity_score DESC,
+verification_score DESC)`. Its PostgreSQL source is
+`202605130002_ai_verified_quality_pipeline.sql`; the frozen SQLite definition
+is compatibility evidence only.
+
+Three independent read-only lanes cover catalog/EXPLAIN evidence,
+source/authority and dependency readiness, and test/acceptance requirements.
+Sol alone owns the serialized ledger, registry, handoff, crosswalk,
+integration, and acceptance surfaces. The current state is 54/52/2 migrations,
+41/21 crosswalk (G-003 18/21, G-002 13/0), and free sequence 010; conditional
+classification would be 42/20 and G-003 19/20. No candidate, migration, test
+edit, replacement, or removal is authorized unless the audit first proves an
+exact tenant-query plan defect. P32 does not change the original 58/318
+accepted-card arithmetic, and parent G-007 remains open.
