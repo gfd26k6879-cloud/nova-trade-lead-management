@@ -2898,3 +2898,19 @@ Date: 2026-07-31
   validated packet. `migration-sequence` and `integration-ledger` release with
   this lineage commit. No P8 container, process, listener, database, worktree,
   or lock remains.
+
+## G-007P9 active statistics deferred-defect audit
+
+- The accepted P8 chain still leaves material tenant ranged and all-time active
+  count work. On 160,000 interleaved leads, tenant ranged read 7,061 buffers;
+  tenant all-time read 8,791 and filtered 48,000 wrong-tenant rows.
+- The exact active `(tenant_id,discovered_at)` partial candidate reduced those
+  paths to 11 and 45 buffers with no residual filtering, but naturally captured
+  both exact current unscoped query owners. Expression-full, structural, and
+  tenant-only alternatives either regressed buffers or failed a required form.
+- Independent architecture and quality review pass DEFER. No migration or lock
+  opens. All candidates and services were removed; 38/38 baseline lead indexes
+  are healthy and the repository remained clean.
+- The obligation transfers explicitly to strict G-017/G-018 statistics/action
+  cutover. Reconcile the ownership map's G-020 citation before functional work;
+  strict G-020 is the fair worker dispatcher. Parent G-007 remains open.

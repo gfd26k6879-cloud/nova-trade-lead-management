@@ -516,3 +516,26 @@ read-only index audit. No remote or external action occurred.
 
 The accepted G-007P8 source commit is
 `defaffe73cad4b79c49d914e67b274dfbc35a942`.
+
+## G-007P9 deferred-defect receipt
+
+Date: 2026-07-31
+
+G-007P9 proves a material post-P8 tenant-plan defect in ranged and all-time
+active statistics counts, but does not open a migration. On 160,000 interleaved
+leads, the tenant ranged baseline read 7,061 buffers and tenant all-time read
+8,791 while filtering 48,000 wrong-tenant rows.
+
+The only complete correction, an exact active partial on
+`(tenant_id,discovered_at)`, reduced those paths to 11 and 45 buffers with no
+filtering. It also captured both current unscoped query owners. Three other
+coherent candidates either materially regressed tenant I/O or failed one form.
+Independent architecture and quality reviews therefore pass DEFER.
+
+No migration or lock opened. All candidates and resources were removed and
+38/38 baseline lead indexes are healthy. The obligation transfers explicitly
+to strict G-017/G-018 statistics/action cutover, where the candidate must be
+rerun after the unscoped path is retired or split. The ownership map's G-020
+citation conflicts with strict G-020's worker-dispatch card and must be
+reconciled before caller changes. Parent G-007 and deferred G-007P5 remain open.
+No remote or external action occurred.
