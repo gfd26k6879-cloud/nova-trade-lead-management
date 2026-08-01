@@ -479,3 +479,37 @@ migration is assumed. No remote or external action occurred.
 
 The accepted G-007P7 source commit is
 `8eccf9108211c0a45878f50214bd6fff19fbec9d`.
+
+## G-007P8 continuation receipt
+
+Date: 2026-07-31
+
+G-007P8 proves and corrects one PostgreSQL-only future tenant dashboard today
+count defect. On 200,000 physically interleaved leads, the scoped baseline used
+global `idx_leads_discovered_at`, removed 10,000 wrong-tenant rows, and read
+2,079 buffers. The additive 7,960 KiB `(tenant_id,discovered_at)` index reduces
+the scoped count to 53 buffers with both keys in `Index Cond`, no residual
+filter, and the same result.
+
+The exact current unscoped count retains its global owner and identical result
+at 80 buffers. UTC date-boundary and archived/excluded inclusion semantics are
+unchanged; the adjacent all-leads count is also unchanged. Replay, rollback,
+foundation/global/final catalog drift, literal-prefix siblings, unrelated
+P5/P9 evolution, P6/P7 coexistence, and live runtime ownership are covered.
+No query, caller, action, runtime repair, SQLite, permission, or external
+behavior changed. Independent architecture and quality reviews pass.
+
+Root gates pass: G-003/P6/P7/P8 5/5, G-002 2/2, isolated G-004A 1/1, G-005
+1/1, T-029 19/19 and isolated Q-002 1/1 at 51 discovered/49 applied/2 skipped,
+focused runtime/actions 23/23, TypeScript, focused ESLint, recovery over 37
+tables, Fedora coordinator 12 pass/26 Windows-native skip, and build 11/11.
+The rejected concurrent G-004A connection-reset run and three audit setup
+errors remain truthfully recorded and are not acceptance evidence.
+
+Parent G-007 remains open and G-007P5 remains deferred. After attributable
+local commits and lock release, the next exact action is a read-only post-P8
+G-007P9 PostgreSQL 16 audit of the active statistics
+`idx_leads_active_discovered_at` family. No migration is assumed. The strict
+G-017/G-018 versus ownership-map G-020 functional-owner discrepancy must be
+reconciled before any later statistics caller cutover, but does not block the
+read-only index audit. No remote or external action occurred.

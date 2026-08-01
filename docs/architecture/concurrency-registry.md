@@ -2862,3 +2862,35 @@ Date: 2026-07-31
   validated packet. `migration-sequence` and `integration-ledger` release with
   this lineage commit. No P7 container, process, listener, database, worktree,
   or lock remains.
+
+## G-007P8 tenant dashboard discovered-today index packet
+
+- A fresh PostgreSQL 16.14 audit over 200,000 physically interleaved leads
+  proves the future tenant-scoped dashboard today count filters 10,000
+  wrong-tenant rows through global `idx_leads_discovered_at`, reading 2,079
+  buffers.
+- The accepted additive hypothetical is `(tenant_id, discovered_at)`. It reads
+  53 buffers with both keys in `Index Cond` and no residual filter. The exact
+  current unscoped count remains on `idx_leads_discovered_at`, returns the same
+  20,000 rows, and reads 80 buffers. Both dashboard globals remain installed.
+- Sol holds `migration-sequence` and `integration-ledger`. One implementer may
+  edit migration `202607310006_tenant_dashboard_discovered_at_index.sql`, the
+  owning G-003 PostgreSQL harness, runtime-ownership assertion, and migration-
+  count expectations only. Root owns acceptance documents and final review.
+- No query/caller, UTC date boundary, archived/excluded semantics, workspace,
+  runtime repair source, SQLite, active-statistics P9 family, permission,
+  navigation, provider, or external behavior change is authorized.
+- The sole implementation packet passed independent architecture and quality
+  review without repair. Exact replay, rollback, catalog/foundation drift,
+  literal-prefix protection, unrelated-family evolution, runtime ownership,
+  boundary and archived/excluded inclusion, and current-query compatibility
+  are covered.
+- Root acceptance passes G-003/P6/P7/P8 5/5, G-002 2/2, isolated G-004A 1/1,
+  G-005 1/1, T-029 19/19 at 51/49/2, isolated Q-002 1/1, focused
+  runtime/actions 23/23, TypeScript, focused ESLint, 37-table recovery, Fedora
+  coordinator 12 pass/26 Windows-native skip, build 11/11, diff, JSONL, and
+  cleanup.
+- G-007P8 is accepted pending attributable local source and lineage commits.
+  Both locks release only after the lineage commit and final invariant check.
+  Parent G-007 and deferred G-007P5 remain open; P9 starts read-only against
+  the accepted P8 chain and assumes no migration.

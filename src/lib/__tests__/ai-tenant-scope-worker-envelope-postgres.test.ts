@@ -250,7 +250,7 @@ describe("G-004A AI tenant scope and worker envelope", () => {
         expect(version.version.startsWith("16")).toBe(true);
 
         const full = await resetTo(client);
-        expect(full).toEqual({ discovered: 50, applied: 48, skipped: 2 });
+        expect(full).toEqual({ discovered: 51, applied: 49, skipped: 2 });
         await client.unsafe(g007p2Sql);
         const verificationIndexes = await client.unsafe<Array<{ indexname: string; indexdef: string }>>(`
           SELECT indexname,indexdef FROM pg_catalog.pg_indexes
