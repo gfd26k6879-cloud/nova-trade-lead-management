@@ -652,3 +652,6 @@ cutover, with G-018 owning scope propagation. Parent G-007 stays open.
 After the local receipt commit, the next action is a separate read-only P14
 audit of `idx_admin_requests_creator_created`. No migration is assumed and no
 remote or external action occurred.
+
+The G-007P13 deferred-audit receipt commit is
+`ab18b8e2b103775886cc467a36ff0364eedb6daf`.

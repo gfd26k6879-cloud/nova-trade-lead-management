@@ -2996,3 +2996,6 @@ Date: 2026-07-31
 - Transfer the unresolved family to strict G015/G017 cutover, with G018 scope
   propagation. Parent G-007 stays open. Counts remain 52/50/2 and sequence 008
   stays free. P14 creator-history is the next lock-free read-only audit.
+- The attributable local receipt is
+  `ab18b8e2b103775886cc467a36ff0364eedb6daf`. No P13 resource, process,
+  worktree, or lock remains.
