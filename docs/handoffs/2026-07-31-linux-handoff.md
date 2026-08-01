@@ -1729,3 +1729,31 @@ sequence `202607310010` remains free. Parent G-007 remains open. Exact next
 residual `idx_leads_exclusion_score(is_excluded, score DESC)` remains unopened;
 the following card must reserve P35 separately. Main and the handoff tag remain
 unchanged, and no push or external action occurred.
+
+## G-007P35 exclusion/score index audit opened
+
+Sol opens read-only G-007P35 at clean baseline
+`ab583892ddf1e3bb6e3061876edbe0f1d3bf65de` for exact residual
+`idx_leads_exclusion_score(is_excluded, score DESC)`. Its origin is the
+historical full schema; SQLite retains the logical mirror as frozen
+compatibility evidence. No migration, replacement, removal, constraint, data
+cleanup, or test edit is assumed.
+
+The PostgreSQL audit must replay 54/52/2 on fresh PostgreSQL 16, prove the exact
+catalog, and compare installed/drop/restored results and plans for reachable
+active, excluded, list, export, aggregate, statistics, queue, Quality, and
+worker shapes. Current source predominantly expresses exclusion through
+`COALESCE(is_excluded, 0)`, while the historical target begins with the raw
+integer column; raw equality is a control unless a current caller is proven.
+`is_excluded` is integer NOT NULL DEFAULT 0 without a 0/1 CHECK, so anomaly
+semantics and authorization must not be inferred from fixture booleans.
+
+Sol holds the durable-document reservation. Three read-only lanes own
+PostgreSQL evidence, source/authority, and test/acceptance analysis. Conditional
+acceptance would make crosswalk 45/17 and G-003 22/17; inventory stays 54/52/2,
+G-002 stays 13/0, sequence `202607310010` stays free, and parent G-007 remains
+open. No hosted or external action opens.
+
+The preceding P34 lineage commit used the correct attributable author name but
+a mistyped noreply email. History is not rewritten; subsequent commits restore
+the established `masih.hedayati@users.noreply.github.com` identity.

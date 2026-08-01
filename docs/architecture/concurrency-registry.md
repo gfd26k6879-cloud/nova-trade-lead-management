@@ -3883,6 +3883,27 @@ Date: 2026-08-01
   `idx_leads_exclusion_score(is_excluded, score DESC)`. This lineage receipt
   does not open or number P35.
 
+## G-007P35 exclusion/score index audit reservation
+
+Date: 2026-08-01
+
+- Sol opens a read-only audit of exact G-003 residual
+  `idx_leads_exclusion_score(is_excluded, score DESC)` at clean baseline
+  `ab583892ddf1e3bb6e3061876edbe0f1d3bf65de`.
+- Sol exclusively owns registry, ledger, handoff, crosswalk, integration, and
+  acceptance writes. Three agents own disjoint PostgreSQL catalog/EXPLAIN,
+  source/authority, and test/evidence lanes; no producer may self-accept.
+- The audit must distinguish the raw integer leading key from current
+  `COALESCE(is_excluded, 0)` predicates, the score/archival/workbench siblings,
+  aggregates, excluded-only views, and future tenant-scoped forms. A raw
+  predicate control is not current source authority.
+- Accepted inventory is 54/52/2 and crosswalk 44/18 (G-003 21/18, G-002
+  13/0). Conditional classification would make 45/17 and G-003 22/17.
+  Sequence `202607310010` remains free; no migration is assumed.
+- Stop before candidate DDL, migration, replacement, removal, constraint, data
+  cleanup, or test edits unless an exact current or durably approved defect is
+  proven. Stored non-0/1 integer anomalies must be reported, not normalized.
+
 ## G-007P34 enrichment-status/score index audit accepted
 
 Date: 2026-08-01
