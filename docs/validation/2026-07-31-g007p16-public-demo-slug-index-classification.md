@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: deliberately global/public; retained with no migration
 
-Receipt commit: pending attributable local commit
+Receipt commit: `dfac6a1b5716e2bfab716a54c4ba2fbf8e01dac5`
 
 ## Scope and catalog
 

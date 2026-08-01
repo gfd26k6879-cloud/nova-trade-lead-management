@@ -3058,3 +3058,6 @@ Date: 2026-07-31
 - Catalog is unchanged, resources are removed, counts remain 52/50/2, and
   sequence 008 stays free. P17 demos lead-index audit is next but not terminal;
   later G004 and G002/G005 retained families require explicit classification.
+- The attributable local receipt is
+  `dfac6a1b5716e2bfab716a54c4ba2fbf8e01dac5`. No P16 container, listener,
+  database, process, worktree, or lock remains.

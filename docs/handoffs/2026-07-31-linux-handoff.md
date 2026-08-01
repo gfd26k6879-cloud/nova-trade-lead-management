@@ -737,3 +737,6 @@ After the local receipt commit, P17 is the read-only audit of
 `idx_demos_lead_id`. P17 is not terminal: P18/P19 reference families and later
 AI query-history and G002/G005 residual families still require explicit
 classification. No migration or external action is assumed.
+
+The G-007P16 retain/classification receipt commit is
+`dfac6a1b5716e2bfab716a54c4ba2fbf8e01dac5`.
