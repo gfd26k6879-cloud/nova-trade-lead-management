@@ -1864,3 +1864,33 @@ sequence `202607310010` remains free. Parent G-007 remains open. Exact residual
 `idx_leads_location_cell(location_cell_id, score DESC)` requires a separate P36
 reservation; this receipt does not open it. Main and the handoff tag remain
 unchanged, and no push or external action occurred.
+
+## G-007P36 location-cell/score index audit opened
+
+At clean baseline `a1aef99558255a85889f31f7501bf6dc27ca8999`, after complete
+SR2 lock release, Sol opens read-only P36 for exact residual
+`idx_leads_location_cell(location_cell_id, score DESC)`. Its origin is
+`20260602193000_international_markets_and_territories.sql`; SQLite retains a
+frozen compatibility mirror. No migration, replacement, removal, test edit, or
+sequence use is assumed.
+
+Fresh PostgreSQL 16 must replay 54/52/2, prove the exact catalog, and compare
+installed/drop/restored full current Coverage, Explore, map, Quality summary/
+list/candidate/action, and count SQL with exact projection, joins, correlated
+subqueries, LIMIT/OFFSET, source ordering, and tie boundaries. Export, Kanban,
+and uncited helper capabilities remain controls. Target selection alone is not
+necessity.
+
+Fixtures must interleave two tenants across shared platform markets/cells,
+selective/common cells, score and order boundaries, lifecycle/assignment/
+visibility states, NULL, empty, orphan, case, and mismatched geography. Cell
+and score never authorize tenant/workspace/market scope; future
+`tenant_id, location_cell_id, score` forms remain nonauthorizing until exact
+G-009/G-010/G-011 callers exist.
+
+The separate P2 candidate in Explore command parsing uppercases canonical
+lowercase cell IDs. P36 must reproduce and report it as a semantic control; an
+empty uppercase result is not index evidence and grants no source edit.
+Conditional classification is 46/16 (G-003 23/16, G-002 13/0), inventory stays
+54/52/2, sequence `202607310010` remains free, and parent G-007 remains open.
+No hosted or external operation opens.

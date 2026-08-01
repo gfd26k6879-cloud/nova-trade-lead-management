@@ -4142,3 +4142,29 @@ Date: 2026-08-01
 - Counts remain 54/52/2, crosswalk 45/17, sequence `202607310010` remains
   free, and parent G-007 remains open. P36 is not opened by this receipt and
   requires a separate reservation.
+
+## G-007P36 location-cell/score index audit reservation
+
+Date: 2026-08-01
+
+- Sol opens a read-only audit of exact G-003 residual
+  `idx_leads_location_cell(location_cell_id, score DESC)` at clean baseline
+  `a1aef99558255a85889f31f7501bf6dc27ca8999` after SR2 release.
+- Sol exclusively owns registry, ledger, handoff, crosswalk, integration, and
+  acceptance writes. Three agents own disjoint PostgreSQL catalog/EXPLAIN,
+  source/authority, and test/evidence lanes; no producer may self-accept.
+- Exact live Coverage, Explore, map, Quality summary/list/candidate/action, and
+  count paths must be distinguished from export/Kanban/query-function controls,
+  default non-score orders, and accepted geography/score/tenant siblings.
+- Full current projection, LEFT JOIN, correlated subquery, LIMIT/OFFSET, and
+  order fidelity is required where source supplies it; the P35 selector waiver
+  is not reusable. Cell, market, and score selectors never grant tenant or
+  workspace authority.
+- Accepted inventory is 54/52/2 and crosswalk 45/17 (G-003 22/17, G-002
+  13/0). Conditional classification would make 46/16 and G-003 23/16.
+  Sequence `202607310010` remains free; no migration is assumed.
+- Explore command parsing uppercases canonical lowercase cell identifiers; it
+  is a separate P2 candidate/control and its empty result must not become index
+  evidence. Stop before DDL, migration, replacement, removal, test edits, or
+  sequence use unless a material exact current or durably approved tenant-plan
+  defect is proven.
