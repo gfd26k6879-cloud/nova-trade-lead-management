@@ -12,8 +12,10 @@ import {
 
 const G002_MIGRATION = "202607290001_add_location_crawl_tenant_scope.sql";
 const G003_MIGRATION = "202607290002_add_lead_crm_tenant_scope.sql";
+const G007P3_MIGRATION = "202607310003_tenant_prefix_lead_ai_queue_indexes.sql";
 const g002Sql = readFileSync(join("supabase", "migrations", G002_MIGRATION), "utf8");
 const g003Sql = readFileSync(join("supabase", "migrations", G003_MIGRATION), "utf8");
+const g007p3Sql = readFileSync(join("supabase", "migrations", G007P3_MIGRATION), "utf8");
 const skipped = new Set(["20260514161714_supabase_ai_verification_cron.sql", "20260514163203_scheduler_v2_sales_ready_pipeline.sql"]);
 const tenantA = "00000000-0000-4000-8000-000000000301";
 const tenantB = "00000000-0000-4000-8000-000000000302";
@@ -205,6 +207,78 @@ async function seedPostInstallGraph(client: PgClient): Promise<void> {
   `);
 }
 
+async function seedG007P3PlanRows(client: PgClient): Promise<void> {
+  await client.unsafe(`
+    INSERT INTO auth.users(id) VALUES ('${ownerA}'),('${ownerB}');
+    INSERT INTO public.tenants(id,slug,name,status) VALUES
+      ('${tenantA}','g007p3-plan-a','G007P3 Plan A','active'),
+      ('${tenantB}','g007p3-plan-b','G007P3 Plan B','active');
+    INSERT INTO public.workspaces(id,tenant_id,slug,name,status) VALUES
+      ('${workspaceA}','${tenantA}','g007p3-plan-a','G007P3 Plan A','active'),
+      ('${workspaceB}','${tenantB}','g007p3-plan-b','G007P3 Plan B','active');
+    INSERT INTO public.tenant_memberships(id,tenant_id,auth_identity_id,workspace_id,status) VALUES
+      ('${membershipA}','${tenantA}','${ownerA}','${workspaceA}','active'),
+      ('${membershipB}','${tenantB}','${ownerB}','${workspaceB}','active');
+
+    INSERT INTO public.leads(
+      id,tenant_id,place_id,name,ai_queue_status,ai_next_retry_at,ai_attempt_count,
+      is_excluded,archived_at,status,business_status,sales_priority_score,
+      raw_opportunity_score,score,updated_at
+    )
+    SELECT
+      'g007p3-ready-'||scope.label||'-'||series.n,
+      scope.tenant_id,
+      'g007p3-ready-place-'||scope.label||'-'||series.n,
+      'G007P3 ready '||scope.label||' '||series.n,
+      'queued',NULL,0,0,NULL,'new','OPERATIONAL',
+      scope.priority_bias+series.n,scope.priority_bias+series.n,scope.priority_bias+series.n,
+      now()-(series.n||' seconds')::interval
+    FROM pg_catalog.generate_series(1,4000) series(n)
+    CROSS JOIN (VALUES
+      ('a','${tenantA}'::uuid,0),
+      ('b','${tenantB}'::uuid,10000)
+    ) scope(label,tenant_id,priority_bias);
+
+    INSERT INTO public.leads(
+      id,tenant_id,place_id,name,ai_queue_status,ai_next_retry_at,ai_attempt_count,
+      is_excluded,archived_at,status,business_status,sales_priority_score,
+      raw_opportunity_score,score,updated_at
+    )
+    SELECT
+      'g007p3-running-'||scope.label||'-'||series.n,
+      scope.tenant_id,
+      'g007p3-running-place-'||scope.label||'-'||series.n,
+      'G007P3 running '||scope.label||' '||series.n,
+      'running',NULL,1,0,NULL,'new','OPERATIONAL',
+      series.n,series.n,series.n,now()-interval '10 minutes'
+    FROM pg_catalog.generate_series(1,4000) series(n)
+    CROSS JOIN (VALUES
+      ('a','${tenantA}'::uuid),
+      ('b','${tenantB}'::uuid)
+    ) scope(label,tenant_id);
+
+    INSERT INTO public.leads(
+      id,tenant_id,place_id,name,ai_queue_status,ai_next_retry_at,ai_attempt_count,
+      is_excluded,archived_at,status,business_status,sales_priority_score,
+      raw_opportunity_score,score,updated_at
+    )
+    SELECT
+      'g007p3-verified-'||scope.label||'-'||series.n,
+      scope.tenant_id,
+      'g007p3-verified-place-'||scope.label||'-'||series.n,
+      'G007P3 verified '||scope.label||' '||series.n,
+      'verified',NULL,0,0,NULL,'new','OPERATIONAL',
+      series.n,series.n,series.n,now()-(series.n||' seconds')::interval
+    FROM pg_catalog.generate_series(1,32000) series(n)
+    CROSS JOIN (VALUES
+      ('a','${tenantA}'::uuid),
+      ('b','${tenantB}'::uuid)
+    ) scope(label,tenant_id);
+
+    ANALYZE public.leads;
+  `);
+}
+
 async function targetSnapshot(client: PgClient): Promise<Record<string, unknown>> {
   const snapshot: Record<string, unknown> = {};
   for (const table of targetTables) {
@@ -258,6 +332,66 @@ async function targetCatalogSnapshot(client: PgClient): Promise<Record<string, u
        ORDER BY c.relname
     `),
   };
+}
+
+const leadAiQueueIndexNames = [
+  "idx_leads_ai_queue_ready",
+  "idx_leads_ai_queue_status",
+  "idx_g007p_leads_tenant_ai_queue_ready",
+  "idx_g007p_leads_tenant_ai_queue_status",
+] as const;
+
+type LeadAiQueueIndex = {
+  indexname: string;
+  relkind: string;
+  indexdef: string | null;
+  indisvalid: boolean | null;
+  indisready: boolean | null;
+  indislive: boolean | null;
+};
+
+async function leadAiQueueIndexSnapshot(client: PgClient): Promise<LeadAiQueueIndex[]> {
+  return await client.unsafe<LeadAiQueueIndex[]>(`
+    SELECT i.relname indexname,i.relkind,
+      CASE WHEN i.relkind='i' THEN pg_catalog.pg_get_indexdef(i.oid) ELSE NULL END indexdef,
+      x.indisvalid,x.indisready,x.indislive
+    FROM pg_catalog.pg_class i
+    JOIN pg_catalog.pg_namespace n ON n.oid=i.relnamespace
+    LEFT JOIN pg_catalog.pg_index x ON x.indexrelid=i.oid
+    WHERE n.nspname='public' AND i.relname=ANY($1::text[])
+    ORDER BY i.relname
+  `, [leadAiQueueIndexNames]);
+}
+
+async function g007p3CatalogSnapshot(client: PgClient): Promise<Record<string, unknown>> {
+  return {
+    queueIndexes: await leadAiQueueIndexSnapshot(client),
+    foundation: await client.unsafe(`
+      SELECT c.conname,c.convalidated,pg_catalog.pg_get_constraintdef(c.oid) definition,
+        c.conindid::regclass::text backing_index,i.relkind,
+        x.indisunique,x.indisvalid,x.indisready,x.indislive
+      FROM pg_catalog.pg_constraint c
+      LEFT JOIN pg_catalog.pg_class i ON i.oid=c.conindid
+      LEFT JOIN pg_catalog.pg_index x ON x.indexrelid=c.conindid
+      WHERE c.connamespace='public'::regnamespace
+        AND c.conrelid='public.leads'::regclass
+        AND c.conname='leads_tenant_id_id_unique'
+    `),
+  };
+}
+
+async function expectG007P3RejectedWithoutChange(client: PgClient, label: string): Promise<void> {
+  const before = await g007p3CatalogSnapshot(client);
+  let failure: unknown;
+  try {
+    await client.unsafe(g007p3Sql);
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure, label).toBeInstanceOf(Error);
+  expect((failure as Error).message, label).toMatch(/G007P3_INDEX_CATALOG_DRIFT/);
+  await client.unsafe("ROLLBACK");
+  expect(await g007p3CatalogSnapshot(client), label).toEqual(before);
 }
 
 async function expectMigrationRejected(client: PgClient, pattern: RegExp, label?: string): Promise<void> {
@@ -374,8 +508,242 @@ describe("G-003 lead CRM tenant scope", () => {
         expect((await client.unsafe<Array<{ v: string }>>("SELECT current_setting('server_version_num') v"))[0].v.startsWith("16")).toBe(true);
 
         const full = await resetDatabase(client, true);
-        expect(full).toEqual({ discovered: 47, applied: 45, skipped: 2 });
+        expect(full).toEqual({ discovered: 48, applied: 46, skipped: 2 });
         await assertCatalog(client);
+
+        const expectedFinalQueueIndexes: LeadAiQueueIndex[] = [
+          {
+            indexname: "idx_g007p_leads_tenant_ai_queue_ready",
+            relkind: "i",
+            indexdef: "CREATE INDEX idx_g007p_leads_tenant_ai_queue_ready ON public.leads USING btree (tenant_id, sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at) WHERE (ai_queue_status = 'queued'::text)",
+            indisvalid: true,
+            indisready: true,
+            indislive: true,
+          },
+          {
+            indexname: "idx_g007p_leads_tenant_ai_queue_status",
+            relkind: "i",
+            indexdef: "CREATE INDEX idx_g007p_leads_tenant_ai_queue_status ON public.leads USING btree (tenant_id, ai_queue_status, ai_next_retry_at, sales_priority_score DESC)",
+            indisvalid: true,
+            indisready: true,
+            indislive: true,
+          },
+        ];
+        const finalQueueIndexes = await leadAiQueueIndexSnapshot(client);
+        expect(finalQueueIndexes).toEqual(expectedFinalQueueIndexes);
+        await client.unsafe(g007p3Sql);
+        expect(await leadAiQueueIndexSnapshot(client)).toEqual(finalQueueIndexes);
+
+        const priorRuntimeEnv = {
+          databaseUrl: process.env.DATABASE_URL,
+          repair: process.env.NOSITE_RUNTIME_POSTGRES_REPAIR,
+          geography: process.env.NOSITE_RUNTIME_GEOGRAPHY_BACKFILL,
+          zipSeed: process.env.NOSITE_RUNTIME_ZIP_SEED,
+          databaseSsl: process.env.DATABASE_SSL,
+        };
+        let resetRuntimeDb: (() => Promise<void>) | undefined;
+        try {
+          process.env.DATABASE_URL = url;
+          process.env.NOSITE_RUNTIME_POSTGRES_REPAIR = "1";
+          process.env.NOSITE_RUNTIME_GEOGRAPHY_BACKFILL = "0";
+          process.env.NOSITE_RUNTIME_ZIP_SEED = "0";
+          process.env.DATABASE_SSL = "disable";
+          const dbModule = await import("@/lib/db/index");
+          resetRuntimeDb = dbModule.resetDbClient;
+          const { ensureDbReady } = await import("@/lib/db/queries");
+          await ensureDbReady();
+          expect(await leadAiQueueIndexSnapshot(client)).toEqual(expectedFinalQueueIndexes);
+        } finally {
+          await resetRuntimeDb?.();
+          if (priorRuntimeEnv.databaseUrl === undefined) delete process.env.DATABASE_URL;
+          else process.env.DATABASE_URL = priorRuntimeEnv.databaseUrl;
+          if (priorRuntimeEnv.repair === undefined) delete process.env.NOSITE_RUNTIME_POSTGRES_REPAIR;
+          else process.env.NOSITE_RUNTIME_POSTGRES_REPAIR = priorRuntimeEnv.repair;
+          if (priorRuntimeEnv.geography === undefined) delete process.env.NOSITE_RUNTIME_GEOGRAPHY_BACKFILL;
+          else process.env.NOSITE_RUNTIME_GEOGRAPHY_BACKFILL = priorRuntimeEnv.geography;
+          if (priorRuntimeEnv.zipSeed === undefined) delete process.env.NOSITE_RUNTIME_ZIP_SEED;
+          else process.env.NOSITE_RUNTIME_ZIP_SEED = priorRuntimeEnv.zipSeed;
+          if (priorRuntimeEnv.databaseSsl === undefined) delete process.env.DATABASE_SSL;
+          else process.env.DATABASE_SSL = priorRuntimeEnv.databaseSsl;
+        }
+        expect((await client.unsafe(`
+          SELECT count(*)::integer count FROM pg_catalog.pg_class i
+          JOIN pg_catalog.pg_namespace n ON n.oid=i.relnamespace
+          WHERE n.nspname='public' AND i.relname IN (
+            'idx_ai_verifications_requester_created','idx_lead_ai_artifacts_requester_created',
+            'idx_lead_ai_artifacts_retry_ready','idx_leads_ai_queue_ready',
+            'idx_leads_ai_queue_status'
+          )
+        `))[0].count).toBe(0);
+        expect(await client.unsafe(`
+          SELECT indexname,indexdef FROM pg_catalog.pg_indexes
+          WHERE schemaname='public' AND indexname IN (
+            'idx_g007p_ai_verifications_tenant_requester_created',
+            'idx_g007p_ai_artifacts_tenant_requester_created',
+            'idx_g007p_ai_artifacts_tenant_retry_ready',
+            'idx_g007p_leads_tenant_ai_queue_ready'
+          ) ORDER BY indexname
+        `)).toEqual([
+          { indexname: "idx_g007p_ai_artifacts_tenant_requester_created", indexdef: "CREATE INDEX idx_g007p_ai_artifacts_tenant_requester_created ON public.lead_ai_artifacts USING btree (tenant_id, requested_by_user_id, created_at DESC)" },
+          { indexname: "idx_g007p_ai_artifacts_tenant_retry_ready", indexdef: "CREATE INDEX idx_g007p_ai_artifacts_tenant_retry_ready ON public.lead_ai_artifacts USING btree (tenant_id, status, next_retry_at, created_at) WHERE (status = 'queued'::text)" },
+          { indexname: "idx_g007p_ai_verifications_tenant_requester_created", indexdef: "CREATE INDEX idx_g007p_ai_verifications_tenant_requester_created ON public.ai_lead_verifications USING btree (tenant_id, requested_by_user_id, created_at DESC)" },
+          { indexname: "idx_g007p_leads_tenant_ai_queue_ready", indexdef: "CREATE INDEX idx_g007p_leads_tenant_ai_queue_ready ON public.leads USING btree (tenant_id, sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at) WHERE (ai_queue_status = 'queued'::text)" },
+        ]);
+
+        await resetDatabase(client, true, true);
+        const baselineQueueIndexes = await leadAiQueueIndexSnapshot(client);
+        expect(baselineQueueIndexes).toEqual([
+          {
+            indexname: "idx_leads_ai_queue_ready",
+            relkind: "i",
+            indexdef: "CREATE INDEX idx_leads_ai_queue_ready ON public.leads USING btree (ai_queue_status, ai_next_retry_at, sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at) WHERE (ai_queue_status = 'queued'::text)",
+            indisvalid: true,
+            indisready: true,
+            indislive: true,
+          },
+          {
+            indexname: "idx_leads_ai_queue_status",
+            relkind: "i",
+            indexdef: "CREATE INDEX idx_leads_ai_queue_status ON public.leads USING btree (ai_queue_status, ai_next_retry_at, sales_priority_score DESC)",
+            indisvalid: true,
+            indisready: true,
+            indislive: true,
+          },
+        ]);
+        await seedG007P3PlanRows(client);
+        expect(await client.unsafe(`
+          SELECT tenant_id::text,ai_queue_status,count(*)::integer AS row_count
+          FROM public.leads
+          WHERE tenant_id IN ('${tenantA}','${tenantB}')
+          GROUP BY tenant_id,ai_queue_status
+          ORDER BY tenant_id,ai_queue_status
+        `)).toEqual([
+          { tenant_id: tenantA, ai_queue_status: "queued", row_count: 4000 },
+          { tenant_id: tenantA, ai_queue_status: "running", row_count: 4000 },
+          { tenant_id: tenantA, ai_queue_status: "verified", row_count: 32000 },
+          { tenant_id: tenantB, ai_queue_status: "queued", row_count: 4000 },
+          { tenant_id: tenantB, ai_queue_status: "running", row_count: 4000 },
+          { tenant_id: tenantB, ai_queue_status: "verified", row_count: 32000 },
+        ]);
+        const baselineReadyPlan = (await client.unsafe<Record<string, string>[]>(`
+          EXPLAIN (ANALYZE,COSTS OFF,TIMING OFF,SUMMARY OFF)
+          SELECT id FROM public.leads
+          WHERE tenant_id='${tenantA}' AND ai_queue_status='queued'
+            AND (ai_next_retry_at IS NULL OR ai_next_retry_at <= now())
+            AND ai_attempt_count < 3 AND COALESCE(is_excluded,0)=0
+            AND archived_at IS NULL AND status NOT IN ('closed_won','closed_lost')
+            AND COALESCE(business_status,'') NOT IN ('CLOSED_PERMANENTLY','CLOSED_TEMPORARILY')
+          ORDER BY sales_priority_score DESC,raw_opportunity_score DESC,score DESC,updated_at
+          LIMIT 10
+        `)).map((row) => Object.values(row)[0]).join("\n");
+        expect(baselineReadyPlan).toMatch(/idx_leads_ai_queue_(?:ready|status)/u);
+        expect(baselineReadyPlan).toMatch(/Filter: .*tenant_id/u);
+        expect(baselineReadyPlan).toMatch(/Rows Removed by Filter: [1-9][0-9]*/u);
+
+        const baselineStalePlan = (await client.unsafe<Record<string, string>[]>(`
+          EXPLAIN (ANALYZE,COSTS OFF,TIMING OFF,SUMMARY OFF)
+          SELECT id FROM public.leads
+          WHERE tenant_id='${tenantA}' AND ai_queue_status='running'
+            AND updated_at < now()-interval '5 minutes'
+        `)).map((row) => Object.values(row)[0]).join("\n");
+        expect(baselineStalePlan).toContain("idx_leads_ai_queue_status");
+        expect(baselineStalePlan).toMatch(/Filter: .*tenant_id/u);
+        expect(baselineStalePlan).toMatch(/Rows Removed by Filter: [1-9][0-9]*/u);
+
+        await client.unsafe(g007p3Sql);
+        await client.unsafe("ANALYZE public.leads");
+        expect(await leadAiQueueIndexSnapshot(client)).toEqual(expectedFinalQueueIndexes);
+        const finalReadyPlan = (await client.unsafe<Record<string, string>[]>(`
+          EXPLAIN (ANALYZE,COSTS OFF,TIMING OFF,SUMMARY OFF)
+          SELECT id FROM public.leads
+          WHERE tenant_id='${tenantA}' AND ai_queue_status='queued'
+            AND (ai_next_retry_at IS NULL OR ai_next_retry_at <= now())
+            AND ai_attempt_count < 3 AND COALESCE(is_excluded,0)=0
+            AND archived_at IS NULL AND status NOT IN ('closed_won','closed_lost')
+            AND COALESCE(business_status,'') NOT IN ('CLOSED_PERMANENTLY','CLOSED_TEMPORARILY')
+          ORDER BY sales_priority_score DESC,raw_opportunity_score DESC,score DESC,updated_at
+          LIMIT 10
+        `)).map((row) => Object.values(row)[0]).join("\n");
+        expect(finalReadyPlan).toContain("idx_g007p_leads_tenant_ai_queue_ready");
+        expect(finalReadyPlan).toMatch(/Index Cond: \(tenant_id = '[^']+'::uuid\)/u);
+        expect(expectedFinalQueueIndexes[0].indexdef).toContain("WHERE (ai_queue_status = 'queued'::text)");
+        expect(finalReadyPlan.split("\n").filter((line) => line.includes("Filter:")).join("\n")).not.toContain("tenant_id");
+
+        const finalStalePlan = (await client.unsafe<Record<string, string>[]>(`
+          EXPLAIN (ANALYZE,COSTS OFF,TIMING OFF,SUMMARY OFF)
+          SELECT id FROM public.leads
+          WHERE tenant_id='${tenantA}' AND ai_queue_status='running'
+            AND updated_at < now()-interval '5 minutes'
+        `)).map((row) => Object.values(row)[0]).join("\n");
+        expect(finalStalePlan).toContain("idx_g007p_leads_tenant_ai_queue_status");
+        expect(finalStalePlan).toMatch(/Index Cond: .*tenant_id.*ai_queue_status/u);
+        expect(finalStalePlan.split("\n").filter((line) => line.includes("Filter:")).join("\n")).not.toContain("tenant_id");
+
+        await resetDatabase(client, true, true);
+        const rollbackBaseline = await leadAiQueueIndexSnapshot(client);
+        await client.unsafe("BEGIN");
+        await client.unsafe(g007p3Sql);
+        expect(await leadAiQueueIndexSnapshot(client)).toEqual(expectedFinalQueueIndexes);
+        await client.unsafe("ROLLBACK");
+        expect(await leadAiQueueIndexSnapshot(client)).toEqual(rollbackBaseline);
+
+        for (const mutation of [
+          "baseline_missing",
+          "baseline_partial",
+          "baseline_spoof_ready",
+          "baseline_spoof_status",
+          "baseline_non_index_final_name",
+          "final_missing",
+          "final_partial",
+          "final_spoof_ready",
+          "final_spoof_status",
+        ] as const) {
+          await resetDatabase(client, true, true);
+          if (mutation.startsWith("final_")) await client.unsafe(g007p3Sql);
+          if (mutation === "baseline_missing") {
+            await client.unsafe("DROP INDEX public.idx_leads_ai_queue_ready; DROP INDEX public.idx_leads_ai_queue_status");
+          }
+          if (mutation === "baseline_partial") await client.unsafe("DROP INDEX public.idx_leads_ai_queue_status");
+          if (mutation === "baseline_spoof_ready") {
+            await client.unsafe("DROP INDEX public.idx_leads_ai_queue_ready; CREATE INDEX idx_leads_ai_queue_ready ON public.leads(ai_queue_status,tenant_id,updated_at) WHERE ai_queue_status='queued'");
+          }
+          if (mutation === "baseline_spoof_status") {
+            await client.unsafe("DROP INDEX public.idx_leads_ai_queue_status; CREATE INDEX idx_leads_ai_queue_status ON public.leads(ai_queue_status,tenant_id,updated_at)");
+          }
+          if (mutation === "baseline_non_index_final_name") await client.unsafe("CREATE TABLE public.idx_g007p_leads_tenant_ai_queue_ready(sentinel integer)");
+          if (mutation === "final_missing") {
+            await client.unsafe("DROP INDEX public.idx_g007p_leads_tenant_ai_queue_ready; DROP INDEX public.idx_g007p_leads_tenant_ai_queue_status");
+          }
+          if (mutation === "final_partial") await client.unsafe("DROP INDEX public.idx_g007p_leads_tenant_ai_queue_status");
+          if (mutation === "final_spoof_ready") {
+            await client.unsafe("DROP INDEX public.idx_g007p_leads_tenant_ai_queue_ready; CREATE INDEX idx_g007p_leads_tenant_ai_queue_ready ON public.leads(ai_queue_status,tenant_id,updated_at) WHERE ai_queue_status='queued'");
+          }
+          if (mutation === "final_spoof_status") {
+            await client.unsafe("DROP INDEX public.idx_g007p_leads_tenant_ai_queue_status; CREATE INDEX idx_g007p_leads_tenant_ai_queue_status ON public.leads(ai_queue_status,tenant_id,updated_at)");
+          }
+          await expectG007P3RejectedWithoutChange(client, mutation);
+        }
+
+        await resetDatabase(client, true, true);
+        await client.unsafe(`
+          UPDATE pg_catalog.pg_index
+          SET indisvalid=false
+          WHERE indexrelid=(
+            SELECT conindid FROM pg_catalog.pg_constraint
+            WHERE connamespace='public'::regnamespace
+              AND conrelid='public.leads'::regclass
+              AND conname='leads_tenant_id_id_unique'
+          )
+        `);
+        expect((await client.unsafe(`
+          SELECT c.convalidated,pg_catalog.pg_get_constraintdef(c.oid) definition,x.indisunique,x.indisvalid,x.indisready,x.indislive
+          FROM pg_catalog.pg_constraint c
+          JOIN pg_catalog.pg_index x ON x.indexrelid=c.conindid
+          WHERE c.connamespace='public'::regnamespace
+            AND c.conrelid='public.leads'::regclass
+            AND c.conname='leads_tenant_id_id_unique'
+        `))[0]).toEqual({ convalidated: true, definition: "UNIQUE (tenant_id, id)", indisunique: true, indisvalid: false, indisready: true, indislive: true });
+        await expectG007P3RejectedWithoutChange(client, "foundation_backing_index_invalid");
 
         await resetDatabase(client, false);
         await seedLegacyGraph(client);

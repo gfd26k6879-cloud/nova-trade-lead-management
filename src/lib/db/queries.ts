@@ -1670,8 +1670,6 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_leads_assigned_to_user ON leads(assigned_to_user_id, updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_outreach_events_actor_created ON outreach_events(actor_user_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_ai_usage_actor_created ON ai_usage_events(actor_user_id, created_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_ai_verifications_requester_created ON ai_lead_verifications(requested_by_user_id, created_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_requester_created ON lead_ai_artifacts(requested_by_user_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_lead_created ON ai_feedback_events(lead_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_actor_created ON ai_feedback_events(actor_user_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_kind_verdict ON ai_feedback_events(feedback_kind, verdict, created_at DESC)",
@@ -1687,8 +1685,6 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
     "ALTER TABLE IF EXISTS admin_requests ENABLE ROW LEVEL SECURITY",
     "ALTER TABLE IF EXISTS ai_feedback_events ENABLE ROW LEVEL SECURITY",
     "REVOKE ALL ON TABLE lead_notes, admin_requests, ai_feedback_events FROM anon, authenticated",
-    "CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_retry_ready ON lead_ai_artifacts(status, next_retry_at, created_at) WHERE status = 'queued'",
-    "CREATE INDEX IF NOT EXISTS idx_leads_ai_queue_ready ON leads(ai_queue_status, ai_next_retry_at, sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at) WHERE ai_queue_status = 'queued'",
     "CREATE INDEX IF NOT EXISTS idx_leads_score_recompute_stale ON leads(updated_at DESC, last_quality_scored_at)",
   ];
 

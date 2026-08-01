@@ -2692,3 +2692,54 @@ Date: 2026-07-31
 - Both locks are released after the local acceptance commit. Parent G-007
   remains open; the next child is read-only G-007P3 preflight. G-006C2B remains
   unopened, and no remote or external action is authorized.
+
+## G-007P3 tenant-prefixed lead AI queue index packet
+
+- Three bounded read-only lanes audited the PostgreSQL catalog/query plans,
+  downstream dependency readiness, and the existing acceptance harnesses. No
+  lane edited the repository or held a lock.
+- PostgreSQL 16.14 plan evidence over 80,000 representative two-tenant `leads`
+  rows showed the tenant-scoped AI queue read selecting the inherited global
+  queue index, scanning 8,000 candidates, and removing 4,000 wrong-tenant rows.
+  The stale-running path likewise scanned 8,000 global candidates.
+- A bounded tenant-first replacement reduced each index scan to the 4,000-row
+  target tenant and removed the tenant post-filter. This proves one exact
+  `leads` AI queue index-family defect; no other family is included.
+- `migration-sequence` and `integration-ledger` are held for migration
+  `202607310003_tenant_prefix_lead_ai_queue_indexes.sql`, the owning G-003
+  PostgreSQL harness, all full-chain migration-count expectations, and the
+  append-only acceptance records. One implementer may edit that exact packet;
+  it has no acceptance or external-action authority.
+- Required evidence is exact final replay, definition-aware missing/partial/
+  spoof rejection before DDL, rollback without residue, tenant-bearing query
+  plans, all applicable upstream PostgreSQL gates, static/recovery/portable
+  coordinator/build checks, clean teardown, and independent Sol review.
+- Parent G-007, the paused G-006 lane, and G-006C2B remain open. G-008, G-009,
+  and G-004B remain dependency-blocked. No remote or external action is
+  authorized.
+- Independent architecture and quality review rejected the first implementation
+  draft before acceptance. The plan regression used an empty forced plan, the
+  required G-003 tenant unique constraint did not verify its backing-index
+  health, and the supported runtime Postgres repair path would recreate global
+  indexes removed by G-007P1, G-007P2, and G-007P3.
+- Sol therefore acquires `database-adapter` and expands the same serialized
+  repair packet only to `src/lib/db/queries.ts` and
+  `src/lib/__tests__/db-ready-retry.test.ts`. The repair must preserve the exact
+  accepted tenant-prefixed catalogs by removing the four legacy runtime index
+  synthesis statements that collide with G-007P1/P2/P3; serialized migrations
+  remain the sole owner of those families. It must also add representative
+  two-tenant natural-plan evidence, bind the foundation constraint to a healthy
+  unique backing index, and extend adversarial catalog coverage. No query API,
+  SQLite behavior, dependency, or external-action change is authorized.
+- The repaired packet passed fresh architecture and quality re-review. A final
+  quality-only check found two bounded harness omissions; status-index runtime
+  assertions and inherited environment restoration were repaired and rechecked
+  PASS without production or migration changes.
+- Root acceptance passed G-002 2/2, G-003/G-007P3 2/2 with natural 80,000-row
+  two-tenant plans, G-004A 1/1, G-005 1/1, T-029 19/19 at 48/46/2, Q-002 1/1,
+  TypeScript, focused ESLint, runtime-repair unit 2/2, recovery over 37 tables,
+  Fedora coordinator 12 pass/26 Windows-native skip, production build 11/11,
+  diff, JSONL, and cleanup checks.
+- G-007P3 is accepted pending attributable local source and lineage commits.
+  Parent G-007 remains open. The three held locks release only after the
+  acceptance-lineage commit and final clean-resource check.

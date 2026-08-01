@@ -326,3 +326,35 @@ credential action occurred.
 
 The accepted G-007P2 source commit is
 `a0472e6d13839d27d6ae133f92e1202f1f7c9185`.
+
+## G-007P3 continuation receipt
+
+Date: 2026-07-31
+
+G-007P3 audited all remaining G-002-through-G-005 tenant-owned indexes and
+proved one bounded `leads` AI queue defect on PostgreSQL 16.14. With 80,000
+representative rows, global baseline indexes scanned both tenants and applied
+tenant scope as a filter. Migration
+`202607310003_tenant_prefix_lead_ai_queue_indexes.sql` replaces only the ready
+and status queue indexes with tenant-first definitions. Natural final plans use
+the intended indexes and no longer apply tenant scope as a post-filter.
+
+The first draft was rejected and repaired before acceptance. The final packet
+also prevents the supported runtime Postgres repair path from recreating four
+global indexes retired by G-007P1/P2/P3; migrations remain their sole owner.
+Exact replay, rollback, missing/partial/spoofed/non-index catalogs, foundation
+backing-index health, runtime repair, and complete migration inventory are
+covered. Fresh independent architecture and quality reviews pass.
+
+All root gates pass: G-002 2/2, G-003/G-007P3 2/2, G-004A 1/1, G-005 1/1,
+T-029 19/19 with 48 discovered/46 applied/2 skipped, Q-002 1/1, TypeScript,
+focused ESLint, runtime-repair unit 2/2, recovery over 37 tables, Fedora
+coordinator 12 passed/26 Windows-native skipped, and production build 11/11.
+Invalid TLS, undersized-plan-fixture, and pre-process launcher invocations are
+retained in the validation receipt and are not counted as passes.
+
+Parent G-007 remains open. Next work is another read-only, separately justified
+G-007P audit; no later Phase 2 write card is unlocked by this child alone.
+G-006 remains paused, G-006C2B is unopened, and historical Windows evidence is
+unchanged. No hosted Supabase, remote migration, push, PR, deployment,
+production, provider, credential, customer-data, or outreach action occurred.
