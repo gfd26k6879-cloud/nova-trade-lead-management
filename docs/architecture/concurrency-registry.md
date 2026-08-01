@@ -3078,3 +3078,6 @@ Date: 2026-07-31
   if callers add unbounded history or real churn grows materially. P18 is next.
   The 62-name crosswalk has 28 mapped/queued and 34 unclassified; G005 has no
   residual global secondary index, so P17 is not terminal.
+- The attributable local receipt is
+  `ff44228dc0205943f5b427db15d769b3fcdc4bc8`. No P17 container, listener,
+  database, process, worktree, or lock remains.

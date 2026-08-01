@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: no tenant-plan defect; retained with no migration
 
-Receipt commit: pending attributable local commit
+Receipt commit: `ff44228dc0205943f5b427db15d769b3fcdc4bc8`
 
 ## Scope and fixture
 

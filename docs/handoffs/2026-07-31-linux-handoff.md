@@ -765,3 +765,6 @@ P18 AI-feedback references are next. The reconciled source inventory contains
 mapped/queued and 34 G-002/G-003 names remain unclassified. G-005 has zero
 residual globals, correcting earlier broad G002/G005 wording. No migration or
 external action is assumed.
+
+The G-007P17 no-defect receipt commit is
+`ff44228dc0205943f5b427db15d769b3fcdc4bc8`.
