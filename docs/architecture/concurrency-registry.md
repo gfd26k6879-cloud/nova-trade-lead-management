@@ -3425,3 +3425,22 @@ Date: 2026-07-31
   reservation, migration, test edits, or removal unless a material exact current
   or durably approved tenant-plan defect is proven. Counts remain 54/52/2,
   crosswalk 33/29, and sequence `202607310010` stays free.
+
+## G-007P25 accepted; retain exact cell-status owner
+
+- Fresh PostgreSQL 16.14 replay passes 54/52/2. The accepted 120,000-row
+  interleaved fixture includes 96,000 cell units and 24,000 generalized null-cell
+  units; every constructed cell spans both tenants and all statuses/categories,
+  with zero scope mismatch.
+- Four current/current-derived shapes and one bounded market control naturally
+  use the exact target. Transactional removal preserves canonical result SHA
+  `a6e5cdd6c8d52e4d59067c624ce3c99cf882ed813a633979679815568b6b2521`
+  but falls back to sequential or P4 run-status-only work. Explicit rollback
+  restores the definition, catalog, results, and all five plan fingerprints.
+- Platform cells remain non-authorizing. Tenant/workspace controls are future
+  G-010/G-013 measurements; the target neither owns nor fully covers the
+  market/cell FK. No defect, candidate, migration, test edit, or removal opens.
+- Root behavior and proportional gates pass, including fresh G-002 2/2 and
+  T-029 19/19. Counts remain 54/52/2, sequence 010 stays free, and the
+  crosswalk becomes 34/28. All task resources are removed; the receipt
+  reservation remains only through commit.

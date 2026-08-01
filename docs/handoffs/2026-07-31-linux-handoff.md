@@ -1135,3 +1135,23 @@ cell-owned shapes. The target is not constraint-owned and does not cover the
 full market/cell child key. No defect, candidate, migration, test edit, or
 removal is assumed. Counts remain 54/52/2, crosswalk 33/29, and sequence 010
 remains free.
+
+## G-007P25 accepted; retain exact cell-status owner
+
+Fresh PostgreSQL 16.14 replayed 54/52/2 and measured 120,000 interleaved units:
+96,000 cell-owned shapes plus 24,000 generalized null-cell controls. Every
+constructed cell included both tenants and all six statuses/categories, with
+zero inherited-scope mismatch.
+
+Four current/current-derived shapes and one bounded market control naturally
+used the target. Transactional removal preserved the canonical result SHA
+`a6e5cdd6c8d52e4d59067c624ce3c99cf882ed813a633979679815568b6b2521`
+but changed all five plans to sequential or P4 run-status-only fallbacks.
+Explicit rollback restored exact definition, catalog, results, and plan
+fingerprints.
+
+Sol retains the exact current compatibility owner. Platform cells remain
+non-authorizing, G-010/G-013 controls are measurements only, and no defect,
+candidate, migration, test edit, or removal packet is opened. Root behavior and
+proportional gates pass. Counts remain 54/52/2, sequence 010 stays free, the
+crosswalk is 34/28, and all disposable resources are removed.
