@@ -1941,3 +1941,23 @@ sequence `202607310010` remains free. Parent G-007 remains open. The separate
 Explore command lowercase repair requires its own reservation; this receipt
 does not open it or P37. Main and the handoff tag remain unchanged, and no push
 or external action occurred.
+
+## G-007SR3 Explore cell-command normalization opened
+
+At clean baseline `fb27ae488db5287af95c388b23ad268d7efd7e43`, after P36's
+complete release, Sol opens the bounded P2 parser repair. Command parsing
+already trims, unquotes, and lowercases values, but the `cell:` branch
+incorrectly uppercases canonical lowercase platform cell IDs before exact SQL
+equality.
+
+One implementer owns only `src/lib/explore-filters.ts` and
+`src/lib/__tests__/explore-filters.test.ts`. The source change removes the
+redundant uppercase conversion. Tests must cover lowercase, uppercase,
+mixed-case, and quoted command values, preserve lowercase query state/chips,
+prove direct URL case remains unchanged, and preserve postal uppercase and
+unrelated command behavior.
+
+No client, page, query, access, permission, schema, migration, dependency,
+data, index, tenant-cutover, or visual change opens. Counts stay 54/52/2,
+crosswalk 46/16, sequence `202607310010` remains free, parent G-007 remains
+open, and P37 stays blocked until SR3 acceptance and lineage release.

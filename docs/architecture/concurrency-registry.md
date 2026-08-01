@@ -4209,3 +4209,28 @@ Date: 2026-08-01
   sequence `202607310010` remains free, and parent G-007 remains open.
 - The separate Explore command P2 repair remains unopened by this receipt and
   must close before residual P37.
+
+## G-007SR3 Explore cell-command lowercase normalization reservation
+
+Date: 2026-08-01
+
+- Sol opens the bounded P2 compatibility repair at clean baseline
+  `fb27ae488db5287af95c388b23ad268d7efd7e43` after complete P36 release.
+- One implementer exclusively owns `src/lib/explore-filters.ts` and
+  `src/lib/__tests__/explore-filters.test.ts`. Sol owns durable documents,
+  integration, acceptance, and these serialized parser/test locks.
+- Exact policy: command values have already been trimmed, unquoted, and
+  lowercased by `normalizeCommandValue`; `cell:` must preserve that canonical
+  lowercase value instead of uppercasing it. Canonical, uppercase, mixed-case,
+  and quoted command inputs must resolve to the lowercase platform cell ID.
+- Direct URL values and URL chips remain trim-only/case-preserving. Postal
+  commands remain uppercase. No client/page/query/access/permission/schema,
+  migration, dependency, data, index, tenant-cutover, or UI redesign change is
+  authorized.
+- Two other agents own independent architecture/security and test/evidence
+  review. The implementer cannot self-accept. Stop on unexpected dirty overlap,
+  mixed-case canonical source truth, broader URL normalization, any SQL/access/
+  schema change, or scope expansion.
+- Counts remain 54/52/2; crosswalk remains 46/16 (G-003 23/16, G-002 13/0),
+  sequence `202607310010` remains free, P37 remains blocked, and parent G-007
+  remains open.
