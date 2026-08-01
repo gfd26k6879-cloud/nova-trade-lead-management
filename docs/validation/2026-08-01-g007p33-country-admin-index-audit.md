@@ -223,3 +223,7 @@ G-003 becomes 20/19, G-002 remains 13/0, original-plan arithmetic remains
 source-order residual is `idx_leads_enrichment(enrichment_status, score DESC)`,
 but the P1 security repair takes precedence and this receipt does not open or
 number either packet.
+
+Acceptance commit `3b069a418b2b144bf39f84709aedd0d82de4fd2c` records this
+reviewed RETAIN disposition locally. The following lineage-only commit records
+that immutable receipt hash and releases the P33 durable-document reservation.

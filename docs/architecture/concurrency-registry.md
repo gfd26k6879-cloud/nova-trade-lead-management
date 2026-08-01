@@ -3902,3 +3902,6 @@ Date: 2026-08-01
   packet with no remaining P0/P1/P2. The producer factual cross-check closes
   without self-acceptance. The sole P2 changed common US from high- to low-
   selectivity; no evidence or disposition changed.
+- Acceptance commit `3b069a418b2b144bf39f84709aedd0d82de4fd2c` records the
+  reviewed P33 classification. Its lineage-only successor releases the P33
+  durable-document reservation without opening the security repair or P34.

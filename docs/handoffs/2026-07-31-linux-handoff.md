@@ -1592,3 +1592,7 @@ Independent architecture and test/evidence reviews accept the repaired P33
 packet with no remaining P0/P1/P2. The producer factual cross-check closes
 without self-acceptance. One P2 wording repair correctly labels common US as
 low-selectivity; the evidence and RETAIN disposition are unchanged.
+
+P33 acceptance commit `3b069a418b2b144bf39f84709aedd0d82de4fd2c` records the
+reviewed classification locally. Its lineage-only successor releases the P33
+reservation without opening the security repair or P34.

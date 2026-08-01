@@ -492,3 +492,7 @@ crosswalk becomes 43/19, G-003 becomes 20/19, G-002 stays 13/0, and parent
 G-007 remains open. The next residual is `idx_leads_enrichment`, but a separately
 proven P1 researcher archive/exclusion authorization repair takes precedence;
 neither is opened or numbered here.
+
+G-007P33 acceptance commit `3b069a418b2b144bf39f84709aedd0d82de4fd2c`
+records this classification locally. Its lineage-only successor releases the
+P33 reservation without opening the security repair or P34.
