@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: retain exact current compatibility owner; no migration
 
-Receipt commit: pending
+Receipt commit: `381ff0a45fcf03677fdb90dbfd06984287b5bff8`
 
 ## Scope and authority
 

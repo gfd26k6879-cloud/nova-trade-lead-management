@@ -311,3 +311,7 @@ run-status-only work; rollback restored the definition, catalog, result, and
 plan digests. Platform cells never authorize tenant units. No defect, candidate,
 migration, test edit, or removal packet is opened. Counts stay 54/52/2 and
 sequence 010 remains free.
+
+G-007P25 receipt commit `381ff0a45fcf03677fdb90dbfd06984287b5bff8`
+records the accepted RETAIN decision. This lineage update opens no next
+residual family.

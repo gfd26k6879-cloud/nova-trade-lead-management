@@ -3443,4 +3443,5 @@ Date: 2026-07-31
 - Root behavior and proportional gates pass, including fresh G-002 2/2 and
   T-029 19/19. Counts remain 54/52/2, sequence 010 stays free, and the
   crosswalk becomes 34/28. All task resources are removed; the receipt
-  reservation remains only through commit.
+  commit is `381ff0a45fcf03677fdb90dbfd06984287b5bff8`. The reservation is released,
+  and this lineage update opens no next residual family.

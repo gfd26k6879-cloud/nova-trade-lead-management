@@ -1154,4 +1154,6 @@ Sol retains the exact current compatibility owner. Platform cells remain
 non-authorizing, G-010/G-013 controls are measurements only, and no defect,
 candidate, migration, test edit, or removal packet is opened. Root behavior and
 proportional gates pass. Counts remain 54/52/2, sequence 010 stays free, the
-crosswalk is 34/28, and all disposable resources are removed.
+crosswalk is 34/28, and all disposable resources are removed. Receipt commit
+`381ff0a45fcf03677fdb90dbfd06984287b5bff8` records the accepted RETAIN
+decision. This lineage update opens no next residual family.
