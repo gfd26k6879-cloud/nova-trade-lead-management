@@ -3172,3 +3172,6 @@ Date: 2026-07-31
   fresh 53/51/2 replay is authoritative. No P19 container, database, listener,
   process, candidate, worktree, or lock remains. G-004B and the paused native
   Windows/NTFS G-006 boundary remain unchanged.
+- P19 receipt and exact crosswalk commit
+  `4adc7bd09c84d8890b1950221b78255b0af38564` is accepted; its documentation
+  reservation releases with this lineage commit.

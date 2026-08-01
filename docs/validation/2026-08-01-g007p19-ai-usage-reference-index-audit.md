@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: accepted RETAIN/no tenant-query-plan defect/no migration
 
-Receipt commit: recorded by the following lineage update
+Receipt commit: `4adc7bd09c84d8890b1950221b78255b0af38564`
 
 ## Scope and source ownership
 

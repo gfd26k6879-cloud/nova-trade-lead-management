@@ -6,6 +6,8 @@ Catalog baseline: `c15cf94c24093769a1f1648deb4d4f392474ad7b`
 
 Status: exact appendix reconstructed and accepted during G-007P19 closeout
 
+Receipt commit: `4adc7bd09c84d8890b1950221b78255b0af38564`
+
 ## Definition and arithmetic
 
 This appendix enumerates every retained valid secondary btree on the sixteen

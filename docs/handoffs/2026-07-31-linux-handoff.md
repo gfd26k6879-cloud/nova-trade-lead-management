@@ -887,4 +887,5 @@ The first crosswalk bootstrap omitted `auth`; its entire container and partial
 catalog were rejected and removed. The fresh corrected replay passed. All P19
 containers, databases, ports, processes, candidates, and worktrees are gone.
 Main/tag remain unchanged and no remote or external action occurred. The P19
-receipt and crosswalk commit are recorded by the following lineage update.
+receipt and exact crosswalk commit is
+`4adc7bd09c84d8890b1950221b78255b0af38564`.
