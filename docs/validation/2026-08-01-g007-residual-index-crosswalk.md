@@ -325,3 +325,7 @@ single-FK support candidate, but it is not constraint-owned and does not cover
 the compound market/cell key. No live catalog, plan, health, use, performance,
 necessity, duplicate, replacement, or removal claim is made. Counts stay
 54/52/2 and sequence 010 remains free.
+
+G-007P26 receipt commit `18e6e7a92bde686ea7e45850e030710a75b68074`
+records the accepted RETAIN/DEFER decision. This lineage update opens no next
+residual family.

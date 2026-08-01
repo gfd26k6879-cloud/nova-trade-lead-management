@@ -1186,4 +1186,6 @@ plan, RI-necessity, tenant-query, replacement, and removal claims. Platform
 markets never authorize tenant units; G-010/G-013 still own the future query
 contract and G-021 is not a current owner. No PostgreSQL service, defect, candidate,
 migration, test edit, replacement, or removal packet is opened. Counts remain
-54/52/2, sequence 010 stays free, and the crosswalk is 35/27.
+54/52/2, sequence 010 stays free, and the crosswalk is 35/27. Receipt commit
+`18e6e7a92bde686ea7e45850e030710a75b68074` records the accepted RETAIN/DEFER
+decision. This lineage update opens no next residual family.
