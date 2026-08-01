@@ -8,7 +8,7 @@ Branch: `codex/nova-multitenant-integration`
 
 Status: retain/defer structural FK support and compatibility; no live-use claim
 
-Receipt commit: pending
+Receipt commit: `e9ac62457d874d8f3fa5d9aa4f4354d90acec593`
 
 ## Exact scope and provenance
 

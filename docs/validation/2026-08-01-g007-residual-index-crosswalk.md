@@ -281,3 +281,7 @@ runs, and no exact market-history reader exists. Historical PostgreSQL and
 SQLite compatibility is retained; tenant-history, replacement, and removal
 wait for exact G-010/G-013 authority or measured RI evidence. Counts stay
 54/52/2 and sequence 010 remains free.
+
+G-007P23 receipt commit `e9ac62457d874d8f3fa5d9aa4f4354d90acec593`
+records the accepted retain/defer classification. This lineage update opens no
+next residual family.

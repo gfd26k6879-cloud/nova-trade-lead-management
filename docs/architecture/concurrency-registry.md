@@ -3367,3 +3367,6 @@ Date: 2026-07-31
 - Historical PostgreSQL replay and accepted SQLite schema retain the index.
   Counts remain 54/52/2, sequence 010 stays free, and the crosswalk becomes
   32 classified/30 unclassified. No later card unlocks.
+- Receipt commit `e9ac62457d874d8f3fa5d9aa4f4354d90acec593` is final locally.
+  The documentation reservation is released and no next residual card is
+  opened by this lineage update.

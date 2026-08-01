@@ -1083,3 +1083,7 @@ PostgreSQL replay and accepted SQLite schema retain the index, so Sol retains
 compatibility and defers tenant-history, replacement, and removal claims. No
 PostgreSQL service, test, candidate, or DDL was used. Counts remain 54/52/2,
 sequence 010 stays free, the crosswalk is 32/30, and no later card unlocks.
+
+The accepted receipt commit is
+`e9ac62457d874d8f3fa5d9aa4f4354d90acec593`. Its documentation reservation is
+released. This lineage update opens no next residual card.
