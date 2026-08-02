@@ -4393,3 +4393,17 @@ Date: 2026-08-01
   through lineage.
 - Crosswalk is 48/14 (G-003 25/14, G-002 13/0), inventory is 54/52/2,
   sequence `202607310010` remains free, and parent G-007 remains open.
+
+## G-007P38 lineage recorded; durable-document reservation released
+
+Date: 2026-08-01
+
+- Local acceptance commit:
+  `5d170495b63ef48ff567c1bcc750ef3ef37f288f`.
+- The P38 durable-document reservation is released. No migration, source,
+  test, sequence, service, payload, process, or worktree lock remains.
+- G-007SR4 and P39 remain unopened. SR4 requires its own reservation; P39
+  remains blocked until SR4 is accepted, committed, and lineage-released.
+- Inventory stays 54/52/2, crosswalk stays 48/14 (G-003 25/14, G-002 13/0),
+  sequence `202607310010` remains free, and parent G-007 remains open. No
+  remote or external action occurred.

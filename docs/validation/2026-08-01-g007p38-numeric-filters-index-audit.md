@@ -186,3 +186,12 @@ receipt releases P38's durable-document reservation. P39 remains blocked until
 SR4 is accepted, committed, and lineage-released. Its residual is
 `idx_leads_phone_quality(phone_verification_status, lead_quality_score DESC)`
 for a separate read-only audit. No push or external action occurs.
+
+## Lineage receipt
+
+The attributable local acceptance commit is
+`5d170495b63ef48ff567c1bcc750ef3ef37f288f`. This lineage-only receipt
+releases P38's durable-document reservation. G-007SR4 and P39 remain unopened;
+SR4 requires its own separate reservation, and P39 remains blocked through
+SR4 acceptance, commit, and lineage release. No remote or external action
+occurred.

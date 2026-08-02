@@ -2147,3 +2147,17 @@ Crosswalk becomes 48/14 (G-003 25/14, G-002 13/0), inventory remains 54/52/2,
 sequence `202607310010` stays free, original arithmetic remains 58/318/260,
 and parent G-007 remains open. The durable-document reservation stays held
 until the separate local lineage receipt. No push or external action occurs.
+
+## G-007P38 lineage receipt
+
+The attributable local P38 acceptance commit is
+`5d170495b63ef48ff567c1bcc750ef3ef37f288f`. The durable-document
+reservation is released with no remaining P38 migration, source, test,
+sequence, service, payload, process, or worktree lock.
+
+G-007SR4 and P39 remain unopened. SR4 requires its own separate reservation;
+P39 remains blocked until SR4 is accepted, committed, and lineage-released.
+Inventory stays 54/52/2, crosswalk stays 48/14 (G-003 25/14, G-002 13/0),
+sequence `202607310010` remains free, and parent G-007 remains open. Main and
+the handoff tag remain unchanged; no push, deployment, hosted migration, or
+external action occurred.
