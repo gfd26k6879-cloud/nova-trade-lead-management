@@ -84,6 +84,8 @@ const researcherSession = { userId: "researcher-1", email: "one@example.com", ro
 const claimedLead = {
   id: "lead-1",
   market_id: "market-colorado",
+  archived_at: null,
+  is_excluded: false,
   assigned_to_user_id: "researcher-1",
   assigned_user_email: "one@example.com",
   assigned_user_display_name: "Researcher One",
@@ -155,6 +157,24 @@ describe("researcher-safe AI lead actions", () => {
     const result = await runResearcherAiCheckAction("lead-1");
 
     expect(result).toEqual({ error: "Claim this lead before running AI tools." });
+    expect(verificationMocks.performAiVerification).not.toHaveBeenCalled();
+  });
+
+  it("blocks researcher AI tools on archived leads", async () => {
+    queryMocks.getLeadById.mockResolvedValue({ ...claimedLead, archived_at: "2026-08-01T00:00:00.000Z" });
+
+    const result = await runResearcherAiCheckAction("lead-1");
+
+    expect(result).toEqual({ error: "Lead not found" });
+    expect(verificationMocks.performAiVerification).not.toHaveBeenCalled();
+  });
+
+  it("blocks researcher AI tools on excluded leads", async () => {
+    queryMocks.getLeadById.mockResolvedValue({ ...claimedLead, is_excluded: true });
+
+    const result = await runResearcherAiCheckAction("lead-1");
+
+    expect(result).toEqual({ error: "Lead not found" });
     expect(verificationMocks.performAiVerification).not.toHaveBeenCalled();
   });
 
