@@ -138,3 +138,9 @@ sequence `202607310010` remains free, original arithmetic remains 58/318/260,
 and parent G-007 remains open. P39 `idx_leads_phone_quality` is next but stays
 unopened until a lineage-only commit records the SR4 acceptance hash and
 releases the durable-document reservation. No push or external action occurs.
+
+## Lineage receipt
+
+Acceptance commit `de6b21a03dccae86e6a6687285769de547aecdcf` records this
+validated repair. This lineage-only receipt releases the durable-document
+reservation; P39 remains unopened until its own separate reservation commit.

@@ -4479,3 +4479,13 @@ Date: 2026-08-01
   only the durable-document reservation through lineage.
 - Counts remain 54/52/2, crosswalk 48/14 (G-003 25/14, G-002 13/0), sequence
   `202607310010` stays free, parent G-007 stays open, and P39 remains unopened.
+
+## G-007SR4 lineage recorded; all locks released
+
+Date: 2026-08-01
+
+- Acceptance commit `de6b21a03dccae86e6a6687285769de547aecdcf` records the
+  accepted SR4 implementation and evidence.
+- The durable-document reservation is released. No source, test, migration,
+  sequence, service, payload, process, or worktree lock remains for SR4.
+- P39 remains unopened pending its own separately committed reservation.

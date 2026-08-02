@@ -2231,3 +2231,11 @@ sequence `202607310010` stays free, original arithmetic stays 58/318/260, and
 parent G-007 remains open. P39 `idx_leads_phone_quality` stays unopened until
 SR4 lineage releases the remaining durable-document reservation. No push or
 external action occurs.
+
+## G-007SR4 lineage receipt
+
+Acceptance commit `de6b21a03dccae86e6a6687285769de547aecdcf` records the
+accepted repair. The lineage-only follow-up releases every SR4 lock and leaves
+P39 unopened for a separate reservation commit. Main, the handoff tag,
+migration inventory 54/52/2, crosswalk 48/14, sequence `202607310010`, the
+paused Windows lane, and all external systems remain unchanged.
