@@ -4359,3 +4359,37 @@ Date: 2026-08-01
 - Stop before DDL migration, replacement, removal, test edits, or sequence use
   unless a material exact current or durably approved tenant-query plan defect
   is proven.
+
+## G-007P38 accepted; audit resources released
+
+Date: 2026-08-01
+
+- Sol accepts RETAIN for the exact healthy historical PostgreSQL and frozen
+  SQLite `idx_leads_numeric_filters(review_count, rating, score DESC)`
+  compatibility definition. No candidate, migration, replacement, removal,
+  repository guard, source/test edit, or sequence use opens.
+- PostgreSQL 16.14 replayed 54/52/2 over 240,000 interleaved rows. Ninety-one
+  exact cases have complete I0/D0/I1/D1/I2 result and source-order equality,
+  exact same-state structures, and exact target use of 7/0/7/0/7.
+- The seven target-owning cases are unscoped/global controls. All five
+  researcher or market-scoped numeric forms avoid the target with identical
+  plans. Numeric fields remain nonauthorizing; future tenant forms stay
+  dependency-bound.
+- The 26-receipt matrix contains 21 hostile-state rejects before guard DDL or
+  workload, one healthy no-op, one exact-missing install, two historical
+  name-only replay controls, and one transactional missing-install rollback.
+  All avoid workload and restore exact state. No rejected hostile-state
+  receipt executes guard DDL or workload. Post-validation DDL occurs only in
+  the two historical-replay and two exact-missing controls.
+- Fractional review-count binding and parser coercion are separate index-
+  neutral source debt. G-007SR4 remains unopened until P38 acceptance is
+  committed and lineage-released. P39 `idx_leads_phone_quality` remains
+  blocked until SR4 is accepted, committed, and lineage-released.
+- Independent architecture/causality and test/evidence reviews accept with no
+  remaining P0/P1/P2 evidence blocker. No producer self-accepts.
+- All P38 containers, databases, volumes, listeners, processes, runners, and
+  payloads are removed. No migration, source, test, sequence, service, or
+  worktree lock remains; Sol retains only the durable-document reservation
+  through lineage.
+- Crosswalk is 48/14 (G-003 25/14, G-002 13/0), inventory is 54/52/2,
+  sequence `202607310010` remains free, and parent G-007 remains open.

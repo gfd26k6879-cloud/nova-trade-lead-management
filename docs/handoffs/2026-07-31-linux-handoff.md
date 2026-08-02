@@ -2105,3 +2105,45 @@ stays 54/52/2, sequence `202607310010` remains free, and parent G-007 remains
 open. Stop before candidate DDL unless material exact current or durably
 approved tenant-query plan evidence proves a defect. No hosted or external
 operation opens.
+
+## G-007P38 numeric-filter index audit accepted
+
+Sol accepts RETAIN for the exact healthy historical PostgreSQL and frozen
+SQLite `idx_leads_numeric_filters(review_count, rating, score DESC)`
+compatibility definition. PostgreSQL 16.14 replayed 54/52/2 over 240,000
+physically interleaved two-tenant rows.
+
+The accepted mode-0600 v5 evidence contains 91 exact cases across
+I0/D0/I1/D1/I2. All complete results and source orders match, all same-state
+structures and immediate repeats match, and the target is selected exactly
+7/0/7/0/7. Its seven natural owners are unscoped/global controls; all five
+researcher or market-scoped numeric forms avoid it with identical plans.
+
+The 26-receipt catalog matrix contains 21 hostile-definition/collision rejects
+before guard DDL or workload, one healthy no-op, one exact-missing install, two
+historical name-only replay controls, and one transactional missing-install
+rollback. All avoid workload and restore exact state. No rejected hostile-
+state receipt executes guard DDL or workload. Post-validation DDL occurs only
+in the two historical-replay and two exact-missing controls. Target physical
+identity and controlled planner, statistics, maintenance, heap, and sibling
+contexts pass.
+No material tenant-query plan defect is proven. Numeric fields never authorize
+tenant scope, and no candidate, migration, replacement,
+removal, repository guard, source/test edit, or sequence use opens.
+
+Fractional review-count binding reaches PostgreSQL integer SQLSTATE `22P02`,
+while Leads/CSV and Explore coerce differently. This is separate index-neutral
+source-contract debt. G-007SR4 remains unopened until P38 acceptance is
+committed and lineage-released. P39 `idx_leads_phone_quality` remains blocked
+until SR4 is accepted, committed, and lineage-released.
+
+Independent reviews accept with no remaining P0/P1/P2 evidence blocker; the
+producer does not self-accept. Root passed focused 88/88, TypeScript, corrected
+focused ESLint, recovery 37, Fedora coordinator 12 passed/26 Windows-native
+skipped, build 11/11, and fresh G-002/G-003/G-004A/G-005/T-029 PostgreSQL
+gates. All P38 resources and temporary evidence are removed.
+
+Crosswalk becomes 48/14 (G-003 25/14, G-002 13/0), inventory remains 54/52/2,
+sequence `202607310010` stays free, original arithmetic remains 58/318/260,
+and parent G-007 remains open. The durable-document reservation stays held
+until the separate local lineage receipt. No push or external action occurs.
