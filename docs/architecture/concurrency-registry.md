@@ -4452,3 +4452,30 @@ Date: 2026-08-01
   dependency state, non-loopback PostgreSQL, Windows-only evidence, or scope
   expansion. Inventory stays 54/52/2, crosswalk 48/14, sequence
   `202607310010` stays free, and parent G-007 remains open.
+
+## G-007SR4 accepted; source and test locks released
+
+Date: 2026-08-01
+
+- Sol accepts implementation commit
+  `fe7bd66ccea83a63bdfa8681bdba386b790dc668`. The shared parser and five
+  ingress/query boundaries now enforce the reserved minimum-review contract;
+  the central builder binds only canonical positive `int4` values and emits
+  parameter-free `1 = 0` for larger safe integers.
+- Zero and invalid omission preserve the chosen compatibility behavior.
+  Rating/score, command aliases, repeated keys, raw chips, access clamps,
+  permissions, clients, schema, migrations, indexes, data, dependencies,
+  sequence, and Windows lane are unchanged.
+- Focused portable tests passed 112/112 with one expected default PostgreSQL
+  skip; two different fresh PostgreSQL 16.14 exact-54/52/2 runs passed the
+  opt-in real-adapter test 1/1 each. Adjacent regressions passed 63/63,
+  TypeScript/ESLint passed, recovery matched 37 tables, Fedora coordinator was
+  12 passed/26 Windows-native skipped, build was 11/11, and fresh G-003 passed
+  6/6.
+- Independent architecture/security and test/evidence reviewers accept with
+  no P0/P1/P2; the implementer did not self-accept.
+- All SR4 and G-003 containers, databases, volumes, listeners, processes, and
+  payloads are removed. The source/test/service locks are released; Sol retains
+  only the durable-document reservation through lineage.
+- Counts remain 54/52/2, crosswalk 48/14 (G-003 25/14, G-002 13/0), sequence
+  `202607310010` stays free, parent G-007 stays open, and P39 remains unopened.

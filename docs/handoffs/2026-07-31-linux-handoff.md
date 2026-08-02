@@ -2195,3 +2195,39 @@ and test reviewers must accept it, and the implementer cannot self-accept.
 Inventory remains 54/52/2, crosswalk remains 48/14 (G-003 25/14, G-002 13/0),
 sequence `202607310010` remains free, original arithmetic remains 58/318/260,
 and parent G-007 remains open. No hosted or external action opens.
+
+## G-007SR4 minimum-review integer contract accepted
+
+Sol accepts implementation commit
+`fe7bd66ccea83a63bdfa8681bdba386b790dc668`. A shared pure parser now
+normalizes minimum-review input across Explore URL/commands, protected Leads,
+CSV export, the list action, and the final query seam.
+
+Strings accept trimmed optional-plus ASCII decimal safe integers with leading
+zeros. Primitive numbers accept finite nonnegative safe integers and normalize
+numeric negative zero. Invalid values are omitted; zero remains a valid no-op;
+positive values through `int4` maximum bind once to inclusive review count;
+larger safe values produce literal `1 = 0` with no bind. All five shared query
+consumers inherit the defense with stable following parameter positions.
+
+Permissions and researcher access clamps remain unchanged. Rating/score,
+command aliases and label debt, repeated keys, raw invalid chips, clients,
+schema, migrations, indexes, data, dependencies, sequence, and Windows lane
+are unchanged. No migration count changes.
+
+Focused portable evidence passed 112/112 with one expected default PostgreSQL
+skip. Producer and root used different fresh PostgreSQL 16.14 loopback services
+and exact 54/52/2 replays; the opt-in real-adapter regression passed 1/1 twice.
+Adjacent regressions passed 63/63, TypeScript and ESLint passed, recovery
+matched 37 tables, Fedora coordinator passed 12 with 26 Windows-native skips,
+build generated 11/11 pages, and independent fresh G-003 passed 6/6.
+
+Independent architecture/security and test/evidence reviewers accept with no
+P0/P1/P2; the implementer does not self-accept. All SR4 and G-003 services,
+volumes, listeners, processes, and payloads are removed.
+
+Inventory stays 54/52/2, crosswalk stays 48/14 (G-003 25/14, G-002 13/0),
+sequence `202607310010` stays free, original arithmetic stays 58/318/260, and
+parent G-007 remains open. P39 `idx_leads_phone_quality` stays unopened until
+SR4 lineage releases the remaining durable-document reservation. No push or
+external action occurs.
