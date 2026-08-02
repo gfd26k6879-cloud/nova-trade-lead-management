@@ -2346,3 +2346,16 @@ sequence `202607310010` stays free, original arithmetic stays 58/318/260, and
 parent G-007 remains open. P40
 `idx_leads_primary_type_score(primary_type, score DESC)` is next but unopened.
 Main and the handoff tag remain unchanged; no push or external action occurred.
+
+## G-007P39 lineage receipt
+
+Acceptance commit `332ba10e72a13568d62f65de4d149b02b3fbcc4d` records the
+accepted RETAIN/no-DDL audit. The lineage-only follow-up releases every P39
+lock, including the durable-document reservation.
+
+Inventory remains 54/52/2, crosswalk remains 49/13 (G-003 26/13, G-002 13/0),
+sequence `202607310010` stays free, original arithmetic remains 58/318/260,
+and parent G-007 remains open. P40
+`idx_leads_primary_type_score(primary_type, score DESC)` is next but remains
+unopened pending its own separate reservation. Main, the handoff tag, the
+paused Windows lane, and all external systems remain unchanged.

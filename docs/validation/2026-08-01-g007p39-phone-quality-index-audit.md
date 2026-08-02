@@ -204,3 +204,15 @@ The next source-order residual is P40
 `idx_leads_primary_type_score(primary_type, score DESC)`. P40 remains unopened
 until this acceptance is committed and a lineage-only receipt releases P39's
 durable-document reservation. No remote or external action occurs.
+
+## Lineage receipt
+
+The attributable local acceptance commit is
+`332ba10e72a13568d62f65de4d149b02b3fbcc4d`. This lineage-only receipt
+releases P39's durable-document reservation. No migration, source, test,
+sequence, service, payload, process, database, or worktree lock remains.
+
+Inventory stays 54/52/2; crosswalk stays 49/13 (G-003 26/13, G-002 13/0);
+sequence `202607310010` remains free; parent G-007 remains open. P40 is next
+but remains unopened for its own separate reservation. Main and the handoff
+tag remain unchanged, and no remote or external action occurred.
