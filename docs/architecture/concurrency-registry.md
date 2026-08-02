@@ -4489,3 +4489,32 @@ Date: 2026-08-01
 - The durable-document reservation is released. No source, test, migration,
   sequence, service, payload, process, or worktree lock remains for SR4.
 - P39 remains unopened pending its own separately committed reservation.
+
+## G-007P39 phone-quality index audit reservation
+
+Date: 2026-08-01
+
+- Sol opens a read-only audit of exact G-003 residual
+  `idx_leads_phone_quality(phone_verification_status, lead_quality_score DESC)`
+  at clean baseline `6adf2e9d0abea161ea3f2639e6fe95b7a0c08ea6`, after complete
+  SR4 lineage release.
+- Sol exclusively owns registry, ledger, handoff, crosswalk, integration, and
+  acceptance writes. Three agents own disjoint source/catalog, test/evidence,
+  and dependency/readiness lanes; no producer may self-accept.
+- Current live Quality summary, list, AI-candidate, and action forms must be
+  separated from latent shared filter consumers and synthetic future
+  G-011/G-017 tenant forms. Phone and quality fields never authorize tenant,
+  workspace, assignment, market, or lifecycle access.
+- Fresh PostgreSQL 16 evidence must replay 54/52/2 and compare the exact
+  installed, dropped, and restored target with complete source SQL, binds,
+  projections, joins, correlated subqueries, ordering, LIMIT/OFFSET, and
+  adversarial status/score/selectivity/tie fixtures.
+- Accepted inventory is 54/52/2 and crosswalk 48/14 (G-003 25/14, G-002
+  13/0). Conditional classification would make 49/13 and G-003 26/13.
+  Sequence `202607310010` remains free; no migration is assumed.
+- Sol holds only durable-document integration writes. A single later producer
+  may hold exact disposable PostgreSQL runner, payload, service, process, and
+  database names; no repository source/test/migration or sequence lock opens.
+- Stop before repository DDL, migration, replacement, removal, test edit, or
+  sequence use unless a material exact current or durably approved tenant-query
+  plan defect is proven.

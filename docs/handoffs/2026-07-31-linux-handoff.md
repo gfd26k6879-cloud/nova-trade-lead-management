@@ -2239,3 +2239,32 @@ accepted repair. The lineage-only follow-up releases every SR4 lock and leaves
 P39 unopened for a separate reservation commit. Main, the handoff tag,
 migration inventory 54/52/2, crosswalk 48/14, sequence `202607310010`, the
 paused Windows lane, and all external systems remain unchanged.
+
+## G-007P39 phone-quality index audit opened
+
+At clean baseline `6adf2e9d0abea161ea3f2639e6fe95b7a0c08ea6`, after complete
+SR4 lineage release, Sol opens read-only P39 for exact residual
+`idx_leads_phone_quality(phone_verification_status, lead_quality_score DESC)`.
+Its historical origin is
+`supabase/migrations/202605130001_lead_quality_command_center.sql:15`; SQLite
+retains a frozen compatibility mirror at `src/lib/db/schema.ts:2086`. No
+migration, replacement, removal, repository source/test edit, or sequence use
+is assumed.
+
+Fresh PostgreSQL 16 must replay 54/52/2 and compare definition-aware catalog
+and installed/drop/restored exact current Quality summary, list, candidate,
+and action SQL, latent shared-filter consumers, and explicitly synthetic
+future tenant probes. Fixtures must physically interleave two tenants and vary
+nominal, empty, arbitrary, common, selective, and absent phone statuses;
+`real` score boundaries and ties; lifecycle, assignment, market, exclusions,
+and complete order-key ties. Under-specified tied row order is evidence, not an
+invented SQL contract.
+
+Current compatibility authority remains role, assignment, and market based;
+phone status and quality score never grant tenant scope. G-011/G-017 future
+tenant forms are measurement-only and cannot prove a current defect. Inventory
+stays 54/52/2, conditional crosswalk is 49/13 (G-003 26/13, G-002 13/0),
+sequence `202607310010` remains free, and parent G-007 remains open. Stop before
+candidate repository DDL unless material exact current or durably approved
+tenant-query plan evidence proves a defect. No hosted or external operation
+opens.
