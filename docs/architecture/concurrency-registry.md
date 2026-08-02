@@ -4541,3 +4541,19 @@ Date: 2026-08-01
 - P39 may continue its read-only PostgreSQL audit concurrently, but final P39
   acceptance waits for SR5 acceptance and lineage. Counts, crosswalk, sequence,
   Windows evidence, and external systems remain unchanged.
+
+## G-007SR5 accepted; test lock released
+
+Date: 2026-08-01
+
+- Sol accepts test-only implementation commit
+  `c6933af531f31bfc23d1ac0e76eb0afc6dc88bf6`: one file, 20 additions,
+  canonical active/nonexcluded fixture state, and archived/excluded denials.
+- Root and implementer each passed the 59/59 access/action gate; root's repaired
+  combined P39 portable suite passed 83/83. TypeScript, focused ESLint, and diff
+  checks passed.
+- Independent test/evidence review accepts with no P0/P1/P2. Production access
+  policy, schema, migrations, dependencies, data, indexes, and sequence remain
+  unchanged.
+- The SR5 test lock is released. Sol retains only the serialized durable-
+  document reservation through lineage; P39 remains open.

@@ -2285,3 +2285,17 @@ not change production access policy. The P39 PostgreSQL producer continues in
 its disjoint disposable scope, but P39 acceptance waits for SR5 acceptance and
 lineage. No migration, sequence, Windows, hosted, remote, or external state
 changes.
+
+## G-007SR5 researcher-AI lifecycle fixture repair accepted
+
+Sol accepts test-only implementation commit
+`c6933af531f31bfc23d1ac0e76eb0afc6dc88bf6`. The canonical mock now carries
+explicit active/nonexcluded lifecycle state, and archived/excluded denial tests
+preserve the production fail-closed not-found behavior without invoking AI.
+
+Implementer and root each passed 59/59 across researcher-AI, lead-access, and
+lead-ownership tests; the repaired combined P39 portable suite passed 83/83.
+TypeScript, focused ESLint, and diff checks passed. Independent review accepts
+with no P0/P1/P2. Only the durable-document reservation remains through
+lineage; P39 stays open. No production, migration, sequence, Windows, hosted,
+remote, or external state changes.
