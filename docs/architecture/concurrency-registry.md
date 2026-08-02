@@ -4606,3 +4606,36 @@ Date: 2026-08-01
   13/0), sequence `202607310010` stays free, and parent G-007 remains open.
 - P40 is the next source-order residual but remains unopened pending its own
   separate reservation. No remote or external action occurred.
+
+## G-007P40 primary-type score index audit reservation
+
+Date: 2026-08-01
+
+- Sol opens a read-only audit of exact G-003 residual
+  `idx_leads_primary_type_score(primary_type, score DESC)` at clean baseline
+  `b060f60a9c8c19bd3315933b338877b50de48e43`, after complete P39 lineage
+  release.
+- Sol exclusively owns registry, ledger, handoff, crosswalk, integration, and
+  acceptance writes. Three agents own disjoint source/catalog, test/evidence,
+  and dependency/readiness lanes; no producer may self-accept.
+- The PostgreSQL origin is
+  `supabase/migrations/202605110001_full_schema.sql:302`, introduced by
+  `0c80c1e831b0e95e0007fdb5ee0bd1bfce87da6c`; SQLite retains its frozen
+  compatibility mirror at `src/lib/db/schema.ts:2076`.
+- Current and latent source query forms must be distinguished from synthetic
+  future tenant forms. `primary_type` and score are classification/ranking
+  fields and never authorize tenant, workspace, assignment, market,
+  lifecycle, or exclusion access.
+- Fresh PostgreSQL 16 evidence must replay 54/52/2 and compare the exact
+  installed, dropped, and restored target with definition-aware catalog
+  identity, complete source SQL and binds, projected results, ordering,
+  pagination, adversarial selectivity, nulls, and full ordering-key ties.
+- Accepted crosswalk is 49/13 (G-003 26/13, G-002 13/0). Conditional
+  classification would make 50/12 and G-003 27/12. Sequence
+  `202607310010` remains free; no migration is assumed.
+- Sol holds only durable-document integration writes. A single later producer
+  may hold exact disposable PostgreSQL runner, payload, service, process, and
+  database names; no repository source/test/migration or sequence lock opens.
+- Stop before repository DDL, migration, replacement, removal, test edit, or
+  sequence use unless a material exact current or durably approved tenant-query
+  plan defect is proven.
