@@ -4665,3 +4665,16 @@ Date: 2026-08-01
 - Crosswalk is 50/12 (G-003 27/12, G-002 13/0), inventory is 54/52/2,
   sequence `202607310010` remains free, original arithmetic stays 58/318/260,
   and parent G-007 remains open. P41 remains unopened until lineage release.
+
+## G-007P40 lineage recorded; durable-document reservation released
+
+Date: 2026-08-01
+
+- Local acceptance commit:
+  `a4d36061573406bb95da42f9585a3104e2ec0a7e`.
+- The P40 durable-document reservation is released. No migration, source,
+  test, sequence, service, payload, process, database, or worktree lock remains.
+- Inventory remains 54/52/2, crosswalk remains 50/12 (G-003 27/12, G-002
+  13/0), sequence `202607310010` stays free, and parent G-007 remains open.
+- P41 is the next source-order residual but remains unopened pending its own
+  separate reservation. No remote or external action occurred.

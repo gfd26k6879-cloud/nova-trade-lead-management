@@ -201,3 +201,15 @@ P41 `idx_leads_qualification_score(qualification_status, score DESC)` is the
 next source-order residual but remains unopened until the P40 acceptance
 commit is followed by a lineage-only receipt releasing P40's durable-document
 reservation. No remote or external action occurs.
+
+## Lineage receipt
+
+The attributable local acceptance commit is
+`a4d36061573406bb95da42f9585a3104e2ec0a7e`. This lineage-only receipt
+releases P40's durable-document reservation. No migration, source, test,
+sequence, service, payload, process, database, or worktree lock remains.
+
+Inventory stays 54/52/2; crosswalk stays 50/12 (G-003 27/12, G-002 13/0);
+sequence `202607310010` remains free; parent G-007 remains open. P41 is next
+but remains unopened for its own separate reservation. Main and the handoff
+tag remain unchanged, and no remote or external action occurred.

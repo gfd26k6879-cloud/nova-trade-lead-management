@@ -2422,3 +2422,16 @@ parent G-007 remains open. P41
 `idx_leads_qualification_score(qualification_status, score DESC)` is next but
 unopened until P40 lineage. Main and the handoff tag remain unchanged; no push
 or external action occurred.
+
+## G-007P40 lineage receipt
+
+Acceptance commit `a4d36061573406bb95da42f9585a3104e2ec0a7e` records the
+accepted RETAIN/no-DDL audit. The lineage-only follow-up releases every P40
+lock, including the durable-document reservation.
+
+Inventory remains 54/52/2, crosswalk remains 50/12 (G-003 27/12, G-002 13/0),
+sequence `202607310010` stays free, original arithmetic remains 58/318/260,
+and parent G-007 remains open. P41
+`idx_leads_qualification_score(qualification_status, score DESC)` is next but
+remains unopened pending its own separate reservation. Main, the handoff tag,
+the paused Windows lane, and all external systems remain unchanged.
