@@ -102,6 +102,55 @@ describe("explore command filters", () => {
     });
   });
 
+  it("keeps minimum-review comparison aliases inclusive and canonicalizes valid integers", () => {
+    for (const command of ["reviews>+00050", "reviews>=00050"]) {
+      const result = parseExploreCommand(command);
+
+      expect(result.errors).toEqual([]);
+      expect(result.unparsedText).toBe("");
+      expect(result.filters.minReviews).toBe("50");
+      expect(result.chips).toContainEqual({
+        key: "minReviews",
+        label: "Reviews >",
+        value: "50",
+        removeParams: { minReviews: null },
+      });
+      expect(buildExploreQueryState({ minReviews: result.filters.minReviews ?? undefined }).filters.minReviews).toBe(50);
+    }
+  });
+
+  it.each(["reviews>4.5", "reviews>=-1", "reviews>1e3", "reviews>0x10", "reviews>１２"])(
+    "omits invalid minimum-review command %s without turning it into search text",
+    (command) => {
+      const result = parseExploreCommand(command);
+
+      expect(result.errors).toEqual([]);
+      expect(result.unparsedText).toBe("");
+      expect(result.filters.minReviews).toBeUndefined();
+      expect(result.filters.search).toBeUndefined();
+      expect(result.chips).toEqual([]);
+    },
+  );
+
+  it("applies the shared minimum-review grammar only to review count", () => {
+    expect(buildExploreQueryState({ minReviews: "  +00050 " }).filters.minReviews).toBe(50);
+    expect(buildExploreQueryState({ minReviews: "4.5", minRating: "4.5", minScore: "70.5" }).filters).toMatchObject({
+      minReviews: undefined,
+      minRating: 4.5,
+      minScore: 70.5,
+    });
+  });
+
+  it("preserves raw invalid URL chip display while omitting the query filter", () => {
+    expect(buildExploreQueryState({ minReviews: "4.5" }).filters.minReviews).toBeUndefined();
+    expect(buildExploreFilterChips({ minReviews: "4.5" })).toContainEqual({
+      key: "minReviews",
+      label: "Reviews",
+      value: "4.5",
+      removeParams: { minReviews: null },
+    });
+  });
+
   it("preserves free text as search", () => {
     const result = parseExploreCommand("premier plumbing website:none");
 

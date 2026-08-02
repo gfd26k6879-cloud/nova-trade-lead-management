@@ -60,6 +60,7 @@ import {
 } from "@/lib/db/queries";
 import { requirePermission, type AppSession } from "@/lib/auth";
 import { canClaimLeadForSession, canReadLeadForSession, constrainLeadFiltersForSession } from "@/lib/lead-access";
+import { parseMinReviewsFilter } from "@/lib/lead-filter-parsing";
 import type { PhoneVerificationStatus, QualityBucket } from "@/lib/lead-quality";
 import { generateOutreachPackage } from "@/lib/outreach-package";
 import { computeScoreWithBreakdown } from "@/lib/scoring";
@@ -306,7 +307,10 @@ function normalizeWebsiteUrl(value: string | null | undefined): string | null {
 export async function getLeadsAction(filters: LeadFilters = {}) {
   const session = await requirePermission("view:workspace");
   await ensureDbReady();
-  return queryLeads(constrainLeadFiltersForSession(session, filters));
+  return queryLeads(constrainLeadFiltersForSession(session, {
+    ...filters,
+    minReviews: parseMinReviewsFilter(filters.minReviews),
+  }));
 }
 
 export async function getLeadByIdAction(id: string) {

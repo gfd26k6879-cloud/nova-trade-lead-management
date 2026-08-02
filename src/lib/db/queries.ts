@@ -41,6 +41,7 @@ import type { AppRole } from "@/lib/permissions";
 import { throwIfWorkerAborted } from "@/lib/worker-abort";
 import { readPlaceCacheMetadata } from "@/lib/place-cache-contract";
 import { isLeadExcluded } from "./lead-exclusion";
+import { parseMinReviewsFilter, POSTGRES_INT4_MAX } from "@/lib/lead-filter-parsing";
 
 // ─── Types ───
 
@@ -4899,9 +4900,12 @@ function buildLeadFilterWhere(filters: LeadFilters): { where: string; params: un
     conditions.push("l.lng IS NOT NULL AND l.lng <= ?");
     params.push(filters.maxLng);
   }
-  if (filters.minReviews != null && filters.minReviews > 0) {
+  const minReviews = parseMinReviewsFilter(filters.minReviews);
+  if (minReviews != null && minReviews > POSTGRES_INT4_MAX) {
+    conditions.push("1 = 0");
+  } else if (minReviews != null && minReviews > 0) {
     conditions.push("l.review_count >= ?");
-    params.push(filters.minReviews);
+    params.push(minReviews);
   }
   if (filters.minRating != null && filters.minRating > 0) {
     conditions.push("l.rating >= ?");

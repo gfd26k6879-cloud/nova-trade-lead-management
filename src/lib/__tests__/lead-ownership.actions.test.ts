@@ -62,6 +62,7 @@ import {
   claimLeadAction,
   createManualLeadAction,
   getLeadByIdAction,
+  getLeadsAction,
   logOutreachEventAction,
   restoreArchivedLeadAction,
   unclaimLeadAction,
@@ -86,6 +87,36 @@ beforeEach(() => {
 });
 
 describe("lead ownership server actions", () => {
+  it("normalizes minimum reviews before preserving the researcher access clamp", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "researcher-1", email: "one@example.com", role: "researcher" });
+    queryMocks.getLeads.mockResolvedValue({ leads: [], total: 0 });
+
+    await getLeadsAction({
+      minReviews: "4.5" as unknown as number,
+      archived: "all",
+      includeExcluded: true,
+      assigned: "unassigned",
+    });
+
+    expect(queryMocks.getLeads).toHaveBeenCalledWith(expect.objectContaining({
+      minReviews: undefined,
+      archived: "active",
+      includeExcluded: false,
+      assigned: "me",
+      assignedToUserId: "researcher-1",
+      visibleToUserId: "researcher-1",
+    }));
+  });
+
+  it("preserves safe above-int4 minimum reviews at the admin action boundary", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    queryMocks.getLeads.mockResolvedValue({ leads: [], total: 0 });
+
+    await getLeadsAction({ minReviews: 2_147_483_648, status: "new" });
+
+    expect(queryMocks.getLeads).toHaveBeenCalledWith({ minReviews: 2_147_483_648, status: "new" });
+  });
+
   it("returns researcher lead details only for owned active nonexcluded assigned-market leads", async () => {
     authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
     queryMocks.getLeadById

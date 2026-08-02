@@ -8,6 +8,7 @@ import {
 import { ForbiddenError, requirePermission, UnauthorizedError } from "@/lib/auth";
 import { csvEscape } from "@/lib/csv";
 import type { QualificationStatus } from "@/lib/qualification";
+import { parseMinReviewsFilter } from "@/lib/lead-filter-parsing";
 
 export async function GET(request: NextRequest) {
   try {
@@ -70,7 +71,7 @@ export async function GET(request: NextRequest) {
       status: params.get("status") ?? undefined,
       websiteStatus: params.get("websiteStatus") ?? undefined,
       enrichment: params.get("enrichment") ?? undefined,
-      minReviews: params.get("minReviews") ? parseInt(params.get("minReviews")!) : undefined,
+      minReviews: parseMinReviewsFilter(params.get("minReviews") ?? undefined),
       minRating: params.get("minRating") ? parseFloat(params.get("minRating")!) : undefined,
       minScore: params.get("minScore") ? parseFloat(params.get("minScore")!) : undefined,
       category: params.get("category") ?? undefined,

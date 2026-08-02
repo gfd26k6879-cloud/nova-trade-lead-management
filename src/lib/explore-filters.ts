@@ -1,4 +1,5 @@
 import type { LeadFilters } from "@/lib/db/queries";
+import { parseMinReviewsFilter } from "@/lib/lead-filter-parsing";
 
 export const EXPLORER_PAGE_SIZE = 60;
 export const DEFAULT_MAP_POINT_LIMIT = 200;
@@ -170,7 +171,7 @@ export function buildExploreQueryState(params: ExploreParams): {
       maxLat: parseNumber(params.maxLat) ?? geoBounds?.maxLat,
       minLng: parseNumber(params.minLng) ?? geoBounds?.minLng,
       maxLng: parseNumber(params.maxLng) ?? geoBounds?.maxLng,
-      minReviews: parseNumber(params.minReviews),
+      minReviews: parseMinReviewsFilter(params.minReviews),
       minRating: parseNumber(params.minRating),
       minScore: parseNumber(params.minScore),
       category: cleanParam(params.category),
@@ -198,11 +199,22 @@ export function parseExploreCommand(input: string): ExploreCommandResult {
   const tokens = input.trim().split(/\s+/).filter(Boolean);
 
   for (const token of tokens) {
-    const comparison = token.match(/^(reviews|rating|score)(>=|>)(\d+(?:\.\d+)?)$/i);
+    const reviewComparison = token.match(/^reviews(?:>=|>)(.*)$/i);
+    if (reviewComparison) {
+      const parsed = parseMinReviewsFilter(reviewComparison[1]);
+      if (parsed !== undefined) {
+        const value = String(parsed);
+        filters.minReviews = value;
+        chips.push({ key: "minReviews", label: minLabel("minReviews"), value, removeParams: { minReviews: null } });
+      }
+      continue;
+    }
+
+    const comparison = token.match(/^(rating|score)(>=|>)(\d+(?:\.\d+)?)$/i);
     if (comparison) {
       const key = comparison[1].toLowerCase();
       const value = comparison[3];
-      const param = key === "reviews" ? "minReviews" : key === "rating" ? "minRating" : "minScore";
+      const param = key === "rating" ? "minRating" : "minScore";
       filters[param] = value;
       chips.push({ key: param, label: minLabel(param), value, removeParams: { [param]: null } });
       continue;

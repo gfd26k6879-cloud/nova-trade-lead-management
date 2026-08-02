@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth";
 import { ensureDbReady, getBusinessTypeCounts, getKanbanLeads, getLeads, getScoreBandThresholds, type LeadFilters } from "@/lib/db/queries";
 import { constrainLeadFiltersForSession, shouldRedirectResearcherLeadList } from "@/lib/lead-access";
+import { parseMinReviewsFilter } from "@/lib/lead-filter-parsing";
 import { LeadsClient } from "./leads-client";
 import { KanbanClient } from "./kanban-client";
 
@@ -49,7 +50,7 @@ export default async function LeadsPage({ searchParams }: Props) {
     includeExcluded: isKanban,
     websiteStatus: params.websiteStatus,
     enrichment: params.enrichment,
-    minReviews: params.minReviews ? parseInt(params.minReviews) : undefined,
+    minReviews: parseMinReviewsFilter(params.minReviews),
     minRating: params.minRating ? parseFloat(params.minRating) : undefined,
     minScore: params.minScore ? parseFloat(params.minScore) : undefined,
     category: params.category,
