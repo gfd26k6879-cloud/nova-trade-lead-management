@@ -2382,3 +2382,43 @@ Inventory stays 54/52/2, conditional crosswalk is 50/12 (G-003 27/12, G-002
 58/318/260, and parent G-007 remains open. Stop before candidate repository
 DDL unless a material exact current or durably approved tenant-query plan
 defect is proven. No hosted or external operation opens.
+
+## G-007P40 primary-type score index audit accepted
+
+Sol accepts RETAIN/no-DDL for the exact healthy historical PostgreSQL and
+frozen SQLite compatibility definition
+`idx_leads_primary_type_score(primary_type, score DESC)`. The accepted
+mode-0600 V8 runner/artifact identities are
+`d3f1c2d5056e6695c509524c5fbbd7e684e0c6695a7664fe3d341b6d616eaa88`
+and `4000bfc316fdd5922067be1a618d1de8cb63fd6d40f1e57200e7bc81c00dae77`.
+
+Fresh PostgreSQL 16.14 replayed 54/52/2 on 240,000 physically alternating
+two-tenant rows. Twenty-eight cases ran through I0/D0/I1/D1/I2 for 140
+executions and 112 comparisons. Full projected results, 14,524 complete and
+20 split ordered-cohort proofs, and all comparable same-state structures
+passed. Natural target selection was 8/0/8/0/8 without planner forcing.
+Initial/final catalog, physical identity, columns, constraints, statistics,
+and controlled settings were exact.
+
+Ten hostile catalog states rejected before DDL/workload; healthy, missing,
+historical replay, and forced rollback controls passed, and all 14 receipts
+restored exact context. Current primary-type query forms are compatibility
+evidence; two future tenant probes are measurement-only. Primary type and
+score never authorize tenant/workspace, assignment, market, lifecycle, or
+exclusion access. No material current or approved tenant-query defect was
+proven, so no migration, candidate, replacement, removal, repository guard,
+source/test edit, dependency/data change, or sequence use opens.
+
+Root passed focused portable 134/134, TypeScript, focused ESLint, recovery 37,
+Fedora coordinator 12 passed/26 Windows-native skipped, build 11/11, and fresh
+G-002, G-003, G-004A/P20A, G-005, and enabled T-029 PostgreSQL gates.
+Independent final V8 reviews accept with no P0/P1/P2. All P40 resources and
+payloads are removed; the durable-document reservation remains held only
+through lineage.
+
+Crosswalk becomes 50/12 (G-003 27/12, G-002 13/0), inventory remains 54/52/2,
+sequence `202607310010` stays free, original arithmetic stays 58/318/260, and
+parent G-007 remains open. P41
+`idx_leads_qualification_score(qualification_status, score DESC)` is next but
+unopened until P40 lineage. Main and the handoff tag remain unchanged; no push
+or external action occurred.

@@ -4639,3 +4639,29 @@ Date: 2026-08-01
 - Stop before repository DDL, migration, replacement, removal, test edit, or
   sequence use unless a material exact current or durably approved tenant-query
   plan defect is proven.
+
+## G-007P40 accepted; audit resources released
+
+Date: 2026-08-01
+
+- Sol accepts RETAIN/no-DDL for
+  `idx_leads_primary_type_score(primary_type, score DESC)` from frozen V8
+  runner/artifact identities
+  `d3f1c2d5056e6695c509524c5fbbd7e684e0c6695a7664fe3d341b6d616eaa88`
+  and `4000bfc316fdd5922067be1a618d1de8cb63fd6d40f1e57200e7bc81c00dae77`.
+- PostgreSQL 16.14 replayed 54/52/2 over 240,000 physically alternating rows.
+  Five phases, 140 executions, 112 comparisons, ten hostile receipts, and four
+  controls passed with exact semantic, cohort, structural, catalog, physical,
+  rollback, and context restoration. Independent final reviews accept with no
+  P0/P1/P2.
+- Current primary-type forms are compatibility evidence. Two future tenant
+  probes are measurement-only. Primary type and score never grant tenant,
+  workspace, assignment, market, lifecycle, or exclusion authority. No
+  migration or repository write packet opens.
+- All P40 containers, databases, volumes, listeners, processes, runners,
+  artifacts, and extracts are removed. No migration, source, test, sequence,
+  service, payload, process, database, or worktree lock remains. Sol retains
+  only the serialized durable-document reservation through lineage.
+- Crosswalk is 50/12 (G-003 27/12, G-002 13/0), inventory is 54/52/2,
+  sequence `202607310010` remains free, original arithmetic stays 58/318/260,
+  and parent G-007 remains open. P41 remains unopened until lineage release.
