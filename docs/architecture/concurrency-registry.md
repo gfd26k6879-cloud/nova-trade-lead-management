@@ -4557,3 +4557,13 @@ Date: 2026-08-01
   unchanged.
 - The SR5 test lock is released. Sol retains only the serialized durable-
   document reservation through lineage; P39 remains open.
+
+## G-007SR5 lineage recorded; all locks released
+
+Date: 2026-08-01
+
+- Acceptance commit `bbe261295bbe39ec1cf36f90990d6afbae766a0b` records SR5.
+- No test, production, migration, sequence, service, process, payload,
+  worktree, or durable-document lock remains for SR5.
+- P39 remains open and is unblocked to continue its independently reviewed
+  disposable PostgreSQL evidence lane.

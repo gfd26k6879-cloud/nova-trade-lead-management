@@ -2299,3 +2299,10 @@ TypeScript, focused ESLint, and diff checks passed. Independent review accepts
 with no P0/P1/P2. Only the durable-document reservation remains through
 lineage; P39 stays open. No production, migration, sequence, Windows, hosted,
 remote, or external state changes.
+
+## G-007SR5 lineage receipt
+
+Acceptance commit `bbe261295bbe39ec1cf36f90990d6afbae766a0b` records the
+test-only repair. The lineage-only follow-up releases every SR5 lock and
+unblocks P39's remaining disposable PostgreSQL evidence work. No push or
+external action occurs.

@@ -47,3 +47,9 @@ Inventory remains 54/52/2, crosswalk remains 48/14 (G-003 25/14, G-002 13/0),
 sequence `202607310010` remains free, and parent G-007 remains open. P39 remains
 open and its PostgreSQL audit may resume after SR5 lineage releases the
 test/durable-document reservation. No push or external action occurs.
+
+## Lineage receipt
+
+Acceptance commit `bbe261295bbe39ec1cf36f90990d6afbae766a0b` records the
+validated repair. This lineage-only receipt releases every SR5 lock and
+unblocks final P39 evidence work.
