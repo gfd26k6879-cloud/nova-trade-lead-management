@@ -2161,3 +2161,37 @@ Inventory stays 54/52/2, crosswalk stays 48/14 (G-003 25/14, G-002 13/0),
 sequence `202607310010` remains free, and parent G-007 remains open. Main and
 the handoff tag remain unchanged; no push, deployment, hosted migration, or
 external action occurred.
+
+## G-007SR4 minimum-review integer contract opened
+
+At clean baseline `893e28180bd62d0a1e51075ef7d2c30a5d9d5c0e`, after P38's
+complete lineage release, Sol opens a serialized source/test repair for the
+proven `minReviews` PostgreSQL integer-bind inconsistency. P39 remains blocked
+through SR4 acceptance, commit, and lineage release.
+
+The shared contract trims string ingress, omits empty, and accepts ASCII
+base-10 digits with an optional leading `+` and any leading zeros. It rejects
+negative spelling including `-0`, fractions, partial text, exponents, alternate
+bases, separators, Unicode digits, nonfinite values, and unsafe integers.
+Primitive numeric ingress must be a finite nonnegative safe integer; numeric
+`-0` canonicalizes to zero. Other runtime types are invalid.
+
+Invalid input is explicitly omitted as the chosen shared nonauthorizing no-
+filter compatibility outcome. Zero remains a valid no-op. Values 1 through PostgreSQL
+`int4` maximum 2,147,483,647 bind to inclusive `review_count >= ?`. Larger
+safe integers produce parameter-free literal `1 = 0`; invalid or out-of-int4
+values never reach a PostgreSQL bind.
+
+Existing command `>` and `>=` remain inclusive aliases. Their label/operator
+distinction, repeated-key selection, and raw invalid-chip display are expressly
+deferred; `minRating` and `minScore` are unchanged. The bounded packet is one
+shared parser plus Explore parsing, Leads page, CSV route, list action, central
+query defense, and focused unit/boundary/query/opt-in PostgreSQL tests. No
+client, access, permission, schema, migration, index, data, dependency, or
+Windows-lane change is authorized.
+
+One implementer owns the serialized source/test set; independent architecture
+and test reviewers must accept it, and the implementer cannot self-accept.
+Inventory remains 54/52/2, crosswalk remains 48/14 (G-003 25/14, G-002 13/0),
+sequence `202607310010` remains free, original arithmetic remains 58/318/260,
+and parent G-007 remains open. No hosted or external action opens.

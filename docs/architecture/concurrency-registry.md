@@ -4407,3 +4407,48 @@ Date: 2026-08-01
 - Inventory stays 54/52/2, crosswalk stays 48/14 (G-003 25/14, G-002 13/0),
   sequence `202607310010` remains free, and parent G-007 remains open. No
   remote or external action occurred.
+
+## G-007SR4 minimum-review integer contract reservation
+
+Date: 2026-08-01
+
+- Sol opens serialized G-007SR4 at clean baseline
+  `893e28180bd62d0a1e51075ef7d2c30a5d9d5c0e`, after P38 acceptance and
+  lineage release. P39 remains blocked through SR4 acceptance, commit, and
+  lineage release.
+- Scope is only `minReviews`. String ingress trims, omits empty, and accepts
+  ASCII base-10 digits with an optional single leading `+`; leading zeros are
+  allowed. It rejects negative spelling including `-0`, fractions, partial
+  text, exponent/base notation, separators, Unicode digits, nonfinite values,
+  and values outside JavaScript's safe-integer domain. Primitive runtime
+  numbers must be finite nonnegative safe integers; numeric `-0` normalizes to
+  zero. Other runtime types are invalid.
+- Invalid or empty ingress is explicitly omitted as a nonauthorizing no-filter
+  compatibility result. Zero is a valid no-op and preserves NULL/negative-row
+  inclusion. Values 1 through 2,147,483,647 bind to inclusive
+  `review_count >= ?`. Larger safe integers produce literal `1 = 0` with no
+  parameter; no invalid, fractional, nonfinite, or out-of-int4 value may reach
+  a PostgreSQL bind.
+- Existing command `>` and `>=` forms remain inclusive compatibility aliases;
+  their misleading label/operator distinction is deferred and is not claimed
+  fixed. Repeated-key selection and raw invalid-chip display stay at existing
+  framework behavior and are outside this packet. `minRating` and `minScore`
+  remain behaviorally unchanged.
+- One implementer owns new `src/lib/lead-filter-parsing.ts` plus exact edits to
+  `src/lib/explore-filters.ts`, `src/app/(protected)/leads/page.tsx`,
+  `src/app/api/export/csv/route.ts`, `src/lib/leads/actions.ts`, and
+  `src/lib/db/queries.ts`.
+- The focused test lock covers new parser, Leads-page, CSV-route, query, and
+  opt-in PostgreSQL tests plus exact edits to Explore-filter and lead-ownership
+  action tests. Existing Explore page/map tests are validation-only.
+- Numeric filtering remains nonauthorizing. All permission, tenant, workspace,
+  market, assignment, lifecycle, exclusion, schema, migration, index, data,
+  dependency, UI-client, and Windows-lane behavior is unchanged.
+- Sol owns durable documents, integration, and acceptance. Independent
+  architecture/security and test/evidence reviewers are required; the
+  implementer may not self-accept.
+- Stop for unexpected dirty overlap, any need to alter rating/score or command
+  comparator semantics, access/session policy, schema/migration/index/data/
+  dependency state, non-loopback PostgreSQL, Windows-only evidence, or scope
+  expansion. Inventory stays 54/52/2, crosswalk 48/14, sequence
+  `202607310010` stays free, and parent G-007 remains open.
