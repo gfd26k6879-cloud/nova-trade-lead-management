@@ -2435,3 +2435,27 @@ and parent G-007 remains open. P41
 `idx_leads_qualification_score(qualification_status, score DESC)` is next but
 remains unopened pending its own separate reservation. Main, the handoff tag,
 the paused Windows lane, and all external systems remain unchanged.
+
+## G-007P41 qualification-score index audit opened
+
+At clean baseline `1c673dac595dca09a0bc41b6107715b63ca7b4aa`, after complete
+P40 lineage release, Sol opens read-only P41 for exact residual
+`idx_leads_qualification_score(qualification_status, score DESC)`. Its
+historical PostgreSQL origin is
+`supabase/migrations/202605110001_full_schema.sql:305`, introduced by
+`0c80c1e831b0e95e0007fdb5ee0bd1bfce87da6c`; SQLite retains a frozen
+compatibility mirror at `src/lib/db/schema.ts:2080`. No migration,
+replacement, removal, repository source/test edit, or sequence use is assumed.
+
+Three disjoint read-only lanes will reconstruct current/latent/maintenance
+source SQL, the exact PostgreSQL 16 catalog/EXPLAIN and adversarial evidence
+contract, and dependency/authority boundaries. Synthetic future tenant probes
+are measurement-only. Qualification and score classify or rank leads; neither
+field grants tenant/workspace, assignment, market, lifecycle, or exclusion
+authority.
+
+Inventory stays 54/52/2, conditional crosswalk is 51/11 (G-003 28/11, G-002
+13/0), sequence `202607310010` remains free, original arithmetic remains
+58/318/260, and parent G-007 remains open. Stop before candidate repository
+DDL unless a material exact current or durably approved tenant-query plan
+defect is proven. No hosted or external operation opens.
