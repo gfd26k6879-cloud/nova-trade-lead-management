@@ -2268,3 +2268,20 @@ sequence `202607310010` remains free, and parent G-007 remains open. Stop before
 candidate repository DDL unless material exact current or durably approved
 tenant-query plan evidence proves a defect. No hosted or external operation
 opens.
+
+## G-007SR5 researcher-AI lifecycle fixture repair opened
+
+P39's first broad portable invocation passed its 13 exact source/query files
+75/75 but the adjacent researcher-AI action file failed 0/6. Independent
+source/history reviews prove a stale synthetic fixture: lifecycle hardening
+commit `726765ad7f1eeb9df91dcf7648e837561cda7792` requires active,
+nonexcluded rows, while the old mock omits both fields and therefore correctly
+fails closed. This is a separate P2 test-maintenance defect, not P39 evidence.
+
+At baseline `e91b409a9bea696fc3f3236a224ba41610cd5812`, Sol opens a
+one-file test-only SR5 repair. Add canonical `archived_at: null` and
+`is_excluded: false` fixture state plus explicit archived/excluded denials; do
+not change production access policy. The P39 PostgreSQL producer continues in
+its disjoint disposable scope, but P39 acceptance waits for SR5 acceptance and
+lineage. No migration, sequence, Windows, hosted, remote, or external state
+changes.

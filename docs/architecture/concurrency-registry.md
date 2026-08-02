@@ -4518,3 +4518,26 @@ Date: 2026-08-01
 - Stop before repository DDL, migration, replacement, removal, test edit, or
   sequence use unless a material exact current or durably approved tenant-query
   plan defect is proven.
+
+## G-007SR5 researcher-AI lifecycle fixture repair reservation
+
+Date: 2026-08-01
+
+- During P39 portable validation, the adjacent
+  `src/lib/__tests__/researcher-ai.actions.test.ts` suite failed 0/6 on the
+  clean baseline because its synthetic claimed lead predates lifecycle
+  hardening and omits canonical active/nonexcluded fields.
+- Two independent read-only reviews classify this as a P2 stale-fixture defect,
+  not a product, access-policy, or P39 index defect. Real query rows normalize
+  both fields and the production fail-closed behavior is correct.
+- One implementer exclusively owns that single test file. Sol owns durable
+  documents and acceptance; a separate reviewer must accept. No production,
+  migration, schema, dependency, service, sequence, or P39 producer lock
+  overlaps.
+- Exact repair: add `archived_at: null` and `is_excluded: false` to the canonical
+  claimed fixture and add archived/excluded denial coverage without relaxing
+  source policy. Validate the three-file focused access/action suite,
+  TypeScript, focused ESLint, and diff checks.
+- P39 may continue its read-only PostgreSQL audit concurrently, but final P39
+  acceptance waits for SR5 acceptance and lineage. Counts, crosswalk, sequence,
+  Windows evidence, and external systems remain unchanged.
