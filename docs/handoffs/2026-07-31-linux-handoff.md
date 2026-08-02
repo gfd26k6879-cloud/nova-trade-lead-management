@@ -2306,3 +2306,43 @@ Acceptance commit `bbe261295bbe39ec1cf36f90990d6afbae766a0b` records the
 test-only repair. The lineage-only follow-up releases every SR5 lock and
 unblocks P39's remaining disposable PostgreSQL evidence work. No push or
 external action occurs.
+
+## G-007P39 phone-quality index audit accepted
+
+Sol accepts RETAIN/no-DDL for the exact healthy historical PostgreSQL and
+frozen SQLite compatibility definition
+`idx_leads_phone_quality(phone_verification_status, lead_quality_score DESC)`.
+The accepted mode-0600 V9 runner/artifact identities are
+`eee0dbbe56dc2703a1f6367cd8e110243276ae9b29694f7972b9032c7af9855b`
+and `fdba2c52dba2659c070f6e1947fac8689fd68b3b7caeb5580f8b4ed54edf0631`.
+
+Fresh PostgreSQL 16.14 replayed 54/52/2 on 240,000 physically alternating
+two-tenant rows. Seventeen exact cases ran through I0/D0/I1/D1/I2 for 85
+executions and 68 comparisons. All unordered results, ordered full-projection
+cohorts, authoritative eligible-source descriptors, multiplicity and split-
+boundary proofs, and same-state structures passed. Target selection was
+13/0/13/0/13 but is noncausal. Initial/final catalog, physical identity,
+columns, constraints, and statistics were exact.
+
+Ten hostile catalog states rejected before DDL/workload; healthy, missing,
+historical replay, and forced rollback controls passed, and all 14 receipts
+restored exact context. Six live and eight latent current-source forms are
+compatibility evidence; three future tenant probes are measurement-only.
+Phone and quality fields never authorize tenant/workspace, assignment, market,
+lifecycle, or exclusion access. No material current or approved tenant-query
+defect was proven, so no migration, candidate, replacement, removal,
+repository guard, source/test edit, dependency/data change, or sequence use
+opens.
+
+The adjacent SR5 repair is fully accepted and lineage-released. Root passed
+the repaired portable 83/83, TypeScript, focused ESLint, recovery 37, Fedora
+coordinator 12 passed/26 Windows-native skipped, build 11/11, and fresh G-002,
+G-003, G-004A/P20A, G-005, and enabled T-029 PostgreSQL gates. Independent
+final V9 reviews accept with no P0/P1/P2. All P39 resources and payloads are
+removed; the durable-document reservation remains held only through lineage.
+
+Crosswalk becomes 49/13 (G-003 26/13, G-002 13/0), inventory remains 54/52/2,
+sequence `202607310010` stays free, original arithmetic stays 58/318/260, and
+parent G-007 remains open. P40
+`idx_leads_primary_type_score(primary_type, score DESC)` is next but unopened.
+Main and the handoff tag remain unchanged; no push or external action occurred.

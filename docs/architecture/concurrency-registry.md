@@ -4567,3 +4567,29 @@ Date: 2026-08-01
   worktree, or durable-document lock remains for SR5.
 - P39 remains open and is unblocked to continue its independently reviewed
   disposable PostgreSQL evidence lane.
+
+## G-007P39 accepted; audit resources released
+
+Date: 2026-08-01
+
+- Sol accepts RETAIN/no-DDL for
+  `idx_leads_phone_quality(phone_verification_status, lead_quality_score DESC)`
+  from frozen V9 runner/artifact identities
+  `eee0dbbe56dc2703a1f6367cd8e110243276ae9b29694f7972b9032c7af9855b`
+  and `fdba2c52dba2659c070f6e1947fac8689fd68b3b7caeb5580f8b4ed54edf0631`.
+- PostgreSQL 16.14 replayed 54/52/2 over 240,000 physically alternating rows.
+  Five phases, 85 executions, 68 comparisons, ten hostile receipts, and four
+  controls passed with exact semantic, catalog, physical, rollback, and
+  context restoration. Independent final reviews accept with no P0/P1/P2.
+- Six live Quality forms and eight latent current-source forms are current
+  compatibility evidence. Three future tenant probes are measurement-only.
+  Phone and quality fields never grant tenant, workspace, assignment, market,
+  lifecycle, or exclusion authority. No migration or repository write packet
+  opens.
+- All P39 containers, databases, volumes, listeners, processes, runners, and
+  payloads are removed. No migration, source, test, sequence, service, payload,
+  process, database, or worktree lock remains. Sol retains only the serialized
+  durable-document reservation through lineage.
+- Crosswalk is 49/13 (G-003 26/13, G-002 13/0), inventory is 54/52/2,
+  sequence `202607310010` remains free, original arithmetic stays 58/318/260,
+  and parent G-007 remains open. P40 remains unopened until lineage release.

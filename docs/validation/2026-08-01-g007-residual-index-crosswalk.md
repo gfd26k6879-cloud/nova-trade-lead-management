@@ -120,7 +120,7 @@ audit disposition, and `U` means not yet classified by a bounded G-007 audit.
 | A:P36 retain; future tenant analogue defer | `leads` | `idx_leads_location_cell(location_cell_id, score DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definition; exact current Coverage, Explore, map, and Quality cell readers naturally use the target; target-only drop preserves results/order with honest plan changes; cell/market/score never authorize tenant/workspace scope; current market-visible compatibility reads and future tenant forms remain G-009/G-010/G-011 boundaries; separate uppercase Explore command defect recorded; no candidate, migration, replacement, test edit, or removal |
 | A:P37 retain; future tenant analogue defer | `leads` | `idx_leads_market_active(market_id, archived_at, score DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definition; exact current Coverage market counts naturally use the leading key while complete Explore, map, researcher Leads, business-count, Quality, and Workbench forms remain target-neutral on the reviewed fixture; target-only drop preserves all results/source orders with honest Coverage plan changes; market identity and user-only compatibility grants never authorize tenant/workspace scope; future tenant form remains G-009/G-010/G-011; separate Coverage `activeLeads` all-lifecycle semantic finding recorded; no candidate, migration, replacement, test edit, or removal |
 | A:P38 retain; future tenant analogue defer | `leads` | `idx_leads_numeric_filters(review_count, rating, score DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definition; seven exact unscoped/global admin, Explore, map, and export controls naturally use the target, while all five researcher/market-scoped numeric forms avoid it and preserve identical installed/drop/restored plans; review/rating/score never authorize tenant/workspace scope; fractional review-count and parser-contract findings are separate SR4 source debt; no candidate, migration, replacement, repository guard, source/test edit, or removal |
-| U | `leads` | `idx_leads_phone_quality(phone_verification_status, lead_quality_score DESC)` | quality filtering; G-011/G-017 |
+| A:P39 retain; future tenant analogue defer | `leads` | `idx_leads_phone_quality(phone_verification_status, lead_quality_score DESC)` | healthy historical PostgreSQL catalog and frozen SQLite compatibility definition; six live Quality and eight latent current-source forms preserve complete semantics through exact installed/drop/restored phases; three future tenant forms are measurement-only; phone/quality never authorize tenant/workspace/assignment/market/lifecycle scope; no candidate, migration, replacement, removal, repository guard, source/test edit, or sequence use |
 | U | `leads` | `idx_leads_primary_type_score(primary_type, score DESC)` | filtering/statistics; G-011/G-017 |
 | U | `leads` | `idx_leads_qualification_score(qualification_status, score DESC)` | qualification; G-011/G-017 |
 | U | `leads` | `idx_leads_quality_bucket_score(quality_bucket, lead_quality_score DESC)` | quality lists/statistics; G-011/G-017 |
@@ -608,3 +608,27 @@ acceptance commit and lineage release; P39 `idx_leads_phone_quality` remains
 blocked until SR4 is accepted, committed, and lineage-released. Counts remain
 54/52/2, sequence 010 stays free, crosswalk becomes 48/14, G-003 becomes
 25/14, G-002 stays 13/0, and parent G-007 remains open.
+
+G-007P39 classifies `idx_leads_phone_quality` RETAIN and defers any future
+tenant-prefixed analogue. PostgreSQL 16.14 replayed 54/52/2 over 240,000
+physically alternating two-tenant rows. Seventeen exact cases ran through
+I0/D0/I1/D1/I2 for 85 executions and 68 comparisons. All unordered results,
+ordered declared-key sequences, complete-cohort full projections,
+authoritative eligible-source descriptors, split-boundary proofs, and same-
+state structures passed. Target selection was 13/0/13/0/13 but is explicitly
+noncausal.
+
+The 14-receipt definition-aware catalog matrix contains ten hostile rejects
+before DDL/workload and four healthy/missing/replay/rollback controls. Every
+receipt restores exact context; initial and final target physical/catalog/
+statistics identity match. Six live Quality forms, eight latent current-source
+forms, and three future measurement-only tenant probes establish that phone
+status and quality score never authorize tenant, workspace, assignment,
+market, lifecycle, or exclusion scope. No material current or approved tenant-
+query defect was proven, so no DDL, candidate, replacement, removal, guard,
+source/test edit, or sequence opens.
+
+Counts remain 54/52/2, sequence 010 stays free, crosswalk becomes 49/13,
+G-003 becomes 26/13, G-002 stays 13/0, and parent G-007 remains open. Original
+plan arithmetic stays 58/318/260. P40 `idx_leads_primary_type_score` is the
+next source-order residual but remains unopened until P39 lineage release.
