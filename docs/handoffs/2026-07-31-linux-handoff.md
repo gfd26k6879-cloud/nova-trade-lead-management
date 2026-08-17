@@ -2459,3 +2459,349 @@ Inventory stays 54/52/2, conditional crosswalk is 51/11 (G-003 28/11, G-002
 58/318/260, and parent G-007 remains open. Stop before candidate repository
 DDL unless a material exact current or durably approved tenant-query plan
 defect is proven. No hosted or external operation opens.
+
+## 2026-08-16 G-007P41 interim continuation checkpoint (not acceptance)
+
+This is a non-acceptance recovery checkpoint recorded while the local P41
+evidence tooling remains under adversarial review. It does not change the
+ledger's durable `open_read_only_audit` state, classify P41, release its
+reservation, open a migration, or assign the next residual card. The durable
+repository position remains branch `codex/nova-multitenant-integration` at
+opening commit `31f891039c3aac2f9fc9975343c10d6777ef931c`. Main remains
+`8225df619a96a088f18ff7f574a36b157d55dd2f`; handoff tag object
+`a3f8278f600be87962642842a3fdd7600242cffd` still peels to
+`0c48035ef4a44b64580716b04d3b629f0c3b5b47`.
+
+### Durable state and authority
+
+- The JSONL ledger still ends at entry 821 with
+  `G007P41_qualification_score_index_audit_opened`. No P41 acceptance,
+  rejection, validation, or lineage event exists.
+- Inventory remains 54 discovered, 52 applied, and two named runtime-only
+  skips. Conditional crosswalk arithmetic remains 51/11, with G-003 at 28/11
+  and G-002 at 13/0. Original-plan arithmetic remains 58/318 accepted and 260
+  remaining. Migration sequence `202607310010` remains free.
+- Sol retains the only serialized P41 durable-document/integration reservation.
+  No repository source, test, migration, SQLite schema, migration-sequence,
+  service, database, payload, process, or worktree write lock is open.
+- Parent G-007 remains open. The next source-order residual is
+  `idx_leads_quality_bucket_score`, but no next card number or reservation is
+  assigned before P41 acceptance and lineage.
+
+### Read-only P41 source and query reconciliation
+
+The exact healthy historical definition remains
+`idx_leads_qualification_score(qualification_status, score DESC)` at
+`supabase/migrations/202605110001_full_schema.sql:305`, with the frozen SQLite
+compatibility mirror at `src/lib/db/schema.ts:2080`. Current source consumers
+are global compatibility forms: central qualification equality with score
+ordering; count, list, map, export, business-type, and Kanban consumers;
+qualified-count and score-band forms; AI candidate, Quality, Workbench/Now
+Queue, and statistics forms; and maintenance writers that do not use this
+index for row authority. Qualification and score classify or rank leads and
+never authorize tenant, workspace, assignment, market, lifecycle, or exclusion
+scope.
+
+No current repository query supplies a tenant predicate through the central
+`LeadFilters` builder, and G-009/G-011/G-017 have not yet established final
+tenant SQL or an index shape for this residual. Tenant-prefixed qualification
+probes are therefore measurement-only. The source audit found no present basis
+for repository DDL, removal, replacement, guard, source, test, dependency,
+data, or migration-count changes. A fresh PostgreSQL 16 run may still prove a
+material defect, but it must stop before any write packet unless exact current
+or durably approved tenant-query evidence does so.
+
+The planned evidence packet remains a fresh, uniquely named loopback
+PostgreSQL 16 database with exact 54/52/2 replay; at least 240,000 physically
+alternating two-tenant rows; all four legal qualification statuses, skewed and
+empty cohorts, negative/zero/positive scores, dense ties, and relevant
+auxiliary predicates; natural I0/D0/I1/D1/I2 plans without planner forcing or
+sibling-index removal; full result, order, cohort, multiplicity, and structure
+comparisons; definition-aware installed/drop/restored catalog identity; ten
+hostile states plus four healthy/missing/replay/rollback controls; and exact
+initial/final whole-context restoration. This PostgreSQL run has not started.
+
+### Local cleanup scaffold lineage (all `/var/tmp`, none durable)
+
+No cleanup candidate below is accepted for runtime or activation:
+
+- v3r19, SHA
+  `f290a72eaad6299e3a5f38f40d69e2633450c9fa635a3f401b0d27ddd9da2db6`,
+  was rejected because a final claim could use `null` top-level and nested
+  runner exit statuses even when the receipt required concrete zero.
+- v3r20, SHA
+  `4784ad2fcbdb0220c9f3a0df24325cb26781fc2656a7d24f0f6d216e925c8819`,
+  repaired the production guard but was rejected because its nine negative
+  cases changed only the inner claim and were rejected before recomputing the
+  enclosing lineage, receipt-core, plan, runner-chain, challenge, and barrier
+  digests.
+- v3r21, SHA
+  `298cdbcafd206c2fbbb8b945ca71df723236875a2f0099c6bc0ac5547948ac6c`,
+  causally recomputed 47 surfaces, passed nine omission controls and nine fully
+  resealed attacks, and preserved a byte-equivalent no-op control. It was
+  nevertheless rejected because a caller-supplied validation observer ran
+  after outer validation and immediately before the mandatory seal guard; the
+  callback could mutate the receipt or throw and bypass the claimed
+  non-reentrant guarantee.
+- v3r22, SHA
+  `2d792d8a55e84ea4908c158f4228e48ad0e7178ad509160f27aca8e199c79220`,
+  is independently and root-accepted only as a local static cleanup scaffold.
+  It removes caller code from production validators, rejects surplus former
+  callback arguments before invocation, makes the final seal guard
+  unconditional and non-reentrant, revalidates claim identity after the guard,
+  and preserves the 47-surface reseal, nine omission, nine fully resealed,
+  terminal, durability, no-export, and frozen-activation gates. Its mutation
+  bomb is zero. This is not durable P41, runtime, cleanup, or activation
+  acceptance.
+
+Production cleanup mutation remains false. No frozen cleanup program exports
+a runnable authority, and no cleanup lineage has been released.
+
+### Local PostgreSQL runner lineage (all `/var/tmp`, none durable)
+
+No runner candidate below is accepted for PostgreSQL execution, cleanup
+activation, production runtime authority, or runtime lineage. v4r7 alone has
+the narrow local static and memory/execution scaffold acceptance described
+below:
+
+- v4r1 was rejected for treating non-`ENOENT` residue observations as absence,
+  overwriting original failure provenance with terminal state, and failing to
+  close the sidecar directory descriptor exactly once after fsync failure.
+- v4r2 repaired those paths but falsely labeled rejected v4r1 accepted, could
+  suppress its terminal receipt on artifact `EACCES`/`EIO`, and retained a
+  stale namespace.
+- v4r3, SHA
+  `7b07e62db3273ca45cf13638353bd8b8f07e6d5912d610f57609a7b1b5bf887d`,
+  repaired that receipt lineage but was rejected because it opened and wrote
+  the final artifact directly, deliberately permitting `partial-final` state,
+  and its disposable resource names conflicted with cleanup authority.
+- v4r4, SHA
+  `dc735b213de9727be549894b006c0a8b80c3faaea4092ad315ad1c0d8c02bc6f`,
+  introduced same-directory staged, same-FD-verified, hard-link no-replace
+  publication and aligned the disposable resource tuple. It was rejected
+  before memory execution because its terminal receipt omitted retained temp
+  recovery fields, a secondary final-path observation could replace the first
+  failure, and its advertised seam matrix did not execute link-time `EEXIST`
+  contention or explicit stat/owner/mode drift.
+- v4r5, SHA
+  `6a7f6f708b144c91d251c1e73df67a79801a841b8911097b7f2c88b020bcb16b`,
+  made secondary observations non-authoritative, added a bounded complete
+  publication snapshot, and executed 24 production seam cases. It was rejected
+  before memory because post-install temp-unlink `EPERM` was converted into a
+  nested cleanup receipt and then replaced by a code-less assertion; its
+  `originalFailurePreserved` check compared against that already-replaced
+  assertion and therefore passed tautologically.
+- v4r6, SHA
+  `45354fd92f22bb4d50ef4eb46f7ab913fd471db41e014dfb17c1d2ef1a2a068e`,
+  repaired the cleanup contract by returning `{ receipt, error }`, recording
+  only the bounded receipt, and rethrowing the exact original installed-temp
+  `EPERM` object. Its pure-static gate and 24-case source contract passed, but
+  independent memory acceptance rejected it. The distinct-score run exceeded
+  the fixed 512 MiB cap twice: RSS/VmHWM was
+  `549720064/562085888`, then `555614208/561930240` on the
+  correctly pipe-failing rerun. The tie-score run reached all 24 cases but
+  rejected `final-reread`: truthful recovery performs three directory
+  open/fsync/close cycles (installation, temp unlink, and catch recovery after
+  already-absent observation), while the frozen expectation asserted two.
+- v4r7, SHA
+  `616d4b7f58f8633a84b265bcf85cc1c71adf0be3913c41fcb0734ea30ca55e7c`,
+  298895 bytes and mode `0600`, is independently accepted as a static and
+  memory/execution scaffold only. It corrects final-reread to the truthful
+  3/3/3 directory open/fsync/close sequence, rejects a 2/2/2 spoof, retains
+  v4r6's exact original `EPERM` preservation, and replaces high-overhead
+  per-distinct-cohort nested arrays with compact scalar ownership while still
+  hashing and comparing all 240000 selected and eligible rows. Independent
+  full-process maximum RSS was 342212608 bytes for distinct scores and
+  487444480 bytes for ties, both below the unchanged 512 MiB cap with the
+  required 8 MiB headroom. Both modes released the evidence ledger to 0/0,
+  exercised all 24 filesystem seams, and emitted receipts below 16 KiB. This
+  does not accept PostgreSQL execution, cleanup activation, or runtime lineage.
+
+All rejected source identities are preserved. No rejected diagnostic is an
+accepted artifact, and no Fedora result substitutes for Windows/NTFS evidence.
+
+### Orchestrator and activation boundary
+
+Orchestrator v3r10 remains rejected. Read-only v3r11 preflight found stale
+v3/v3r15 bindings, no exact v4 invocation repair packet, repeated/unbounded
+compressed sidecar scans, loss of first failure and finalizer exceptions, no
+durable terminal outbox/ack/replay consumer, and no support for partial-final
+recovery.
+
+The static-only v3r11 successor, SHA
+`2a4ed94d1838ddccd7259cc6e296c1880671dcfaa24fd5baa61baca7a713d3d2`,
+46747 bytes and mode `0600`, is also rejected. Its synthetic static gate passed,
+but independent source and execution review proved five HIGH defects and one
+MEDIUM defect: it claimed an impossible v4r7-plus-v3r22 cleanup tuple even
+though v4r7 permits only v3r19/v3r20; required the wrong v3r22 receipt-core
+version and did not cross-bind its claim/journal lineages; replaced v3r22's
+actual 16-key challenge and authority chain with an invented 7-key projection;
+accepted non-exact nested v4r7 failure, provenance, residue, and compact
+artifact shapes; and neither compared every opened sidecar identity field nor
+derived v4r7's real typed-row schema/order/multiplicity evidence. A hostile
+Error accessor could also abort secondary/finalizer processing. Its false
+activation gates and lack of mutation primitives were correct but insufficient
+for acceptance.
+
+The static-only v3r12 repair, SHA
+`05ac1a24beaf31a4d8db69dadd41c900f227b09ac6354ebcf8d593c2197d4b24`,
+107560 bytes and mode `0600`, is rejected. It correctly separated v4r7's
+v3r19/v3r20 whitelist from independent v3r22 modeling, reported both peer and
+orchestrator-path compatibility false, restored the real 18-key core, 16-key
+challenge, six-stage chain, 19-key outbox, 10-key ack, and false authority
+gates. However, independent review found five HIGH and two MEDIUM defects:
+compact artifacts could be self-consistently spoofed without authoritative
+semantic bindings; the sidecar cache conflated physical content with logical
+order interpretation; Date and byte-array raw schemas were incompatible with
+v4r7; claim/journal stage subjects were not closed over the authoritative
+lineages; nested v4 pass/failure semantics remained weak; an early secondary
+failure could be displaced by a later finalizer; and source-stream errors were
+not explicitly forwarded to gunzip. Syntax/static passing did not overcome
+these contract defects.
+
+The minimal static-diagnostic v3r13 successor, SHA
+`4d1c6cbeeddba3fc48b20ef0f5ccc54ea29bbe79ec0c42035c2d488c01f512f9`,
+120239 bytes and mode `0600`, is rejected after source review even though its
+exact diagnostic execution passed. Its trust, disposition, DDL, PostgreSQL,
+runtime, mutation, detached-authority, and activation fields remained
+correctly false or null, and its firewall prevented self-consistent fixtures
+from flipping those claims. One HIGH issue remained because claim/journal
+closure trusted a caller-supplied projection instead of validated final
+records and identities. One MEDIUM issue remained because a gzip cap could
+throw from an event callback outside awaited teardown. One LOW issue remained
+because `(path, null)` was not an explicit logical cache interpretation.
+
+The minimal static-diagnostic v3r14 repair, SHA
+`44836dc1bfd68a018ddd06392791860d5af1c4c89ffb943fad659664790b1405`,
+131910 bytes and mode `0600`, is independently accepted in that narrow class.
+It records one physical sidecar decode with explicit null and ordered logical
+interpretations, exact Date/byte schema parity, awaited bounded stream teardown
+for nine outcomes, earliest-failure ordering, and final-record internal
+claim/journal closure. Fixed model anchors reject causally resealed
+transplants, while `fullUniverseForgeryRejected`, `causalResistanceClaimed`,
+and `runtimeTrustedAnchorsEstablished` remain truthfully false. Its artifact,
+decision, compact production validation, nested v4 semantic validation,
+disposition, DDL, PostgreSQL, runtime, mutation, replay, detached-authority,
+and activation fields remain false or null. No static successor becomes
+runtime-eligible until new compatible frozen peers exist under an approved
+authority model.
+
+A separate read-only identity-cycle analysis concludes that exact three-way
+mutual whole-file SHA-256 embedding is computationally infeasible: whichever
+peer file is hashed last would require an earlier frozen peer to have predicted
+that fresh 256-bit digest. Its unaccepted proposed minimum authority change is
+to pin canonical immutable program-core hashes, exclude only a rigidly parsed
+peer-pin block from each core digest, and bind all whole-file identities and
+core-to-peer relationships in one detached freeze manifest whose digest is
+rooted by a later Sol acceptance ledger event. A policy object would fix exact
+roles, paths, minimum versions, byte/mode/owner bounds, and rejected-version
+denylist before any successor core is built. This dissolves the hash cycle
+without credentials, dependencies, native code, or external systems, but it is
+only a preflight proposal: it still requires independent cryptographic review,
+exact downgrade/transplant/post-freeze adversaries, and a separately frozen
+acceptance packet before implementation or activation.
+
+Activation also requires a fresh explicit authority choice. The minimally
+invasive local option is one disposable run under an operator-exclusive
+same-UID trust window: one exact pinned orchestrator owns a fresh mode-0700
+per-run directory, runner, cleanup, durable outbox, at-least-once terminalId-
+deduped delivery, ack, replay, and release plan. This excludes a hostile or
+cooperating UID-1000 namespace writer and must not be described as same-UID
+adversary-safe. If hostile UID-1000 processes remain in scope, use a separately
+approved dedicated service UID and private state directory. SELinux plus a
+native FD-relative publisher is a higher-cost third architecture requiring
+separate security/dependency authority. No option is approved by this
+checkpoint.
+
+Outbox publication, directory fsync, consumer identity, durable ack, replay
+dedupe, per-step cleanup intent/completion, and lineage release remain blocked
+until one exact authority option is approved and implemented in new frozen
+successors. A filename's presence or absence never grants authority, stdout is
+not exactly-once, and durable-document lineage release remains a later Sol
+acceptance commit rather than a runtime shortcut.
+
+### Current ready queue and resumption order
+
+1. Preserve the static-only v3r22 identity and its false activation gate; do
+   not treat it as runnable cleanup authority.
+2. Preserve the independently accepted v4r7 scaffold identity; do not infer
+   PostgreSQL or activation authority from its static/memory receipts.
+3. Preserve the independently accepted v3r14 minimal static diagnostic; do not
+   infer production-validator, runtime, or causal-resistance authority.
+4. Present the exact detached-authority and activation options and obtain fresh
+   approval before creating compatible runnable successors or any
+   destructive cleanup, outbox/ack publication, or PostgreSQL runtime packet.
+5. After approval and independent static/memory acceptance, run the fresh
+   PostgreSQL 16 P41 packet and upstream G-002, G-003, G-004A/P20A, G-005,
+   T-029, TypeScript, focused ESLint, recovery, Fedora-portable coordinator,
+   build, ledger JSON, and diff gates.
+6. If evidence proves no material defect, prepare a five-path RETAIN/no-DDL
+   acceptance commit and a separate four-path lineage-release commit. If a
+   material defect is proven, stop first and define a separately locked single-
+   family migration/test/count/document packet. Do not infer the next card ID.
+
+G-009 remains blocked on parent G-007; G-008 remains blocked on G-006 and
+G-007; G-004B remains blocked on G-009/G-011 and its co-delivery boundary;
+the native G-006 SQLite lane remains paused for Windows/NTFS evidence, and
+G-006C2B remains unopened.
+
+### Validation, cleanup, and worktree caveat
+
+Node `24.13.1` and npm `11.8.0` remain required. No P41 PostgreSQL container,
+database, volume, listener on port 38543, runtime runner, cleanup activation,
+provider call, hosted Supabase operation, deployment, production/staging or
+customer-data access, push, pull request, credential change, or external
+communication occurred in this checkpoint.
+
+One final checkpoint command was accidentally invoked without `mise` and
+reported the ineligible system defaults Node `22.23.2` and npm `10.9.8`; it is
+invalid acceptance evidence. The ledger parse and toolchain check were
+immediately rerun through `mise exec node@24.13.1 --` and passed with Node
+`24.13.1` and npm `11.8.0`.
+
+For v3r22, implementer, independent reviewer, and Sol syntax/pure-static/
+diagnostic evidence passed. Sol's first two focused jq projections used stale
+field paths (`sealedOutcomeEvidence` and then `terminalStage`); the underlying
+static command passed both times, the source did not change, and a corrected
+exact aggregate over the emitted `finalClaimOutcomeGuard` schema passed.
+
+For v4r6, the first distinct-score memory wrapper omitted `pipefail`, so the
+visible Node assertion was initially accompanied by a misleading shell exit
+zero. The invocation is invalid acceptance evidence. The immediate rerun used
+`pipefail`, exited one, and independently confirmed the over-cap result quoted
+above. No v4r6 run created PostgreSQL, Podman, listener, or task residue.
+
+For v4r7, one implementer distinct-score run completed the logic but correctly
+rejected a 23454-byte terminal receipt against the 16384-byte cap. The source
+then compacted only the emitted exact-schema matrix after validating the full
+24-case receipt and retaining its JCS SHA-256; both final memory modes were
+rerun and passed. Independent execution used `pipefail` and external
+full-process maximum-RSS measurement. Syntax, pure static, distinct, and tie
+all exited zero. The final frozen identity matched twice, and no v4r7 seam,
+artifact, sidecar, or titled process residue remained.
+
+Orchestrator v3r11, v3r12, and v3r13 were each frozen and rejected before the
+next successor opened; their exact rejection evidence is summarized above.
+One K3 protocol review incorrectly accepted v3r11 by comparing its synthetic
+fixtures to themselves instead of the frozen v3r22/v4r7 production contracts;
+that false-positive review is rejected evidence. For final v3r14, Node syntax,
+Sol and independent exact static execution, independent full-source review,
+double identity checks, diagnostic firewall, and residue checks passed. The
+accepted receipt is `static-diagnostic-pass`, not runtime acceptance.
+
+Final checkpoint review found 22 obsolete task-owned v3r4/v3r5 reviewer
+capture files in `/var/tmp` (70998 bytes total). They were outside the six
+deliberately frozen program sources, were removed, and a matching residue
+recheck returned zero. The frozen sources were not changed.
+
+The tracked tree and index were clean before this interim documentation edit.
+Two unrelated user-owned untracked files under `.commandcode/taste/` appeared
+after the original clean handoff; their contents were not read, they do not
+overlap P41 paths, and they must remain untouched and excluded from every
+commit. Consequently, later reports may claim only tracked/index/task-owned
+path cleanliness, never that the whole worktree is clean, unless the user
+resolves those files.
+
+This interim handoff section itself must be reviewed and reconciled with the
+registry and JSONL ledger at the next authorized durable acceptance boundary;
+it is not an acceptance or lineage receipt.
