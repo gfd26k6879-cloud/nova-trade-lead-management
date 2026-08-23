@@ -2805,3 +2805,47 @@ resolves those files.
 This interim handoff section itself must be reviewed and reconciled with the
 registry and JSONL ledger at the next authorized durable acceptance boundary;
 it is not an acceptance or lineage receipt.
+
+## 2026-08-23 G-007P41 activation-authority continuation checkpoint
+
+The user explicitly authorized the next local tasks and approved the recommended
+operator-exclusive same-UID disposable trust model. This is a narrowed threat
+model, not a claim of same-UID-adversary safety: one operator must exclusively
+control the UID for the whole run, and a hostile or cooperating same-UID writer
+is out of scope. The approved runtime architecture uses one fresh unpredictable
+mode-0700 per-run directory, exact pinned mode-0600 programs, one owning
+orchestrator, immutable resource identities, journaled cleanup, durable
+terminalId-deduped outbox/ack/replay, and later lineage release.
+
+The approval does not retroactively activate the frozen local scaffolds. Their
+identities remain exact and unchanged: v3r22 cleanup
+`2d792d8a55e84ea4908c158f4228e48ad0e7178ad509160f27aca8e199c79220`
+is static-only, v4r7 runner
+`616d4b7f58f8633a84b265bcf85cc1c71adf0be3913c41fcb0734ea30ca55e7c`
+is static/memory-only and still binds rejected cleanup peers, and v3r14
+diagnostic orchestrator
+`44836dc1bfd68a018ddd06392791860d5af1c4c89ffb943fad659664790b1405`
+has every runtime/activation gate false. Fresh syntax and accepted static checks
+passed for v3r22 and v3r14. A direct v4r7 static check correctly stopped at its
+pinned `src/app/api/export/csv/route.ts` hash because current commit
+`e309ba9aead5ca702624acbe12f6695b94516820` contains the later generic-error
+hardening; stale source-corpus evidence must not be reused.
+
+Parallel read-only source review found no material index defect and recommends
+RETAIN/no-DDL. The PostgreSQL and SQLite definitions remain exact at
+`supabase/migrations/202605110001_full_schema.sql:305` and
+`src/lib/db/schema.ts:2080`, with unchanged file hashes recorded by ledger entry
+821. Equality qualification filtering followed by score-descending order is a
+live compatible reader; wider status-filter and aggregate consumers retain
+prefix value. PostgreSQL runtime evidence remains required before acceptance.
+
+The exact PostgreSQL 16.14 image is now cached locally by repository digest
+`sha256:7a396fd264a2067788b6551122b50f162bf6136312c7fc9d74381cb92c648382`
+and verified as image ID
+`de3a4eab8fdfa507ea92aac488b916b08089e515db49b055fe71dfa271ba3a28`.
+Port 38543 is free and no P41 container, database, volume, listener, or runtime
+artifact was created. The next exact work is to freeze and independently accept
+compatible cleanup, runner, and orchestrator successors under the approved
+authority, then run the PostgreSQL 16.14 packet and upstream gates. This remains
+a continuation checkpoint, not P41 acceptance, lineage release, or permission
+for repository DDL.

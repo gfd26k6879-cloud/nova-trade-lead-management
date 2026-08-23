@@ -4710,3 +4710,30 @@ Date: 2026-08-01
 - Stop before repository DDL, migration, replacement, removal, test edit, or
   sequence use unless a material exact current or durably approved tenant-query
   plan defect is proven.
+
+## G-007P41 operator-exclusive same-UID activation model approved
+
+Date: 2026-08-23
+
+- The user explicitly grants the task-scoped local authority needed to continue
+  P41 and selects the least-invasive operator-exclusive same-UID disposable
+  trust model. The operator must control the UID for the complete run; hostile
+  or cooperating same-UID writers remain out of scope and no artifact may claim
+  same-UID-adversary safety.
+- Runtime work must use one fresh unpredictable mode-0700 per-run directory,
+  exact pinned mode-0600 programs, a single owning orchestrator, journaled
+  immutable resource identities, durable terminalId-deduped outbox/ack/replay,
+  and cleanup/release verified against immutable container and volume IDs.
+- This approval does not activate the frozen local files. Cleanup v3r22 remains
+  static-only, runner v4r7 remains static/memory-only and pins rejected cleanup
+  peers, and orchestrator v3r14 remains a non-runtime diagnostic. New mutually
+  compatible successors require independent static and memory acceptance before
+  any PostgreSQL execution.
+- Current source audit still supports RETAIN/no-DDL. The v4r7 static gate now
+  correctly rejects current HEAD because the CSV export route changed after its
+  source corpus was frozen. A current-source runner successor is required.
+- The exact PostgreSQL 16.14 image was cached locally by immutable repository
+  digest and verified as image ID
+  `de3a4eab8fdfa507ea92aac488b916b08089e515db49b055fe71dfa271ba3a28`.
+  No P41 container, database, volume, listener, artifact, or cleanup mutation
+  was started by this checkpoint.
