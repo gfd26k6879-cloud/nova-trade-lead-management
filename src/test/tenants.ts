@@ -1,4 +1,5 @@
 import type { DbClient } from "@/lib/db";
+import type { TenantSession } from "@/lib/auth";
 import type { TenantQueryRepository } from "@/lib/tenancy/queries";
 import {
   LAUNCH_ROLES,
@@ -524,5 +525,27 @@ export const CANONICAL_TENANT_FIXTURE_AUTH_IDENTITIES = deepFreeze({
   tenantA: ROLE_IDENTITY_IDS.A,
   tenantB: ROLE_IDENTITY_IDS.B,
 } as const) satisfies DeepReadonly<Record<string, unknown>>;
+
+/**
+ * Builds the accepted server-session shape for a canonical active member.
+ * Tests still have to install the session through `runWithTenantContext`; the
+ * fixture helper does not manufacture database context or bypass RLS.
+ */
+export function createCanonicalTenantFixtureSession(
+  tenantKey: "A" | "B",
+  role: LaunchRole = "owner",
+): TenantSession {
+  const userId = role === "owner" ? SHARED_IDENTITY_ID : ROLE_IDENTITY_IDS[tenantKey][role];
+  return {
+    userId,
+    email: `synthetic-${tenantKey.toLowerCase()}-${role.replaceAll("_", "-")}@example.test`,
+    displayName: `Synthetic ${tenantKey} ${role}`,
+    tenantId: TENANT_IDS[tenantKey],
+    workspaceId: WORKSPACE_IDS[tenantKey],
+    membershipId: MEMBERSHIP_IDS[tenantKey][role],
+    role,
+    roleBindingId: ROLE_BINDING_IDS[tenantKey][role],
+  };
+}
 
 export type CanonicalTenantFixtureAuthIdentityId = AuthIdentityId;
