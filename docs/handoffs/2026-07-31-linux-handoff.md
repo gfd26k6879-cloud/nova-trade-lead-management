@@ -2849,3 +2849,32 @@ compatible cleanup, runner, and orchestrator successors under the approved
 authority, then run the PostgreSQL 16.14 packet and upstream gates. This remains
 a continuation checkpoint, not P41 acceptance, lineage release, or permission
 for repository DDL.
+
+## 2026-08-23 Q-006A child checkpoint
+
+Q-006A is accepted only as a child checkpoint at committed source
+`18cbb6734270cb6aaac02a705a8ffd9f6a662b14`. Its exact scope is the eight T-027
+foundation tables: `tenants`, `workspaces`, `tenant_memberships`,
+`tenant_role_bindings`, `tenant_policies`, `support_access_grants`,
+`support_access_grant_permissions`, and `support_access_grant_data_classes`.
+The final independent review result is **ACCEPT, with no P0, P1, P2, or P3
+findings**.
+
+The second clean disposable PostgreSQL 16.14 gate passed 1 of 1. The focused
+follow-on passed 63 tests with 1 intentional opt-in skip; TypeScript, focused
+ESLint, and `git diff --check` also passed. The runtime used pinned image ID
+`de3a4eab8fdfa507ea92aac488b916b08089e515db49b055fe71dfa271ba3a28`
+and repository digest
+`sha256:7a396fd264a2067788b6551122b50f162bf6136312c7fc9d74381cb92c648382`.
+Post-run checks prove the exact container and volume absent, the assigned port
+without a listener, and no Q-006A process; cleanup is complete and certain.
+
+The first disposable run remains superseded helper-contract evidence, not a
+product defect: PostgreSQL's permitted fail-closed zero-row write exposed an
+overly narrow rejection-only test helper and did not show a protected-row
+mutation. It is not acceptance evidence for the runtime gate.
+
+Parent Q-006 remains **rework-required and open**. The original-plan arithmetic
+is unchanged at 58 accepted of 318 total, with 260 remaining; Q-006A does not
+count as parent Q-006 acceptance. Q-006B may not proceed on this child receipt
+alone and requires a new accepted RLS/context prerequisite.
