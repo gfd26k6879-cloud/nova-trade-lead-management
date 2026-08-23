@@ -20,7 +20,7 @@ npm run release:check
 | `npm run test:e2e:auth` | Protected read-only workflow checks | Auth storage state or E2E credentials |
 | `npm run test:e2e` | Public plus protected read-only projects | Auth storage state or E2E credentials |
 | `npm run test:e2e:launch` | Protected desktop/mobile screenshot pass | Auth storage state or E2E credentials |
-| `npm run test:e2e:mutating` | Lead creation, archive, drag, exclusion, and restoration flows | Auth plus explicit mutation opt-in |
+| `npm run test:e2e:mutating` | Disposable lead workbench, archive, drag, exclusion, and restoration flows | Auth plus explicit mutation opt-in and fixture binding |
 
 Authenticated commands require either:
 
@@ -33,8 +33,13 @@ or both `E2E_SUPABASE_EMAIL` and `E2E_SUPABASE_PASSWORD`. Missing auth is a hard
 Mutation suites are excluded by default. A local disposable target requires:
 
 ```bash
-E2E_ALLOW_MUTATIONS=1 npm run test:e2e:mutating
+E2E_ALLOW_MUTATIONS=1 \
+E2E_DISPOSABLE_LEAD_ID=lead-e2e-1 \
+E2E_DISPOSABLE_LEAD_NAME='[E2E DISPOSABLE] Kanban lead' \
+npm run test:e2e:mutating
 ```
+
+The ID and exact name must identify the same operator-owned fixture. Its name must start with `[E2E DISPOSABLE] `, and it must be unarchived, non-excluded, in the `New` column, and expose `qualification_status=needs_verification` directly on its detail page; a missing or mismatched fixture is a hard failure. Kanban checks use the exact marked name as a search constraint, while cleanup navigates directly to the bound ID and restores exclusion, status, and archive state in `finally`; the suite does not create leads or persist outreach events.
 
 For any non-loopback target, `E2E_ALLOW_REMOTE_MUTATIONS=1` is also required. Use that override only after approving the target, fixture data, rollback, and cleanup. Never point the mutating suite at production by habit.
 

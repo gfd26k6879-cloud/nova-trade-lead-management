@@ -50,9 +50,12 @@ const HASH_C = "c".repeat(64);
 const HASH_D = "d".repeat(64);
 const CREATED = "2026-07-27T00:00:00.000Z";
 const SNAPSHOT = "2026-07-27T00:01:00.000Z";
-const ARTIFACT_CREATED = "2026-07-27T00:02:00.000Z";
-const EXPIRY = "2026-08-03T00:02:00.000Z";
-const BEFORE_EXPIRY = "2026-08-03T00:01:59.999Z";
+// The SQLite transition guard evaluates its real clock, so this fixture must not age past expiry.
+const ARTIFACT_CREATED_MILLISECONDS = Date.now();
+const ARTIFACT_CREATED = new Date(ARTIFACT_CREATED_MILLISECONDS).toISOString();
+const EXPIRY = new Date(ARTIFACT_CREATED_MILLISECONDS + TENANT_EXPORT_MAX_ARTIFACT_AGE_SECONDS * 1000).toISOString();
+const BEFORE_EXPIRY = new Date(Date.parse(EXPIRY) - 1).toISOString();
+const AFTER_MAXIMUM_EXPIRY = new Date(Date.parse(EXPIRY) + 1).toISOString();
 
 function database(): Database.Database {
   const db = new Database(":memory:");
@@ -332,7 +335,7 @@ describe("tenant export job schema", () => {
       { artifact_storage_ref: artifactRef().replace("artifact.csv", "../artifact.csv") },
       { artifact_checksum_sha256: HASH_D.toUpperCase() },
       { included_count: -1 },
-      { expires_at: "2026-08-04T00:02:00.000Z" },
+      { expires_at: AFTER_MAXIMUM_EXPIRY },
     ];
     for (const values of invalid) {
       const invalidDb = database();

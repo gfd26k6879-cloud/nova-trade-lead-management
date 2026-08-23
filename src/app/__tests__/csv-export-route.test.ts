@@ -65,3 +65,19 @@ describe("CSV export minimum-review parsing", () => {
     expect(queryMocks.getLeadsForExport).toHaveBeenCalledWith(expect.objectContaining({ minReviews: 50 }), 50_000);
   });
 });
+
+describe("CSV export error handling", () => {
+  it("does not expose internal backend error details", async () => {
+    const secret = "secret-password";
+    queryMocks.ensureDbReady.mockRejectedValueOnce(
+      new Error(`DATABASE_URL=postgres://worker:${secret}@db.internal/app`),
+    );
+
+    const response = await GET(new NextRequest("https://example.test/api/export/csv"));
+    const body: unknown = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({ error: "CSV export failed." });
+    expect(JSON.stringify(body)).not.toContain(secret);
+  });
+});

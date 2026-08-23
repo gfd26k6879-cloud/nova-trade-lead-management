@@ -35,6 +35,8 @@ const DEFAULT_WORKER_DB_TIMEOUT_MS = 20_000;
 const DEFAULT_SCORE_WORKER_DB_TIMEOUT_MS = 30_000;
 const DEFAULT_WORKER_ROUTE_TIMEOUT_MS = 45_000;
 const WORKER_ROUTE_TIMEOUT_MESSAGE = "Worker exceeded internal timeout before Vercel runtime limit.";
+const WORKER_FAILED_MESSAGE = "Worker failed.";
+const WORKER_AUTHORIZATION_FAILED_MESSAGE = "Worker authorization failed";
 
 class WorkerRouteTimeoutError extends Error {
   constructor() {
@@ -102,7 +104,7 @@ async function runWorkerRouteBody(
   task: LegacyWorkerTask | TenantWorkerTask,
   context: WorkerTenantContext | undefined,
   logRouteTiming: ReturnType<typeof startRouteTiming>,
-  safeErrors: boolean,
+  safeInternalErrors: boolean,
 ): Promise<NextResponse> {
   await withWorkerDbTimeout(workerName, async () => {
     await ensureDbReady();
@@ -130,15 +132,17 @@ async function runWorkerRouteBody(
     if (context) assertWorkerTenantContext(context);
     const result = normalizeTaskResult(taskResult);
     const status = classifyWorkerStatus(result);
+    // Preserve full operator diagnostics in the run record; redact only the HTTP representation.
     await withWorkerDbTimeout(workerName, () => completeWorkerRun(run.id, status, result, 200, result.error ?? null));
     logRouteTiming(200, { workerName, workerStatus: status });
-    return NextResponse.json(result);
+    return NextResponse.json(safeWorkerTaskResult(result));
   } catch (err) {
-    const message = safeErrors ? safeWorkerErrorMessage(err) : err instanceof Error ? err.message : String(err);
+    const message = safeInternalErrors ? safeWorkerErrorMessage(err) : err instanceof Error ? err.message : String(err);
+    const publicMessage = safeWorkerErrorMessage(err);
     const httpStatus = classifyWorkerHttpStatus(err);
     await withWorkerDbTimeout(workerName, () => completeWorkerRun(run.id, "error", { status: "error", error: message }, httpStatus, message));
     logRouteTiming(httpStatus, { workerName, reason: classifyWorkerFailureReason(err), error: message });
-    return NextResponse.json({ status: "error", error: message }, { status: httpStatus });
+    return NextResponse.json({ status: "error", error: publicMessage }, { status: httpStatus });
   }
 }
 
@@ -146,11 +150,11 @@ function handleWorkerRouteError(
   err: unknown,
   workerName: SchedulerWorkerName,
   logRouteTiming: ReturnType<typeof startRouteTiming>,
-  safeErrors: boolean,
+  safeInternalErrors: boolean,
 ): NextResponse {
   if (isTenantWorkerAuthorizationError(err)) {
     logRouteTiming(err.status, { workerName, reason: "worker_authorization_failed" });
-    return NextResponse.json({ status: "error", error: err.message }, { status: err.status });
+    return NextResponse.json({ status: "error", error: WORKER_AUTHORIZATION_FAILED_MESSAGE }, { status: err.status });
   }
   if (err instanceof UnauthorizedError) {
     logRouteTiming(err.status, { workerName, reason: "unauthorized" });
@@ -160,16 +164,17 @@ function handleWorkerRouteError(
     logRouteTiming(err.status, { workerName, reason: "forbidden" });
     return NextResponse.json({ status: "error", error: err.message }, { status: err.status });
   }
-  const message = safeErrors ? safeWorkerErrorMessage(err) : err instanceof Error ? err.message : String(err);
+  const message = safeInternalErrors ? safeWorkerErrorMessage(err) : err instanceof Error ? err.message : String(err);
+  const publicMessage = safeWorkerErrorMessage(err);
   const httpStatus = classifyWorkerHttpStatus(err);
   logRouteTiming(httpStatus, { workerName, reason: classifyWorkerFailureReason(err), error: message });
-  return NextResponse.json({ status: "error", error: message }, { status: httpStatus });
+  return NextResponse.json({ status: "error", error: publicMessage }, { status: httpStatus });
 }
 
 function safeWorkerErrorMessage(error: unknown): string {
   if (error instanceof WorkerRouteTimeoutError) return WORKER_ROUTE_TIMEOUT_MESSAGE;
   if (isDbStatementTimeoutError(error)) return "Worker database operation timed out.";
-  return "Worker failed.";
+  return WORKER_FAILED_MESSAGE;
 }
 
 function isTenantWorkerAuthorizationError(error: unknown): error is { status: 401; message: string; code: "WORKER_AUTHORIZATION_FAILED" } {
@@ -185,6 +190,19 @@ function isTenantWorkerAuthorizationError(error: unknown): error is { status: 40
 function normalizeTaskResult(result: unknown): WorkerTaskResult {
   if (result && typeof result === "object" && !Array.isArray(result)) return result as WorkerTaskResult;
   return { status: "processed", result };
+}
+
+function safeWorkerTaskResult(result: WorkerTaskResult): WorkerTaskResult {
+  if (!Object.prototype.hasOwnProperty.call(result, "error")) return result;
+
+  const safeResult = Object.create(null) as WorkerTaskResult;
+  for (const key of Object.keys(result)) {
+    safeResult[key] = key === "error" ? WORKER_FAILED_MESSAGE : result[key];
+  }
+  if (!Object.prototype.propertyIsEnumerable.call(result, "error")) {
+    safeResult.error = WORKER_FAILED_MESSAGE;
+  }
+  return safeResult;
 }
 
 function classifyWorkerStatus(result: WorkerTaskResult): SchedulerRunStatus {

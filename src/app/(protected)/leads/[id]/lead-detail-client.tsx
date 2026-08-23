@@ -104,6 +104,22 @@ const LEAD_DETAIL_TABS: Array<{ key: LeadDetailTab; label: string }> = [
   { key: "intelligence", label: "Intelligence" },
   { key: "admin", label: "Admin" },
 ];
+
+export function resolveLeadDetailTabTargetIndex(currentIndex: number, key: string): number | null {
+  switch (key) {
+    case "ArrowLeft":
+      return (currentIndex - 1 + LEAD_DETAIL_TABS.length) % LEAD_DETAIL_TABS.length;
+    case "ArrowRight":
+      return (currentIndex + 1) % LEAD_DETAIL_TABS.length;
+    case "Home":
+      return 0;
+    case "End":
+      return LEAD_DETAIL_TABS.length - 1;
+    default:
+      return null;
+  }
+}
+
 const CALL_OUTCOME_PRESETS: CallOutcomePreset[] = [
   {
     key: "no_answer",
@@ -204,6 +220,7 @@ export function LeadDetailClient({
   const scoreBand = resolveScoreBand(lead.score, scoreThresholds);
   const scoreBandStyle = getScoreBandStyle(scoreBand.key);
   const [activeTab, setActiveTab] = useState<LeadDetailTab>(initialTab);
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [showAiSources, setShowAiSources] = useState(false);
   const [status, setStatus] = useState(lead.status);
   const [notes, setNotes] = useState(lead.notes ?? "");
@@ -1107,6 +1124,13 @@ export function LeadDetailClient({
         { label: "Contact", value: contactStat, hint: `${Math.round(lead.contactability_score * 100)}% contactability` },
       ]}
     >
+      <span
+        className="sr-only"
+        data-role="lead-qualification-status"
+        data-qualification-status={lead.qualification_status}
+      >
+        Qualification status: {formatLabel(lead.qualification_status)}
+      </span>
       {/* Back link and notifications */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Link href="/explore" className="link-accent text-sm">&larr; Back to Explorer</Link>
@@ -1150,16 +1174,31 @@ export function LeadDetailClient({
 
       <section className="glass rounded-2xl p-3" role="tablist" aria-label="Lead detail sections">
         <div className="flex flex-wrap gap-2">
-          {LEAD_DETAIL_TABS.map((tab) => (
+          {LEAD_DETAIL_TABS.map((tab, index) => (
             <button
               key={tab.key}
+              ref={(element) => {
+                tabRefs.current[index] = element;
+              }}
               type="button"
               id={`lead-detail-tab-${tab.key}`}
               role="tab"
               aria-selected={activeTab === tab.key}
               aria-controls={`lead-detail-panel-${tab.key}`}
+              tabIndex={activeTab === tab.key ? 0 : -1}
               className={activeTab === tab.key ? "btn-primary text-sm" : "btn-glass text-sm"}
               onClick={() => setActiveTab(tab.key)}
+              onKeyDown={(event) => {
+                const targetIndex = resolveLeadDetailTabTargetIndex(index, event.key);
+                if (targetIndex === null) return;
+
+                const targetTab = LEAD_DETAIL_TABS[targetIndex];
+                if (!targetTab) return;
+
+                event.preventDefault();
+                setActiveTab(targetTab.key);
+                tabRefs.current[targetIndex]?.focus();
+              }}
             >
               {tab.label}
             </button>

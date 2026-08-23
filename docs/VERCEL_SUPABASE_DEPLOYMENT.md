@@ -8,13 +8,39 @@ Run these before pushing:
 
 ```bash
 npm run release:check
-npm run test:e2e
 ```
 
 `release:check` is the safe local Node 24 gate and includes the public read-only
-browser project. `test:e2e` adds protected read-only workflows and fails if no
-E2E auth is configured. See `docs/TESTING.md`. Mutating E2E is never part of
-this default release path.
+browser project. It stops its temporary loopback server when the gate finishes.
+
+Authenticated E2E does not start a target. Keep a target running, set
+`E2E_BASE_URL` explicitly, and configure either `E2E_STORAGE_STATE` or both
+`E2E_SUPABASE_EMAIL` and `E2E_SUPABASE_PASSWORD`. For a safe local run after
+`release:check`, start the built app in one terminal:
+
+```bash
+npm run start -- --hostname 127.0.0.1 --port 3000
+```
+
+Then run the read-only projects from another terminal:
+
+```bash
+E2E_BASE_URL=http://127.0.0.1:3000 \
+E2E_STORAGE_STATE=.auth/admin.json \
+npm run test:e2e
+```
+
+An already-running remote target is also supported for the read-only projects:
+
+```bash
+E2E_BASE_URL=https://www.nosite.xyz \
+E2E_STORAGE_STATE=.auth/admin.json \
+npm run test:e2e
+```
+
+If no storage state is available, replace it in either example with both E2E
+Supabase credentials. Missing auth is a hard failure. See `docs/TESTING.md`.
+Mutating E2E is never part of this default release path.
 
 For the launch screenshot QA pass, run the dedicated authenticated screenshot
 spec after setting either `E2E_STORAGE_STATE` or both Supabase E2E credentials:
@@ -29,8 +55,8 @@ If no storage state is available, use:
 
 ```bash
 E2E_BASE_URL=https://www.nosite.xyz \
-E2E_SUPABASE_EMAIL=<admin email> \
-E2E_SUPABASE_PASSWORD=<password> \
+E2E_SUPABASE_EMAIL='admin@example.com' \
+E2E_SUPABASE_PASSWORD='replace-with-e2e-password' \
 npm run test:e2e:launch
 ```
 

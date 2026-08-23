@@ -133,8 +133,7 @@ export async function GET(request: NextRequest) {
     if (err instanceof ForbiddenError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json({ error: "CSV export failed." }, { status: 500 });
   }
 }
 

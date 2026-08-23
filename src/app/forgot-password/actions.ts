@@ -63,7 +63,7 @@ export async function requestPasswordResetAction(formData: FormData) {
       actor: { email: parsed.data.email },
       metadata: { email: parsed.data.email, reason: "supabase_reset_error", error: error.message },
     });
-    redirect(`/forgot-password?error=${encodeURIComponent(error.message)}`);
+    redirect("/forgot-password?error=reset_failed");
   }
 
   await recordOperationalEvent({
