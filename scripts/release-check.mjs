@@ -26,11 +26,22 @@ for (const [name, path] of Object.entries(bins)) {
   }
 }
 
+const vitestArgs = ["run"];
+if (process.platform !== "win32") {
+  for (const file of [
+    "src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts",
+    "src/lib/__tests__/sqlite-compatibility-scope.test.ts",
+    "src/lib/__tests__/sqlite-g002-operation-permit.test.ts",
+  ]) {
+    vitestArgs.push(`--exclude=${file}`);
+  }
+}
+
 try {
   run("TypeScript", bins.tsc, ["--noEmit", "--pretty", "false"]);
   run("ESLint", bins.eslint, ["."]);
   run("Recovery contract and schema verifier", bins.recovery, []);
-  run("Vitest", bins.vitest, ["run"]);
+  run(process.platform === "win32" ? "Vitest" : "Vitest (portable non-Windows lane)", bins.vitest, vitestArgs);
   run("Next production build", bins.next, ["build"]);
 
   const port = await reservePort();

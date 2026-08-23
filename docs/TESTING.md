@@ -10,7 +10,7 @@ npx playwright install chromium
 npm run release:check
 ```
 
-`release:check` runs TypeScript no-emit, ESLint, the full Vitest suite, a production build, and the public read-only Playwright project. The browser pass starts the built app on a temporary loopback port and never enables authenticated or mutating specs.
+`release:check` runs TypeScript no-emit, ESLint, the platform-appropriate Vitest suite, a production build, and the public read-only Playwright project. On Windows that is the full Vitest suite. On other platforms it excludes the three tests that transitively require the accepted Windows/NTFS finalization boundary. The browser pass starts the built app on a temporary loopback port and never enables authenticated or mutating specs.
 
 ## Playwright lanes
 
@@ -56,3 +56,9 @@ recorded Windows evidence.
 Do not run `src/lib/__tests__/sqlite-g006b-pre-finalization.test.ts` on Linux as
 acceptance evidence. New platform database behavior must instead use the
 explicit disposable-Postgres lane named by its task receipt.
+
+The same boundary is used transitively by
+`src/lib/__tests__/sqlite-compatibility-scope.test.ts` and
+`src/lib/__tests__/sqlite-g002-operation-permit.test.ts`; the composed release
+gate excludes all three outside Windows rather than reporting missing
+PowerShell as a product failure.

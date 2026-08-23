@@ -387,8 +387,7 @@ describe("tenant deletion job schema and contract", () => {
       db.prepare("UPDATE tenant_deletion_jobs SET status = 'backup_aging', backup_aging_at = ?, updated_at = ? WHERE id = ?").run(T5, T5, JOB_A);
       expect(() => db.prepare("UPDATE tenant_deletion_jobs SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?").run(T6, T6, JOB_A)).toThrow(/checkpoint/i);
       setCheckpoint(db, "backup_aging", "exempted", { exemption_reason: "backup_retention_only", exemption_approved: 1 });
-      const retentionBoundary = (db.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+7 years') AS value").get() as { value: string }).value;
-      db.prepare("INSERT INTO tenant_deletion_tombstones (id, job_id, tenant_id, scope_selector_hash, tenant_identity_hash, policy_version, retention_until) VALUES (?, ?, ?, ?, ?, ?, ?)").run("70000000-0000-4000-8000-000000000001", JOB_A, TENANT_A, HASH_A, HASH_B, "policy-v1", retentionBoundary);
+      db.prepare("INSERT INTO tenant_deletion_tombstones (id, job_id, tenant_id, scope_selector_hash, tenant_identity_hash, policy_version, retention_until) VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+7 years'))").run("70000000-0000-4000-8000-000000000001", JOB_A, TENANT_A, HASH_A, HASH_B, "policy-v1");
       db.prepare("UPDATE tenant_deletion_jobs SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?").run(T6, T6, JOB_A);
       expect(db.prepare("SELECT status, primary_deleted_at, backup_aging_at, completed_at FROM tenant_deletion_jobs WHERE id = ?").get(JOB_A)).toMatchObject({ status: "completed", primary_deleted_at: T4, backup_aging_at: T5, completed_at: T6 });
       expect(canEnterTenantDeletionCompleted({ checkpoints: TENANT_DELETION_CHECKPOINT_STORES.map((store) => store === "backup_aging"
