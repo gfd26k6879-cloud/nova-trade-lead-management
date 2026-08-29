@@ -7,6 +7,12 @@ import { getAdminFulfillmentSummary } from "@/lib/db/queries";
 
 export const dynamic = "force-dynamic";
 
+const FIXTURE_SHELL_SCOPE = {
+  tenantName: "Legacy compatibility",
+  workspaceName: "Legacy website leads",
+  preview: true,
+};
+
 export default async function ProtectedLayout({
   children,
 }: Readonly<{
@@ -54,8 +60,20 @@ export default async function ProtectedLayout({
 
   return (
     <div className="min-h-screen">
-      <NavHeader email={session.email} role={session.role} fulfillmentCount={fulfillmentCount} logoutAction={logoutAction} />
-      <main className="mx-auto w-full max-w-7xl px-6 py-7">{children}</main>
+      <a
+        href="#main-content"
+        className="fixed left-4 top-4 z-[100] -translate-y-24 rounded-lg bg-[var(--surface-card)] px-4 py-2 text-sm font-semibold text-[var(--text-primary)] shadow-lg transition-transform focus:translate-y-0"
+      >
+        Skip to main content
+      </a>
+      <NavHeader
+        email={session.email}
+        role={session.role}
+        scope={{ ...FIXTURE_SHELL_SCOPE, roleLabel: session.role }}
+        fulfillmentCount={fulfillmentCount}
+        logoutAction={logoutAction}
+      />
+      <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-[1360px] px-4 py-5 sm:px-6 sm:py-7">{children}</main>
     </div>
   );
 }
