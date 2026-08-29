@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isSharedArrayBuffer } from "node:util/types";
 
 import { DocumentIntakeError } from "./errors";
 
@@ -215,29 +216,120 @@ function zipEntryNames(bytes: Uint8Array): ReadonlySet<string> | null {
   return offset === endOffset ? names : null;
 }
 
-function containsAsciiCaseInsensitive(bytes: Uint8Array, marker: string): boolean {
-  const loweredMarker = marker.toLowerCase();
-  if (loweredMarker.length > bytes.byteLength) return false;
-  outer: for (let offset = 0; offset <= bytes.byteLength - loweredMarker.length; offset += 1) {
-    for (let index = 0; index < loweredMarker.length; index += 1) {
-      const value = bytes[offset + index];
-      const loweredValue = value >= 0x41 && value <= 0x5a ? value + 0x20 : value;
-      if (loweredValue !== loweredMarker.charCodeAt(index)) continue outer;
+function hexNibble(value: number): number {
+  if (value >= 0x30 && value <= 0x39) return value - 0x30;
+  if (value >= 0x41 && value <= 0x46) return value - 0x41 + 10;
+  if (value >= 0x61 && value <= 0x66) return value - 0x61 + 10;
+  return -1;
+}
+
+function containsPdfName(bytes: Uint8Array, marker: string): boolean {
+  const target = marker.toLowerCase();
+  for (let offset = 0; offset < bytes.byteLength; offset += 1) {
+    if (bytes[offset] !== 0x2f) continue;
+    let position = offset;
+    let matched = true;
+    for (let index = 0; index < target.length; index += 1) {
+      let value = bytes[position];
+      if (value === 0x23 && position + 2 < bytes.byteLength) {
+        const high = hexNibble(bytes[position + 1]);
+        const low = hexNibble(bytes[position + 2]);
+        if (high >= 0 && low >= 0) {
+          value = high * 16 + low;
+          position += 3;
+        } else position += 1;
+      } else position += 1;
+      if (value >= 0x41 && value <= 0x5a) value += 0x20;
+      if (value !== target.charCodeAt(index)) {
+        matched = false;
+        break;
+      }
     }
-    return true;
+    if (matched) return true;
   }
   return false;
 }
 
 function assertText(bytes: Uint8Array): void {
-  for (const value of bytes) {
-    if (value === 0 || (value < 0x20 && value !== 0x09 && value !== 0x0a && value !== 0x0d)) {
-      throw new DocumentIntakeError(
-        "malformed_signature",
-        "The declared text file contains binary control bytes.",
-      );
-    }
+  let decoded: string;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+  } catch {
+    throw new DocumentIntakeError("malformed_signature", "The declared text file is not valid UTF-8.");
   }
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ufeff]/u.test(decoded)) {
+    throw new DocumentIntakeError(
+      "malformed_signature",
+      "The declared text file contains binary control bytes or a misplaced BOM.",
+    );
+  }
+}
+
+function readUint32BigEndian(bytes: Uint8Array, offset: number): number | null {
+  if (offset < 0 || offset + 4 > bytes.byteLength) return null;
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, false);
+}
+
+function assertJpeg(bytes: Uint8Array): void {
+  if (!startsWith(bytes, [0xff, 0xd8]) || bytes.byteLength < 16) {
+    throw new DocumentIntakeError("malformed_signature", "The JPEG structure is incomplete.");
+  }
+  let offset = 2;
+  let hasFrame = false;
+  let hasScan = false;
+  while (offset + 1 < bytes.byteLength) {
+    if (bytes[offset] !== 0xff) break;
+    while (bytes[offset] === 0xff) offset += 1;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === 0xd9) {
+      if (!hasFrame || !hasScan || offset !== bytes.byteLength) break;
+      return;
+    }
+    if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    const length = offset + 2 <= bytes.byteLength ? (bytes[offset] << 8) | bytes[offset + 1] : 0;
+    if (length < 2 || offset + length > bytes.byteLength) break;
+    const isFrame = (marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7)
+      || (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf);
+    if (isFrame) {
+      if (length < 8) break;
+      const height = (bytes[offset + 3] << 8) | bytes[offset + 4];
+      const width = (bytes[offset + 5] << 8) | bytes[offset + 6];
+      if (width < 1 || height < 1 || width > 7680 || height > 7680 || width * height > 20_000_000) break;
+      hasFrame = true;
+    }
+    if (marker === 0xda) {
+      hasScan = true;
+      if (bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9 && hasFrame) return;
+      break;
+    }
+    offset += length;
+  }
+  throw new DocumentIntakeError("malformed_signature", "The JPEG structure is incomplete or invalid.");
+}
+
+function assertPng(bytes: Uint8Array): void {
+  if (!startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) || bytes.byteLength < 57
+    || readUint32BigEndian(bytes, 8) !== 13
+    || new TextDecoder("latin1").decode(bytes.subarray(12, 16)) !== "IHDR") {
+    throw new DocumentIntakeError("malformed_signature", "The PNG structure is incomplete.");
+  }
+  const width = readUint32BigEndian(bytes, 16);
+  const height = readUint32BigEndian(bytes, 20);
+  if (!width || !height || width > 7680 || height > 7680 || width * height > 20_000_000) {
+    throw new DocumentIntakeError("malformed_signature", "The PNG dimensions exceed launch bounds.");
+  }
+  let offset = 8;
+  let hasImageData = false;
+  while (offset + 12 <= bytes.byteLength) {
+    const length = readUint32BigEndian(bytes, offset);
+    if (length === null || offset + 12 + length > bytes.byteLength) break;
+    const type = new TextDecoder("latin1").decode(bytes.subarray(offset + 4, offset + 8));
+    if (type === "IDAT") hasImageData = true;
+    offset += 12 + length;
+    if (type === "IEND" && length === 0 && hasImageData && offset === bytes.byteLength) return;
+  }
+  throw new DocumentIntakeError("malformed_signature", "The PNG chunk structure is incomplete or invalid.");
 }
 
 function assertOfficePackage(bytes: Uint8Array, format: "docx" | "xlsx"): void {
@@ -290,13 +382,13 @@ function assertSignature(format: LaunchDocumentFormat, bytes: Uint8Array): void 
         || !/\b\d+\s+\d+\s+obj\b/u.test(new TextDecoder("latin1").decode(bytes))) {
         throw new DocumentIntakeError("malformed_signature", "The PDF signature is missing.");
       }
-      if (containsAsciiCaseInsensitive(bytes, "/encrypt")) {
+      if (containsPdfName(bytes, "/encrypt")) {
         throw new DocumentIntakeError(
           "encrypted_document",
           "Encrypted or password-protected PDFs are not supported at launch.",
         );
       }
-      if (["/javascript", "/launch", "/openaction", "/embeddedfile", "/aa"].some((marker) => containsAsciiCaseInsensitive(bytes, marker))) {
+      if (["/javascript", "/launch", "/openaction", "/embeddedfile", "/aa"].some((marker) => containsPdfName(bytes, marker))) {
         throw new DocumentIntakeError(
           "active_content",
           "PDF active content is not supported at launch.",
@@ -308,14 +400,10 @@ function assertSignature(format: LaunchDocumentFormat, bytes: Uint8Array): void 
       assertOfficePackage(bytes, format);
       return;
     case "jpeg":
-      if (!startsWith(bytes, [0xff, 0xd8, 0xff])) {
-        throw new DocumentIntakeError("malformed_signature", "The JPEG signature is missing.");
-      }
+      assertJpeg(bytes);
       return;
     case "png":
-      if (!startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
-        throw new DocumentIntakeError("malformed_signature", "The PNG signature is missing.");
-      }
+      assertPng(bytes);
       return;
     case "csv":
     case "txt":
@@ -327,7 +415,9 @@ function assertSignature(format: LaunchDocumentFormat, bytes: Uint8Array): void 
 export function validateDocumentFile(input: DocumentFileInput): ValidatedDocumentFile {
   const reservation = validateDocumentReservation(input);
 
-  if (!(input.bytes instanceof Uint8Array) || input.bytes.byteLength === 0) {
+  if (!(input.bytes instanceof Uint8Array)
+    || isSharedArrayBuffer(input.bytes.buffer)
+    || input.bytes.byteLength === 0) {
     throw new DocumentIntakeError("empty_file", "The uploaded document has no bytes.");
   }
   if (input.bytes.byteLength !== input.declaredByteSize) {
@@ -337,11 +427,12 @@ export function validateDocumentFile(input: DocumentFileInput): ValidatedDocumen
     );
   }
 
-  assertSignature(reservation.format, input.bytes);
+  const snapshot = new Uint8Array(input.bytes);
+  assertSignature(reservation.format, snapshot);
 
   return {
     ...reservation,
-    checksum: createHash("sha256").update(input.bytes).digest("hex"),
+    checksum: createHash("sha256").update(snapshot).digest("hex"),
     checksumAlgorithm: "sha256",
   };
 }

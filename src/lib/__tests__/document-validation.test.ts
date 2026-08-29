@@ -8,6 +8,20 @@ import {
 } from "@/lib/documents";
 
 const bytes = (value: string): Uint8Array => new TextEncoder().encode(value);
+const validJpeg = new Uint8Array([
+  0xff, 0xd8,
+  0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00,
+  0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00,
+  0xff, 0xd9,
+]);
+const validPng = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x49, 0x44, 0x41, 0x54, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0x00, 0x00, 0x00, 0x00,
+]);
 
 function storedZip(entryNames: readonly string[]): Uint8Array {
   const locals: Buffer[] = [];
@@ -91,14 +105,14 @@ const supportedFiles = [
     label: "JPEG",
     fileName: "label.jpeg",
     mediaType: "image/jpeg",
-    bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]),
+    bytes: validJpeg,
     format: "jpeg",
   },
   {
     label: "PNG",
     fileName: "diagram.png",
     mediaType: "image/png",
-    bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x49, 0x48, 0x44, 0x52]),
+    bytes: validPng,
     format: "png",
   },
 ] as const;
@@ -170,6 +184,32 @@ describe("document intake validation", () => {
       declaredByteSize: content.byteLength,
       bytes: content,
     })).toThrow(expect.objectContaining({ code: "active_content" }));
+  });
+
+  it("rejects hex-escaped PDF active-content names", () => {
+    const content = bytes("%PDF-1.7\n1 0 obj\n<< /Java#53cript 2 0 R /Open#41ction 3 0 R >>\nendobj\n%%EOF");
+    expect(() => validateDocumentFile({
+      fileName: "escaped-active.pdf",
+      declaredMediaType: "application/pdf",
+      declaredByteSize: content.byteLength,
+      bytes: content,
+    })).toThrow(expect.objectContaining({ code: "active_content" }));
+  });
+
+  it("rejects invalid UTF-8 text and header-only images", () => {
+    const cases = [
+      { fileName: "bad.txt", mediaType: "text/plain", bytes: new Uint8Array([0xff, 0xfe, 0xfd]) },
+      { fileName: "bad.jpg", mediaType: "image/jpeg", bytes: new Uint8Array([0xff, 0xd8, 0xff]) },
+      { fileName: "bad.png", mediaType: "image/png", bytes: validPng.subarray(0, 8) },
+    ];
+    for (const fixture of cases) {
+      expect(() => validateDocumentFile({
+        fileName: fixture.fileName,
+        declaredMediaType: fixture.mediaType,
+        declaredByteSize: fixture.bytes.byteLength,
+        bytes: fixture.bytes,
+      })).toThrow(expect.objectContaining({ code: "malformed_signature" }));
+    }
   });
 
   it("maps a malformed media type to a stable intake error", () => {

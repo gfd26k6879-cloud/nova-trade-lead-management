@@ -52,6 +52,15 @@ describe("connector policy", () => {
       decision: "block",
       code: "D015_MALFORMED",
     });
+    class FieldsSubclass extends Array<string> {}
+    expect(evaluateConnectorPolicy({ ...approvedRequest, fields: new FieldsSubclass("place_id") }))
+      .toMatchObject({ code: "D015_MALFORMED", sourceCardId: "unknown" });
+    expect(evaluateConnectorPolicy({ ...approvedRequest, fields: Array(10_000).fill("place_id") }))
+      .toMatchObject({ code: "D015_MALFORMED" });
+    expect(evaluateConnectorPolicy({ ...approvedRequest, now: `${"2".repeat(1_000)}Z` }))
+      .toMatchObject({ code: "D015_MALFORMED" });
+    expect(evaluateConnectorPolicy({ ...approvedRequest, sourceCardId: "x".repeat(100_000) }))
+      .toMatchObject({ code: "D015_MALFORMED", sourceCardId: "unknown" });
   });
 
   it("rejects accessor and proxy policy requests without evaluating them or invoking the connector", async () => {

@@ -39,6 +39,7 @@ export type ConnectorPolicyCode =
   | "D015_MALFORMED";
 
 type ConnectorPolicyBlockCode = Exclude<ConnectorPolicyCode, "D015_PASS">;
+const TOKEN = /^[a-z0-9][a-z0-9._:-]{0,159}$/u;
 
 export type ConnectorPolicyDecision =
   | Readonly<{
@@ -110,15 +111,15 @@ function block(
   request: Readonly<{ sourceCardId: string }>,
   code: ConnectorPolicyBlockCode,
 ): ConnectorPolicyDecision {
-  return {
+  return Object.freeze({
     decision: "block",
     code,
     sourceCardId: request.sourceCardId,
-  };
+  });
 }
 
 function allow(request: ConnectorPolicyRequest): ConnectorPolicyDecision {
-  return { decision: "allow", code: "D015_PASS", sourceCardId: request.sourceCardId };
+  return Object.freeze({ decision: "allow", code: "D015_PASS", sourceCardId: request.sourceCardId });
 }
 
 function dataRecord(
@@ -149,16 +150,19 @@ function dataRecord(
 }
 
 function stringArray(value: unknown): readonly string[] | null {
-  if (!Array.isArray(value) || isProxy(value)) return null;
+  if (!Array.isArray(value) || isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
   try {
     const descriptors = Object.getOwnPropertyDescriptors(value);
     const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
     const length = lengthDescriptor && "value" in lengthDescriptor ? lengthDescriptor.value : null;
-    if (!Number.isSafeInteger(length) || (length as number) < 0) return null;
+    if (!Number.isSafeInteger(length) || (length as number) < 1 || (length as number) > 64) return null;
     const snapshot: string[] = [];
+    const seen = new Set<string>();
     for (let index = 0; index < (length as number); index += 1) {
       const item = descriptors[String(index)];
-      if (!item || !("value" in item) || !item.enumerable || typeof item.value !== "string") return null;
+      if (!item || !("value" in item) || !item.enumerable || typeof item.value !== "string"
+        || !TOKEN.test(item.value) || seen.has(item.value)) return null;
+      seen.add(item.value);
       snapshot.push(item.value);
     }
     if (Reflect.ownKeys(descriptors).some((key) => {
@@ -198,7 +202,14 @@ function malformed(sourceCardId: string): ConnectorPolicyDecision {
 }
 
 function isNonEmpty(value: string): boolean {
-  return value.trim().length > 0;
+  return value.length <= 160 && value.trim().length > 0 && value.trim() === value
+    && !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
+}
+
+function canonicalTimestamp(value: string): boolean {
+  if (value.length > 40) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 }
 
 function hasValidBudget(budget: ConnectorBudget): boolean {
@@ -215,9 +226,8 @@ function hasCurrentAttestation(
 ): boolean {
   if (!attestation || attestation.revoked || attestation.tenantId !== request.tenantId) return false;
 
-  const now = Date.parse(request.now);
-  const expiresAt = Date.parse(attestation.expiresAt);
-  return Number.isFinite(now) && Number.isFinite(expiresAt) && expiresAt > now;
+  if (!canonicalTimestamp(request.now) || !canonicalTimestamp(attestation.expiresAt)) return false;
+  return Date.parse(attestation.expiresAt) > Date.parse(request.now);
 }
 
 /**
@@ -228,9 +238,10 @@ export function evaluateConnectorPolicy(requestValue: ConnectorPolicyRequest): C
 export function evaluateConnectorPolicy(requestValue: unknown): ConnectorPolicyDecision {
   const request = snapshotPolicyRequest(requestValue);
   if (!request) return malformed("unknown");
-  const sourceCardId = typeof request.sourceCardId === "string"
+  const sourceCardId = typeof request.sourceCardId === "string" && isNonEmpty(request.sourceCardId)
     ? request.sourceCardId
     : "unknown";
+  if (sourceCardId === "unknown") return malformed("unknown");
   if (!Object.hasOwn(CONNECTOR_CARD_REGISTRY, sourceCardId)) {
     return block({ sourceCardId }, "D015_PROVIDER_UNKNOWN");
   }
@@ -238,16 +249,15 @@ export function evaluateConnectorPolicy(requestValue: unknown): ConnectorPolicyD
     || typeof request.tenantId !== "string"
     || typeof request.workspaceId !== "string"
     || typeof request.authorizedTenantId !== "string"
-    || typeof request.operation !== "string"
-    || request.fields.some((field) => typeof field !== "string")
+    || typeof request.operation !== "string" || !TOKEN.test(request.operation)
     || typeof request.termsState !== "string"
     || typeof request.budget.requestedUnits !== "number"
     || typeof request.budget.remainingUnits !== "number"
-    || typeof request.now !== "string"
-    || (request.query !== undefined && typeof request.query !== "string")
+    || typeof request.now !== "string" || !canonicalTimestamp(request.now)
+    || (request.query !== undefined && (typeof request.query !== "string" || request.query.length > 10_000))
     || (request.attestation !== undefined && (
-      typeof request.attestation.tenantId !== "string"
-      || typeof request.attestation.expiresAt !== "string"
+      typeof request.attestation.tenantId !== "string" || !isNonEmpty(request.attestation.tenantId)
+      || typeof request.attestation.expiresAt !== "string" || !canonicalTimestamp(request.attestation.expiresAt)
       || typeof request.attestation.revoked !== "boolean"
     ))) {
     return malformed(sourceCardId);
