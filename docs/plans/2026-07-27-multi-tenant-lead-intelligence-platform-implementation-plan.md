@@ -1,5 +1,10 @@
 # Nova Trade Multi-Tenant Lead Intelligence Platform Implementation Plan
 
+> **ARCHIVED — NOT ACTIVE.** No instruction below governs current execution. Use
+> [`2026-08-29-lean-finish-plan.md`](./2026-08-29-lean-finish-plan.md) for the active
+> queue, status, dependencies, and concurrency rules. This document remains only the
+> detailed requirement crosswalk and record of the original 318-card decomposition.
+
 ## Planner metadata
 
 - **Repository:** `C:\Users\Masih\OneDrive\Documents\Nova Trade\nova-trade-lead-management`

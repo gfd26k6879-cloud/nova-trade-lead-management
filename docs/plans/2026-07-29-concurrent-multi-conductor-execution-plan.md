@@ -1,5 +1,11 @@
 # Nova Trade Concurrent Multi-Conductor Execution Plan
 
+> **ARCHIVED — NOT ACTIVE.** No instruction below governs current execution. Use
+> [`2026-08-29-lean-finish-plan.md`](./2026-08-29-lean-finish-plan.md) for the active
+> queue, status, dependencies, and concurrency rules. The conductor hierarchy, model
+> mandates, worktree registry, receipt process, and ledger rules below are retained
+> only as history and must not be applied unless explicitly reactivated.
+
 ## Document control
 
 - **Repository:** `C:\Users\Masih\OneDrive\Documents\Nova Trade\nova-trade-lead-management`
