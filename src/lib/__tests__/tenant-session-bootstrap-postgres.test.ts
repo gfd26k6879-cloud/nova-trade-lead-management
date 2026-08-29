@@ -75,7 +75,7 @@ async function replayMigrations(sql: Sql): Promise<void> {
     }
   }
   expect({ discovered: migrations.length, applied, skipped: SKIPPED.size })
-    .toEqual({ discovered: 58, applied: 56, skipped: 2 });
+    .toEqual({ discovered: 59, applied: 57, skipped: 2 });
 }
 
 async function resolveRaw(

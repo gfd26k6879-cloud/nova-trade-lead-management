@@ -88,6 +88,10 @@ function boundedString(value: unknown, maximum: number): string | null {
   return value;
 }
 
+function nonBlankText(value: unknown, maximum: number): string | null {
+  return typeof value === "string" && value.length <= maximum && value.trim().length > 0 ? value : null;
+}
+
 function safeInteger(value: unknown, minimum: number, maximum: number): number | null {
   return Number.isSafeInteger(value) && (value as number) >= minimum && (value as number) <= maximum
     ? value as number
@@ -150,7 +154,7 @@ function parseRequest(value: unknown): ParseDocumentRequest | null {
     || !SHA256.test(record.checksum) || typeof record.format !== "string" || !FORMAT_SET.has(record.format)
     || typeof record.mediaType !== "string" || !MEDIA_TYPE.test(record.mediaType)
     || record.mediaType !== record.mediaType.toLowerCase() || !(record.bytes instanceof Uint8Array)
-    || isProxy(record.bytes)) return null;
+    || isProxy(record.bytes) || record.bytes.byteLength > DOCUMENT_MAX_BYTES) return null;
   try {
     const bytes = new Uint8Array(record.bytes);
     if (createHash("sha256").update(bytes).digest("hex") !== record.checksum) return null;
@@ -239,7 +243,7 @@ function parseOutput(value: unknown, parser: DocumentParserCapability): ParserOu
   for (let index = 0; index < rawBlocks.length; index += 1) {
     const block = exactRecord(rawBlocks[index], BLOCK_FIELDS);
     const locator = block && parseLocator(block.locator);
-    const text = block && boundedString(block.text, 32_767);
+    const text = block && nonBlankText(block.text, 32_767);
     if (!block || !locator || !text || !BLOCK_KINDS.has(String(block.kind))
       || block.ordinal !== index || typeof block.contentHash !== "string" || !HASH_REF.test(block.contentHash)
       || block.contentHash !== `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`) return null;
