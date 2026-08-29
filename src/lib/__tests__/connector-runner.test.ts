@@ -242,6 +242,22 @@ describe("fixture connector source-run page runner", () => {
     expect(runner.getRunUsage("run-a")).toEqual({ reservedUnits: 0, actualUnits: 0 });
   });
 
+  it("keeps direct runPage an exact fixture harness without accepting authority-shaped extras", async () => {
+    const runner = createFixtureConnectorRunner();
+    let calls = 0;
+    const input = {
+      ...request({ execute: async () => {
+        calls += 1;
+        return request().execute({ cursor: null, signal: new AbortController().signal });
+      } }),
+      sourcePolicyId: "caller-policy",
+      leaseGeneration: 99,
+    };
+
+    expect(await runner.runPage(input as never)).toEqual({ status: "blocked", code: "D015_MALFORMED" });
+    expect(calls).toBe(0);
+  });
+
   it("rejects malformed, over-budget, or non-advancing page output without committing", async () => {
     const cases = [
       { actualUnits: 2 },

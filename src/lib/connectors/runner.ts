@@ -29,6 +29,12 @@ export interface ConnectorFixturePage {
   readonly actualUnits: number;
 }
 
+/** Caller-supplied fixture implementation; it is never a provider or network adapter. */
+export type ConnectorFixturePageExecutor = (context: Readonly<{
+  cursor: string | null;
+  signal: AbortSignal;
+}>) => ConnectorFixturePage | Promise<ConnectorFixturePage>;
+
 export interface ConnectorRunPageRequest {
   readonly runId: string;
   readonly unitId: string;
@@ -39,10 +45,7 @@ export interface ConnectorRunPageRequest {
   readonly hardCapUnits: number;
   readonly policy: ConnectorPolicyRequest;
   readonly descriptor: ConnectorAdapterDescriptor;
-  readonly execute: (context: Readonly<{
-    cursor: string | null;
-    signal: AbortSignal;
-  }>) => ConnectorFixturePage | Promise<ConnectorFixturePage>;
+  readonly execute: ConnectorFixturePageExecutor;
 }
 
 type CheckpointStatus =
