@@ -19,9 +19,18 @@ export interface DbStatement {
   run(...params: unknown[]): Promise<DbRunResult>;
 }
 
+export interface TenantSessionBootstrapInput {
+  readonly authIdentityId: string;
+  readonly tenantId: string;
+  readonly workspaceSelectorProvided: boolean;
+  readonly workspaceId: string | null;
+}
+
 export interface DbClient {
   prepare(query: string): DbStatement;
   exec(query: string): Promise<void>;
+  /** PostgreSQL-only pre-GUC member resolver; SQLite intentionally omits it. */
+  resolveTenantSessionBootstrap?(input: TenantSessionBootstrapInput): Promise<readonly Record<string, unknown>[]>;
   withStatementTimeout?<T>(timeoutMs: number, fn: () => Promise<T>): Promise<T>;
   withTransaction?<T>(fn: () => Promise<T>): Promise<T>;
 }
@@ -322,6 +331,18 @@ class PostgresClient implements DbClient {
 
   async exec(query: string): Promise<void> {
     await this.sql.unsafe(query);
+  }
+
+  async resolveTenantSessionBootstrap(input: TenantSessionBootstrapInput): Promise<Record<string, unknown>[]> {
+    return this.prepare(
+      `SELECT tenant_id, workspace_id, membership_id, role, role_binding_id
+       FROM public.novatrade_resolve_tenant_session(?, ?, ?, ?)`,
+    ).all(
+      input.authIdentityId,
+      input.tenantId,
+      input.workspaceSelectorProvided,
+      input.workspaceId,
+    );
   }
 
   async installTransactionLocalContext(entries: readonly (readonly [string, string])[]): Promise<void> {

@@ -117,12 +117,22 @@ async function resolveTenantSessionScopeAt(
   db: DbClient | undefined,
   now: Date,
 ): Promise<TenantSessionScope> {
-  const client = db ?? await getDb();
   if (Number.isNaN(now.getTime())) throw new TenantScopeResolutionError();
 
   const tenantId = requireUuidSelector(input.selector.tenantId, true);
   const workspaceSelector = parseWorkspaceSelector(input.selector.workspaceId);
   const authIdentityId = requireUuidSelector(input.authIdentityId, false);
+  const client = db ?? await getDb();
+
+  if (client.resolveTenantSessionBootstrap) {
+    const rows = await client.resolveTenantSessionBootstrap({
+      authIdentityId,
+      tenantId,
+      workspaceSelectorProvided: workspaceSelector.provided,
+      workspaceId: workspaceSelector.value,
+    });
+    return parseBootstrapTenantSessionRows(rows, tenantId, workspaceSelector);
+  }
 
   // Keep the authority decision in one database statement. Besides avoiding a
   // read/disable/read TOCTOU window, this gives adapters one snapshot boundary
@@ -217,6 +227,39 @@ async function resolveTenantSessionScopeAt(
     role: roleBinding.role,
     roleBindingId: roleBinding.id,
   };
+}
+
+const BOOTSTRAP_SCOPE_KEYS = [
+  "membership_id",
+  "role",
+  "role_binding_id",
+  "tenant_id",
+  "workspace_id",
+] as const;
+
+function parseBootstrapTenantSessionRows(
+  rows: readonly Record<string, unknown>[],
+  selectedTenantId: string,
+  workspaceSelector: { provided: boolean; value: string | null },
+): TenantSessionScope {
+  if (rows.length !== 1) throw new TenantScopeResolutionError();
+  const row = rows[0];
+  const keys = Object.keys(row).sort();
+  if (keys.length !== BOOTSTRAP_SCOPE_KEYS.length
+      || keys.some((key, index) => key !== BOOTSTRAP_SCOPE_KEYS[index])) {
+    throw new TenantScopeResolutionError();
+  }
+
+  const tenantId = requiredUuid(row.tenant_id);
+  const workspaceId = nullableUuid(row.workspace_id);
+  const membershipId = requiredUuid(row.membership_id);
+  const role = requiredEnum<LaunchRole>(row.role, launchRoleSet);
+  const roleBindingId = requiredUuid(row.role_binding_id);
+  if (tenantId !== selectedTenantId) throw new TenantScopeResolutionError();
+  if (workspaceSelector.provided && workspaceId !== workspaceSelector.value) {
+    throw new TenantScopeResolutionError();
+  }
+  return { tenantId, workspaceId, membershipId, role, roleBindingId };
 }
 
 interface RawJoinedTenantSessionRow extends Record<string, unknown> {
@@ -334,14 +377,14 @@ function requireUuidSelector(value: unknown, required: boolean): string {
   if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
     throw new TenantScopeResolutionError(required ? "TENANT_SCOPE_REQUIRED" : "TENANT_SCOPE_UNAVAILABLE");
   }
-  return value;
+  return value.toLowerCase();
 }
 
 function parseWorkspaceSelector(value: unknown): { provided: boolean; value: string | null } {
   if (value === undefined) return { provided: false, value: null };
   if (value === null) return { provided: true, value: null };
   if (typeof value !== "string" || !UUID_PATTERN.test(value)) throw new TenantScopeResolutionError();
-  return { provided: true, value };
+  return { provided: true, value: value.toLowerCase() };
 }
 
 function parseTenantScopeRow(row: RawTenantScopeRow): ParsedTenantScopeRow {

@@ -222,7 +222,7 @@ describe("G-002 location and crawl tenant scope", () => {
         expect(version[0].server_version_num.startsWith("16")).toBe(true);
 
         const fullChain = await resetDatabase(client, true);
-        expect(fullChain).toEqual({ discovered: 55, applied: 53, skipped: 2 });
+        expect(fullChain).toEqual({ discovered: 58, applied: 56, skipped: 2 });
         await client.unsafe(`
           INSERT INTO public.tenants (id, slug, name, status)
             VALUES ('${TENANT_A}', 'replay-tenant', 'Replay Tenant', 'active');
