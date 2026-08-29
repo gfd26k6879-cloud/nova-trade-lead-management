@@ -101,7 +101,7 @@ async function replayAllMigrations(sql: Sql): Promise<void> {
     }
   }
   expect({ discovered: migrations.length, applied, skipped: SKIPPED.size })
-    .toEqual({ discovered: 60, applied: 58, skipped: 2 });
+    .toEqual({ discovered: 62, applied: 60, skipped: 2 });
 }
 
 function versionSql(versionId: string, objectKey: string): string {
