@@ -171,4 +171,65 @@ describe("bounded launch Markdown parser", () => {
       ] },
     });
   });
+
+  it("preserves an unmatched table-separator-looking line as evidence", async () => {
+    await expect(createDocumentParserRegistry([MARKDOWN_DOCUMENT_PARSER]).parse(request(
+      "Context\n--- | ---\nEvidence",
+    ))).resolves.toMatchObject({
+      ok: true,
+      output: { blocks: [
+        { text: "Context", locator: { startLine: 1 } },
+        { kind: "paragraph", text: "--- | ---", locator: { startLine: 2 } },
+        { text: "Evidence", locator: { startLine: 3 } },
+      ] },
+    });
+  });
+
+  it.each([
+    ["ATX heading", "# A | B\n--- | ---\nEvidence", ["heading", "paragraph", "paragraph"]],
+    ["list item", "- A | B\n--- | ---\nEvidence", ["list_item", "paragraph", "paragraph"]],
+    ["blockquote", "> A | B\n--- | ---\nEvidence", ["paragraph", "paragraph", "paragraph"]],
+    ["too many delimiter cells", "A | B\n--- | --- | ---\nEvidence", ["paragraph", "paragraph", "paragraph"]],
+    ["too few delimiter cells", "A | B | C\n--- | ---\nEvidence", ["paragraph", "paragraph", "paragraph"]],
+  ])("preserves a separator after an ineligible or mismatched %s", async (_label, source, kinds) => {
+    const result = await createDocumentParserRegistry([MARKDOWN_DOCUMENT_PARSER]).parse(request(source));
+    expect(result).toMatchObject({
+      ok: true,
+      output: {
+        blocks: [
+          { text: source.split("\n")[0], locator: { startLine: 1 } },
+          { kind: "paragraph", text: source.split("\n")[1], locator: { startLine: 2 } },
+          { text: "Evidence", locator: { startLine: 3 } },
+        ],
+      },
+    });
+    if (!result.ok) return;
+    expect(result.output.blocks.map((block) => block.kind)).toEqual(kinds);
+  });
+
+  it("matches effective table cells while ignoring escaped and inline-code pipes", async () => {
+    await expect(createDocumentParserRegistry([MARKDOWN_DOCUMENT_PARSER]).parse(request(
+      "Name \\| alias | Example `a|b` | Status\n--- | --- | ---\nPrimer | `x|y` | Ready",
+    ))).resolves.toMatchObject({
+      ok: true,
+      output: { blocks: [
+        { kind: "table_row", locator: { startLine: 1 } },
+        { kind: "table_row", locator: { startLine: 3 } },
+      ] },
+    });
+  });
+
+  it("stops a table body at a new block boundary", async () => {
+    await expect(createDocumentParserRegistry([MARKDOWN_DOCUMENT_PARSER]).parse(request(
+      "A | B\n--- | ---\n1 | 2\n- outside | list\n> outside | quote",
+    ))).resolves.toMatchObject({
+      ok: true,
+      output: { blocks: [
+        { kind: "table_row", text: "A | B" },
+        { kind: "table_row", text: "1 | 2" },
+        { kind: "list_item", text: "- outside | list" },
+        { kind: "paragraph", text: "> outside | quote" },
+      ] },
+    });
+  });
 });

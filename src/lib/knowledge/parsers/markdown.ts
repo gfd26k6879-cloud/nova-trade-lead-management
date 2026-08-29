@@ -12,6 +12,7 @@ const OVERSIZED_TOKEN = new RegExp(`\\S{${TEXT_MAX_TOKEN_CHARS + 1}}`, "u");
 const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/u;
 const HEADING = /^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/u;
 const LIST_ITEM = /^\s{0,3}(?:[-+*]|\d+[.)])\s+/u;
+const BLOCKQUOTE = /^ {0,3}>/u;
 const TABLE_SEPARATOR = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/u;
 
 function referenceLabel(value: string): string {
@@ -39,16 +40,69 @@ function countLinks(line: string, definitions: ReadonlySet<string>): number {
   return count;
 }
 
-function tableRows(lines: readonly string[]): ReadonlySet<number> {
+function effectiveTableCellCount(line: string): number | null {
+  const pipes: number[] = [];
+  let openCodeTicks = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    if (line[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (line[index] === "`") {
+      let runLength = 1;
+      while (line[index + runLength] === "`") runLength += 1;
+      if (openCodeTicks === 0) openCodeTicks = runLength;
+      else if (openCodeTicks === runLength) openCodeTicks = 0;
+      index += runLength - 1;
+      continue;
+    }
+    if (line[index] === "|" && openCodeTicks === 0) pipes.push(index);
+  }
+  if (pipes.length === 0) return null;
+  const leadingOuterPipe = line.slice(0, pipes[0]).trim().length === 0 ? 1 : 0;
+  const trailingOuterPipe = line.slice(pipes.at(-1)! + 1).trim().length === 0 ? 1 : 0;
+  const cells = pipes.length + 1 - leadingOuterPipe - trailingOuterPipe;
+  return cells >= 2 ? cells : null;
+}
+
+function structuralTableBoundary(line: string): boolean {
+  return /^(?: {4}|\t)/u.test(line)
+    || HEADING.test(line)
+    || LIST_ITEM.test(line)
+    || BLOCKQUOTE.test(line)
+    || FENCE.test(line)
+    || TABLE_SEPARATOR.test(line)
+    || /^\s{0,3}\[[^\]\n]{1,1000}\]:\s*\S+/u.test(line);
+}
+
+function plainTableRowCellCount(line: string): number | null {
+  if (!line.trim() || structuralTableBoundary(line)) return null;
+  return effectiveTableCellCount(line);
+}
+
+function tableStructure(
+  lines: readonly string[],
+  codeLines: ReadonlySet<number>,
+  fenceDelimiters: ReadonlySet<number>,
+): Readonly<{ rows: ReadonlySet<number>; separators: ReadonlySet<number> }> {
   const rows = new Set<number>();
+  const separators = new Set<number>();
   for (let index = 1; index < lines.length; index += 1) {
-    if (!TABLE_SEPARATOR.test(lines[index]) || !lines[index - 1].includes("|")) continue;
+    if (codeLines.has(index) || codeLines.has(index - 1)
+      || fenceDelimiters.has(index) || fenceDelimiters.has(index - 1)
+      || !TABLE_SEPARATOR.test(lines[index])) continue;
+    const headerCells = plainTableRowCellCount(lines[index - 1]);
+    const separatorCells = effectiveTableCellCount(lines[index]);
+    if (headerCells === null || separatorCells === null || headerCells !== separatorCells) continue;
+    separators.add(index);
     rows.add(index - 1);
-    for (let row = index + 1; row < lines.length && lines[row].includes("|") && lines[row].trim(); row += 1) {
+    for (let row = index + 1; row < lines.length
+      && !codeLines.has(row) && !fenceDelimiters.has(row)
+      && plainTableRowCellCount(lines[row]) !== null; row += 1) {
       rows.add(row);
     }
   }
-  return rows;
+  return { rows, separators };
 }
 
 async function parseLaunchMarkdown(context: Parameters<DocumentParser["parse"]>[0]): Promise<ParserOutput> {
@@ -100,7 +154,7 @@ async function parseLaunchMarkdown(context: Parameters<DocumentParser["parse"]>[
     if (links > MARKDOWN_MAX_LINKS) throw new Error("markdown link limit exceeded");
   }
 
-  const markdownTableRows = tableRows(lines);
+  const markdownTable = tableStructure(lines, codeLines, fenceDelimiters);
   const setextHeadings = new Map<number, { level: number; text: string }>();
   const setextUnderlines = new Set<number>();
   for (let index = 0; index + 1 < lines.length; index += 1) {
@@ -120,7 +174,7 @@ async function parseLaunchMarkdown(context: Parameters<DocumentParser["parse"]>[
     }
     const line = lines[index];
     if (!line.trim() || fenceDelimiters.has(index) || setextUnderlines.has(index)
-      || (!codeLines.has(index) && TABLE_SEPARATOR.test(line))) continue;
+      || markdownTable.separators.has(index)) continue;
     const atxHeading = codeLines.has(index) ? null : HEADING.exec(line);
     const heading = atxHeading
       ? { level: atxHeading[1].length, text: atxHeading[2] }
@@ -131,7 +185,7 @@ async function parseLaunchMarkdown(context: Parameters<DocumentParser["parse"]>[
     }
     const kind = codeLines.has(index) ? "code_block"
       : heading ? "heading"
-        : markdownTableRows.has(index) ? "table_row"
+        : markdownTable.rows.has(index) ? "table_row"
           : LIST_ITEM.test(line) ? "list_item" : "paragraph";
     blocks.push({
       kind,
