@@ -1,22 +1,46 @@
+import { randomUUID } from "node:crypto";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { requirePermission } from "@/lib/auth";
-import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
+import { getTenantSession, requirePermission } from "@/lib/auth";
+import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout, withTenantDbContext } from "@/lib/db/index";
 import { ensureDbReady, getResearcherTeamBoardSummary, getTeamBoardSummary, type TeamBoardSummary } from "@/lib/db/queries";
 import { PageShell } from "@/components/page-shell";
 import { startRouteTiming } from "@/lib/route-timing";
+import { assertTenantPermission } from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
 
 export const metadata: Metadata = { title: "Team Board | Nova Trade Lead Management" };
 
 export default async function TeamBoardPage() {
   const logRouteTiming = startRouteTiming("/team");
   const session = await requirePermission("view:workspace");
+  const tenantSession = await getTenantSession({});
+  if (
+    !tenantSession
+    || tenantSession.userId !== session.userId
+    || tenantSession.workspaceId !== null
+  ) {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <TeamUnavailable reason="tenant_scope_unavailable" canOpenDashboard={session.role === "admin"} />;
+  }
+
+  try {
+    await assertTenantPermission(tenantSession, "account:read", { action: "team.board.page" });
+  } catch {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <TeamUnavailable reason="tenant_scope_unavailable" canOpenDashboard={session.role === "admin"} />;
+  }
+
   let summary: TeamBoardSummary;
   try {
-    summary = await withDbStatementTimeout(10_000, async () => {
-      await ensureDbReady();
-      return session.role === "admin" ? getTeamBoardSummary() : getResearcherTeamBoardSummary(session.userId);
-    });
+    summary = await runWithTenantContext(
+      tenantSession,
+      `team-board-page:${randomUUID()}`,
+      () => withTenantDbContext(() => withDbStatementTimeout(10_000, async () => {
+        await ensureDbReady();
+        return session.role === "admin" ? getTeamBoardSummary() : getResearcherTeamBoardSummary(session.userId);
+      })),
+    );
     logRouteTiming(200);
   } catch (error) {
     const reason = routeFailureReason(error);
