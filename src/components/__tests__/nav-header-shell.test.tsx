@@ -17,22 +17,42 @@ describe("authenticated NavHeader shell", () => {
       <NavHeader
         email="owner@aster.example"
         role="admin"
-        scope={{ tenantName: "Aster Materials", workspaceName: "North America", roleLabel: "Owner", preview: true }}
+        scope={{ tenantLabel: "Tenant ID · aster", workspaceLabel: "Workspace ID · north-america", roleLabel: "owner", preview: false }}
         logoutAction={async () => undefined}
       />,
     );
 
-    expect(html).toContain('aria-label="Preview tenant and workspace"');
-    expect(html).toContain("Preview fixture");
-    expect(html).toContain("Aster Materials");
-    expect(html).toContain("North America");
-    expect(html).toContain("Owner");
+    expect(html).toContain('aria-label="Current tenant and workspace"');
+    expect(html).not.toContain("Preview fixture");
+    expect(html).toContain("Tenant ID · aster");
+    expect(html).toContain("Workspace ID · north-america");
+    expect(html).toContain("owner");
     expect(html).toContain('href="/onboarding"');
     expect(html).toContain('href="/knowledge"');
     expect(html).toContain('href="/explore"');
     expect(html).toContain('href="/queue"');
     expect(html).toContain('href="/leads?assigned=me"');
     expect(html).toContain('href="/team"');
+  });
+
+  it("labels the legacy scope as a preview when tenant authority is unavailable", () => {
+    const html = renderToStaticMarkup(
+      <NavHeader
+        email="admin@example.com"
+        role="admin"
+        scope={{
+          tenantLabel: "Legacy compatibility",
+          workspaceLabel: "Legacy website leads",
+          roleLabel: "Tenant role unavailable",
+          preview: true,
+        }}
+        logoutAction={async () => undefined}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Preview tenant and workspace"');
+    expect(html).toContain("Preview fixture");
+    expect(html).toContain("Tenant role unavailable");
   });
 
   it("keeps compact scope visible until the full scope takes over", () => {

@@ -1,15 +1,16 @@
 import { redirect } from "next/navigation";
 
 import { logoutAction } from "@/app/login/actions";
-import { getSession } from "@/lib/auth";
+import { getSession, getTenantSession } from "@/lib/auth";
 import { NavHeader } from "@/components/nav-header";
 import { getAdminFulfillmentSummary } from "@/lib/db/queries";
 
 export const dynamic = "force-dynamic";
 
-const FIXTURE_SHELL_SCOPE = {
-  tenantName: "Legacy compatibility",
-  workspaceName: "Legacy website leads",
+const LEGACY_PREVIEW_SHELL_SCOPE = {
+  tenantLabel: "Legacy compatibility",
+  workspaceLabel: "Legacy website leads",
+  roleLabel: "Tenant role unavailable",
   preview: true,
 };
 
@@ -49,6 +50,26 @@ export default async function ProtectedLayout({
     );
   }
 
+  let tenantSession = null;
+  try {
+    tenantSession = await getTenantSession({});
+  } catch {
+    // Scope resolution is deliberately non-enumerating. The legacy preview is
+    // informational only and never grants tenant authority.
+    tenantSession = null;
+  }
+
+  const shellScope = tenantSession?.userId === session.userId
+    ? {
+        tenantLabel: `Tenant ID · ${tenantSession.tenantId}`,
+        workspaceLabel: tenantSession.workspaceId
+          ? `Workspace ID · ${tenantSession.workspaceId}`
+          : null,
+        roleLabel: tenantSession.role,
+        preview: false,
+      }
+    : LEGACY_PREVIEW_SHELL_SCOPE;
+
   let fulfillmentCount = 0;
   if (session.role === "admin") {
     try {
@@ -69,7 +90,7 @@ export default async function ProtectedLayout({
       <NavHeader
         email={session.email}
         role={session.role}
-        scope={{ ...FIXTURE_SHELL_SCOPE, roleLabel: session.role }}
+        scope={shellScope}
         fulfillmentCount={fulfillmentCount}
         logoutAction={logoutAction}
       />

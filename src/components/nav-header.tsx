@@ -9,8 +9,8 @@ import { ADMIN_NAV_ITEMS, PRIMARY_NAV_ITEMS } from "@/lib/navigation";
 import type { AppRole } from "@/lib/permissions";
 
 type ShellScope = {
-  tenantName: string;
-  workspaceName: string | null;
+  tenantLabel: string;
+  workspaceLabel: string | null;
   roleLabel: string;
   preview: boolean;
 };
@@ -232,9 +232,9 @@ export function NavHeader({ email, role, scope, fulfillmentCount = 0, logoutActi
 }
 
 function ScopeContext({ scope, compact = false, className = "" }: { scope: ShellScope; compact?: boolean; className?: string }) {
-  const workspace = scope.workspaceName ?? "Tenant-wide";
+  const workspace = scope.workspaceLabel ?? "Tenant-wide";
   const previewLabel = scope.preview ? "Preview fixture · " : "";
-  const fullLabel = `${previewLabel}${scope.tenantName} · ${workspace} · ${scope.roleLabel}`;
+  const fullLabel = `${previewLabel}${scope.tenantLabel} · ${workspace} · ${scope.roleLabel}`;
 
   return (
     <div
@@ -245,7 +245,7 @@ function ScopeContext({ scope, compact = false, className = "" }: { scope: Shell
     >
       <div className="min-w-0">
         <p className="section-label">{scope.preview ? "Preview fixture" : compact ? "Scope" : "Tenant / workspace"}</p>
-        <p className="truncate text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{scope.tenantName}</p>
+        <p className="truncate text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{scope.tenantLabel}</p>
         <p className="truncate text-[0.65rem]" style={{ color: "var(--text-tertiary)" }}>{workspace} · {scope.roleLabel}</p>
       </div>
     </div>
