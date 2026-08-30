@@ -47,25 +47,27 @@ describe("/api/health/db-activity", () => {
   });
 
   it("returns JSON 401 when unauthenticated", async () => {
-    authMocks.requirePermission.mockRejectedValue(new authMocks.UnauthorizedError());
+    authMocks.requirePermission.mockRejectedValue(new authMocks.UnauthorizedError("Identity account-private was not found"));
 
     const response = await GET();
     const json = await response.json();
 
     expect(response.status).toBe(401);
     expect(json).toEqual({ status: "error", error: "Authentication required" });
+    expect(JSON.stringify(json)).not.toContain("account-private");
     expect(response.headers.get("Cache-Control")).toContain("private");
     expect(response.headers.get("Cache-Control")).toContain("no-store");
   });
 
   it("returns JSON 403 when the user lacks admin settings access", async () => {
-    authMocks.requirePermission.mockRejectedValue(new authMocks.ForbiddenError());
+    authMocks.requirePermission.mockRejectedValue(new authMocks.ForbiddenError("Tenant tenant-private is suspended"));
 
     const response = await GET();
     const json = await response.json();
 
     expect(response.status).toBe(403);
     expect(json).toEqual({ status: "error", error: "You do not have permission to perform this action" });
+    expect(JSON.stringify(json)).not.toContain("tenant-private");
     expect(response.headers.get("Cache-Control")).toContain("private");
     expect(response.headers.get("Cache-Control")).toContain("no-store");
   });

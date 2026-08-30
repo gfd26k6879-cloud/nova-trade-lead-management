@@ -27,7 +27,10 @@ export async function GET() {
     }));
   } catch (error) {
     if (error instanceof UnauthorizedError || error instanceof ForbiddenError) {
-      return applyNoStoreHeaders(NextResponse.json({ status: "error", error: error.message }, { status: error.status }));
+      const message = error instanceof UnauthorizedError
+        ? "Authentication required"
+        : "You do not have permission to perform this action";
+      return applyNoStoreHeaders(NextResponse.json({ status: "error", error: message }, { status: error.status }));
     }
     if (isDbStatementTimeoutError(error)) {
       return applyNoStoreHeaders(NextResponse.json({ status: "error", error: "db_statement_timeout" }, { status: 503 }));
