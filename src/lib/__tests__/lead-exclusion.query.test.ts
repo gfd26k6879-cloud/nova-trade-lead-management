@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { createTestDb } from "./test-helpers";
 
 let testDb: Database.Database;
+const TENANT_A = "10000000-0000-4000-8000-000000000001";
 
 vi.mock("@/lib/db/index", () => {
   return {
@@ -12,6 +13,14 @@ vi.mock("@/lib/db/index", () => {
     withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
   };
 });
+
+vi.mock("@/lib/tenancy/context", () => ({
+  getTenantContext: vi.fn(() => null),
+  requireTenantContext: vi.fn(() => ({
+    tenantId: "10000000-0000-4000-8000-000000000001",
+    workspaceId: null,
+  })),
+}));
 
 import {
   clearLeadExclusion,
@@ -47,6 +56,7 @@ function insertLead(
 
 beforeEach(() => {
   testDb = createTestDb();
+  testDb.exec(`ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}'`);
 });
 
 afterEach(() => {

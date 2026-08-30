@@ -20,7 +20,11 @@ import {
 } from "@/lib/lead-quality";
 import { decryptSecret, encryptSecret } from "@/lib/secret-crypto";
 import { getAuditActor } from "@/lib/audit-context";
-import { getTenantContext, requireTenantContext, type TenantContext } from "@/lib/tenancy/context";
+import {
+  getTenantContext,
+  requireTenantContext,
+  type TenantContext,
+} from "@/lib/tenancy/context";
 import { resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
   SCHEDULER_WORKER_METADATA,
@@ -4382,6 +4386,8 @@ export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
 }
 
 export async function getLeadMapZipCoverage(): Promise<LeadMapZipCoverage[]> {
+  const { tenantId, workspaceId } = requireTenantContext();
+  if (workspaceId !== null) throw new Error("Tenant-wide context is required");
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT
@@ -4398,8 +4404,14 @@ export async function getLeadMapZipCoverage(): Promise<LeadMapZipCoverage[]> {
      WHERE c.is_active = 1
        AND c.lat IS NOT NULL
        AND c.lng IS NOT NULL
+       AND EXISTS (
+         SELECT 1
+         FROM leads tenant_lead
+         WHERE tenant_lead.tenant_id = ?
+           AND tenant_lead.location_cell_id = c.id
+       )
      ORDER BY c.country_code, c.postal_code_normalized, c.cell_label`
-  ).all() as Array<{
+  ).all(tenantId) as Array<{
     id: string;
     postal_code_normalized: string | null;
     postal_code: string | null;
@@ -5030,17 +5042,21 @@ export async function getLeadMapPoints(
   limit = 600,
   options: { includeTotal?: boolean; fastOrder?: boolean } = {},
 ): Promise<{ points: LeadMapPoint[]; totalMapped: number }> {
+  const { tenantId, workspaceId } = requireTenantContext();
+  if (workspaceId !== null) throw new Error("Tenant-wide context is required");
   const db = await getDb();
   const { where, params } = buildLeadFilterWhere(filters);
   const { orderBySql } = resolveLeadSort(filters);
   const mapOrderBySql = options.fastOrder ? fastLeadMapOrderBySql(filters) : orderBySql;
   const coordinateCondition = "l.lat IS NOT NULL AND l.lng IS NOT NULL";
   const mapWhere = where ? `${where} AND ${coordinateCondition}` : `WHERE ${coordinateCondition}`;
+  const scopedMapWhere = `${mapWhere} AND l.tenant_id = ?`;
+  const scopedParams = [...params, tenantId];
   const safeLimit = Math.min(1000, Math.max(1, Math.floor(limit)));
 
   const countRow = options.includeTotal === false
     ? null
-    : await db.prepare(`SELECT COUNT(*) as count FROM leads l ${mapWhere}`).get(...params) as { count: number };
+    : await db.prepare(`SELECT COUNT(*) as count FROM leads l ${scopedMapWhere}`).get(...scopedParams) as { count: number };
   const rows = await db.prepare(
     `SELECT
        l.id,
@@ -5063,11 +5079,19 @@ export async function getLeadMapPoints(
        au.email as assigned_user_email,
        au.display_name as assigned_user_display_name
      FROM leads l
-     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
-     ${mapWhere}
+     LEFT JOIN app_users au
+       ON au.user_id = l.assigned_to_user_id
+      AND EXISTS (
+        SELECT 1
+        FROM tenant_memberships tenant_membership
+        WHERE tenant_membership.tenant_id = l.tenant_id
+          AND tenant_membership.auth_identity_id = au.user_id
+          AND tenant_membership.status = 'active'
+      )
+     ${scopedMapWhere}
      ORDER BY ${mapOrderBySql}
      LIMIT ?`
-  ).all(...params, safeLimit) as Array<Record<string, unknown>>;
+  ).all(...scopedParams, safeLimit) as Array<Record<string, unknown>>;
 
   return {
     totalMapped: countRow ? Number(countRow.count ?? 0) : rows.length,

@@ -3,6 +3,12 @@ import Database from "better-sqlite3";
 import { createTestDb, seedTestRun, seedTestZip } from "./test-helpers";
 
 let testDb: Database.Database;
+const TENANT_A = "10000000-0000-4000-8000-000000000001";
+const TENANT_B = "20000000-0000-4000-8000-000000000002";
+
+const tenantContextMocks = vi.hoisted(() => ({
+  requireTenantContext: vi.fn(),
+}));
 
 vi.mock("@/lib/db/index", () => {
   return {
@@ -12,6 +18,11 @@ vi.mock("@/lib/db/index", () => {
     withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
   };
 });
+
+vi.mock("@/lib/tenancy/context", () => ({
+  getTenantContext: vi.fn(() => null),
+  requireTenantContext: tenantContextMocks.requireTenantContext,
+}));
 
 import {
   cancelCrawlRun,
@@ -35,6 +46,9 @@ import {
 
 beforeEach(() => {
   testDb = createTestDb();
+  testDb.exec(`ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}'`);
+  tenantContextMocks.requireTenantContext.mockReset();
+  tenantContextMocks.requireTenantContext.mockReturnValue({ tenantId: TENANT_A, workspaceId: null });
   seedTestZip(testDb, "80202", "Denver", 39.75, -104.99, "Denver");
   seedTestZip(testDb, "80123", "Littleton", 39.61, -105.07, "Jefferson");
   seedTestZip(testDb, "80010", "Aurora", 39.73, -104.85, "Arapahoe");
@@ -260,7 +274,7 @@ describe("state county zip planner queries", () => {
     expect(coverage.completed).toBe(false);
   });
 
-  it("returns active zip map coverage coordinates without crawl aggregation", async () => {
+  it("returns only active zip map coverage referenced by the current tenant's leads", async () => {
     const runId = seedTestRun(testDb);
     await createCrawlUnitsForSelection(runId, ["dentist", "plumber"], ["80202", "80123"]);
     testDb.prepare("UPDATE crawl_units SET status = 'done', discovered_count = 7 WHERE crawl_run_id = ? AND zip = '80202'").run(runId);
@@ -270,10 +284,21 @@ describe("state county zip planner queries", () => {
     testDb.prepare(
       "UPDATE crawl_units SET status = 'failed' WHERE crawl_run_id = ? AND zip = '80123' AND category = 'plumber'"
     ).run(runId);
-    const coverage = await getLeadMapZipCoverage();
+    testDb.prepare(
+      `INSERT INTO leads (id, place_id, tenant_id, location_cell_id, categories)
+       VALUES ('tenant-a-lead', 'tenant-a-place', ?, 'cell-us-co-80202', '[]')`,
+    ).run(TENANT_A);
+    testDb.prepare(
+      `INSERT INTO leads (id, place_id, tenant_id, location_cell_id, categories)
+       VALUES ('tenant-b-lead', 'tenant-b-place', ?, 'cell-us-co-80123', '[]')`,
+    ).run(TENANT_B);
 
-    expect(coverage.map((row) => row.zip)).toEqual(["80010", "80123", "80202"]);
-    expect(coverage.find((row) => row.zip === "80202")).toMatchObject({
+    const coverageA = await getLeadMapZipCoverage();
+    tenantContextMocks.requireTenantContext.mockReturnValue({ tenantId: TENANT_B, workspaceId: null });
+    const coverageB = await getLeadMapZipCoverage();
+
+    expect(coverageA.map((row) => row.zip)).toEqual(["80202"]);
+    expect(coverageA[0]).toMatchObject({
       city: "Denver",
       leadCount: 0,
       discoveredCount: 0,
@@ -282,14 +307,9 @@ describe("state county zip planner queries", () => {
       failedUnits: 0,
       scrapeStatus: "not_started",
     });
-    expect(coverage.find((row) => row.zip === "80123")).toMatchObject({
+    expect(coverageB.map((row) => row.zip)).toEqual(["80123"]);
+    expect(coverageB[0]).toMatchObject({
       city: "Littleton",
-      leadCount: 0,
-      totalUnits: 0,
-      scrapeStatus: "not_started",
-    });
-    expect(coverage.find((row) => row.zip === "80010")).toMatchObject({
-      city: "Aurora",
       leadCount: 0,
       totalUnits: 0,
       scrapeStatus: "not_started",

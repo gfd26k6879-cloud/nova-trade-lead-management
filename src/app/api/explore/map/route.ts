@@ -1,6 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { ForbiddenError, requirePermission, UnauthorizedError } from "@/lib/auth";
-import { withDbStatementTimeout } from "@/lib/db/index";
+import { withDbStatementTimeout, withTenantDbContext } from "@/lib/db/index";
 import {
   ensureDbReady,
   getConfiguredGoogleMapsBrowserApiKey,
@@ -10,8 +10,16 @@ import {
 import { buildExploreQueryState, parseMapPointLimit, type ExploreParams } from "@/lib/explore-filters";
 import { applyNoStoreHeaders } from "@/lib/http-cache";
 import { constrainExploreFiltersForSession } from "@/lib/lead-access";
+import { requireTenantPermission, TenantAuthorizationError } from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
 
 export const dynamic = "force-dynamic";
+
+function privateNoStore<T extends { headers: Headers }>(response: T): T {
+  const secured = applyNoStoreHeaders(response);
+  secured.headers.set("Vary", "Cookie");
+  return secured;
+}
 
 export async function GET(request: Request) {
   const startedAt = Date.now();
@@ -22,17 +30,31 @@ export async function GET(request: Request) {
   const includeTotal = url.searchParams.get("includeTotal") === "true" || url.searchParams.get("includeTotal") === "1";
 
   try {
-    const session = await requirePermission("view:workspace");
+    const session = await requireTenantPermission(
+      {
+        tenantId: url.searchParams.get("tenantId") ?? undefined,
+        workspaceId: url.searchParams.has("workspaceId") ? url.searchParams.get("workspaceId") : undefined,
+      },
+      "account:read",
+      { action: "explore.map.read" },
+    );
+    if (session.workspaceId !== null) {
+      throw new TenantAuthorizationError(403, "WORKSPACE_SCOPE_INVALID");
+    }
     await ensureDbReady();
     const { filters: rawFilters } = buildExploreQueryState(params);
     const filters = constrainExploreFiltersForSession(session, rawFilters);
 
-    const [mapResult, zipCoverage, googleMapsApiKey] = await withDbStatementTimeout(8_000, async () => {
-      const pointsResult = await getLeadMapPoints(filters, limit, { includeTotal, fastOrder: true });
-      const coverage = await getLeadMapZipCoverage();
-      const apiKey = await getConfiguredGoogleMapsBrowserApiKey();
-      return [pointsResult, coverage, apiKey] as const;
-    });
+    const [mapResult, zipCoverage, googleMapsApiKey] = await runWithTenantContext(
+      session,
+      randomUUID(),
+      () => withTenantDbContext(() => withDbStatementTimeout(8_000, async () => {
+        const pointsResult = await getLeadMapPoints(filters, limit, { includeTotal, fastOrder: true });
+        const coverage = await getLeadMapZipCoverage();
+        const apiKey = await getConfiguredGoogleMapsBrowserApiKey();
+        return [pointsResult, coverage, apiKey] as const;
+      })),
+    );
 
     const durationMs = Date.now() - startedAt;
     console.info("route_timing", {
@@ -43,7 +65,7 @@ export async function GET(request: Request) {
       includeTotal,
     });
 
-    return applyNoStoreHeaders(NextResponse.json({
+    return privateNoStore(NextResponse.json({
       points: mapResult.points,
       totalMapped: mapResult.totalMapped,
       zipCoverage,
@@ -53,14 +75,14 @@ export async function GET(request: Request) {
       generatedAt,
     }));
   } catch (error) {
-    if (error instanceof UnauthorizedError || error instanceof ForbiddenError) {
+    if (error instanceof TenantAuthorizationError) {
       console.warn("route_timing", {
         route: "/api/explore/map",
         durationMs: Date.now() - startedAt,
         status: error.status,
         reason: error.name,
       });
-      return applyNoStoreHeaders(NextResponse.json({
+      return privateNoStore(NextResponse.json({
         points: [],
         totalMapped: 0,
         zipCoverage: [],
@@ -68,7 +90,7 @@ export async function GET(request: Request) {
         googleMapsConfigured: false,
         googleMapsApiKey: null,
         generatedAt,
-        error: error.message,
+        error: error.status === 401 ? "Authentication required" : "Permission denied",
       }, { status: error.status }));
     }
 
@@ -82,7 +104,7 @@ export async function GET(request: Request) {
       reason: timedOut ? "timeout" : "error",
       error: message,
     });
-    return applyNoStoreHeaders(NextResponse.json({
+    return privateNoStore(NextResponse.json({
       points: [],
       totalMapped: 0,
       zipCoverage: [],

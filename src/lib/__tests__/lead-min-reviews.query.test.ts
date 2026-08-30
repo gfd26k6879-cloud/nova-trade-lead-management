@@ -47,6 +47,7 @@ import {
   getBusinessTypeCounts,
   getKanbanLeads,
   getLeadMapPoints,
+  getLeadMapZipCoverage,
   getLeads,
   getLeadsForExport,
   type LeadFilters,
@@ -63,7 +64,7 @@ const consumers = [
 beforeEach(() => {
   dbState.calls = [];
   tenantContextMocks.requireTenantContext.mockReset();
-  tenantContextMocks.requireTenantContext.mockReturnValue({ tenantId: TENANT_A });
+  tenantContextMocks.requireTenantContext.mockReturnValue({ tenantId: TENANT_A, workspaceId: null });
 });
 
 describe("minimum-review query defense", () => {
@@ -89,8 +90,8 @@ describe("minimum-review query defense", () => {
 
   it("binds each export to the current trusted tenant context", async () => {
     tenantContextMocks.requireTenantContext
-      .mockReturnValueOnce({ tenantId: TENANT_A })
-      .mockReturnValueOnce({ tenantId: TENANT_B });
+      .mockReturnValueOnce({ tenantId: TENANT_A, workspaceId: null })
+      .mockReturnValueOnce({ tenantId: TENANT_B, workspaceId: null });
 
     await getLeadsForExport({ status: "new" }, 25);
     await getLeadsForExport({ status: "new" }, 25);
@@ -103,8 +104,8 @@ describe("minimum-review query defense", () => {
 
   it("scopes canonical rows and their lead join to the same tenant", async () => {
     tenantContextMocks.requireTenantContext
-      .mockReturnValueOnce({ tenantId: TENANT_A })
-      .mockReturnValueOnce({ tenantId: TENANT_B });
+      .mockReturnValueOnce({ tenantId: TENANT_A, workspaceId: null })
+      .mockReturnValueOnce({ tenantId: TENANT_B, workspaceId: null });
 
     await getCanonicalPlacesForExport(25);
     await getCanonicalPlacesForExport(25);
@@ -114,6 +115,66 @@ describe("minimum-review query defense", () => {
     expect(dbState.calls[0].sql).toContain("WHERE pm.tenant_id = ?");
     expect(dbState.calls[0].params).toEqual([TENANT_A, 25]);
     expect(dbState.calls[1].params).toEqual([TENANT_B, 25]);
+  });
+
+  it("binds map points and assignment identity joins to the current tenant", async () => {
+    tenantContextMocks.requireTenantContext
+      .mockReturnValueOnce({ tenantId: TENANT_A, workspaceId: null })
+      .mockReturnValueOnce({ tenantId: TENANT_B, workspaceId: null });
+
+    await getLeadMapPoints({ status: "new" }, 25, { includeTotal: true });
+    await getLeadMapPoints({ status: "new" }, 25, { includeTotal: true });
+
+    expect(dbState.calls).toHaveLength(4);
+    for (const call of dbState.calls) {
+      expect(call.sql).toContain("l.tenant_id = ?");
+    }
+    expect(dbState.calls[0].params).toEqual(["new", TENANT_A]);
+    expect(dbState.calls[1].params).toEqual(["new", TENANT_A, 25]);
+    expect(dbState.calls[2].params).toEqual(["new", TENANT_B]);
+    expect(dbState.calls[3].params).toEqual(["new", TENANT_B, 25]);
+    expect(dbState.calls[1].sql).toContain("tenant_membership.tenant_id = l.tenant_id");
+    expect(dbState.calls[1].sql).toContain("EXISTS (");
+    expect(dbState.calls[1].sql).not.toContain("JOIN tenant_memberships tenant_membership");
+  });
+
+  it("binds zip coverage existence checks to separate trusted tenants", async () => {
+    tenantContextMocks.requireTenantContext
+      .mockReturnValueOnce({ tenantId: TENANT_A, workspaceId: null })
+      .mockReturnValueOnce({ tenantId: TENANT_B, workspaceId: null });
+
+    await getLeadMapZipCoverage();
+    await getLeadMapZipCoverage();
+
+    expect(dbState.calls).toHaveLength(2);
+    expect(dbState.calls[0].sql).toContain("tenant_lead.tenant_id = ?");
+    expect(dbState.calls[0].params).toEqual([TENANT_A]);
+    expect(dbState.calls[1].params).toEqual([TENANT_B]);
+  });
+
+  it.each([
+    ["points", () => getLeadMapPoints({}, 25)],
+    ["zip coverage", () => getLeadMapZipCoverage()],
+  ])("rejects workspace-narrowed context before database access for map %s", async (_name, run) => {
+    tenantContextMocks.requireTenantContext.mockReturnValue({
+      tenantId: TENANT_A,
+      workspaceId: "30000000-0000-4000-8000-000000000003",
+    });
+
+    await expect(run()).rejects.toBeInstanceOf(Error);
+    expect(dbState.calls).toEqual([]);
+  });
+
+  it.each([
+    ["points", () => getLeadMapPoints({}, 25)],
+    ["zip coverage", () => getLeadMapZipCoverage()],
+  ])("requires tenant context before database access for map %s", async (_name, run) => {
+    tenantContextMocks.requireTenantContext.mockImplementation(() => {
+      throw new Error("A tenant context is required");
+    });
+
+    await expect(run()).rejects.toThrow("A tenant context is required");
+    expect(dbState.calls).toEqual([]);
   });
 
   it.each(consumers)("uses a parameter-free false condition above int4 for %s", async (_name, run) => {
