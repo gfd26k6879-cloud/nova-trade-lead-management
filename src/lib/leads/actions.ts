@@ -77,7 +77,7 @@ import {
 } from "@/lib/ai/verification-worker";
 import { processLeadArtifactJobById, queueLeadAiArtifact, queueLeadPitchPack } from "@/lib/ai/artifact-worker";
 import type { LeadAiArtifactType } from "@/lib/db/queries";
-import { requireTenantPermission } from "@/lib/tenancy/authorize";
+import { requireTenantPermission, TenantAuthorizationError } from "@/lib/tenancy/authorize";
 import { runWithTenantContext } from "@/lib/tenancy/context";
 import { withTenantDbContext } from "@/lib/db";
 
@@ -309,13 +309,29 @@ function normalizeWebsiteUrl(value: string | null | undefined): string | null {
   }
 }
 
-export async function getLeadsAction(filters: LeadFilters = {}) {
+export async function getLeadsAction(
+  filters: LeadFilters = {},
+  selector: TenantSessionSelector = {},
+) {
+  const tenantSession = await requireTenantPermission(selector, "account:read", {
+    action: "lead.list",
+  });
   const session = await requirePermission("view:workspace");
-  await ensureDbReady();
-  return queryLeads(constrainLeadFiltersForSession(session, {
-    ...filters,
-    minReviews: parseMinReviewsFilter(filters.minReviews),
-  }));
+  if (session.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
+  }
+  if (tenantSession.workspaceId !== null) {
+    throw new TenantAuthorizationError(403, "WORKSPACE_SCOPE_INVALID");
+  }
+
+  return runWithTenantContext(tenantSession, `lead-list:${randomUUID()}`, () =>
+    withTenantDbContext(async () => {
+      await ensureDbReady();
+      return queryLeads(constrainLeadFiltersForSession(session, {
+        ...filters,
+        minReviews: parseMinReviewsFilter(filters.minReviews),
+      }));
+    }));
 }
 
 export async function getLeadByIdAction(id: string, selector: TenantSessionSelector) {

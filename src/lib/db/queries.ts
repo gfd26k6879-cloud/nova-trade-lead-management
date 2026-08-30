@@ -4970,6 +4970,33 @@ function buildLeadFilterWhere(filters: LeadFilters): { where: string; params: un
   return { where, params };
 }
 
+function requireTenantWideLeadReadContext(): { tenantId: string } {
+  const { tenantId, workspaceId } = requireTenantContext();
+  if (workspaceId !== null) throw new Error("Tenant-wide context is required");
+  return { tenantId };
+}
+
+function bindLeadTenantScope(
+  where: string,
+  params: unknown[],
+  tenantId: string,
+): { where: string; params: unknown[] } {
+  return {
+    where: where ? `${where} AND l.tenant_id = ?` : "WHERE l.tenant_id = ?",
+    params: [...params, tenantId],
+  };
+}
+
+const TENANT_BOUND_ASSIGNEE_JOIN = `LEFT JOIN app_users au
+       ON au.user_id = l.assigned_to_user_id
+      AND EXISTS (
+        SELECT 1
+        FROM tenant_memberships tenant_membership
+        WHERE tenant_membership.tenant_id = l.tenant_id
+          AND tenant_membership.auth_identity_id = au.user_id
+          AND tenant_membership.status = 'active'
+      )`;
+
 function leadUnassignedCondition(column: string): string {
   return `(${column} IS NULL OR CAST(${column} AS TEXT) = '')`;
 }
@@ -5012,8 +5039,10 @@ function fastLeadMapOrderBySql(filters: LeadFilters): string {
 }
 
 export async function getLeads(filters: LeadFilters = {}): Promise<{ leads: Lead[]; total: number }> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const { where, params } = buildLeadFilterWhere(filters);
+  const filter = buildLeadFilterWhere(filters);
+  const { where, params } = bindLeadTenantScope(filter.where, filter.params, tenantId);
   const { orderBySql } = resolveLeadSort(filters);
 
   const page = Math.max(1, filters.page ?? 1);
@@ -5025,7 +5054,7 @@ export async function getLeads(filters: LeadFilters = {}): Promise<{ leads: Lead
   const leads = await db.prepare(
     `SELECT l.*, au.email as assigned_user_email, au.display_name as assigned_user_display_name
      FROM leads l
-     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${TENANT_BOUND_ASSIGNEE_JOIN}
      ${where}
      ORDER BY ${orderBySql}
      LIMIT ? OFFSET ?`
@@ -5130,7 +5159,7 @@ export async function getLeadsForExport(filters: LeadFilters = {}, limit = 50000
   const rows = await db.prepare(
     `SELECT l.*, au.email as assigned_user_email, au.display_name as assigned_user_display_name
      FROM leads l
-     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${TENANT_BOUND_ASSIGNEE_JOIN}
      ${scopedWhere}
      ORDER BY ${orderBySql}
      LIMIT ?`
@@ -5140,8 +5169,10 @@ export async function getLeadsForExport(filters: LeadFilters = {}, limit = 50000
 }
 
 export async function getBusinessTypeCounts(filters: LeadFilters = {}): Promise<BusinessTypeCount[]>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const { where, params } = buildLeadFilterWhere({ ...filters, businessType: undefined, page: undefined, pageSize: undefined });
+  const filter = buildLeadFilterWhere({ ...filters, businessType: undefined, page: undefined, pageSize: undefined });
+  const { where, params } = bindLeadTenantScope(filter.where, filter.params, tenantId);
   const rows = await db.prepare(
     `SELECT COALESCE(l.business_type, 'local_services') as business_type,
             COUNT(*) as total,
@@ -5164,8 +5195,10 @@ export async function getBusinessTypeCounts(filters: LeadFilters = {}): Promise<
 }
 
 export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads: KanbanLead[]; total: number }> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const { where, params } = buildLeadFilterWhere(filters);
+  const filter = buildLeadFilterWhere(filters);
+  const { where, params } = bindLeadTenantScope(filter.where, filter.params, tenantId);
   const { orderBySql } = resolveLeadSort(filters);
 
   const page = Math.max(1, filters.page ?? 1);
@@ -5184,7 +5217,7 @@ export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads
       l.raw_opportunity_score, l.verification_score, l.sales_priority_score, l.qualification_status,
       l.assigned_to_user_id, au.email as assigned_user_email, au.display_name as assigned_user_display_name
      FROM leads l
-     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${TENANT_BOUND_ASSIGNEE_JOIN}
      ${where}
      ORDER BY ${orderBySql}
      LIMIT ? OFFSET ?`

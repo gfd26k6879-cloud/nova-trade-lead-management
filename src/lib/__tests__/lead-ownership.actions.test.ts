@@ -6,6 +6,16 @@ const authMocks = vi.hoisted(() => ({
 
 const tenantAuthorizationMocks = vi.hoisted(() => ({
   requireTenantPermission: vi.fn(),
+  TenantAuthorizationError: class TenantAuthorizationError extends Error {
+    readonly status: number;
+    readonly code: string;
+
+    constructor(status: number, code: string) {
+      super(code);
+      this.status = status;
+      this.code = code;
+    }
+  },
 }));
 
 const tenantContextMocks = vi.hoisted(() => ({
@@ -69,6 +79,7 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requirePermission: authMocks.requirePermission }));
 vi.mock("@/lib/tenancy/authorize", () => ({
   requireTenantPermission: tenantAuthorizationMocks.requireTenantPermission,
+  TenantAuthorizationError: tenantAuthorizationMocks.TenantAuthorizationError,
 }));
 vi.mock("@/lib/tenancy/context", () => ({
   runWithTenantContext: tenantContextMocks.runWithTenantContext,
@@ -125,7 +136,7 @@ beforeEach(() => {
 
 describe("lead ownership server actions", () => {
   it("normalizes minimum reviews before preserving the researcher access clamp", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "researcher-1", email: "one@example.com", role: "researcher" });
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
     queryMocks.getLeads.mockResolvedValue({ leads: [], total: 0 });
 
     await getLeadsAction({
@@ -140,18 +151,68 @@ describe("lead ownership server actions", () => {
       archived: "active",
       includeExcluded: false,
       assigned: "me",
-      assignedToUserId: "researcher-1",
-      visibleToUserId: "researcher-1",
+      assignedToUserId: USER_A,
+      visibleToUserId: USER_A,
     }));
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith({}, "account:read", {
+      action: "lead.list",
+    });
+    expect(tenantContextMocks.runWithTenantContext).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: TENANT_A }),
+      expect.stringMatching(/^lead-list:[0-9a-f-]+$/),
+      expect.any(Function),
+    );
+    expect(tenantDbMocks.withTenantDbContext).toHaveBeenCalledWith(expect.any(Function));
   });
 
   it("preserves safe above-int4 minimum reviews at the admin action boundary", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
     queryMocks.getLeads.mockResolvedValue({ leads: [], total: 0 });
 
     await getLeadsAction({ minReviews: 2_147_483_648, status: "new" });
 
     expect(queryMocks.getLeads).toHaveBeenCalledWith({ minReviews: 2_147_483_648, status: "new" });
+  });
+
+  it("fails closed before database access when lead-list tenant scope is absent", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockRejectedValue(new Error("A valid tenant scope is required"));
+
+    await expect(getLeadsAction({}, { tenantId: TENANT_B })).rejects.toThrow("A valid tenant scope is required");
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_B },
+      "account:read",
+      { action: "lead.list" },
+    );
+    expect(authMocks.requirePermission).not.toHaveBeenCalled();
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.getLeads).not.toHaveBeenCalled();
+  });
+
+  it("rejects mismatched legacy identity and workspace-narrowed list scope before database access", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "different-user", email: "other@example.com", role: "admin" });
+
+    await expect(getLeadsAction({}, TENANT_SELECTOR)).rejects.toMatchObject({
+      code: "TENANT_SCOPE_MISMATCH",
+    });
+
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue({
+      userId: USER_A,
+      email: "owner@example.com",
+      displayName: "Owner",
+      tenantId: TENANT_A,
+      workspaceId: "40000000-0000-4000-8000-000000000001",
+      membershipId: MEMBERSHIP_A,
+      role: "owner",
+      roleBindingId: ROLE_BINDING_A,
+    });
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "owner@example.com", role: "admin" });
+
+    await expect(getLeadsAction({}, TENANT_SELECTOR)).rejects.toMatchObject({
+      code: "WORKSPACE_SCOPE_INVALID",
+    });
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.getLeads).not.toHaveBeenCalled();
   });
 
   it("returns researcher lead details only for owned active nonexcluded assigned-market leads", async () => {

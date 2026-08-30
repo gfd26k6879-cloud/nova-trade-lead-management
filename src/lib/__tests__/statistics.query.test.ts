@@ -15,7 +15,10 @@ vi.mock("@/lib/db/index", () => {
 
 vi.mock("@/lib/tenancy/context", () => ({
   getTenantContext: () => null,
-  requireTenantContext: () => ({ tenantId: "10000000-0000-4000-8000-000000000001" }),
+  requireTenantContext: () => ({
+    tenantId: "10000000-0000-4000-8000-000000000001",
+    workspaceId: null,
+  }),
 }));
 
 import { getLeads, getLeadsForExport, getStatisticsSummary } from "@/lib/db/queries";
@@ -57,6 +60,7 @@ function insertLead(opts: {
 
 beforeEach(() => {
   testDb = createTestDb();
+  testDb.exec("ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '10000000-0000-4000-8000-000000000001'");
 });
 
 afterEach(() => {
@@ -64,12 +68,12 @@ afterEach(() => {
 });
 
 describe("statistics and business type queries", () => {
-  it("filters leads and fails closed when tenant export meets the legacy unscoped SQLite schema", async () => {
+  it("filters leads within trusted tenant context", async () => {
     insertLead({ id: "plumbing-lead", businessType: "plumbing", discoveredAt: "2026-05-01T10:00:00.000Z" });
     insertLead({ id: "dental-lead", businessType: "dental", discoveredAt: "2026-05-01T10:00:00.000Z" });
 
     expect((await getLeads({ businessType: "plumbing" })).leads.map((lead) => lead.id)).toEqual(["plumbing-lead"]);
-    await expect(getLeadsForExport({ businessType: "dental" })).rejects.toThrow(/tenant_id/);
+    expect((await getLeadsForExport({ businessType: "dental" })).map((lead) => lead.id)).toEqual(["dental-lead"]);
   });
 
   it("builds date-scoped statistics with business type partitions", async () => {
