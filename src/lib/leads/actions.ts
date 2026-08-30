@@ -77,7 +77,11 @@ import {
 } from "@/lib/ai/verification-worker";
 import { processLeadArtifactJobById, queueLeadAiArtifact, queueLeadPitchPack } from "@/lib/ai/artifact-worker";
 import type { LeadAiArtifactType } from "@/lib/db/queries";
-import { requireTenantPermission, TenantAuthorizationError } from "@/lib/tenancy/authorize";
+import {
+  assertTenantResourceOwnership,
+  requireTenantPermission,
+  TenantAuthorizationError,
+} from "@/lib/tenancy/authorize";
 import { runWithTenantContext } from "@/lib/tenancy/context";
 import { withTenantDbContext } from "@/lib/db";
 
@@ -339,14 +343,39 @@ export async function getLeadByIdAction(id: string, selector: TenantSessionSelec
     action: "lead.read",
   });
   const session = await requirePermission("view:workspace");
-  await ensureDbReady();
+  if (session.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
+  }
+
   const lead = await runWithTenantContext(
     tenantSession,
     `lead-read:${randomUUID()}`,
-    () => withTenantDbContext(() => queryLeadById(id)),
+    () => withTenantDbContext(async () => {
+      await ensureDbReady();
+      return queryLeadById(id);
+    }),
   );
-  if (!lead || (lead as { tenant_id?: unknown }).tenant_id !== tenantSession.tenantId) return null;
-  return lead && await canReadLeadForSession(session, lead) ? lead : null;
+
+  const scopedLead = lead as (typeof lead & { tenant_id?: unknown; workspace_id?: unknown }) | null;
+  try {
+    assertTenantResourceOwnership(tenantSession, scopedLead && {
+      tenantId: scopedLead.tenant_id,
+      workspaceId: scopedLead.workspace_id ?? null,
+      resourceId: scopedLead.id,
+      resourceType: "lead",
+    }, "workspace-optional");
+  } catch (error) {
+    if (
+      error instanceof TenantAuthorizationError &&
+      (error.code === "RESOURCE_NOT_FOUND_OR_FORBIDDEN" || error.code === "WORKSPACE_SCOPE_INVALID")
+    ) {
+      return null;
+    }
+    throw error;
+  }
+
+  if (!scopedLead) return null;
+  return await canReadLeadForSession(session, scopedLead) ? scopedLead : null;
 }
 
 export async function updateLeadStatusAction(id: string, status: string) {
