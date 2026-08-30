@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { requirePermission } from "@/lib/auth";
+import { getTenantSession, requirePermission } from "@/lib/auth";
 import {
   emptyAdminFulfillmentSummary,
   emptyDashboardStats,
@@ -7,13 +7,38 @@ import {
   emptyTeamBoardSummary,
 } from "@/lib/dashboard-fallbacks";
 import { startRouteTiming } from "@/lib/route-timing";
+import { assertTenantPermission } from "@/lib/tenancy/authorize";
 import { DashboardClient } from "./dashboard-client";
 
 export const metadata: Metadata = { title: "Admin Command Center | Nova Trade Lead Management" };
 
 export default async function DashboardPage() {
   const logRouteTiming = startRouteTiming("/dashboard");
-  await requirePermission("crawl:manage");
+  const legacySession = await requirePermission("crawl:manage");
+  let tenantSession: Awaited<ReturnType<typeof getTenantSession>>;
+  try {
+    tenantSession = await getTenantSession({});
+  } catch {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <DashboardUnavailable />;
+  }
+
+  if (
+    !tenantSession
+    || tenantSession.userId !== legacySession.userId
+    || tenantSession.workspaceId !== null
+  ) {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <DashboardUnavailable />;
+  }
+
+  try {
+    await assertTenantPermission(tenantSession, "report:read", { action: "dashboard.page" });
+  } catch {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <DashboardUnavailable />;
+  }
+
   logRouteTiming(200, { mode: "fast_shell" });
 
   return (
@@ -23,5 +48,21 @@ export default async function DashboardPage() {
       weeklyStats={emptyStatisticsSummary()}
       fulfillmentSummary={emptyAdminFulfillmentSummary()}
     />
+  );
+}
+
+function DashboardUnavailable() {
+  return (
+    <section className="glass rounded-3xl p-8" role="alert">
+      <div className="max-w-2xl">
+        <p className="section-label">Dashboard temporarily unavailable</p>
+        <h1 className="mt-3 text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>
+          The dashboard could not be loaded.
+        </h1>
+        <p className="mt-3 text-sm leading-6" style={{ color: "var(--text-secondary)" }}>
+          No dashboard data was requested. Reload the workspace to try again.
+        </p>
+      </div>
+    </section>
   );
 }
