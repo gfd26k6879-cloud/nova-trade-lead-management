@@ -3483,12 +3483,14 @@ export async function getZipCoverageStatus(zip: string, categories?: readonly st
 export async function createCrawlRun(
   categories: string[],
   options: {
+    tenantId: string;
+    workspaceId: string | null;
     marketId?: string | null;
     selection?: Record<string, unknown> | null;
     name?: string | null;
     scopeLabel?: string | null;
     createdByUserId?: string | null;
-  } = {},
+  },
 ): Promise<CrawlRun>{
   const db = await getDb();
   const id = generateId();
@@ -3496,12 +3498,14 @@ export async function createCrawlRun(
 
   await db.prepare(
     `INSERT INTO crawl_runs (
-       id, mode, status, categories, market_id, selection_json, name, scope_label,
+       id, tenant_id, workspace_id, mode, status, categories, market_id, selection_json, name, scope_label,
        created_by_user_id, started_at, created_at, updated_at
      )
-     VALUES (?, 'coverage', 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, 'coverage', 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
+    options.tenantId,
+    options.workspaceId,
     JSON.stringify(categories),
     options.marketId ?? null,
     options.selection ? JSON.stringify(options.selection) : null,
@@ -3534,16 +3538,37 @@ function parseCrawlRunRow(row: Record<string, unknown>): CrawlRun {
   } as unknown as CrawlRun;
 }
 
-export async function getCrawlRun(id: string): Promise<CrawlRun | null>{
+interface CrawlRunScope {
+  tenantId: string;
+  workspaceId: string | null;
+}
+
+export async function getCrawlRun(id: string, scope?: CrawlRunScope): Promise<CrawlRun | null>{
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM crawl_runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  const row = scope
+    ? await db.prepare(
+      `SELECT * FROM crawl_runs
+       WHERE id = ?
+         AND tenant_id = ?
+         AND (workspace_id = ? OR (workspace_id IS NULL AND ? IS NULL))`,
+    ).get(id, scope.tenantId, scope.workspaceId, scope.workspaceId) as Record<string, unknown> | undefined
+    : await db.prepare("SELECT * FROM crawl_runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
   if (!row) return null;
   return parseCrawlRunRow(row);
 }
 
-export async function getProcessingCrawlRun(): Promise<CrawlRun | null>{
+export async function getProcessingCrawlRun(scope?: CrawlRunScope): Promise<CrawlRun | null>{
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM crawl_runs WHERE status IN ('running', 'queued') ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+  const row = scope
+    ? await db.prepare(
+      `SELECT * FROM crawl_runs
+       WHERE tenant_id = ?
+         AND (workspace_id = ? OR (workspace_id IS NULL AND ? IS NULL))
+         AND status IN ('running', 'queued')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(scope.tenantId, scope.workspaceId, scope.workspaceId) as Record<string, unknown> | undefined
+    : await db.prepare("SELECT * FROM crawl_runs WHERE status IN ('running', 'queued') ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
   if (!row) return null;
   return parseCrawlRunRow(row);
 }
@@ -3558,9 +3583,12 @@ export async function getDefaultVisibleCrawlRun(): Promise<CrawlRun | null>{
   return getLatestCrawlRun();
 }
 
-export async function getSelectedOrDefaultVisibleCrawlRun(runId?: string | null): Promise<CrawlRun | null>{
+export async function getSelectedOrDefaultVisibleCrawlRun(
+  runId?: string | null,
+  scope?: CrawlRunScope,
+): Promise<CrawlRun | null>{
   const cleanRunId = normalizeNullableText(runId);
-  if (cleanRunId) return getCrawlRun(cleanRunId);
+  if (cleanRunId) return getCrawlRun(cleanRunId, scope);
   return getDefaultVisibleCrawlRun();
 }
 
@@ -7101,8 +7129,10 @@ function buildQualityRemovedWebsiteWhere(filters: QualityFilters = {}): { where:
 }
 
 export async function getQualitySummary(filters: QualityFilters = {}): Promise<QualitySummary>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const { where, params } = buildQualityWhere(filters);
+  const qualityFilter = buildQualityWhere(filters);
+  const { where, params } = bindLeadTenantScope(qualityFilter.where, qualityFilter.params, tenantId);
   const row = await db.prepare(
     `SELECT
        COALESCE(SUM(CASE WHEN l.quality_bucket = 'ready_to_call' THEN 1 ELSE 0 END), 0) as ready_to_call,
@@ -7114,7 +7144,12 @@ export async function getQualitySummary(filters: QualityFilters = {}): Promise<Q
        COALESCE(SUM(CASE WHEN l.quality_bucket IN ('ready_to_call','broken_site_opportunity') THEN l.estimated_deal_value ELSE 0 END), 0) as estimated_pipeline_value
      FROM leads l ${where}`
   ).get(...params) as Record<string, number>;
-  const removedWebsiteWhere = buildQualityRemovedWebsiteWhere(filters);
+  const removedWebsiteFilter = buildQualityRemovedWebsiteWhere(filters);
+  const removedWebsiteWhere = bindLeadTenantScope(
+    removedWebsiteFilter.where,
+    removedWebsiteFilter.params,
+    tenantId,
+  );
   const removedRow = await db.prepare(
     `SELECT COUNT(*) as count
      FROM leads l
@@ -7134,8 +7169,10 @@ export async function getQualitySummary(filters: QualityFilters = {}): Promise<Q
 }
 
 export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ leads: QualityLead[]; total: number }>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const { where, params } = buildQualityWhere(filters);
+  const filter = buildQualityWhere(filters);
+  const { where, params } = bindLeadTenantScope(filter.where, filter.params, tenantId);
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 50));
   const offset = (page - 1) * pageSize;
@@ -7188,19 +7225,23 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
        (
          SELECT a.status
          FROM lead_ai_artifacts a
-         WHERE a.lead_id = l.id AND a.artifact_type = 'business_detail'
+         WHERE a.tenant_id = l.tenant_id
+           AND a.lead_id = l.id
+           AND a.artifact_type = 'business_detail'
          ORDER BY a.created_at DESC
          LIMIT 1
        ) as business_detail_status,
        (
          SELECT a.status
          FROM lead_ai_artifacts a
-         WHERE a.lead_id = l.id AND a.artifact_type = 'competitive_report'
+         WHERE a.tenant_id = l.tenant_id
+           AND a.lead_id = l.id
+           AND a.artifact_type = 'competitive_report'
          ORDER BY a.created_at DESC
          LIMIT 1
        ) as competitive_report_status
      FROM leads l
-     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${TENANT_BOUND_ASSIGNEE_JOIN}
      ${where}
      ORDER BY
        CASE l.quality_bucket
@@ -9877,71 +9918,84 @@ export async function getResearcherWorkbench(userId: string, options: { viewerRo
 }
 
 export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const staleBefore = weekAgo;
+  const roleBindingAsOf = new Date().toISOString();
 
   const members = await db.prepare(
-    `SELECT
+    `WITH tenant_scope(tenant_id) AS (VALUES (?))
+     SELECT
        au.user_id,
        au.email,
        au.display_name,
-       au.role,
-       au.is_team_lead,
-       au.team_lead_user_id,
-       au.team_label,
-       tl.email as team_lead_email,
-       tl.display_name as team_lead_display_name,
+       member_role.role,
+       0 as is_team_lead,
+       NULL as team_lead_user_id,
+       NULL as team_label,
+       NULL as team_lead_email,
+       NULL as team_lead_display_name,
        COALESCE(COUNT(CASE WHEN l.status NOT IN ('closed_won','closed_lost') THEN l.id END), 0) as claimed_active,
        COALESCE(SUM(CASE WHEN l.reminder_date IS NOT NULL AND l.reminder_date <= ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as due_today,
        COALESCE(SUM(CASE WHEN l.updated_at < ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as stale_claimed,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM lead_notes n
-         WHERE n.author_user_id = au.user_id AND n.created_at >= ? AND n.deleted_at IS NULL
+         WHERE n.tenant_id = member.tenant_id
+           AND n.author_user_id = au.user_id AND n.created_at >= ? AND n.deleted_at IS NULL
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         WHERE ar.created_by_user_id = au.user_id AND ar.created_at >= ?
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.created_by_user_id = au.user_id AND ar.created_at >= ?
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM audit_logs al
-         WHERE al.actor_user_id = au.user_id
+         WHERE al.scope_kind = 'tenant'
+           AND al.tenant_id = member.tenant_id
+           AND al.actor_user_id = au.user_id
            AND al.created_at >= ?
            AND al.action NOT IN ('outreach_logged','lead_note_created','admin_request_created','admin_request_duplicate_open')
        ), 0) as activity_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0) as contacts_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.channel = 'call'
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.channel = 'call'
        ), 0) as calls_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND COALESCE(oe.decision_maker_reached, 0) = 1
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND COALESCE(oe.decision_maker_reached, 0) = 1
        ), 0) as decision_makers_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.follow_up_at IS NOT NULL
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.follow_up_at IS NOT NULL
        ), 0) as followups_set_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0) as contacts_7d,
        COALESCE(SUM(CASE WHEN l.status = 'meeting_set' THEN 1 ELSE 0 END), 0) as meetings,
        COALESCE(SUM(CASE WHEN l.status = 'closed_won' THEN 1 ELSE 0 END), 0) as closed_won,
@@ -9949,45 +10003,75 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
        COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         LEFT JOIN app_users creator ON creator.user_id = ar.created_by_user_id
-         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
            AND ar.request_type = 'website_request'
-           AND (ar.created_by_user_id = au.user_id OR (au.is_team_lead = 1 AND creator.team_lead_user_id = au.user_id))
+           AND ar.created_by_user_id = au.user_id
        ), 0) as website_requests_open,
        COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         LEFT JOIN app_users creator ON creator.user_id = ar.created_by_user_id
-         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
            AND ar.request_type = 'quote_request'
-           AND (ar.created_by_user_id = au.user_id OR (au.is_team_lead = 1 AND creator.team_lead_user_id = au.user_id))
+           AND ar.created_by_user_id = au.user_id
        ), 0) as quote_requests_open
-     FROM app_users au
-     LEFT JOIN app_users tl ON tl.user_id = au.team_lead_user_id
-     LEFT JOIN leads l ON l.assigned_to_user_id = au.user_id AND COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL
-     WHERE au.status = 'active'
-     GROUP BY au.user_id, au.email, au.display_name, au.role, au.is_team_lead, au.team_lead_user_id, au.team_label, tl.email, tl.display_name
-     ORDER BY au.role ASC, au.is_team_lead DESC, au.email ASC`
-  ).all<Record<string, unknown>>(today, staleBefore, today, today, today, today, today, today, today, today, weekAgo);
+     FROM tenant_scope tenant
+     JOIN tenant_memberships member
+       ON member.tenant_id = tenant.tenant_id
+      AND member.status = 'active'
+      AND member.auth_identity_id IS NOT NULL
+     JOIN tenant_role_bindings member_role
+       ON member_role.tenant_id = member.tenant_id
+      AND member_role.membership_id = member.id
+      AND member_role.revoked_at IS NULL
+      AND member_role.valid_from <= ?
+     JOIN app_users au
+       ON au.user_id = member.auth_identity_id
+      AND au.status = 'active'
+     LEFT JOIN leads l
+       ON l.tenant_id = member.tenant_id
+      AND l.assigned_to_user_id = au.user_id
+      AND COALESCE(l.is_excluded, 0) = 0
+      AND l.archived_at IS NULL
+     GROUP BY au.user_id, au.email, au.display_name, member_role.role
+     ORDER BY member_role.role ASC, au.email ASC`
+  ).all<Record<string, unknown>>(
+    tenantId,
+    today,
+    staleBefore,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    weekAgo,
+    roleBindingAsOf,
+  );
 
   const unassignedRow = await db.prepare(
     `SELECT COUNT(*) as count
-     FROM leads
-     WHERE COALESCE(is_excluded, 0) = 0
-       AND archived_at IS NULL
-       AND ${leadUnassignedCondition("assigned_to_user_id")}
-       AND quality_bucket IN ('ready_to_call','broken_site_opportunity')
-       AND status IN ('new','verified','contacted')`
-  ).get() as { count: number } | undefined;
+     FROM leads l
+     WHERE l.tenant_id = ?
+       AND COALESCE(l.is_excluded, 0) = 0
+       AND l.archived_at IS NULL
+       AND ${leadUnassignedCondition("l.assigned_to_user_id")}
+       AND l.quality_bucket IN ('ready_to_call','broken_site_opportunity')
+       AND l.status IN ('new','verified','contacted')`
+  ).get(tenantId) as { count: number } | undefined;
   const overdueRow = await db.prepare(
     `SELECT COUNT(*) as count
-     FROM leads
-     WHERE COALESCE(is_excluded, 0) = 0
-       AND archived_at IS NULL
-       AND reminder_date IS NOT NULL
-       AND reminder_date <= ?
-       AND status NOT IN ('closed_won','closed_lost')`
-  ).get(today) as { count: number } | undefined;
+     FROM leads l
+     WHERE l.tenant_id = ?
+       AND COALESCE(l.is_excluded, 0) = 0
+       AND l.archived_at IS NULL
+       AND l.reminder_date IS NOT NULL
+       AND l.reminder_date <= ?
+       AND l.status NOT IN ('closed_won','closed_lost')`
+  ).get(tenantId, today) as { count: number } | undefined;
   const todayActivityRows = await getTeamBoardActivityRows({ since: today, limit: 100 });
   const activityRows = await getTeamBoardActivityRows({ limit: 25 });
 
@@ -10026,71 +10110,84 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
 }
 
 export async function getResearcherTeamBoardSummary(userId: string): Promise<TeamBoardSummary> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const staleBefore = weekAgo;
+  const roleBindingAsOf = new Date().toISOString();
 
   const memberRow = await db.prepare(
-    `SELECT
+    `WITH tenant_scope(tenant_id) AS (VALUES (?))
+     SELECT
        au.user_id,
        au.email,
        au.display_name,
-       au.role,
-       au.is_team_lead,
-       au.team_lead_user_id,
-       au.team_label,
-       tl.email as team_lead_email,
-       tl.display_name as team_lead_display_name,
+       member_role.role,
+       0 as is_team_lead,
+       NULL as team_lead_user_id,
+       NULL as team_label,
+       NULL as team_lead_email,
+       NULL as team_lead_display_name,
        COALESCE(COUNT(CASE WHEN l.status NOT IN ('closed_won','closed_lost') THEN l.id END), 0) as claimed_active,
        COALESCE(SUM(CASE WHEN l.reminder_date IS NOT NULL AND l.reminder_date <= ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as due_today,
        COALESCE(SUM(CASE WHEN l.updated_at < ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as stale_claimed,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM lead_notes n
-         WHERE n.author_user_id = au.user_id AND n.created_at >= ? AND n.deleted_at IS NULL
+         WHERE n.tenant_id = member.tenant_id
+           AND n.author_user_id = au.user_id AND n.created_at >= ? AND n.deleted_at IS NULL
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         WHERE ar.created_by_user_id = au.user_id AND ar.created_at >= ?
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.created_by_user_id = au.user_id AND ar.created_at >= ?
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM audit_logs al
-         WHERE al.actor_user_id = au.user_id
+         WHERE al.scope_kind = 'tenant'
+           AND al.tenant_id = member.tenant_id
+           AND al.actor_user_id = au.user_id
            AND al.created_at >= ?
            AND al.action NOT IN ('outreach_logged','lead_note_created','admin_request_created','admin_request_duplicate_open')
        ), 0) as activity_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0) as contacts_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.channel = 'call'
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.channel = 'call'
        ), 0) as calls_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND COALESCE(oe.decision_maker_reached, 0) = 1
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND COALESCE(oe.decision_maker_reached, 0) = 1
        ), 0) as decision_makers_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.follow_up_at IS NOT NULL
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.follow_up_at IS NOT NULL
        ), 0) as followups_set_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0) as contacts_7d,
        COALESCE(SUM(CASE WHEN l.status = 'meeting_set' THEN 1 ELSE 0 END), 0) as meetings,
        COALESCE(SUM(CASE WHEN l.status = 'closed_won' THEN 1 ELSE 0 END), 0) as closed_won,
@@ -10098,23 +10195,54 @@ export async function getResearcherTeamBoardSummary(userId: string): Promise<Tea
        COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
            AND ar.request_type = 'website_request'
            AND ar.created_by_user_id = au.user_id
        ), 0) as website_requests_open,
        COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
            AND ar.request_type = 'quote_request'
            AND ar.created_by_user_id = au.user_id
        ), 0) as quote_requests_open
-     FROM app_users au
-     LEFT JOIN app_users tl ON tl.user_id = au.team_lead_user_id
-     LEFT JOIN leads l ON l.assigned_to_user_id = au.user_id AND COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL
-     WHERE au.status = 'active' AND au.user_id = ?
-     GROUP BY au.user_id, au.email, au.display_name, au.role, au.is_team_lead, au.team_lead_user_id, au.team_label, tl.email, tl.display_name`
-  ).get<Record<string, unknown>>(today, staleBefore, today, today, today, today, today, today, today, today, weekAgo, userId);
+     FROM tenant_scope tenant
+     JOIN tenant_memberships member
+       ON member.tenant_id = tenant.tenant_id
+      AND member.status = 'active'
+      AND member.auth_identity_id = ?
+     JOIN tenant_role_bindings member_role
+       ON member_role.tenant_id = member.tenant_id
+      AND member_role.membership_id = member.id
+      AND member_role.revoked_at IS NULL
+      AND member_role.valid_from <= ?
+     JOIN app_users au
+       ON au.user_id = member.auth_identity_id
+      AND au.status = 'active'
+     LEFT JOIN leads l
+       ON l.tenant_id = member.tenant_id
+      AND l.assigned_to_user_id = au.user_id
+      AND COALESCE(l.is_excluded, 0) = 0
+      AND l.archived_at IS NULL
+     GROUP BY au.user_id, au.email, au.display_name, member_role.role`
+  ).get<Record<string, unknown>>(
+    tenantId,
+    today,
+    staleBefore,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    weekAgo,
+    userId,
+    roleBindingAsOf,
+  );
 
   const todayActivityRows = await getTeamBoardActivityRows({ since: today, actorUserId: userId, limit: 100 });
   const activityRows = await getTeamBoardActivityRows({ actorUserId: userId, limit: 25 });
@@ -10164,6 +10292,7 @@ async function getTeamBoardActivityRows({
   actorUserId?: string;
   limit: number;
 }): Promise<Array<Record<string, unknown>>> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(250, Math.floor(limit)));
   const params: unknown[] = [];
@@ -10172,12 +10301,14 @@ async function getTeamBoardActivityRows({
   const noteWhere = buildActivityWhere("n", "author_user_id", since, actorUserId, params, ["n.deleted_at IS NULL"]);
   const adminRequestWhere = buildActivityWhere("ar", "created_by_user_id", since, actorUserId, params);
   const auditWhere = buildActivityWhere("al", "actor_user_id", since, actorUserId, params, [
+    "al.scope_kind = 'tenant'",
     "al.action NOT IN ('outreach_logged','lead_note_created','admin_request_created','admin_request_duplicate_open')",
   ]);
   params.push(safeLimit);
 
   return db.prepare(
-    `SELECT *
+    `WITH tenant_scope(tenant_id) AS (VALUES (?))
+     SELECT *
      FROM (
        SELECT
          'outreach:' || oe.id as id,
@@ -10203,8 +10334,19 @@ async function getTeamBoardActivityRows({
          '{}' as metadata_json,
          oe.created_at
        FROM outreach_events oe
-       LEFT JOIN leads l ON l.id = oe.lead_id
-       LEFT JOIN app_users au ON au.user_id = oe.actor_user_id
+       LEFT JOIN leads l ON l.tenant_id = oe.tenant_id AND l.id = oe.lead_id
+       LEFT JOIN tenant_memberships actor_membership
+         ON actor_membership.tenant_id = oe.tenant_id
+        AND actor_membership.auth_identity_id = oe.actor_user_id
+        AND actor_membership.status = 'active'
+       LEFT JOIN tenant_role_bindings actor_role
+         ON actor_role.tenant_id = actor_membership.tenant_id
+        AND actor_role.membership_id = actor_membership.id
+        AND actor_role.revoked_at IS NULL
+       LEFT JOIN app_users au
+         ON au.user_id = actor_membership.auth_identity_id
+        AND au.status = 'active'
+        AND actor_role.id IS NOT NULL
        ${outreachWhere}
 
        UNION ALL
@@ -10233,8 +10375,19 @@ async function getTeamBoardActivityRows({
          '{}' as metadata_json,
          n.created_at
        FROM lead_notes n
-       LEFT JOIN leads l ON l.id = n.lead_id
-       LEFT JOIN app_users au ON au.user_id = n.author_user_id
+       LEFT JOIN leads l ON l.tenant_id = n.tenant_id AND l.id = n.lead_id
+       LEFT JOIN tenant_memberships actor_membership
+         ON actor_membership.tenant_id = n.tenant_id
+        AND actor_membership.auth_identity_id = n.author_user_id
+        AND actor_membership.status = 'active'
+       LEFT JOIN tenant_role_bindings actor_role
+         ON actor_role.tenant_id = actor_membership.tenant_id
+        AND actor_role.membership_id = actor_membership.id
+        AND actor_role.revoked_at IS NULL
+       LEFT JOIN app_users au
+         ON au.user_id = actor_membership.auth_identity_id
+        AND au.status = 'active'
+        AND actor_role.id IS NOT NULL
        ${noteWhere}
 
        UNION ALL
@@ -10263,8 +10416,19 @@ async function getTeamBoardActivityRows({
          '{}' as metadata_json,
          ar.created_at
        FROM admin_requests ar
-       LEFT JOIN leads l ON l.id = ar.lead_id
-       LEFT JOIN app_users au ON au.user_id = ar.created_by_user_id
+       LEFT JOIN leads l ON l.tenant_id = ar.tenant_id AND l.id = ar.lead_id
+       LEFT JOIN tenant_memberships actor_membership
+         ON actor_membership.tenant_id = ar.tenant_id
+        AND actor_membership.auth_identity_id = ar.created_by_user_id
+        AND actor_membership.status = 'active'
+       LEFT JOIN tenant_role_bindings actor_role
+         ON actor_role.tenant_id = actor_membership.tenant_id
+        AND actor_role.membership_id = actor_membership.id
+        AND actor_role.revoked_at IS NULL
+       LEFT JOIN app_users au
+         ON au.user_id = actor_membership.auth_identity_id
+        AND au.status = 'active'
+        AND actor_role.id IS NOT NULL
        ${adminRequestWhere}
 
        UNION ALL
@@ -10293,13 +10457,24 @@ async function getTeamBoardActivityRows({
          CAST(al.metadata AS TEXT) as metadata_json,
          al.created_at
        FROM audit_logs al
-       LEFT JOIN leads l ON al.entity_type = 'lead' AND l.id = al.entity_id
-       LEFT JOIN app_users au ON au.user_id = al.actor_user_id
+       LEFT JOIN leads l ON l.tenant_id = al.tenant_id AND al.entity_type = 'lead' AND l.id = al.entity_id
+       LEFT JOIN tenant_memberships actor_membership
+         ON actor_membership.tenant_id = al.tenant_id
+        AND actor_membership.auth_identity_id = al.actor_user_id
+        AND actor_membership.status = 'active'
+       LEFT JOIN tenant_role_bindings actor_role
+         ON actor_role.tenant_id = actor_membership.tenant_id
+        AND actor_role.membership_id = actor_membership.id
+        AND actor_role.revoked_at IS NULL
+       LEFT JOIN app_users au
+         ON au.user_id = actor_membership.auth_identity_id
+        AND au.status = 'active'
+        AND actor_role.id IS NOT NULL
        ${auditWhere}
      ) activity
      ORDER BY created_at DESC
      LIMIT ?`
-  ).all<Record<string, unknown>>(...params);
+  ).all<Record<string, unknown>>(tenantId, ...params);
 }
 
 function buildActivityWhere(
@@ -10310,7 +10485,10 @@ function buildActivityWhere(
   params: unknown[],
   extraConditions: string[] = [],
 ): string {
-  const conditions = [...extraConditions];
+  const conditions = [
+    `${alias}.tenant_id = (SELECT tenant_id FROM tenant_scope)`,
+    ...extraConditions,
+  ];
   if (since) {
     conditions.push(`${alias}.created_at >= ?`);
     params.push(since);
