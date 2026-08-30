@@ -8,7 +8,7 @@ export type FactFreshness = "current" | "stale" | "expired";
 export type FactConflict = "none" | "conflicting";
 export type UncertaintyKind = "unknown" | "conflict" | "stale" | "missing_threshold";
 export type DecisionImpactArea = "icp" | "play" | "search_scope" | "qualification" | "buying_center" | "outreach_safety";
-export type AnswerDisposition = "answered" | "corrected" | "deferred" | "unknown" | "not_applicable";
+export type AnswerDisposition = "answered" | "corrected" | "deferred" | "dismissed" | "unknown" | "not_applicable";
 export type QuestionRepeatReason = "first_ask" | "stale_fact" | "conflicting_fact" | "different_decision";
 
 /**
@@ -22,6 +22,8 @@ export type QuestionAnswerRecord = Readonly<{
   version: 1;
   answerId: string;
   tenantRef: string;
+  sessionRef: string;
+  understandingVersionId: string;
   questionRef: string;
   uncertaintyId: string;
   questionIdentity: QuestionIdentity;
@@ -33,8 +35,33 @@ export type QuestionAnswerRecord = Readonly<{
   supersedesAnswerId: string | null;
 }>;
 
+export type AnswerClaimUpdateProposal = Readonly<{
+  version: 1;
+  proposalRef: string;
+  tenantRef: string;
+  sessionRef: string;
+  understandingVersionId: string;
+  sourceAnswerId: string;
+  sourceQuestionRef: string;
+  sourceUncertaintyId: string;
+  questionIdentity: QuestionIdentity;
+  decisionKey: string;
+  disposition: "answered" | "corrected";
+  origin: "client_provided";
+  status: "proposed";
+  appliesAutomatically: false;
+  answerText: string;
+  evidenceRefs: readonly string[];
+  supersedesAnswerId: string | null;
+}>;
+
 export type QuestionAnswerRecordResult =
-  | Readonly<{ ok: true; code: "ANSWER_RECORDED"; answer: QuestionAnswerRecord }>
+  | Readonly<{
+    ok: true;
+    code: "ANSWER_RECORDED";
+    answer: QuestionAnswerRecord;
+    claimUpdateProposal: AnswerClaimUpdateProposal | null;
+  }>
   | Readonly<{ ok: false; code: "MALFORMED_ANSWER" }>;
 
 export type AdaptiveQuestionScore = Readonly<{
@@ -67,6 +94,7 @@ export type AdaptiveQuestionSession = Readonly<{
   policyVersion: typeof ADAPTIVE_QUESTION_POLICY_VERSION;
   tenantRef: string;
   sessionRef: string;
+  understandingVersionId: string;
   questions: readonly PlannedAdaptiveQuestion[];
 }>;
 
@@ -107,12 +135,16 @@ export type AdaptiveQuestionPlanInput = Readonly<{
   policyVersion: typeof ADAPTIVE_QUESTION_POLICY_VERSION;
   tenantRef: string;
   sessionRef: string;
+  understandingVersionId: string;
   maxQuestions: number;
   uncertainties: readonly AdaptiveQuestionCandidate[];
   answerHistory: readonly QuestionAnswerRecord[];
 }>;
 
-const PLAN_FIELDS = ["version", "policyVersion", "tenantRef", "sessionRef", "maxQuestions", "uncertainties", "answerHistory"] as const;
+const PLAN_FIELDS = [
+  "version", "policyVersion", "tenantRef", "sessionRef", "understandingVersionId",
+  "maxQuestions", "uncertainties", "answerHistory",
+] as const;
 const CANDIDATE_FIELDS = [
   "uncertaintyId", "questionIdentity", "domain", "subject", "kind", "factStatus", "freshness", "conflict",
   "confirmedForDecision", "decisionKey", "prompt", "whyItMatters", "unlocks", "impacts",
@@ -120,19 +152,23 @@ const CANDIDATE_FIELDS = [
 ] as const;
 const IMPACT_FIELDS = ["area", "magnitude"] as const;
 const ANSWER_FIELDS = [
-  "version", "answerId", "tenantRef", "questionRef", "uncertaintyId", "questionIdentity", "decisionKey", "disposition", "answerText",
-  "evidenceRefs", "recordedAt", "supersedesAnswerId",
+  "version", "answerId", "tenantRef", "sessionRef", "understandingVersionId", "questionRef",
+  "uncertaintyId", "questionIdentity", "decisionKey", "disposition", "answerText", "evidenceRefs",
+  "recordedAt", "supersedesAnswerId",
 ] as const;
 
 const FACT_STATUSES = new Set<FactStatus>(["proposed", "confirmed", "corrected", "disputed", "rejected", "unknown", "expired"]);
 const FRESHNESS_STATES = new Set<FactFreshness>(["current", "stale", "expired"]);
 const CONFLICT_STATES = new Set<FactConflict>(["none", "conflicting"]);
 const UNCERTAINTY_KINDS = new Set<UncertaintyKind>(["unknown", "conflict", "stale", "missing_threshold"]);
-const ANSWER_DISPOSITIONS = new Set<AnswerDisposition>(["answered", "corrected", "deferred", "unknown", "not_applicable"]);
+const ANSWER_DISPOSITIONS = new Set<AnswerDisposition>([
+  "answered", "corrected", "deferred", "dismissed", "unknown", "not_applicable",
+]);
 const IMPACT_AREAS = new Set<DecisionImpactArea>([
   "icp", "play", "search_scope", "qualification", "buying_center", "outreach_safety",
 ]);
 const REF = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u;
+const UNDERSTANDING_VERSION_ID = /^understanding-version:[0-9a-f]{64}$/u;
 
 function malformedPlan(): AdaptiveQuestionPlanResult {
   return Object.freeze({ ok: false, code: "MALFORMED_INPUT" });
@@ -248,6 +284,9 @@ function parseAnswer(value: unknown): QuestionAnswerRecord | null {
   if (!record || record.version !== 1) return null;
   const answerId = reference(record.answerId);
   const tenantRef = reference(record.tenantRef);
+  const sessionRef = reference(record.sessionRef);
+  const understandingVersionId = typeof record.understandingVersionId === "string"
+    && UNDERSTANDING_VERSION_ID.test(record.understandingVersionId) ? record.understandingVersionId : null;
   const questionRef = reference(record.questionRef, 700);
   const uncertaintyId = reference(record.uncertaintyId);
   const questionIdentity = normalizedQuestionIdentity(record.questionIdentity);
@@ -257,7 +296,7 @@ function parseAnswer(value: unknown): QuestionAnswerRecord | null {
   const recordedAt = boundedText(record.recordedAt, 40);
   const answerText = record.answerText === null ? null : boundedText(record.answerText, 10_000);
   const supersedesAnswerId = record.supersedesAnswerId === null ? null : reference(record.supersedesAnswerId);
-  if (!answerId || !tenantRef || !questionRef || !uncertaintyId || !questionIdentity
+  if (!answerId || !tenantRef || !sessionRef || !understandingVersionId || !questionRef || !uncertaintyId || !questionIdentity
     || !decisionKey || !disposition || !evidenceRefs || !recordedAt) return null;
   if (record.answerText !== null && answerText === null) return null;
   if (record.supersedesAnswerId !== null && supersedesAnswerId === null) return null;
@@ -270,6 +309,8 @@ function parseAnswer(value: unknown): QuestionAnswerRecord | null {
     version: 1,
     answerId,
     tenantRef,
+    sessionRef,
+    understandingVersionId,
     questionRef,
     uncertaintyId,
     questionIdentity,
@@ -345,14 +386,26 @@ function compareAscii(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function parseAnswerHistory(value: unknown, expectedTenantRef: string | null): readonly QuestionAnswerRecord[] | null {
+type QuestionBinding = Readonly<{
+  tenantRef: string;
+  sessionRef: string;
+  understandingVersionId: string;
+}>;
+
+function sameBinding(left: QuestionBinding, right: QuestionBinding): boolean {
+  return left.tenantRef === right.tenantRef && left.sessionRef === right.sessionRef
+    && left.understandingVersionId === right.understandingVersionId;
+}
+
+function parseAnswerHistory(value: unknown, expectedBinding: QuestionBinding | null): readonly QuestionAnswerRecord[] | null {
   const rawHistory = exactArray(value, 1_000);
   if (!rawHistory) return null;
   const history: QuestionAnswerRecord[] = [];
   const byId = new Map<string, QuestionAnswerRecord>();
   for (const rawAnswer of rawHistory) {
     const answer = parseAnswer(rawAnswer);
-    if (!answer || byId.has(answer.answerId) || (expectedTenantRef !== null && answer.tenantRef !== expectedTenantRef)) return null;
+    if (!answer || byId.has(answer.answerId)
+      || (expectedBinding !== null && !sameBinding(answer, expectedBinding))) return null;
     byId.set(answer.answerId, answer);
     history.push(answer);
   }
@@ -362,6 +415,8 @@ function parseAnswerHistory(value: unknown, expectedTenantRef: string | null): r
     if (!predecessor
       || Date.parse(predecessor.recordedAt) >= Date.parse(answer.recordedAt)
       || predecessor.tenantRef !== answer.tenantRef
+      || predecessor.sessionRef !== answer.sessionRef
+      || predecessor.understandingVersionId !== answer.understandingVersionId
       || predecessor.questionRef !== answer.questionRef
       || predecessor.uncertaintyId !== answer.uncertaintyId
       || predecessor.questionIdentity !== answer.questionIdentity
@@ -370,22 +425,52 @@ function parseAnswerHistory(value: unknown, expectedTenantRef: string | null): r
   return Object.freeze(history);
 }
 
+function proposeClaimUpdate(answer: QuestionAnswerRecord): AnswerClaimUpdateProposal | null {
+  if (answer.disposition !== "answered" && answer.disposition !== "corrected") return null;
+  return Object.freeze({
+    version: 1,
+    proposalRef: `claim-update:${answer.answerId}`,
+    tenantRef: answer.tenantRef,
+    sessionRef: answer.sessionRef,
+    understandingVersionId: answer.understandingVersionId,
+    sourceAnswerId: answer.answerId,
+    sourceQuestionRef: answer.questionRef,
+    sourceUncertaintyId: answer.uncertaintyId,
+    questionIdentity: answer.questionIdentity,
+    decisionKey: answer.decisionKey,
+    disposition: answer.disposition,
+    origin: "client_provided",
+    status: "proposed",
+    appliesAutomatically: false,
+    answerText: answer.answerText as string,
+    evidenceRefs: answer.evidenceRefs,
+    supersedesAnswerId: answer.supersedesAnswerId,
+  });
+}
+
 export function recordQuestionAnswer(input: unknown, answerHistory: unknown = []): QuestionAnswerRecordResult {
   try {
     const answer = parseAnswer(input);
     if (!answer) return malformedAnswer();
-    const history = parseAnswerHistory(answerHistory, answer.tenantRef);
+    const history = parseAnswerHistory(answerHistory, answer);
     if (!history || history.some((prior) => prior.answerId === answer.answerId)) return malformedAnswer();
     if (answer.disposition === "corrected") {
       const predecessor = history.find((prior) => prior.answerId === answer.supersedesAnswerId);
       if (!predecessor
         || Date.parse(predecessor.recordedAt) >= Date.parse(answer.recordedAt)
+        || predecessor.sessionRef !== answer.sessionRef
+        || predecessor.understandingVersionId !== answer.understandingVersionId
         || predecessor.questionRef !== answer.questionRef
         || predecessor.uncertaintyId !== answer.uncertaintyId
         || predecessor.questionIdentity !== answer.questionIdentity
         || predecessor.decisionKey !== answer.decisionKey) return malformedAnswer();
     }
-    return Object.freeze({ ok: true, code: "ANSWER_RECORDED", answer });
+    return Object.freeze({
+      ok: true,
+      code: "ANSWER_RECORDED",
+      answer,
+      claimUpdateProposal: proposeClaimUpdate(answer),
+    });
   } catch {
     return malformedAnswer();
   }
@@ -397,9 +482,12 @@ export function planAdaptiveQuestionSession(input: unknown): AdaptiveQuestionPla
     if (!record || record.version !== 1 || record.policyVersion !== ADAPTIVE_QUESTION_POLICY_VERSION) return malformedPlan();
     const tenantRef = reference(record.tenantRef);
     const sessionRef = reference(record.sessionRef);
+    const understandingVersionId = typeof record.understandingVersionId === "string"
+      && UNDERSTANDING_VERSION_ID.test(record.understandingVersionId) ? record.understandingVersionId : null;
     const maxQuestions = integer(record.maxQuestions, 1, MAX_ADAPTIVE_QUESTIONS_PER_SESSION);
     const rawCandidates = exactArray(record.uncertainties, 100);
-    if (!tenantRef || !sessionRef || maxQuestions === null || !rawCandidates) return malformedPlan();
+    if (!tenantRef || !sessionRef || !understandingVersionId
+      || maxQuestions === null || !rawCandidates) return malformedPlan();
 
     const candidates: AdaptiveQuestionCandidate[] = [];
     const candidateIds = new Set<string>();
@@ -409,7 +497,11 @@ export function planAdaptiveQuestionSession(input: unknown): AdaptiveQuestionPla
       candidateIds.add(candidate.uncertaintyId);
       candidates.push(candidate);
     }
-    const history = parseAnswerHistory(record.answerHistory, tenantRef);
+    const history = parseAnswerHistory(record.answerHistory, {
+      tenantRef,
+      sessionRef,
+      understandingVersionId,
+    });
     if (!history) return malformedPlan();
 
     const ranked: Omit<PlannedAdaptiveQuestion, "rank">[] = [];
@@ -467,8 +559,9 @@ export function planAdaptiveQuestionSession(input: unknown): AdaptiveQuestionPla
       || compareAscii(left.uncertaintyId, right.uncertaintyId));
     const seenQuestionIdentities = new Set<string>();
     const deduplicated = ranked.filter((question) => {
-      if (seenQuestionIdentities.has(question.questionIdentity)) return false;
-      seenQuestionIdentities.add(question.questionIdentity);
+      const semanticDecisionKey = `${question.questionIdentity}\u0000${question.decisionKey}`;
+      if (seenQuestionIdentities.has(semanticDecisionKey)) return false;
+      seenQuestionIdentities.add(semanticDecisionKey);
       return true;
     });
     const questions = Object.freeze(deduplicated.slice(0, maxQuestions).map((question, index) => Object.freeze({ ...question, rank: index + 1 })));
@@ -477,6 +570,7 @@ export function planAdaptiveQuestionSession(input: unknown): AdaptiveQuestionPla
       policyVersion: ADAPTIVE_QUESTION_POLICY_VERSION,
       tenantRef,
       sessionRef,
+      understandingVersionId,
       questions,
     });
     return Object.freeze({

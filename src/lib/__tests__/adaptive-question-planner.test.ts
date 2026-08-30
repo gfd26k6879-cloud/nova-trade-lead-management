@@ -6,6 +6,8 @@ import {
   recordQuestionAnswer,
 } from "@/lib/understanding/question-planner";
 
+const UNDERSTANDING_VERSION_ID = `understanding-version:${"a".repeat(64)}`;
+
 function uncertainty(overrides: Record<string, unknown> = {}) {
   return {
     uncertaintyId: "uncertainty:channel-model",
@@ -38,6 +40,7 @@ function planInput(overrides: Record<string, unknown> = {}) {
     policyVersion: "adaptive-question-value-v1",
     tenantRef: "tenant:alpha",
     sessionRef: "question-session:industrial-1",
+    understandingVersionId: UNDERSTANDING_VERSION_ID,
     maxQuestions: 1,
     uncertainties: [uncertainty()],
     answerHistory: [],
@@ -50,6 +53,8 @@ function answer(overrides: Record<string, unknown> = {}) {
     version: 1,
     answerId: "answer:1",
     tenantRef: "tenant:alpha",
+    sessionRef: "question-session:industrial-1",
+    understandingVersionId: UNDERSTANDING_VERSION_ID,
     questionRef: "question:1",
     uncertaintyId: "uncertainty:channel-model",
     questionIdentity: "channel-model:route-to-market",
@@ -64,6 +69,19 @@ function answer(overrides: Record<string, unknown> = {}) {
 }
 
 describe("adaptive question planning", () => {
+  it("binds a plan to one exact understanding version", () => {
+    const result = planAdaptiveQuestionSession(planInput());
+
+    expect(result).toMatchObject({
+      ok: true,
+      session: {
+        tenantRef: "tenant:alpha",
+        sessionRef: "question-session:industrial-1",
+        understandingVersionId: UNDERSTANDING_VERSION_ID,
+      },
+    });
+  });
+
   it("chooses one discriminating industrial question and explains its expected value", () => {
     const result = planAdaptiveQuestionSession(planInput({
       uncertainties: [
@@ -158,6 +176,7 @@ describe("adaptive question planning", () => {
         policyVersion: "adaptive-question-value-v1",
         tenantRef: "tenant:alpha",
         sessionRef: "question-session:industrial-1",
+        understandingVersionId: UNDERSTANDING_VERSION_ID,
         questions: [],
       },
     });
@@ -191,6 +210,7 @@ describe("adaptive question planning", () => {
       ["answered", "Direct and distributor channels."],
       ["corrected", "Distributor channel only."],
       ["deferred", null],
+      ["dismissed", null],
       ["unknown", null],
       ["not_applicable", "This decision is outside the approved play scope."],
     ] as const) {
@@ -206,6 +226,17 @@ describe("adaptive question planning", () => {
       }));
       expect(result).toMatchObject({ ok: true, code: "NO_ELIGIBLE_QUESTIONS" });
     }
+  });
+
+  it("uses only answer history bound to the exact session and understanding version", () => {
+    const result = planAdaptiveQuestionSession(planInput({
+      answerHistory: [answer({
+        sessionRef: "question-session:industrial-1",
+        understandingVersionId: UNDERSTANDING_VERSION_ID,
+      })],
+    }));
+
+    expect(result).toMatchObject({ ok: true, code: "NO_ELIGIBLE_QUESTIONS" });
   });
 
   it("suppresses a rephrased repeat with a changed uncertainty ID by normalized question identity", () => {
@@ -226,6 +257,7 @@ describe("adaptive question planning", () => {
         policyVersion: "adaptive-question-value-v1",
         tenantRef: "tenant:alpha",
         sessionRef: "question-session:industrial-1",
+        understandingVersionId: UNDERSTANDING_VERSION_ID,
         questions: [],
       },
     });
@@ -252,9 +284,37 @@ describe("adaptive question planning", () => {
     if (result.ok) expect(result.session.questions).toHaveLength(1);
   });
 
-  it("rejects answer history from another tenant scope", () => {
+  it("deduplicates semantics within a decision without hiding a distinct decision", () => {
+    const result = planAdaptiveQuestionSession(planInput({
+      maxQuestions: 2,
+      uncertainties: [
+        uncertainty({ uncertaintyId: "uncertainty:a", decisionKey: "search-scope:v1" }),
+        uncertainty({
+          uncertaintyId: "uncertainty:b",
+          questionIdentity: "CHANNEL MODEL / ROUTE TO MARKET",
+          decisionKey: "qualification:v2",
+        }),
+      ],
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      session: {
+        questions: [
+          { uncertaintyId: "uncertainty:a", decisionKey: "search-scope:v1" },
+          { uncertaintyId: "uncertainty:b", decisionKey: "qualification:v2" },
+        ],
+      },
+    });
+  });
+
+  it.each([
+    ["tenant", { tenantRef: "tenant:beta" }],
+    ["session", { sessionRef: "question-session:other" }],
+    ["understanding version", { understandingVersionId: `understanding-version:${"b".repeat(64)}` }],
+  ])("rejects answer history from another %s binding", (_label, override) => {
     expect(planAdaptiveQuestionSession(planInput({
-      answerHistory: [answer({ tenantRef: "tenant:beta" })],
+      answerHistory: [answer(override)],
     }))).toEqual({ ok: false, code: "MALFORMED_INPUT" });
   });
 
@@ -425,10 +485,66 @@ describe("adaptive question planning", () => {
 });
 
 describe("question answer records", () => {
+  it("proposes traceable claim updates without applying answer content", () => {
+    const answered = recordQuestionAnswer(answer());
+
+    expect(answered).toMatchObject({
+      ok: true,
+      claimUpdateProposal: {
+        version: 1,
+        proposalRef: "claim-update:answer:1",
+        tenantRef: "tenant:alpha",
+        sessionRef: "question-session:industrial-1",
+        understandingVersionId: UNDERSTANDING_VERSION_ID,
+        sourceAnswerId: "answer:1",
+        sourceQuestionRef: "question:1",
+        sourceUncertaintyId: "uncertainty:channel-model",
+        questionIdentity: "channel-model-route-to-market",
+        decisionKey: "search-scope:v1",
+        disposition: "answered",
+        origin: "client_provided",
+        status: "proposed",
+        appliesAutomatically: false,
+        answerText: "Both direct and distributor channels are in scope.",
+        evidenceRefs: ["evidence:channel-policy-v1"],
+        supersedesAnswerId: null,
+      },
+    });
+    if (!answered.ok || !answered.claimUpdateProposal) return;
+    expect(Object.isFrozen(answered.claimUpdateProposal)).toBe(true);
+    expect(Object.isFrozen(answered.claimUpdateProposal.evidenceRefs)).toBe(true);
+
+    const predecessor = answer({ answerId: "answer:prior", recordedAt: "2026-08-29T17:00:00.000Z" });
+    const corrected = recordQuestionAnswer(answer({
+      disposition: "corrected",
+      answerText: "Distributor channel only.",
+      supersedesAnswerId: "answer:prior",
+    }), [predecessor]);
+    expect(corrected).toMatchObject({
+      ok: true,
+      claimUpdateProposal: {
+        disposition: "corrected",
+        sourceAnswerId: "answer:1",
+        supersedesAnswerId: "answer:prior",
+        status: "proposed",
+        appliesAutomatically: false,
+      },
+    });
+
+    for (const disposition of ["deferred", "dismissed", "unknown", "not_applicable"] as const) {
+      const result = recordQuestionAnswer(answer({
+        disposition,
+        answerText: disposition === "not_applicable" ? "Outside this play." : null,
+      }));
+      expect(result).toMatchObject({ ok: true, claimUpdateProposal: null });
+    }
+  });
+
   it.each([
     ["answered", "A concrete answer.", null],
     ["corrected", "A corrected answer.", "answer:prior"],
     ["deferred", null, null],
+    ["dismissed", null, null],
     ["unknown", null, null],
     ["not_applicable", "Outside the current play by policy:play-v1.", null],
   ] as const)("records %s as exact immutable history", (disposition, answerText, supersedesAnswerId) => {
@@ -449,8 +565,9 @@ describe("question answer records", () => {
     expect(Object.isFrozen(result)).toBe(true);
     if (result.ok) {
       expect(Object.keys(result.answer)).toEqual([
-        "version", "answerId", "tenantRef", "questionRef", "uncertaintyId", "questionIdentity", "decisionKey", "disposition",
-        "answerText", "evidenceRefs", "recordedAt", "supersedesAnswerId",
+        "version", "answerId", "tenantRef", "sessionRef", "understandingVersionId", "questionRef",
+        "uncertaintyId", "questionIdentity", "decisionKey", "disposition", "answerText", "evidenceRefs",
+        "recordedAt", "supersedesAnswerId",
       ]);
       expect(Object.isFrozen(result.answer)).toBe(true);
       expect(Object.isFrozen(result.answer.evidenceRefs)).toBe(true);
@@ -493,6 +610,8 @@ describe("question answer records", () => {
 
     for (const mismatch of [
       { tenantRef: "tenant:beta" },
+      { sessionRef: "question-session:other" },
+      { understandingVersionId: `understanding-version:${"b".repeat(64)}` },
       { questionRef: "question:other" },
       { uncertaintyId: "uncertainty:other" },
       { questionIdentity: "channel-model:other-route" },
