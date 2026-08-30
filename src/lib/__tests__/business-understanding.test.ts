@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { buildIcpProposal } from "@/lib/strategy/icp";
 import {
   buildBusinessUnderstandingProposal,
   transitionBusinessUnderstandingReview,
@@ -678,7 +679,7 @@ describe("business-understanding proposal service", () => {
       "2026-08-29T19:01:00.000Z",
       { tenantId: TENANT_B },
     ))).toEqual({ ok: false, code: "SCOPE_MISMATCH" });
-    for (const reason of ["\u034f", "\ufe0f", "\u200b", "\u2060", "\u202e"]) {
+    for (const reason of ["\u00ad", "\u034f", "\ufe0f", "\u200b", "\u2060", "\u202e"]) {
       expect(transitionBusinessUnderstandingReview(reviewTransition(
         draft,
         "in_review",
@@ -714,6 +715,80 @@ describe("business-understanding proposal service", () => {
       "2026-08-29T19:01:00.000Z",
     ))).toEqual({ ok: false, code: "MALFORMED_INPUT" });
     expect(executions).toBe(0);
+  });
+
+  it("produces an approved review snapshot consumable by the ICP boundary", () => {
+    const source = input();
+    const created = buildBusinessUnderstandingProposal(source);
+    if (!created.ok) throw new Error(created.code);
+    const inReview = transitionBusinessUnderstandingReview(reviewTransition(
+      created.proposal.review,
+      "in_review",
+      "2026-08-29T19:01:00.000Z",
+    ));
+    if (!inReview.ok) throw new Error(inReview.code);
+    const approved = transitionBusinessUnderstandingReview(reviewTransition(
+      inReview.review,
+      "approved",
+      "2026-08-29T19:02:00.000Z",
+    ));
+    if (!approved.ok) throw new Error(approved.code);
+    const snapshot = approved.review;
+    const rationaleRefs = [{
+      claimId: "claim:product-range",
+      evidenceId: "evidence:catalog-page-2",
+    }];
+
+    expect(buildIcpProposal({
+      version: 1,
+      tenantId: TENANT_A,
+      workspaceId: WORKSPACE_A,
+      stableKey: "icp:understanding-consumer-regression",
+      revision: 1,
+      predecessor: null,
+      createdAt: "2026-08-29T20:00:00.000Z",
+      understanding: {
+        tenantId: TENANT_A,
+        workspaceId: WORKSPACE_A,
+        versionId: snapshot.versionId,
+        contentHash: snapshot.contentHash,
+        claimSetHash: snapshot.claimSetHash,
+        reviewHash: snapshot.reviewHash,
+        snapshot,
+        authority: {
+          authorityVersion: 1,
+          tenantId: TENANT_A,
+          workspaceId: WORKSPACE_A,
+          understandingVersionId: snapshot.versionId,
+          understandingContentHash: snapshot.contentHash,
+          understandingClaimSetHash: snapshot.claimSetHash,
+          understandingReviewHash: snapshot.reviewHash,
+          source,
+        },
+      },
+      title: "Evidence-backed industrial product buyers",
+      segment: "Organizations evaluating supported industrial products",
+      useCase: "Prioritize supported product-fit opportunities",
+      positiveCriteria: [{
+        criterionId: "criterion:product-fit",
+        ruleKey: "positive-signal:product-fit",
+        domain: "positive_signal",
+        rule: "The account has a supported industrial product requirement.",
+        rationale: "The approved understanding contains direct product evidence.",
+        confidenceBasisPoints: 9_000,
+        rationaleRefs,
+      }],
+      exclusions: [{
+        criterionId: "exclusion:unsupported-fit",
+        ruleKey: "disqualifier:unsupported-fit",
+        domain: "disqualifier",
+        rule: "Exclude accounts without a supported industrial product requirement.",
+        rationale: "The approved understanding requires direct product evidence.",
+        confidenceBasisPoints: 9_000,
+        rationaleRefs,
+      }],
+      uncertainties: [],
+    })).toMatchObject({ ok: true, code: "ICP_PROPOSAL_CREATED" });
   });
 
   it("deeply snapshots and freezes proposal output", () => {

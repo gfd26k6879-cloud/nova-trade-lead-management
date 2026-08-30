@@ -313,7 +313,7 @@ function boundedText(value: unknown, maximum = 2_000): string | null {
 
 function reviewReason(value: unknown): string | null {
   const reason = boundedText(value, 2_000);
-  return reason && !/[\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufe00-\ufe0f\ufeff]/u.test(reason)
+  return reason && !/\p{Default_Ignorable_Code_Point}/u.test(reason)
     ? reason
     : null;
 }
