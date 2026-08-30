@@ -1,7 +1,14 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
+import {
+  isDbStatementTimeoutError,
+  isTransientDbError,
+  withDbStatementTimeout,
+  withTenantDbContext,
+  type DbClient,
+} from "@/lib/db/index";
 import {
   ReadOnlyActionDeadlineError,
   withReadOnlyActionDeadline,
@@ -66,7 +73,8 @@ import {
   type MarketCoverageSummary,
   type SchedulerWorkerName,
 } from "@/lib/db/queries";
-import { requirePermission } from "@/lib/auth";
+import { requirePermission, type AppSession, type TenantSession } from "@/lib/auth";
+import type { TenantSessionSelector } from "@/lib/app-users";
 import {
   emptyDashboardStats,
   emptyDashboardSummaryPanels,
@@ -85,6 +93,15 @@ import {
 } from "@/lib/discovery-sizing";
 import { PlacesApiError, textSearch } from "@/lib/google-places";
 import { startRouteTiming } from "@/lib/route-timing";
+import {
+  assertTenantPermission,
+  requireTenantPermission,
+  TenantAuthorizationError,
+  type TenantPolicyContext,
+} from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
+import { createTenantQueryRepository } from "@/lib/tenancy/queries";
+import { tenantPolicySchema } from "@/lib/tenancy/schemas";
 
 const startPlannerSchema = z.object({
   state: z.string().trim().min(2).max(2).transform((value) => value.toUpperCase()),
@@ -347,9 +364,47 @@ type StartCrawlPayload = string[] | z.infer<typeof startPlannerSchema> | z.infer
 
 type EstimateCrawlPayload = z.infer<typeof startPlannerSchema> | z.infer<typeof startMarketPlannerSchema>;
 
-export async function startCrawlRunAction(payload: StartCrawlPayload) {
+async function requireCrawlSourceExecution(
+  session: TenantSession,
+  db: DbClient,
+): Promise<void> {
+  const currentPolicy = await createTenantQueryRepository(db).getCurrentTenantPolicy(session.tenantId);
+  const parsedPolicy = tenantPolicySchema.safeParse(currentPolicy);
+
+  await assertTenantPermission(session, "source:execute", {
+    action: "crawl.discovery.start",
+    policyEvaluator: (context: TenantPolicyContext) => ({
+      allowed: session.workspaceId !== null
+        && context.tenantId === session.tenantId
+        && context.workspaceId === session.workspaceId
+        && parsedPolicy.success
+        && parsedPolicy.data.tenantId === session.tenantId
+        && parsedPolicy.data.sourceResearchEnabled
+        && !parsedPolicy.data.requireSourcePlanApproval,
+      context,
+    }),
+  });
+}
+
+export async function startCrawlRunAction(
+  payload: StartCrawlPayload,
+  selector: TenantSessionSelector = {},
+) {
+  const tenantSession = await requireTenantPermission(selector, "workspace:read");
   const actor = await requirePermission("crawl:manage");
-  await ensureDbReady();
+  if (actor.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
+  }
+
+  return runWithTenantContext(tenantSession, `crawl-start:${randomUUID()}`, () =>
+    withTenantDbContext(async (db) => {
+      await ensureDbReady();
+      await requireCrawlSourceExecution(tenantSession, db);
+      return startAuthorizedCrawlRun(payload, actor);
+    }));
+}
+
+async function startAuthorizedCrawlRun(payload: StartCrawlPayload, actor: AppSession) {
 
   const existing = await getProcessingCrawlRun();
   if (existing) {

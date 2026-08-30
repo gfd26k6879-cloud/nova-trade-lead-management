@@ -4,10 +4,21 @@ import { createTestDb, seedTestRun, seedTestUnit, seedTestZip } from "./test-hel
 
 let testDb: Database.Database;
 
+const authMocks = vi.hoisted(() => ({
+  requirePermission: vi.fn(),
+}));
+
 const dbIndexMocks = vi.hoisted(() => ({
   isDbStatementTimeoutError: vi.fn((error: unknown) => (error as { code?: string }).code === "57014"),
   isTransientDbError: vi.fn(() => false),
   withDbStatementTimeout: vi.fn((_timeoutMs: number, fn: () => Promise<unknown>) => fn()),
+  withTenantDbContext: vi.fn((fn: (db: unknown) => Promise<unknown>) => fn(testDb)),
+}));
+
+const tenantAuthorizationMocks = vi.hoisted(() => ({
+  requireTenantPermission: vi.fn(),
+  runWithTenantContext: vi.fn((_session: unknown, _correlationId: unknown, fn: () => unknown) => fn()),
+  getCurrentTenantPolicy: vi.fn(),
 }));
 
 const googlePlacesMocks = vi.hoisted(() => ({
@@ -15,7 +26,23 @@ const googlePlacesMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/auth", () => ({
-  requirePermission: vi.fn(() => Promise.resolve({ userId: "admin-1", email: "admin@example.com", role: "admin" })),
+  requirePermission: authMocks.requirePermission,
+}));
+
+vi.mock("@/lib/tenancy/authorize", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/tenancy/authorize")>(),
+  requireTenantPermission: tenantAuthorizationMocks.requireTenantPermission,
+}));
+
+vi.mock("@/lib/tenancy/context", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/tenancy/context")>(),
+  runWithTenantContext: tenantAuthorizationMocks.runWithTenantContext,
+}));
+
+vi.mock("@/lib/tenancy/queries", () => ({
+  createTenantQueryRepository: vi.fn(() => ({
+    getCurrentTenantPolicy: tenantAuthorizationMocks.getCurrentTenantPolicy,
+  })),
 }));
 
 vi.mock("@/lib/db/index", () => {
@@ -27,6 +54,7 @@ vi.mock("@/lib/db/index", () => {
     isDbStatementTimeoutError: dbIndexMocks.isDbStatementTimeoutError,
     isTransientDbError: dbIndexMocks.isTransientDbError,
     withDbStatementTimeout: dbIndexMocks.withDbStatementTimeout,
+    withTenantDbContext: dbIndexMocks.withTenantDbContext,
   };
 });
 
@@ -65,8 +93,35 @@ import {
   stopCrawlRunAction,
 } from "@/lib/crawl/actions";
 import { PlacesApiError } from "@/lib/google-places";
+import { TENANT_POLICY_DEFAULTS } from "@/lib/tenancy/schemas";
 
 const originalGooglePlacesApiKey = process.env.GOOGLE_PLACES_API_KEY;
+const TENANT_ID = "10000000-0000-4000-8000-000000000001";
+const WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
+const TENANT_SESSION = Object.freeze({
+  userId: "admin-1",
+  email: "admin@example.com",
+  displayName: "Admin",
+  tenantId: TENANT_ID,
+  workspaceId: WORKSPACE_ID,
+  membershipId: "30000000-0000-4000-8000-000000000001",
+  role: "owner" as const,
+  roleBindingId: "40000000-0000-4000-8000-000000000001",
+});
+
+function sourcePolicy(overrides: Record<string, unknown> = {}) {
+  return {
+    ...TENANT_POLICY_DEFAULTS,
+    id: "50000000-0000-4000-8000-000000000001",
+    tenantId: TENANT_ID,
+    version: 1,
+    sourceResearchEnabled: true,
+    requireSourcePlanApproval: false,
+    createdAt: "2026-08-30T00:00:00.000Z",
+    updatedAt: "2026-08-30T00:00:00.000Z",
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   testDb = createTestDb();
@@ -77,6 +132,20 @@ beforeEach(() => {
   dbIndexMocks.isDbStatementTimeoutError.mockImplementation((error: unknown) => (error as { code?: string }).code === "57014");
   dbIndexMocks.isTransientDbError.mockReturnValue(false);
   dbIndexMocks.withDbStatementTimeout.mockImplementation((_timeoutMs: number, fn: () => Promise<unknown>) => fn());
+  dbIndexMocks.withTenantDbContext.mockClear();
+  dbIndexMocks.withTenantDbContext.mockImplementation((fn: (db: unknown) => Promise<unknown>) => fn(testDb));
+  tenantAuthorizationMocks.requireTenantPermission.mockReset();
+  tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue(TENANT_SESSION);
+  authMocks.requirePermission.mockReset();
+  authMocks.requirePermission.mockResolvedValue({
+    userId: "admin-1",
+    email: "admin@example.com",
+    displayName: "Admin",
+    role: "admin",
+  });
+  tenantAuthorizationMocks.runWithTenantContext.mockClear();
+  tenantAuthorizationMocks.getCurrentTenantPolicy.mockReset();
+  tenantAuthorizationMocks.getCurrentTenantPolicy.mockResolvedValue(sourcePolicy());
 });
 
 afterEach(() => {
@@ -89,6 +158,81 @@ afterEach(() => {
 });
 
 describe("crawl discovery item actions", () => {
+  it("establishes the selected tenant scope and source policy before starting discovery", async () => {
+    const result = await startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    }, { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID });
+
+    expect("error" in result).toBe(false);
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID },
+      "workspace:read",
+    );
+    expect(tenantAuthorizationMocks.getCurrentTenantPolicy).toHaveBeenCalledWith(TENANT_ID);
+    expect(tenantAuthorizationMocks.runWithTenantContext).toHaveBeenCalledWith(
+      TENANT_SESSION,
+      expect.stringMatching(/^crawl-start:/),
+      expect.any(Function),
+    );
+    expect(googlePlacesMocks.textSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed before provider or crawl writes when source approval is still required", async () => {
+    tenantAuthorizationMocks.getCurrentTenantPolicy.mockResolvedValueOnce(sourcePolicy({
+      requireSourcePlanApproval: true,
+    }));
+
+    await expect(startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    }, { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID })).rejects.toMatchObject({
+      code: "POLICY_BLOCKED",
+      status: 403,
+    });
+
+    expect(googlePlacesMocks.textSearch).not.toHaveBeenCalled();
+    expect(testDb.prepare("SELECT COUNT(*) AS count FROM crawl_runs").get()).toMatchObject({ count: 0 });
+  });
+
+  it("rejects composed auth identities before tenant context, policy, database, or provider work", async () => {
+    authMocks.requirePermission.mockResolvedValueOnce({
+      userId: "different-user",
+      email: "different@example.com",
+      displayName: "Different user",
+      role: "admin",
+    });
+
+    await expect(startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    }, { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID })).rejects.toMatchObject({
+      code: "TENANT_SCOPE_MISMATCH",
+      status: 403,
+    });
+
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+    expect(tenantAuthorizationMocks.getCurrentTenantPolicy).not.toHaveBeenCalled();
+    expect(googlePlacesMocks.textSearch).not.toHaveBeenCalled();
+    expect(testDb.prepare("SELECT COUNT(*) AS count FROM crawl_runs").get()).toMatchObject({ count: 0 });
+  });
+
   it("returns a blocked estimate when the Text Search cap is exhausted", async () => {
     testDb.prepare(
       `INSERT INTO api_usage_events (id, endpoint, sku, billable_units)
