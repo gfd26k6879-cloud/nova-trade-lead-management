@@ -380,11 +380,32 @@ describe("lead-play proposal and review boundary", () => {
     expect(buildLeadPlayProposal(input({
       searchHypotheses: [hypothesis(), hypothesis()],
     }))).toEqual({ ok: false, code: "DUPLICATE_ITEM" });
+    expect(buildLeadPlayProposal(input({
+      searchHypotheses: [
+        hypothesis({ hypothesisId: "hypothesis:first", queryFamily: "family:first" }),
+        hypothesis({
+          hypothesisId: "hypothesis:second",
+          queryFamily: "family:second",
+          statement: "ORGANIZATIONS ANNOUNCING FORMULATION CHANGES MAY HAVE AN ACTIVE REPLACEMENT NEED.",
+        }),
+      ],
+    }))).toEqual({ ok: false, code: "DUPLICATE_ITEM" });
     expect(buildLeadPlayProposal(input({ title: "Target buyers by religion" })))
       .toEqual({ ok: false, code: "UNSAFE_PLAY" });
     expect(buildLeadPlayProposal(input({ title: "Target buyers by ｒｅｌｉｇｉｏｎ" })))
       .toEqual({ ok: false, code: "UNSAFE_PLAY" });
     expect(buildLeadPlayProposal(input({ title: "Target buyers by rel\u034figion" })).ok).toBe(false);
+    expect(buildLeadPlayProposal(input({ title: "Target buyers by reli\u0301gion" })))
+      .toEqual({ ok: false, code: "UNSAFE_PLAY" });
+    expect(buildLeadPlayProposal(input({
+      searchHypotheses: [hypothesis({ hypothesisId: "hypothesis:religion" })],
+    }))).toEqual({ ok: false, code: "UNSAFE_PLAY" });
+    expect(buildLeadPlayProposal(input({
+      searchHypotheses: [hypothesis({ queryFamily: "target-buyers-by-religion" })],
+    }))).toEqual({ ok: false, code: "UNSAFE_PLAY" });
+    expect(buildLeadPlayProposal(input({
+      searchHypotheses: [hypothesis({ hypothesisId: "hypothesis:ordinary-market", queryFamily: "ordinary-market" })],
+    }))).toMatchObject({ ok: true, code: "LEAD_PLAY_PROPOSAL_CREATED" });
     expect(buildLeadPlayProposal({ ...input(), activate: true })).toEqual({ ok: false, code: "MALFORMED_INPUT" });
 
     let executions = 0;

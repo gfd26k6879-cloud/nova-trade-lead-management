@@ -300,8 +300,12 @@ function allowedTransition(from: LeadPlayReviewStatus, to: LeadPlayReviewStatus)
 }
 
 function unsafeText(value: string): boolean {
-  const securityView = value.normalize("NFKC");
+  const securityView = value.normalize("NFKD").replace(/\p{M}+/gu, "").normalize("NFKC");
   return SECRET.test(securityView) || PROTECTED_TARGETING.test(securityView) || UNSAFE_LINK_OR_MARKUP.test(securityView);
+}
+
+function canonicalSemanticText(value: string): string {
+  return value.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ");
 }
 
 type ParsedIcpReview = Scope & Readonly<{
@@ -492,7 +496,7 @@ function parseHypothesis(value: unknown): HypothesisResult {
   if (!hypothesisId || !queryFamily || !statement || !rationale) {
     return Object.freeze({ ok: false, code: "MALFORMED_INPUT" });
   }
-  if (unsafeText(statement) || unsafeText(rationale)) {
+  if (unsafeText(hypothesisId) || unsafeText(queryFamily) || unsafeText(statement) || unsafeText(rationale)) {
     return Object.freeze({ ok: false, code: "UNSAFE_PLAY" });
   }
   if (!rationaleRefs.ok) return rationaleRefs;
@@ -516,7 +520,9 @@ function parseUncertainty(value: unknown): UncertaintyResult {
   if (!uncertaintyId || !statement || !impact || !rawClaims) {
     return Object.freeze({ ok: false, code: "MALFORMED_INPUT" });
   }
-  if (unsafeText(statement) || unsafeText(impact)) return Object.freeze({ ok: false, code: "UNSAFE_PLAY" });
+  if (unsafeText(uncertaintyId) || unsafeText(statement) || unsafeText(impact)) {
+    return Object.freeze({ ok: false, code: "UNSAFE_PLAY" });
+  }
   if (rawClaims.length === 0) return Object.freeze({ ok: false, code: "MISSING_RATIONALE_REFERENCE" });
   const relatedClaimIds: string[] = [];
   const seen = new Set<string>();
@@ -734,6 +740,7 @@ export function buildLeadPlayProposal(value: unknown): LeadPlayProposalResult {
       || !rawHypotheses || !rawSources || !rawUncertainties || !boundsInput) {
       return proposalFailure("MALFORMED_INPUT");
     }
+    if (unsafeText(stableKey)) return proposalFailure("UNSAFE_PLAY");
     if (input.outreachMode !== "draft_only") {
       return typeof input.outreachMode === "string"
         ? proposalFailure("AUTOMATIC_OUTREACH_FORBIDDEN") : proposalFailure("MALFORMED_INPUT");
@@ -787,14 +794,18 @@ export function buildLeadPlayProposal(value: unknown): LeadPlayProposalResult {
     const searchHypotheses: LeadPlaySearchHypothesis[] = [];
     const hypothesisIds = new Set<string>();
     const queryFamilies = new Set<string>();
+    const hypothesisFingerprints = new Set<string>();
     for (const raw of rawHypotheses) {
       const parsed = parseHypothesis(raw);
       if (!parsed.ok) return proposalFailure(parsed.code);
-      if (hypothesisIds.has(parsed.value.hypothesisId) || queryFamilies.has(parsed.value.queryFamily)) {
+      const fingerprint = canonicalSemanticText(parsed.value.statement);
+      if (hypothesisIds.has(parsed.value.hypothesisId) || queryFamilies.has(parsed.value.queryFamily)
+        || hypothesisFingerprints.has(fingerprint)) {
         return proposalFailure("DUPLICATE_ITEM");
       }
       hypothesisIds.add(parsed.value.hypothesisId);
       queryFamilies.add(parsed.value.queryFamily);
+      hypothesisFingerprints.add(fingerprint);
       if (parsed.value.rationaleRefs.some((item) => !icpResolves(icpSource, item))) {
         return proposalFailure("MISSING_RATIONALE_REFERENCE");
       }
