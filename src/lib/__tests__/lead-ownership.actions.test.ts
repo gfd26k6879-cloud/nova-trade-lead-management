@@ -78,14 +78,24 @@ vi.mock("@/lib/db", () => ({ withTenantDbContext: tenantDbMocks.withTenantDbCont
 vi.mock("@/lib/db/queries", () => queryMocks);
 
 import {
+  addLeadNoteAction,
   archiveLeadAction,
+  assignLeadAction,
+  bulkArchiveLeadsAction,
+  bulkRestoreArchivedLeadsAction,
+  bulkUpdateLeadStatusAction,
   claimLeadAction,
   createManualLeadAction,
+  excludeLeadAction,
   getLeadByIdAction,
+  getLeadNotesAction,
   getLeadsAction,
   logOutreachEventAction,
   restoreArchivedLeadAction,
+  restoreExcludedLeadAction,
   unclaimLeadAction,
+  updateLeadNotesAction,
+  updateLeadReminderAction,
   updateLeadStatusAction,
 } from "@/lib/leads/actions";
 
@@ -95,6 +105,19 @@ const USER_A = "10000000-0000-4000-8000-000000000001";
 const MEMBERSHIP_A = "20000000-0000-4000-8000-000000000001";
 const ROLE_BINDING_A = "30000000-0000-4000-8000-000000000001";
 const TENANT_SELECTOR = { tenantId: TENANT_A };
+
+function mockTenantRole(role: "owner" | "admin" | "strategist_manager" | "researcher" | "reviewer" | "outreach_operator" | "analyst_read_only") {
+  tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue({
+    userId: USER_A,
+    email: "owner@example.com",
+    displayName: "Owner",
+    tenantId: TENANT_A,
+    workspaceId: null,
+    membershipId: MEMBERSHIP_A,
+    role,
+    roleBindingId: ROLE_BINDING_A,
+  });
+}
 
 const baseLead = {
   id: "lead-1",
@@ -112,16 +135,7 @@ beforeEach(() => {
   queryMocks.ensureDbReady.mockResolvedValue(undefined);
   queryMocks.createAuditLog.mockResolvedValue(undefined);
   queryMocks.userCanAccessMarket.mockResolvedValue(true);
-  tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue({
-    userId: USER_A,
-    email: "owner@example.com",
-    displayName: "Owner",
-    tenantId: TENANT_A,
-    workspaceId: null,
-    membershipId: MEMBERSHIP_A,
-    role: "owner",
-    roleBindingId: ROLE_BINDING_A,
-  });
+  mockTenantRole("owner");
 });
 
 describe("lead ownership server actions", () => {
@@ -309,28 +323,30 @@ describe("lead ownership server actions", () => {
   });
 
   it("records the claiming user on claim audit events", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
     queryMocks.getLeadById.mockResolvedValue(baseLead);
     queryMocks.claimLeadForUser.mockResolvedValue(1);
 
     const result = await claimLeadAction("lead-1");
 
     expect(result).toEqual({ success: true });
-    expect(queryMocks.claimLeadForUser).toHaveBeenCalledWith("lead-1", "user-1");
+    expect(queryMocks.claimLeadForUser).toHaveBeenCalledWith("lead-1", USER_A);
     expect(queryMocks.createAuditLog).toHaveBeenCalledWith(
       "lead_claimed",
       "lead",
       "lead-1",
       undefined,
-      { actor: { userId: "user-1", email: "one@example.com", role: "researcher" } },
+      { actor: { userId: USER_A, email: "one@example.com", role: "researcher" } },
     );
   });
 
   it("rejects researcher claims for already assigned, archived, or excluded leads", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
 
     for (const lead of [
-      { ...baseLead, assigned_to_user_id: "user-1" },
+      { ...baseLead, assigned_to_user_id: USER_A },
       { ...baseLead, assigned_to_user_id: "user-2" },
       { ...baseLead, archived_at: "2026-08-01T00:00:00.000Z" },
       { ...baseLead, is_excluded: true },
@@ -343,7 +359,8 @@ describe("lead ownership server actions", () => {
   });
 
   it("rejects researcher claims outside assigned markets before mutation or audit", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
     queryMocks.getLeadById.mockResolvedValue(baseLead);
     queryMocks.userCanAccessMarket.mockResolvedValue(false);
 
@@ -353,7 +370,8 @@ describe("lead ownership server actions", () => {
   });
 
   it("does not disclose lead identity when a researcher loses an atomic claim race", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
     queryMocks.getLeadById.mockResolvedValueOnce(baseLead);
     queryMocks.claimLeadForUser.mockResolvedValue(0);
 
@@ -363,7 +381,7 @@ describe("lead ownership server actions", () => {
   });
 
   it("preserves the admin claim path for inactive inventory", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
     queryMocks.getLeadById.mockResolvedValue({
       ...baseLead,
       archived_at: "2026-08-01T00:00:00.000Z",
@@ -374,14 +392,15 @@ describe("lead ownership server actions", () => {
     await expect(claimLeadAction("lead-1")).resolves.toEqual({ success: true });
     expect(queryMocks.claimLeadForUser).toHaveBeenCalledWith(
       "lead-1",
-      "admin-1",
+      USER_A,
       { preserveAdminSemantics: true },
     );
   });
 
   it("records the releasing user on unclaim audit events", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
-    queryMocks.getLeadById.mockResolvedValue({ ...baseLead, assigned_to_user_id: "user-1" });
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
+    queryMocks.getLeadById.mockResolvedValue({ ...baseLead, assigned_to_user_id: USER_A });
     queryMocks.assignLeadToUser.mockResolvedValue(undefined);
 
     const result = await unclaimLeadAction("lead-1");
@@ -393,12 +412,13 @@ describe("lead ownership server actions", () => {
       "lead",
       "lead-1",
       undefined,
-      { actor: { userId: "user-1", email: "one@example.com", role: "researcher" } },
+      { actor: { userId: USER_A, email: "one@example.com", role: "researcher" } },
     );
   });
 
   it("requires researchers to claim a lead before status changes", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
     queryMocks.getLeadById.mockResolvedValue(baseLead);
 
     const result = await updateLeadStatusAction("lead-1", "contacted");
@@ -408,7 +428,7 @@ describe("lead ownership server actions", () => {
   });
 
   it("allows admins to update unclaimed lead status", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
     queryMocks.getLeadById.mockResolvedValue(baseLead);
     queryMocks.updateLeadStatus.mockResolvedValue(undefined);
 
@@ -419,7 +439,7 @@ describe("lead ownership server actions", () => {
   });
 
   it("prevents researchers from logging outreach on another owner lead", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
     queryMocks.getLeadById.mockResolvedValue({
       ...baseLead,
       assigned_to_user_id: "user-2",
@@ -433,10 +453,11 @@ describe("lead ownership server actions", () => {
   });
 
   it("prevents researchers from mutating archived or excluded owned leads", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
     queryMocks.getLeadById
-      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: "user-1", archived_at: "2026-08-01T00:00:00.000Z" })
-      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: "user-1", is_excluded: true });
+      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: USER_A, archived_at: "2026-08-01T00:00:00.000Z" })
+      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: USER_A, is_excluded: true });
 
     await expect(updateLeadStatusAction("lead-1", "contacted")).resolves.toEqual({ error: "Lead not found" });
     await expect(updateLeadStatusAction("lead-1", "contacted")).resolves.toEqual({ error: "Lead not found" });
@@ -444,8 +465,9 @@ describe("lead ownership server actions", () => {
   });
 
   it("rejects researcher mutations outside assigned markets before mutation or audit", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "one@example.com", role: "researcher" });
-    queryMocks.getLeadById.mockResolvedValue({ ...baseLead, assigned_to_user_id: "user-1", market_id: "market-uk" });
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
+    queryMocks.getLeadById.mockResolvedValue({ ...baseLead, assigned_to_user_id: USER_A, market_id: "market-uk" });
     queryMocks.userCanAccessMarket.mockResolvedValue(false);
 
     await expect(updateLeadStatusAction("lead-1", "contacted")).resolves.toEqual({ error: "Lead not found" });
@@ -453,20 +475,178 @@ describe("lead ownership server actions", () => {
     expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
   });
 
+  it("fails closed before legacy auth or database access when lifecycle tenant scope is unavailable", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockRejectedValue(new Error("A valid tenant scope is required"));
+
+    await expect(updateLeadStatusAction("lead-1", "contacted", TENANT_SELECTOR))
+      .rejects.toThrow("A valid tenant scope is required");
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      TENANT_SELECTOR,
+      "account:read",
+      { action: "lead.status.update" },
+    );
+    expect(authMocks.requirePermission).not.toHaveBeenCalled();
+    expect(tenantContextMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects mismatched actor identity and workspace-narrowed lifecycle scope before database access", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "different-user", email: "other@example.com", role: "admin" });
+
+    await expect(updateLeadNotesAction("lead-1", "note", TENANT_SELECTOR)).rejects.toMatchObject({
+      code: "TENANT_SCOPE_MISMATCH",
+    });
+
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue({
+      userId: USER_A,
+      email: "owner@example.com",
+      displayName: "Owner",
+      tenantId: TENANT_A,
+      workspaceId: "40000000-0000-4000-8000-000000000001",
+      membershipId: MEMBERSHIP_A,
+      role: "owner",
+      roleBindingId: ROLE_BINDING_A,
+    });
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
+
+    await expect(updateLeadNotesAction("lead-1", "note", TENANT_SELECTOR)).rejects.toMatchObject({
+      code: "WORKSPACE_SCOPE_INVALID",
+    });
+    expect(tenantContextMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadNotes).not.toHaveBeenCalled();
+  });
+
+  it("uses canonical researcher semantics even when the legacy session is an admin", async () => {
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
+    queryMocks.getLeadById.mockResolvedValue(baseLead);
+    queryMocks.claimLeadForUser.mockResolvedValue(1);
+
+    await expect(updateLeadStatusAction("lead-1", "contacted")).resolves.toEqual({
+      error: "Claim this lead before updating it.",
+    });
+    await expect(claimLeadAction("lead-1")).resolves.toEqual({ success: true });
+
+    expect(queryMocks.updateLeadStatus).not.toHaveBeenCalled();
+    expect(queryMocks.claimLeadForUser).toHaveBeenCalledWith("lead-1", USER_A);
+    expect(queryMocks.claimLeadForUser).not.toHaveBeenCalledWith(
+      "lead-1",
+      USER_A,
+      { preserveAdminSemantics: true },
+    );
+  });
+
+  it("denies mutation authority to canonical read and outreach roles despite a legacy admin session", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
+
+    for (const role of ["reviewer", "outreach_operator", "analyst_read_only"] as const) {
+      mockTenantRole(role);
+      await expect(updateLeadNotesAction("lead-1", "note")).rejects.toMatchObject({
+        code: "PERMISSION_DENIED",
+      });
+    }
+
+    expect(tenantContextMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadNotes).not.toHaveBeenCalled();
+  });
+
+  it("keeps manager-only lifecycle operations unavailable to a canonical researcher", async () => {
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
+
+    await expect(archiveLeadAction("lead-1", "duplicate candidate")).rejects.toMatchObject({
+      code: "PERMISSION_DENIED",
+    });
+
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+    expect(queryMocks.archiveLead).not.toHaveBeenCalled();
+  });
+
+  it("uses manager semantics for a canonical strategist even with a legacy researcher session", async () => {
+    mockTenantRole("strategist_manager");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "strategist@example.com", role: "researcher" });
+    queryMocks.getLeadById.mockResolvedValue(baseLead);
+    queryMocks.updateLeadStatus.mockResolvedValue(undefined);
+
+    await expect(updateLeadStatusAction("lead-1", "contacted")).resolves.toEqual({ success: true });
+
+    expect(queryMocks.updateLeadStatus).toHaveBeenCalledWith("lead-1", "contacted");
+  });
+
+  it("does not read or mutate a lifecycle resource returned from another tenant", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
+    queryMocks.getLeadById.mockResolvedValue({ ...baseLead, tenant_id: TENANT_B });
+
+    await expect(updateLeadStatusAction("lead-1", "contacted")).resolves.toEqual({ error: "Lead not found" });
+    await expect(updateLeadNotesAction("lead-1", "note")).resolves.toEqual({ error: "Lead not found" });
+    await expect(addLeadNoteAction("lead-1", "note")).resolves.toEqual({ error: "Lead not found" });
+    await expect(getLeadNotesAction("lead-1")).resolves.toEqual([]);
+    await expect(claimLeadAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(unclaimLeadAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(assignLeadAction("lead-1", USER_A)).resolves.toEqual({ error: "Lead not found" });
+    await expect(updateLeadReminderAction("lead-1", "2026-09-01")).resolves.toEqual({ error: "Lead not found" });
+    await expect(excludeLeadAction("lead-1", "duplicate candidate")).resolves.toEqual({ error: "Lead not found" });
+    await expect(restoreExcludedLeadAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(archiveLeadAction("lead-1", "duplicate candidate")).resolves.toEqual({ error: "Lead not found" });
+    await expect(restoreArchivedLeadAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+
+    expect(queryMocks.updateLeadStatus).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadNotes).not.toHaveBeenCalled();
+    expect(queryMocks.createLeadNote).not.toHaveBeenCalled();
+    expect(queryMocks.getLeadNotes).not.toHaveBeenCalled();
+    expect(queryMocks.claimLeadForUser).not.toHaveBeenCalled();
+    expect(queryMocks.assignLeadToUser).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadReminder).not.toHaveBeenCalled();
+    expect(queryMocks.setLeadExclusion).not.toHaveBeenCalled();
+    expect(queryMocks.clearLeadExclusion).not.toHaveBeenCalled();
+    expect(queryMocks.archiveLead).not.toHaveBeenCalled();
+    expect(queryMocks.restoreArchivedLead).not.toHaveBeenCalled();
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("keeps mixed-tenant bulk lifecycle requests all-or-nothing", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
+    queryMocks.getLeadById
+      .mockResolvedValueOnce(baseLead)
+      .mockResolvedValueOnce({ ...baseLead, id: "lead-foreign", tenant_id: TENANT_B })
+      .mockResolvedValueOnce(baseLead)
+      .mockResolvedValueOnce({ ...baseLead, id: "lead-foreign", tenant_id: TENANT_B })
+      .mockResolvedValueOnce(baseLead)
+      .mockResolvedValueOnce({ ...baseLead, id: "lead-foreign", tenant_id: TENANT_B });
+    const ids = ["lead-1", "lead-foreign"];
+
+    await expect(bulkArchiveLeadsAction(ids, "duplicate candidates")).resolves.toEqual({ error: "Lead not found" });
+    await expect(bulkRestoreArchivedLeadsAction(ids)).resolves.toEqual({ error: "Lead not found" });
+    await expect(bulkUpdateLeadStatusAction(ids, "contacted")).resolves.toEqual({ error: "Lead not found" });
+
+    expect(queryMocks.bulkArchiveLeads).not.toHaveBeenCalled();
+    expect(queryMocks.bulkRestoreArchivedLeads).not.toHaveBeenCalled();
+    expect(queryMocks.bulkUpdateLeadStatus).not.toHaveBeenCalled();
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  });
+
   it("archives leads with an audit event", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
     queryMocks.getLeadById.mockResolvedValue(baseLead);
     queryMocks.archiveLead.mockResolvedValue(1);
 
     const result = await archiveLeadAction("lead-1", "duplicate candidate");
 
     expect(result).toEqual({ success: true });
-    expect(queryMocks.archiveLead).toHaveBeenCalledWith("lead-1", "admin-1", "duplicate candidate");
+    expect(queryMocks.archiveLead).toHaveBeenCalledWith("lead-1", USER_A, "duplicate candidate");
     expect(queryMocks.createAuditLog).toHaveBeenCalledWith("lead_archived", "lead", "lead-1", { reason: "duplicate candidate" });
   });
 
   it("restores archived leads with an audit event", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
     queryMocks.getLeadById.mockResolvedValue({ ...baseLead, archived_at: "2026-06-02T20:17:00.000Z" });
     queryMocks.restoreArchivedLead.mockResolvedValue(1);
 

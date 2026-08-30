@@ -59,7 +59,8 @@ import {
   type LeadFilters,
   type QualityFilters,
 } from "@/lib/db/queries";
-import { requirePermission, type AppSession } from "@/lib/auth";
+import { requirePermission, type AppSession, type TenantSession } from "@/lib/auth";
+import type { LegacyPermission } from "@/lib/permissions";
 import type { TenantSessionSelector } from "@/lib/app-users";
 import { canClaimLeadForSession, canReadLeadForSession, constrainLeadFiltersForSession } from "@/lib/lead-access";
 import { parseMinReviewsFilter } from "@/lib/lead-filter-parsing";
@@ -220,9 +221,10 @@ function auditActorOptions(session: AppSession) {
 async function requireLeadOwnershipForMutation(
   id: string,
   session: { userId: string; role: string },
+  knownLead?: Awaited<ReturnType<typeof queryLeadById>>,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (session.role === "admin") return { ok: true };
-  const lead = await queryLeadById(id);
+  const lead = knownLead ?? await queryLeadById(id);
   if (!lead) return { ok: false, error: "Lead not found" };
   if (!await canReadLeadForSession(session, lead)) {
     if (await canClaimLeadForSession(session, lead)) {
@@ -233,6 +235,89 @@ async function requireLeadOwnershipForMutation(
   if (!lead.assigned_to_user_id) return { ok: false, error: "Claim this lead before updating it." };
   if (lead.assigned_to_user_id !== session.userId) return { ok: false, error: `Taken by ${leadOwnerLabel(lead)}.` };
   return { ok: true };
+}
+
+type LeadActionClass = "read" | "researcher-mutation" | "manager-mutation";
+
+const CANONICAL_LEAD_MANAGER_ROLES: ReadonlySet<TenantSession["role"]> = new Set([
+  "owner",
+  "admin",
+  "strategist_manager",
+]);
+
+function bindCanonicalLeadActor(
+  tenantSession: TenantSession,
+  legacySession: AppSession,
+  actionClass: LeadActionClass,
+): AppSession {
+  if (CANONICAL_LEAD_MANAGER_ROLES.has(tenantSession.role)) {
+    return { ...legacySession, role: "admin" };
+  }
+  if (actionClass === "read") {
+    return { ...legacySession, role: "researcher" };
+  }
+  if (actionClass === "researcher-mutation" && tenantSession.role === "researcher") {
+    return { ...legacySession, role: "researcher" };
+  }
+  throw new TenantAuthorizationError(403, "PERMISSION_DENIED");
+}
+
+async function withTenantWideLeadActor<T>(
+  selector: TenantSessionSelector,
+  legacyPermission: LegacyPermission,
+  action: string,
+  actionClass: LeadActionClass,
+  callback: (tenantSession: TenantSession, legacySession: AppSession) => Promise<T>,
+): Promise<T> {
+  const tenantSession = await requireTenantPermission(selector, "account:read", { action });
+  const legacySession = await requirePermission(legacyPermission);
+  if (legacySession.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
+  }
+  if (tenantSession.workspaceId !== null) {
+    throw new TenantAuthorizationError(403, "WORKSPACE_SCOPE_INVALID");
+  }
+  const actorSession = bindCanonicalLeadActor(tenantSession, legacySession, actionClass);
+
+  return runWithTenantContext(tenantSession, `${action}:${randomUUID()}`, () =>
+    withTenantDbContext(async () => {
+      await ensureDbReady();
+      return callback(tenantSession, actorSession);
+    }));
+}
+
+function tenantOwnedLeadOrNull(
+  tenantSession: TenantSession,
+  lead: Awaited<ReturnType<typeof queryLeadById>>,
+): NonNullable<Awaited<ReturnType<typeof queryLeadById>>> | null {
+  if (!lead) return null;
+  const scopedLead = lead as typeof lead & { tenant_id?: unknown; workspace_id?: unknown };
+  try {
+    assertTenantResourceOwnership(tenantSession, {
+      tenantId: scopedLead.tenant_id,
+      workspaceId: scopedLead.workspace_id ?? null,
+      resourceId: scopedLead.id,
+      resourceType: "lead",
+    }, "workspace-optional");
+    return lead;
+  } catch (error) {
+    if (error instanceof TenantAuthorizationError) return null;
+    throw error;
+  }
+}
+
+async function getTenantOwnedLead(
+  tenantSession: TenantSession,
+  id: string,
+): Promise<NonNullable<Awaited<ReturnType<typeof queryLeadById>>> | null> {
+  return tenantOwnedLeadOrNull(tenantSession, await queryLeadById(id));
+}
+
+async function allLeadIdsBelongToTenant(tenantSession: TenantSession, ids: readonly string[]): Promise<boolean> {
+  for (const id of ids) {
+    if (!await getTenantOwnedLead(tenantSession, id)) return false;
+  }
+  return true;
 }
 
 const RESEARCHER_AI_CLAIM_REQUIRED_MESSAGE = "Claim this lead before running AI tools.";
@@ -378,195 +463,211 @@ export async function getLeadByIdAction(id: string, selector: TenantSessionSelec
   return await canReadLeadForSession(session, scopedLead) ? scopedLead : null;
 }
 
-export async function updateLeadStatusAction(id: string, status: string) {
+export async function updateLeadStatusAction(id: string, status: string, selector: TenantSessionSelector = {}) {
   const parsed = statusSchema.safeParse(status);
   if (!parsed.success) return { error: "Invalid status value" };
-  const session = await requirePermission(parsed.data === "closed_won" || parsed.data === "closed_lost" ? "lead:close" : "lead:update");
-  await ensureDbReady();
-  const ownership = await requireLeadOwnershipForMutation(id, session);
-  if (!ownership.ok) return { error: ownership.error };
-  await dbUpdateStatus(id, parsed.data);
-  await createAuditLog("lead_status_change", "lead", id, { status: parsed.data });
-  revalidateLeadViews();
-  return { success: true };
+  return withTenantWideLeadActor(
+    selector,
+    parsed.data === "closed_won" || parsed.data === "closed_lost" ? "lead:close" : "lead:update",
+    "lead.status.update",
+    "researcher-mutation",
+    async (tenantSession, session) => {
+      const lead = await getTenantOwnedLead(tenantSession, id);
+      if (!lead) return { error: "Lead not found" };
+      const ownership = await requireLeadOwnershipForMutation(id, session, lead);
+      if (!ownership.ok) return { error: ownership.error };
+      await dbUpdateStatus(id, parsed.data);
+      await createAuditLog("lead_status_change", "lead", id, { status: parsed.data });
+      revalidateLeadViews();
+      return { success: true };
+    },
+  );
 }
 
-export async function updateLeadNotesAction(id: string, notes: string) {
-  const session = await requirePermission("lead:update");
-  await ensureDbReady();
-  const ownership = await requireLeadOwnershipForMutation(id, session);
-  if (!ownership.ok) return { error: ownership.error };
-  await dbUpdateNotes(id, notes);
-  await createAuditLog("lead_notes_updated", "lead", id, {
-    length: notes.length,
-    hasNotes: notes.trim().length > 0,
+export async function updateLeadNotesAction(id: string, notes: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:update", "lead.notes.update", "researcher-mutation", async (tenantSession, session) => {
+    const lead = await getTenantOwnedLead(tenantSession, id);
+    if (!lead) return { error: "Lead not found" };
+    const ownership = await requireLeadOwnershipForMutation(id, session, lead);
+    if (!ownership.ok) return { error: ownership.error };
+    await dbUpdateNotes(id, notes);
+    await createAuditLog("lead_notes_updated", "lead", id, {
+      length: notes.length,
+      hasNotes: notes.trim().length > 0,
+    });
+    revalidatePath(`/leads/${id}`);
+    return { success: true };
   });
-  revalidatePath(`/leads/${id}`);
-  return { success: true };
 }
 
-export async function addLeadNoteAction(id: string, body: string) {
-  const session = await requirePermission("lead:update");
-  await ensureDbReady();
-  const lead = await queryLeadById(id);
-  if (!lead) return { error: "Lead not found" };
-  const ownership = await requireLeadOwnershipForMutation(id, session);
-  if (!ownership.ok) return { error: ownership.error };
-  const parsed = leadNoteSchema.safeParse(body);
-  if (!parsed.success) return { error: "Note must be between 1 and 4000 characters." };
-  const note = await dbCreateLeadNote(id, session.userId, parsed.data);
-  await createAuditLog("lead_note_created", "lead", id, { noteId: note.id });
-  revalidatePath(`/leads/${id}`);
-  return { success: true, note };
+export async function addLeadNoteAction(id: string, body: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:update", "lead.note.create", "researcher-mutation", async (tenantSession, session) => {
+    const lead = await getTenantOwnedLead(tenantSession, id);
+    if (!lead) return { error: "Lead not found" };
+    const ownership = await requireLeadOwnershipForMutation(id, session, lead);
+    if (!ownership.ok) return { error: ownership.error };
+    const parsed = leadNoteSchema.safeParse(body);
+    if (!parsed.success) return { error: "Note must be between 1 and 4000 characters." };
+    const note = await dbCreateLeadNote(id, session.userId, parsed.data);
+    await createAuditLog("lead_note_created", "lead", id, { noteId: note.id });
+    revalidatePath(`/leads/${id}`);
+    return { success: true, note };
+  });
 }
 
-export async function getLeadNotesAction(id: string) {
-  const session = await requirePermission("view:workspace");
-  await ensureDbReady();
-  const lead = await queryLeadById(id);
-  if (!lead || !await canReadLeadForSession(session, lead)) return [];
-  return dbGetLeadNotes(id);
+export async function getLeadNotesAction(id: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "view:workspace", "lead.notes.read", "read", async (tenantSession, session) => {
+    const lead = await getTenantOwnedLead(tenantSession, id);
+    if (!lead || !await canReadLeadForSession(session, lead)) return [];
+    return dbGetLeadNotes(id);
+  });
 }
 
-export async function claimLeadAction(id: string) {
-  const session = await requirePermission("lead:assign");
-  await ensureDbReady();
-  const lead = await queryLeadById(id);
-  if (!lead) return { error: "Lead not found" };
-  if (!await canClaimLeadForSession(session, lead)) return { error: "Lead not found" };
-  const changes = session.role === "admin"
-    ? await dbClaimLeadForUser(id, session.userId, { preserveAdminSemantics: true })
-    : await dbClaimLeadForUser(id, session.userId);
-  if (changes === 0) {
-    if (session.role !== "admin") return { error: "Lead not found" };
-    const current = await queryLeadById(id);
-    return { error: current ? `Taken by ${leadOwnerLabel(current)}.` : "Lead not found" };
-  }
-  await createAuditLog("lead_claimed", "lead", id, undefined, auditActorOptions(session));
-  revalidateLeadViews();
-  revalidatePath(`/leads/${id}`);
-  return { success: true };
+export async function claimLeadAction(id: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:assign", "lead.claim", "researcher-mutation", async (tenantSession, session) => {
+    const lead = await getTenantOwnedLead(tenantSession, id);
+    if (!lead) return { error: "Lead not found" };
+    if (!await canClaimLeadForSession(session, lead)) return { error: "Lead not found" };
+    const changes = session.role === "admin"
+      ? await dbClaimLeadForUser(id, session.userId, { preserveAdminSemantics: true })
+      : await dbClaimLeadForUser(id, session.userId);
+    if (changes === 0) {
+      if (session.role !== "admin") return { error: "Lead not found" };
+      const current = await getTenantOwnedLead(tenantSession, id);
+      return { error: current ? `Taken by ${leadOwnerLabel(current)}.` : "Lead not found" };
+    }
+    await createAuditLog("lead_claimed", "lead", id, undefined, auditActorOptions(session));
+    revalidateLeadViews();
+    revalidatePath(`/leads/${id}`);
+    return { success: true };
+  });
 }
 
-export async function unclaimLeadAction(id: string) {
-  const session = await requirePermission("lead:assign");
-  await ensureDbReady();
-  const lead = await queryLeadById(id);
-  if (!lead) return { error: "Lead not found" };
-  if (!await canReadLeadForSession(session, lead)) return { error: "Lead not found" };
-  if (lead.assigned_to_user_id && lead.assigned_to_user_id !== session.userId && session.role !== "admin") {
-    return { error: "Only the assigned researcher or an admin can unclaim this lead." };
-  }
-  await dbAssignLeadToUser(id, null);
-  await createAuditLog("lead_unclaimed", "lead", id, undefined, auditActorOptions(session));
-  revalidateLeadViews();
-  revalidatePath(`/leads/${id}`);
-  return { success: true };
+export async function unclaimLeadAction(id: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:assign", "lead.unclaim", "researcher-mutation", async (tenantSession, session) => {
+    const lead = await getTenantOwnedLead(tenantSession, id);
+    if (!lead) return { error: "Lead not found" };
+    if (!await canReadLeadForSession(session, lead)) return { error: "Lead not found" };
+    if (lead.assigned_to_user_id && lead.assigned_to_user_id !== session.userId && session.role !== "admin") {
+      return { error: "Only the assigned researcher or an admin can unclaim this lead." };
+    }
+    await dbAssignLeadToUser(id, null);
+    await createAuditLog("lead_unclaimed", "lead", id, undefined, auditActorOptions(session));
+    revalidateLeadViews();
+    revalidatePath(`/leads/${id}`);
+    return { success: true };
+  });
 }
 
-export async function assignLeadAction(id: string, userId: string | null) {
-  await requirePermission("lead:admin_assign");
-  await ensureDbReady();
-  const lead = await queryLeadById(id);
-  if (!lead) return { error: "Lead not found" };
-  await dbAssignLeadToUser(id, userId);
-  await createAuditLog("lead_assigned", "lead", id, { assignedTo: userId });
-  revalidateLeadViews();
-  revalidatePath(`/leads/${id}`);
-  return { success: true };
+export async function assignLeadAction(id: string, userId: string | null, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:admin_assign", "lead.assign", "manager-mutation", async (tenantSession) => {
+    const lead = await getTenantOwnedLead(tenantSession, id);
+    if (!lead) return { error: "Lead not found" };
+    await dbAssignLeadToUser(id, userId);
+    await createAuditLog("lead_assigned", "lead", id, { assignedTo: userId });
+    revalidateLeadViews();
+    revalidatePath(`/leads/${id}`);
+    return { success: true };
+  });
 }
 
-export async function updateLeadReminderAction(id: string, date: string | null) {
-  const session = await requirePermission("lead:update");
-  await ensureDbReady();
-  const ownership = await requireLeadOwnershipForMutation(id, session);
-  if (!ownership.ok) return { error: ownership.error };
-  await dbUpdateReminder(id, date);
-  await createAuditLog("lead_reminder_updated", "lead", id, { reminderDate: date });
-  revalidateLeadViews();
-  revalidatePath(`/leads/${id}`);
-  return { success: true };
+export async function updateLeadReminderAction(id: string, date: string | null, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:update", "lead.reminder.update", "researcher-mutation", async (tenantSession, session) => {
+    const lead = await getTenantOwnedLead(tenantSession, id);
+    if (!lead) return { error: "Lead not found" };
+    const ownership = await requireLeadOwnershipForMutation(id, session, lead);
+    if (!ownership.ok) return { error: ownership.error };
+    await dbUpdateReminder(id, date);
+    await createAuditLog("lead_reminder_updated", "lead", id, { reminderDate: date });
+    revalidateLeadViews();
+    revalidatePath(`/leads/${id}`);
+    return { success: true };
+  });
 }
 
-export async function excludeLeadAction(id: string, reason: string) {
-  await requirePermission("lead:exclude");
-  await ensureDbReady();
-  const lead = await queryLeadById(id);
-  if (!lead) return { error: "Lead not found" };
+export async function excludeLeadAction(id: string, reason: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:exclude", "lead.exclude", "manager-mutation", async (tenantSession) => {
+    const lead = await getTenantOwnedLead(tenantSession, id);
+    if (!lead) return { error: "Lead not found" };
 
-  const parsedReason = exclusionReasonSchema.safeParse(reason);
-  if (!parsedReason.success) {
-    return { error: "Please provide a clear reason (at least 5 characters)." };
-  }
+    const parsedReason = exclusionReasonSchema.safeParse(reason);
+    if (!parsedReason.success) {
+      return { error: "Please provide a clear reason (at least 5 characters)." };
+    }
 
-  const changes = await dbSetLeadExclusion(id, parsedReason.data);
-  if (changes === 0) return { error: "Lead was not updated. Refresh and try again." };
-  await createAuditLog("lead_excluded", "lead", id, { reason: parsedReason.data });
-  revalidateLeadViews();
-  revalidatePath(`/leads/${id}`);
-  return { success: true };
+    const changes = await dbSetLeadExclusion(id, parsedReason.data);
+    if (changes === 0) return { error: "Lead was not updated. Refresh and try again." };
+    await createAuditLog("lead_excluded", "lead", id, { reason: parsedReason.data });
+    revalidateLeadViews();
+    revalidatePath(`/leads/${id}`);
+    return { success: true };
+  });
 }
 
-export async function restoreExcludedLeadAction(id: string) {
-  await requirePermission("lead:exclude");
-  await ensureDbReady();
-  const lead = await queryLeadById(id);
-  if (!lead) return { error: "Lead not found" };
+export async function restoreExcludedLeadAction(id: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:exclude", "lead.exclusion.restore", "manager-mutation", async (tenantSession) => {
+    const lead = await getTenantOwnedLead(tenantSession, id);
+    if (!lead) return { error: "Lead not found" };
 
-  const changes = await dbClearLeadExclusion(id);
-  if (changes === 0) return { error: "Lead was not updated. Refresh and try again." };
-  await createAuditLog("lead_exclusion_cleared", "lead", id, {});
-  revalidateLeadViews();
-  revalidatePath(`/leads/${id}`);
-  return { success: true };
+    const changes = await dbClearLeadExclusion(id);
+    if (changes === 0) return { error: "Lead was not updated. Refresh and try again." };
+    await createAuditLog("lead_exclusion_cleared", "lead", id, {});
+    revalidateLeadViews();
+    revalidatePath(`/leads/${id}`);
+    return { success: true };
+  });
 }
 
-export async function archiveLeadAction(id: string, reason: string) {
-  const session = await requirePermission("lead:exclude");
-  await ensureDbReady();
-  const lead = await queryLeadById(id);
-  if (!lead) return { error: "Lead not found" };
-  const parsedReason = archiveReasonSchema.safeParse(reason);
-  if (!parsedReason.success) return { error: "Please provide an archive reason of at least 5 characters." };
-  const changes = await dbArchiveLead(id, session.userId, parsedReason.data);
-  if (changes === 0) return { error: "Lead is already archived or was not found." };
-  await createAuditLog("lead_archived", "lead", id, { reason: parsedReason.data });
-  revalidateLeadViews();
-  revalidatePath(`/leads/${id}`);
-  return { success: true };
+export async function archiveLeadAction(id: string, reason: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:exclude", "lead.archive", "manager-mutation", async (tenantSession, session) => {
+    const lead = await getTenantOwnedLead(tenantSession, id);
+    if (!lead) return { error: "Lead not found" };
+    const parsedReason = archiveReasonSchema.safeParse(reason);
+    if (!parsedReason.success) return { error: "Please provide an archive reason of at least 5 characters." };
+    const changes = await dbArchiveLead(id, session.userId, parsedReason.data);
+    if (changes === 0) return { error: "Lead is already archived or was not found." };
+    await createAuditLog("lead_archived", "lead", id, { reason: parsedReason.data });
+    revalidateLeadViews();
+    revalidatePath(`/leads/${id}`);
+    return { success: true };
+  });
 }
 
-export async function restoreArchivedLeadAction(id: string) {
-  await requirePermission("lead:exclude");
-  await ensureDbReady();
-  const lead = await queryLeadById(id);
-  if (!lead) return { error: "Lead not found" };
-  const changes = await dbRestoreArchivedLead(id);
-  if (changes === 0) return { error: "Lead is not archived or was not found." };
-  await createAuditLog("lead_restored", "lead", id, {});
-  revalidateLeadViews();
-  revalidatePath(`/leads/${id}`);
-  return { success: true };
+export async function restoreArchivedLeadAction(id: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:exclude", "lead.archive.restore", "manager-mutation", async (tenantSession) => {
+    const lead = await getTenantOwnedLead(tenantSession, id);
+    if (!lead) return { error: "Lead not found" };
+    const changes = await dbRestoreArchivedLead(id);
+    if (changes === 0) return { error: "Lead is not archived or was not found." };
+    await createAuditLog("lead_restored", "lead", id, {});
+    revalidateLeadViews();
+    revalidatePath(`/leads/${id}`);
+    return { success: true };
+  });
 }
 
-export async function bulkArchiveLeadsAction(ids: string[], reason: string) {
-  const session = await requirePermission("lead:exclude");
-  await ensureDbReady();
-  const parsedReason = archiveReasonSchema.safeParse(reason);
-  if (!parsedReason.success) return { error: "Please provide an archive reason of at least 5 characters." };
-  const count = await dbBulkArchiveLeads(ids, session.userId, parsedReason.data);
-  await createAuditLog("lead_archived", "leads", undefined, { reason: parsedReason.data, count });
-  revalidateLeadViews();
-  return { success: true, count };
+export async function bulkArchiveLeadsAction(ids: string[], reason: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:exclude", "lead.archive.bulk", "manager-mutation", async (tenantSession, session) => {
+    const parsedReason = archiveReasonSchema.safeParse(reason);
+    if (!parsedReason.success) return { error: "Please provide an archive reason of at least 5 characters." };
+    if (ids.length === 0) return { error: "No leads selected" };
+    if (!await allLeadIdsBelongToTenant(tenantSession, ids)) return { error: "Lead not found" };
+    const count = await dbBulkArchiveLeads(ids, session.userId, parsedReason.data);
+    await createAuditLog("lead_archived", "leads", undefined, { reason: parsedReason.data, count });
+    revalidateLeadViews();
+    return { success: true, count };
+  });
 }
 
-export async function bulkRestoreArchivedLeadsAction(ids: string[]) {
-  await requirePermission("lead:exclude");
-  await ensureDbReady();
-  const count = await dbBulkRestoreArchivedLeads(ids);
-  await createAuditLog("lead_restored", "leads", undefined, { count });
-  revalidateLeadViews();
-  return { success: true, count };
+export async function bulkRestoreArchivedLeadsAction(ids: string[], selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "lead:exclude", "lead.archive.bulk_restore", "manager-mutation", async (tenantSession) => {
+    if (ids.length === 0) return { error: "No leads selected" };
+    if (!await allLeadIdsBelongToTenant(tenantSession, ids)) return { error: "Lead not found" };
+    const count = await dbBulkRestoreArchivedLeads(ids);
+    await createAuditLog("lead_restored", "leads", undefined, { count });
+    revalidateLeadViews();
+    return { success: true, count };
+  });
 }
 
 export async function createManualLeadAction(input: unknown) {
@@ -879,22 +980,34 @@ export async function refreshStaleUnitsAction(runId: string, olderThanDays: numb
   return { success: true, count };
 }
 
-export async function bulkUpdateLeadStatusAction(ids: string[], status: string) {
+export async function bulkUpdateLeadStatusAction(ids: string[], status: string, selector: TenantSessionSelector = {}) {
   const parsed = statusSchema.safeParse(status);
   if (!parsed.success) return { error: "Invalid status" };
-  const session = await requirePermission(parsed.data === "closed_won" || parsed.data === "closed_lost" ? "lead:close" : "lead:update");
-  await ensureDbReady();
-  if (ids.length === 0) return { error: "No leads selected" };
-  if (session.role !== "admin") {
-    for (const id of ids) {
-      const ownership = await requireLeadOwnershipForMutation(id, session);
-      if (!ownership.ok) return { error: ownership.error };
-    }
-  }
-  const count = await dbBulkUpdateStatus(ids, parsed.data);
-  await createAuditLog("bulk_status_update", "leads", undefined, { status: parsed.data, count });
-  revalidateLeadViews();
-  return { success: true, count };
+  return withTenantWideLeadActor(
+    selector,
+    parsed.data === "closed_won" || parsed.data === "closed_lost" ? "lead:close" : "lead:update",
+    "lead.status.bulk_update",
+    "researcher-mutation",
+    async (tenantSession, session) => {
+      if (ids.length === 0) return { error: "No leads selected" };
+      const leads: NonNullable<Awaited<ReturnType<typeof queryLeadById>>>[] = [];
+      for (const id of ids) {
+        const lead = await getTenantOwnedLead(tenantSession, id);
+        if (!lead) return { error: "Lead not found" };
+        leads.push(lead);
+      }
+      if (session.role !== "admin") {
+        for (let index = 0; index < ids.length; index += 1) {
+          const ownership = await requireLeadOwnershipForMutation(ids[index]!, session, leads[index]);
+          if (!ownership.ok) return { error: ownership.error };
+        }
+      }
+      const count = await dbBulkUpdateStatus(ids, parsed.data);
+      await createAuditLog("bulk_status_update", "leads", undefined, { status: parsed.data, count });
+      revalidateLeadViews();
+      return { success: true, count };
+    },
+  );
 }
 
 export async function runAiVerificationAction(leadId: string, options: { force?: boolean } = {}) {
