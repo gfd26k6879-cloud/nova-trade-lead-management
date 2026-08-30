@@ -71,21 +71,21 @@ export default function OnboardingPage() {
       steps={ONBOARDING_STEPS}
       currentStepId="materials"
       savedLabel="Preview only · no materials have been submitted"
-      backAction={<Link className="btn-glass min-h-11 w-full sm:w-auto" href="/dashboard">Back to dashboard</Link>}
-      nextAction={<button className="btn-primary min-h-11 w-full sm:w-auto" type="button" disabled title="Available after intake services are connected">Continue</button>}
+      backAction={<Link className="btn-glass col-span-2 min-h-11 w-full sm:w-auto" href="/dashboard">Back to dashboard</Link>}
+      nextAction={<button className="btn-primary col-span-2 min-h-11 w-full sm:w-auto" type="button" disabled aria-describedby="fixture-intake-disabled-explanation">Continue</button>}
     >
       <div className="grid gap-5 lg:grid-cols-[minmax(18rem,30rem)_minmax(0,1fr)]">
         <section className="glass rounded-2xl p-4 sm:p-5" aria-labelledby="authorized-input-title">
-          <div className="flex items-start justify-between gap-3">
-            <div>
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:justify-between">
+            <div className="min-w-0">
               <h2 id="authorized-input-title" className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
                 Choose an authorized input
               </h2>
-              <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
-                Fixture controls are disabled until document services are connected.
+              <p id="fixture-intake-disabled-explanation" className="mt-1 break-words text-xs leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
+                Preview only: file, link, note, and Continue actions are unavailable until document services are connected. Nothing can be submitted from this fixture.
               </p>
             </div>
-            <span className="rounded-full border px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-wide" style={{ borderColor: "var(--chip-border)", color: "var(--text-tertiary)" }}>
+            <span className="shrink-0 rounded-full border px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-wide" style={{ borderColor: "var(--chip-border)", color: "var(--text-tertiary)" }}>
               Preview
             </span>
           </div>
@@ -93,12 +93,12 @@ export default function OnboardingPage() {
           <div className="mt-5 rounded-xl border border-dashed p-6 text-center sm:p-8" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)" }}>
             <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Drop permitted files here</p>
             <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>PDF, spreadsheet, or document · limits shown before upload</p>
-            <button className="btn-primary mt-4 min-h-11" type="button" disabled>Choose files</button>
+            <button className="btn-primary mt-4 min-h-11 w-full sm:w-auto" type="button" disabled aria-describedby="fixture-intake-disabled-explanation">Choose files</button>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <button className="btn-glass min-h-11" type="button" disabled>Add a link</button>
-            <button className="btn-glass min-h-11" type="button" disabled>Add a note</button>
+          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <button className="btn-glass min-h-11 w-full" type="button" disabled aria-describedby="fixture-intake-disabled-explanation">Add a link</button>
+            <button className="btn-glass min-h-11 w-full" type="button" disabled aria-describedby="fixture-intake-disabled-explanation">Add a note</button>
           </div>
 
           <aside className="mt-5 rounded-xl border p-4" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)" }}>
@@ -112,11 +112,11 @@ export default function OnboardingPage() {
 
         <section className="glass rounded-2xl p-4 sm:p-5" aria-labelledby="intake-queue-title">
           <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-            <div>
+            <div className="min-w-0">
               <h2 id="intake-queue-title" className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>Intake queue</h2>
-              <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>5 fixtures · 1 ready · 2 processing · 2 need attention</p>
+              <p className="mt-1 break-words text-xs" style={{ color: "var(--text-tertiary)" }}>5 fixtures · 1 ready · 2 processing · 2 need attention</p>
             </div>
-            <span className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>Tenant-wide</span>
+            <span className="shrink-0 text-xs font-medium" style={{ color: "var(--text-secondary)" }}>Tenant-wide</span>
           </div>
 
           {MATERIAL_FIXTURES.length === 0 ? (
@@ -128,13 +128,18 @@ export default function OnboardingPage() {
               {MATERIAL_FIXTURES.map((item) => (
                 <li key={item.name} data-state={item.stateId} className="grid gap-3 rounded-xl border p-4 sm:grid-cols-[minmax(0,1.4fr)_minmax(7rem,.55fr)_minmax(0,1fr)] sm:items-center" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)" }}>
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium" title={item.name} style={{ color: "var(--text-primary)" }}>{item.name}</p>
-                    <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>{item.metadata}</p>
+                    <p className="break-words text-sm font-medium" style={{ color: "var(--text-primary)" }}>{item.name}</p>
+                    <p className="mt-1 break-words text-xs" style={{ color: "var(--text-tertiary)" }}>{item.metadata}</p>
                   </div>
-                  <p className="text-sm font-medium" style={{ color: item.tone === "success" ? "var(--success-text)" : item.tone === "warning" ? "var(--warning-text)" : "var(--text-secondary)" }}>
+                  <p
+                    className="min-w-0 break-words text-sm font-medium"
+                    data-queue-status="true"
+                    aria-label={`Queue status: ${item.state}`}
+                    style={{ color: item.tone === "success" ? "var(--success-text)" : item.tone === "warning" ? "var(--warning-text)" : "var(--text-secondary)" }}
+                  >
                     <span aria-hidden="true">{item.tone === "success" ? "✓" : item.tone === "warning" ? "!" : "○"}</span> {item.state}
                   </p>
-                  <p className="text-xs leading-relaxed" style={{ color: "var(--text-secondary)" }}>{item.detail}</p>
+                  <p className="min-w-0 break-words text-xs leading-relaxed" style={{ color: "var(--text-secondary)" }}>{item.detail}</p>
                 </li>
               ))}
             </ul>
