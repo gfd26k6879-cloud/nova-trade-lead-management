@@ -13,11 +13,15 @@ vi.mock("@/lib/db/index", () => {
   };
 });
 
+vi.mock("@/lib/tenancy/context", () => ({
+  getTenantContext: () => null,
+  requireTenantContext: () => ({ tenantId: "10000000-0000-4000-8000-000000000001" }),
+}));
+
 import {
   API_ENDPOINT_PLACE_DETAILS,
   API_ENDPOINT_TEXT_SEARCH,
   backfillPlacesMasterFromLeads,
-  getCanonicalPlacesForExport,
   getMonthlyApiUsageSummary,
   getMonthlyBillableEventsForSku,
   getRunApiUsageSummary,
@@ -152,7 +156,9 @@ describe("canonical backfill", () => {
     const count = await backfillPlacesMasterFromLeads(100);
     expect(count).toBe(1);
 
-    const canonical = await getCanonicalPlacesForExport(10);
+    const canonical = testDb.prepare(
+      "SELECT place_id, completeness_score, freshness_score FROM places_master LIMIT 10",
+    ).all() as Array<Record<string, unknown>>;
     expect(canonical).toHaveLength(1);
     expect(canonical[0].place_id).toBe("place-1");
     expect((canonical[0].completeness_score as number) > 0).toBe(true);

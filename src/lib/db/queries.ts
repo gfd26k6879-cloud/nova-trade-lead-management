@@ -5096,19 +5096,21 @@ export async function getLeadMapPoints(
 }
 
 export async function getLeadsForExport(filters: LeadFilters = {}, limit = 50000): Promise<Lead[]>{
+  const { tenantId } = requireTenantContext();
   const db = await getDb();
   const { where, params } = buildLeadFilterWhere(filters);
   const { orderBySql } = resolveLeadSort(filters);
   const safeLimit = Math.min(100000, Math.max(1, Math.floor(limit)));
+  const scopedWhere = where ? `${where} AND l.tenant_id = ?` : "WHERE l.tenant_id = ?";
 
   const rows = await db.prepare(
     `SELECT l.*, au.email as assigned_user_email, au.display_name as assigned_user_display_name
      FROM leads l
      LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
-     ${where}
+     ${scopedWhere}
      ORDER BY ${orderBySql}
      LIMIT ?`
-  ).all(...params, safeLimit) as Array<Record<string, unknown>>;
+  ).all(...params, tenantId, safeLimit) as Array<Record<string, unknown>>;
 
   return rows.map(parseLeadRow);
 }
@@ -8856,6 +8858,7 @@ export async function upsertPlaceMaster(input: PlaceMasterUpsertInput): Promise<
 }
 
 export async function getCanonicalPlacesForExport(limit = 10000): Promise<Array<Record<string, unknown>>>{
+  const { tenantId } = requireTenantContext();
   const db = await getDb();
   return await db.prepare(
     `SELECT
@@ -8885,10 +8888,11 @@ export async function getCanonicalPlacesForExport(limit = 10000): Promise<Array<
       l.status as lead_status,
       l.is_excluded as lead_is_excluded
      FROM places_master pm
-     LEFT JOIN leads l ON l.place_id = pm.place_id
+     LEFT JOIN leads l ON l.tenant_id = pm.tenant_id AND l.place_id = pm.place_id
+     WHERE pm.tenant_id = ?
      ORDER BY pm.freshness_score DESC, pm.completeness_score DESC
      LIMIT ?`
-  ).all(limit) as Array<Record<string, unknown>>;
+  ).all(tenantId, limit) as Array<Record<string, unknown>>;
 }
 
 export async function backfillPlacesMasterFromLeads(limit = 10000): Promise<number>{

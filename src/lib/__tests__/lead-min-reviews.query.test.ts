@@ -10,6 +10,13 @@ const dbState = vi.hoisted(() => ({
   calls: [] as QueryCall[],
 }));
 
+const tenantContextMocks = vi.hoisted(() => ({
+  requireTenantContext: vi.fn(),
+}));
+
+const TENANT_A = "10000000-0000-4000-8000-000000000001";
+const TENANT_B = "20000000-0000-4000-8000-000000000002";
+
 vi.mock("@/lib/db/index", () => ({
   getDb: async () => ({
     prepare: (sql: string) => ({
@@ -30,7 +37,13 @@ vi.mock("@/lib/db/index", () => ({
   withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
 }));
 
+vi.mock("@/lib/tenancy/context", () => ({
+  getTenantContext: vi.fn(() => null),
+  requireTenantContext: tenantContextMocks.requireTenantContext,
+}));
+
 import {
+  getCanonicalPlacesForExport,
   getBusinessTypeCounts,
   getKanbanLeads,
   getLeadMapPoints,
@@ -49,9 +62,20 @@ const consumers = [
 
 beforeEach(() => {
   dbState.calls = [];
+  tenantContextMocks.requireTenantContext.mockReset();
+  tenantContextMocks.requireTenantContext.mockReturnValue({ tenantId: TENANT_A });
 });
 
 describe("minimum-review query defense", () => {
+  it("fails before database access when export tenant context is absent", async () => {
+    tenantContextMocks.requireTenantContext.mockImplementationOnce(() => {
+      throw new Error("A tenant context is required");
+    });
+
+    await expect(getLeadsForExport({}, 25)).rejects.toThrow("A tenant context is required");
+    expect(dbState.calls).toEqual([]);
+  });
+
   it.each(consumers)("binds one canonical int4 value in stable parameter order for %s", async (_name, run) => {
     await run({ status: "new", minReviews: 50, category: "dentist" });
 
@@ -61,6 +85,35 @@ describe("minimum-review query defense", () => {
       expect(call.params.slice(0, 3)).toEqual(["new", 50, "dentist"]);
       expect(call.params.filter((value) => value === 50)).toHaveLength(1);
     }
+  });
+
+  it("binds each export to the current trusted tenant context", async () => {
+    tenantContextMocks.requireTenantContext
+      .mockReturnValueOnce({ tenantId: TENANT_A })
+      .mockReturnValueOnce({ tenantId: TENANT_B });
+
+    await getLeadsForExport({ status: "new" }, 25);
+    await getLeadsForExport({ status: "new" }, 25);
+
+    expect(dbState.calls).toHaveLength(2);
+    expect(dbState.calls[0].sql).toContain("l.tenant_id = ?");
+    expect(dbState.calls[0].params).toEqual(["new", TENANT_A, 25]);
+    expect(dbState.calls[1].params).toEqual(["new", TENANT_B, 25]);
+  });
+
+  it("scopes canonical rows and their lead join to the same tenant", async () => {
+    tenantContextMocks.requireTenantContext
+      .mockReturnValueOnce({ tenantId: TENANT_A })
+      .mockReturnValueOnce({ tenantId: TENANT_B });
+
+    await getCanonicalPlacesForExport(25);
+    await getCanonicalPlacesForExport(25);
+
+    expect(dbState.calls).toHaveLength(2);
+    expect(dbState.calls[0].sql).toContain("l.tenant_id = pm.tenant_id");
+    expect(dbState.calls[0].sql).toContain("WHERE pm.tenant_id = ?");
+    expect(dbState.calls[0].params).toEqual([TENANT_A, 25]);
+    expect(dbState.calls[1].params).toEqual([TENANT_B, 25]);
   });
 
   it.each(consumers)("uses a parameter-free false condition above int4 for %s", async (_name, run) => {
