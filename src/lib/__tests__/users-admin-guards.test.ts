@@ -61,6 +61,7 @@ function expectNoGlobalUserSideEffects(): void {
   expect(appUserMocks.updateAppUserRole).not.toHaveBeenCalled();
   expect(appUserMocks.updateAppUserStatus).not.toHaveBeenCalled();
   expect(appUserMocks.updateAppUserTeam).not.toHaveBeenCalled();
+  expect(queryMocks.replaceUserMarketAccess).not.toHaveBeenCalled();
   expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
   expect(cacheMocks.revalidatePath).not.toHaveBeenCalled();
   expect(supabaseMocks.createSupabaseAdminClient).not.toHaveBeenCalled();
@@ -115,12 +116,16 @@ describe("platform-global user mutation guards", () => {
     expectNoGlobalUserSideEffects();
   });
 
-  it("returns a territory update error when market replacement validation fails", async () => {
-    queryMocks.replaceUserMarketAccess.mockRejectedValueOnce(new Error("Unknown market id: missing-market"));
+  it.each([
+    ["existing target", "researcher-1", { marketIds: ["market-1"] }],
+    ["unknown target", "missing-user", { marketIds: ["missing-market"] }],
+    ["invalid input", "researcher-1", { marketIds: [""] }],
+  ])("fails territory changes closed for an %s before global side effects", async (_label, userId, input) => {
+    await expect(updateUserMarketAccessAction(userId, input)).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
 
-    const result = await updateUserMarketAccessAction("researcher-1", { marketIds: ["missing-market"] });
-
-    expect(result).toEqual({ error: "Unknown market id: missing-market" });
-    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
   });
 });

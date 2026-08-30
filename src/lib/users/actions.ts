@@ -20,7 +20,7 @@ import {
   ensureDbReady,
   listLocationMarkets,
   listUserMarketAccessForUsers,
-  replaceUserMarketAccess,
+  type UserMarketAccess,
 } from "@/lib/db/queries";
 import { type AppRole } from "@/lib/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -36,10 +36,6 @@ const createUserSchema = z.object({
   email: z.string().trim().email().max(320).transform((value) => value.toLowerCase()),
   displayName: z.string().trim().max(120).optional(),
   role: z.enum(["admin", "researcher"]).default("researcher"),
-});
-
-const updateUserMarketsSchema = z.object({
-  marketIds: z.array(z.string().trim().min(1)).max(100),
 });
 
 export async function listUsersAction() {
@@ -195,25 +191,22 @@ export async function updateUserTeamAction(
   return unavailableUserResult();
 }
 
-export async function updateUserMarketAccessAction(userId: string, input: { marketIds: string[] }) {
-  const session = await requirePermission("users:manage");
-  await ensureDbReady();
-  const parsed = updateUserMarketsSchema.safeParse(input);
-  if (!parsed.success) return { error: "Invalid territory selection." };
-  let access: Awaited<ReturnType<typeof replaceUserMarketAccess>>;
-  try {
-    access = await replaceUserMarketAccess(userId, parsed.data.marketIds, session.userId);
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : "Unable to update territory access." };
-  }
-  await createAuditLog("app_user_market_access_updated", "app_user", userId, {
-    marketIds: parsed.data.marketIds,
-  });
-  revalidatePath("/users");
-  revalidatePath("/leads");
-  revalidatePath("/explore");
-  revalidatePath("/queue");
-  return { success: true, access };
+export async function updateUserMarketAccessAction(
+  userId: string,
+  input: { marketIds: string[] },
+): Promise<{
+  error: string;
+} | {
+  success: true;
+  access: UserMarketAccess[];
+}> {
+  await requirePermission("users:manage");
+  void userId;
+  void input;
+  // user_market_access is keyed to the platform-global app_users identity and
+  // has no canonical tenant ownership boundary. Keep this tenant-facing path
+  // closed until a tenant-scoped market-membership adapter owns the mutation.
+  return unavailableUserResult();
 }
 
 export async function resetUserPasswordAction(userId: string) {
