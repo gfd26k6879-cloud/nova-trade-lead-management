@@ -1,11 +1,14 @@
+import { randomUUID } from "node:crypto";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { getTenantSession, requirePermission } from "@/lib/auth";
-import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
+import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout, withTenantDbContext } from "@/lib/db/index";
 import { ensureDbReady, getBusinessTypeCounts, getLeads, getScoreBandThresholds } from "@/lib/db/queries";
 import { DEFAULT_MAP_POINT_LIMIT, buildExploreQueryState, type ExploreParams } from "@/lib/explore-filters";
 import { constrainExploreFiltersForSession } from "@/lib/lead-access";
 import { startRouteTiming } from "@/lib/route-timing";
+import { assertTenantPermission } from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
 import { ExploreClient } from "./explore-client";
 
 export const metadata: Metadata = { title: "Lead Explorer | Nova Trade Lead Management" };
@@ -15,12 +18,26 @@ interface Props {
 }
 
 export default async function ExplorePage({ searchParams }: Props) {
-const logRouteTiming = startRouteTiming("/explore");
+  const logRouteTiming = startRouteTiming("/explore");
   const session = await requirePermission("view:workspace");
   const tenantSession = await getTenantSession({});
-  const mapScope = tenantSession?.userId === session.userId
-    ? { tenantId: tenantSession.tenantId, workspaceId: tenantSession.workspaceId }
+  const inventorySession = tenantSession?.userId === session.userId && tenantSession.workspaceId === null
+    ? tenantSession
     : null;
+  const mapScope = inventorySession
+    ? { tenantId: inventorySession.tenantId, workspaceId: inventorySession.workspaceId }
+    : null;
+
+  if (!inventorySession) {
+    return <ExploreUnavailable reason="tenant_scope_unavailable" />;
+  }
+
+  try {
+    await assertTenantPermission(inventorySession, "account:read", { action: "explore.inventory.read" });
+  } catch {
+    return <ExploreUnavailable reason="tenant_scope_unavailable" />;
+  }
+
   const params = await searchParams;
   const queryState = buildExploreQueryState(params);
   const filters = constrainExploreFiltersForSession(session, queryState.filters);
@@ -33,13 +50,17 @@ const logRouteTiming = startRouteTiming("/explore");
   let failureReason: ReturnType<typeof classifyExploreLoadFailure> | null = null;
 
   try {
-    const { scoreThresholds, businessTypeCounts, result } = await withDbStatementTimeout(10_000, async () => {
-      await ensureDbReady();
-      const scoreThresholds = await getScoreBandThresholds();
-      const businessTypeCounts = await getBusinessTypeCounts(filters);
-      const result = await getLeads(filters);
-      return { scoreThresholds, businessTypeCounts, result };
-    });
+    const { scoreThresholds, businessTypeCounts, result } = await runWithTenantContext(
+      inventorySession,
+      `explore-page:${randomUUID()}`,
+      () => withTenantDbContext(() => withDbStatementTimeout(10_000, async () => {
+        await ensureDbReady();
+        const scoreThresholds = await getScoreBandThresholds();
+        const businessTypeCounts = await getBusinessTypeCounts(filters);
+        const result = await getLeads(filters);
+        return { scoreThresholds, businessTypeCounts, result };
+      })),
+    );
     loaded = { scoreThresholds, businessTypeCounts, result };
   } catch (error) {
     failureReason = classifyExploreLoadFailure(error);
