@@ -13,10 +13,17 @@ export async function GET() {
       await ensureDbReady();
       return getStaleClientReadQueries(60);
     });
+    const safeStaleClientReads = staleClientReads.map((activity) => ({
+      pid: activity.pid,
+      state: activity.state,
+      waitEventType: activity.waitEventType,
+      waitEvent: activity.waitEvent,
+      ageSeconds: activity.ageSeconds,
+    }));
     return applyNoStoreHeaders(NextResponse.json({
-      status: staleClientReads.length > 0 ? "warning" : "ok",
+      status: safeStaleClientReads.length > 0 ? "warning" : "ok",
       checkedAt: new Date().toISOString(),
-      staleClientReads,
+      staleClientReads: safeStaleClientReads,
     }));
   } catch (error) {
     if (error instanceof UnauthorizedError || error instanceof ForbiddenError) {
