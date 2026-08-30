@@ -13,7 +13,6 @@ const crawlActionMocks = vi.hoisted(() => ({
   getFailedUnitErrorsAction: vi.fn(),
   pauseCrawlRunAction: vi.fn(),
   promoteProbeToLeadHarvestAction: vi.fn(),
-  resumeRecommendedSchedulerWorkersAction: vi.fn(),
   resumeCrawlRunAction: vi.fn(),
   runGoogleDiscoveryDiagnosticAction: vi.fn(),
   retryFailedUnitsAction: vi.fn(),
@@ -187,7 +186,8 @@ describe("CoverageClient discovery monitor", () => {
     expect(html).toContain("Waiting for worker");
     expect(html).toContain("crawl scheduler is paused");
     expect(html).toContain("Google key source: Settings UI stored");
-    expect(html).toContain("Enable recommended workers");
+    expect(html).toContain("Worker controls are managed at platform level");
+    expect(html).not.toContain("Enable recommended workers");
     expect(html).toContain("Retrying later");
     expect(html).toContain("google_rate_limited");
     expect(html).toContain("1/3");

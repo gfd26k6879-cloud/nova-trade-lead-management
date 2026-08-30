@@ -17,7 +17,6 @@ import {
   getFailedUnitErrorsAction,
   pauseCrawlRunAction,
   promoteProbeToLeadHarvestAction,
-  resumeRecommendedSchedulerWorkersAction,
   resumeCrawlRunAction,
   runGoogleDiscoveryDiagnosticAction,
   retryFailedUnitsAction,
@@ -220,7 +219,7 @@ export function CoverageClient({
   const [query, setQuery] = useState("");
   const [errors, setErrors] = useState<FailedUnit[]>([]);
   const [showErrors, setShowErrors] = useState(false);
-  const [busy, setBusy] = useState<"pause" | "resume" | "stop" | "retry" | "refresh" | "promote" | "diagnostic" | "workers" | null>(null);
+  const [busy, setBusy] = useState<"pause" | "resume" | "stop" | "retry" | "refresh" | "promote" | "diagnostic" | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; actionLabel: string; action: () => Promise<void> } | null>(null);
   const [refreshDays, setRefreshDays] = useState(7);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(initialCrawlWorkspaceId ?? "");
@@ -502,22 +501,6 @@ export function CoverageClient({
     setBusy(null);
   };
 
-  const handleResumeRecommendedWorkers = async () => {
-    setBusy("workers");
-    try {
-      const result = await resumeRecommendedSchedulerWorkersAction();
-      if (!result.googleReady) {
-        toast.error("Google Places API key is missing. Add it before enabling the crawl worker.");
-      } else {
-        toast.success("Recommended workers updated. Crawl worker is enabled.");
-      }
-    } catch {
-      toast.error("Unable to resume workers");
-    }
-    await refreshRunPanels();
-    setBusy(null);
-  };
-
   const handleShowErrors = async () => {
     if (showErrors) {
       setShowErrors(false);
@@ -702,16 +685,12 @@ export function CoverageClient({
                   `Google key source: ${formatKeySource(crawlWorker?.googlePlacesKeySource ?? "none")}.`,
                   crawlWorker?.googlePlacesKeyConfigured ? "Required Google key is present." : "Google Places API key is missing.",
                   `${openUnitCount} open unit${openUnitCount === 1 ? "" : "s"} are ready but no crawl worker is enabled.`,
+                  "Worker controls are managed at platform level.",
                 ]}
                 actions={(
-                  <>
-                    <button type="button" className="btn-glass text-xs" disabled={busy !== null || !selectedCrawlWorkspace} onClick={handleDiagnostic}>
-                      {busy === "diagnostic" ? "Checking..." : "Run Google diagnostic"}
-                    </button>
-                    <button type="button" className="btn-primary text-xs" disabled={busy !== null || !crawlWorker?.googlePlacesKeyConfigured} onClick={handleResumeRecommendedWorkers}>
-                      {busy === "workers" ? "Updating..." : "Enable recommended workers"}
-                    </button>
-                  </>
+                  <button type="button" className="btn-glass text-xs" disabled={busy !== null || !selectedCrawlWorkspace} onClick={handleDiagnostic}>
+                    {busy === "diagnostic" ? "Checking..." : "Run Google diagnostic"}
+                  </button>
                 )}
               />
             )}
@@ -740,7 +719,6 @@ export function CoverageClient({
                 action: handleResume,
               })}>{busy === "resume" ? "Resuming..." : run.status === "blocked" ? "Resume after fix" : "Resume this discovery item"}</button>}
               {run.id && <button type="button" className="btn-glass text-sm" disabled={busy !== null || !selectedCrawlWorkspace} onClick={handleDiagnostic}>{busy === "diagnostic" ? "Checking..." : "Run Google diagnostic"}</button>}
-              {waitingForWorker && <button type="button" className="btn-glass text-sm" disabled={busy !== null || !crawlWorker?.googlePlacesKeyConfigured} onClick={handleResumeRecommendedWorkers}>{busy === "workers" ? "Updating..." : "Enable recommended workers"}</button>}
               {canStop && <button type="button" className="btn-glass text-sm" disabled={busy !== null || !selectedCrawlWorkspace} onClick={() => setConfirmAction({
                 title: "Cancel this item's remaining units?",
                 message: `This will mark ${pendingUnits} open units for ${run.name ?? "this discovery item"} as canceled. Completed leads and history stay saved, but queued units will not be processed unless recreated later.`,

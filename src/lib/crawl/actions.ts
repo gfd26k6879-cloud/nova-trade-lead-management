@@ -63,7 +63,6 @@ import {
   getAdminFulfillmentSummary,
   getStatisticsSummary,
   getTeamBoardSummary,
-  updateSettings,
   type CrawlProgress,
   type CrawlRun,
   type CrawlUnitPreview,
@@ -125,7 +124,7 @@ const startMarketPlannerSchema = z.object({
 
 const plannerStateSchema = z.string().trim().min(2).max(2).transform((value) => value.toUpperCase());
 const plannerCountySchema = z.string().trim().min(1);
-const schedulerWorkerSchema = z.enum(["ai_verification", "crawl", "enrichment", "artifact", "score_recompute"]);
+const SCHEDULER_GLOBAL_MUTATION_UNAVAILABLE = "Scheduler worker controls are platform-global and unavailable from tenant-facing actions.";
 
 function normalizeDistinct(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)));
@@ -959,51 +958,18 @@ export async function runGoogleDiscoveryDiagnosticAction(
 }
 
 export async function updateSchedulerWorkerEnabledAction(workerName: SchedulerWorkerName, enabled: boolean) {
-  await requirePermission("settings:manage");
-  await ensureDbReady();
-  const parsedWorker = schedulerWorkerSchema.safeParse(workerName);
-  if (!parsedWorker.success) return { error: "Invalid scheduler worker." };
-
-  const settingKey = schedulerSettingKey(parsedWorker.data);
-  await updateSettings({ [settingKey]: enabled });
-  await createAuditLog(enabled ? "scheduler_worker_resumed" : "scheduler_worker_paused", "settings", "1", {
-    workerName: parsedWorker.data,
-  });
-  return { success: true, workerName: parsedWorker.data, enabled };
+  void workerName;
+  void enabled;
+  return { error: SCHEDULER_GLOBAL_MUTATION_UNAVAILABLE };
 }
 
 export async function updateAllSchedulerWorkersEnabledAction(enabled: boolean) {
-  await requirePermission("settings:manage");
-  await ensureDbReady();
-  await updateSettings({
-    scheduler_ai_verification_enabled: enabled,
-    scheduler_crawl_enabled: enabled,
-    scheduler_enrichment_enabled: enabled,
-    scheduler_artifact_enabled: enabled,
-    scheduler_score_recompute_enabled: enabled,
-  });
-  await createAuditLog(enabled ? "scheduler_all_workers_resumed" : "scheduler_all_workers_paused", "settings", "1");
-  return { success: true, enabled };
+  void enabled;
+  return { error: SCHEDULER_GLOBAL_MUTATION_UNAVAILABLE };
 }
 
 export async function resumeRecommendedSchedulerWorkersAction() {
-  await requirePermission("settings:manage");
-  await ensureDbReady();
-  const settings = await getSettings();
-  const openAiReady = settings.ai_enabled && settings.openai_api_key_configured;
-  const googleReady = settings.google_places_api_key_configured;
-  await updateSettings({
-    scheduler_ai_verification_enabled: openAiReady,
-    scheduler_crawl_enabled: googleReady,
-    scheduler_enrichment_enabled: googleReady,
-    scheduler_artifact_enabled: openAiReady,
-    scheduler_score_recompute_enabled: true,
-  });
-  await createAuditLog("scheduler_recommended_workers_resumed", "settings", "1", {
-    openAiReady,
-    googleReady,
-  });
-  return { success: true, openAiReady, googleReady };
+  return { error: SCHEDULER_GLOBAL_MUTATION_UNAVAILABLE };
 }
 
 export async function getSchedulerOperationsAction(
@@ -1627,14 +1593,6 @@ export async function promoteProbeToLeadHarvestAction(
         estimate: result.estimate,
       };
     }));
-}
-
-function schedulerSettingKey(workerName: SchedulerWorkerName) {
-  if (workerName === "ai_verification") return "scheduler_ai_verification_enabled" as const;
-  if (workerName === "crawl") return "scheduler_crawl_enabled" as const;
-  if (workerName === "enrichment") return "scheduler_enrichment_enabled" as const;
-  if (workerName === "artifact") return "scheduler_artifact_enabled" as const;
-  return "scheduler_score_recompute_enabled" as const;
 }
 
 export async function getFailedUnitErrorsAction(

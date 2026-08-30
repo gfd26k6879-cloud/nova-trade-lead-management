@@ -9,6 +9,7 @@ const authMocks = vi.hoisted(() => ({
 }));
 
 const dbIndexMocks = vi.hoisted(() => ({
+  getDb: vi.fn(),
   isDbStatementTimeoutError: vi.fn((error: unknown) => (error as { code?: string }).code === "57014"),
   isTransientDbError: vi.fn(() => false),
   withDbStatementTimeout: vi.fn((_timeoutMs: number, fn: () => Promise<unknown>) => fn()),
@@ -49,7 +50,7 @@ vi.mock("@/lib/tenancy/queries", () => ({
 
 vi.mock("@/lib/db/index", () => {
   return {
-    getDb: () => testDb,
+    getDb: dbIndexMocks.getDb,
     generateId: () => crypto.randomUUID(),
     nowISO: () => new Date().toISOString(),
     withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
@@ -96,8 +97,11 @@ import {
   resumeCrawlRunAction,
   retryFailedUnitsAction,
   runGoogleDiscoveryDiagnosticAction,
+  resumeRecommendedSchedulerWorkersAction,
   startCrawlRunAction,
   stopCrawlRunAction,
+  updateAllSchedulerWorkersEnabledAction,
+  updateSchedulerWorkerEnabledAction,
 } from "@/lib/crawl/actions";
 import { PlacesApiError } from "@/lib/google-places";
 import { TenantAuthorizationError } from "@/lib/tenancy/authorize";
@@ -137,6 +141,8 @@ function sourcePolicy(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   testDb = createTestDb();
+  dbIndexMocks.getDb.mockReset();
+  dbIndexMocks.getDb.mockImplementation(() => testDb);
   testDb.exec(`ALTER TABLE crawl_runs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_ID}'`);
   testDb.exec("ALTER TABLE crawl_runs ADD COLUMN workspace_id TEXT");
   testDb.exec(`ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_ID}'`);
@@ -182,6 +188,35 @@ afterEach(() => {
 });
 
 describe("scheduler operations action", () => {
+  it("fails tenant-facing global scheduler mutations closed before auth or database access", async () => {
+    const before = testDb.prepare(
+      `SELECT scheduler_ai_verification_enabled, scheduler_crawl_enabled,
+              scheduler_enrichment_enabled, scheduler_artifact_enabled,
+              scheduler_score_recompute_enabled
+       FROM settings WHERE id = 1`,
+    ).get();
+
+    const results = await Promise.all([
+      updateSchedulerWorkerEnabledAction("crawl", false),
+      updateAllSchedulerWorkersEnabledAction(false),
+      resumeRecommendedSchedulerWorkersAction(),
+    ]);
+
+    expect(results).toEqual([
+      { error: "Scheduler worker controls are platform-global and unavailable from tenant-facing actions." },
+      { error: "Scheduler worker controls are platform-global and unavailable from tenant-facing actions." },
+      { error: "Scheduler worker controls are platform-global and unavailable from tenant-facing actions." },
+    ]);
+    expect(authMocks.requirePermission).not.toHaveBeenCalled();
+    expect(dbIndexMocks.getDb).not.toHaveBeenCalled();
+    expect(testDb.prepare(
+      `SELECT scheduler_ai_verification_enabled, scheduler_crawl_enabled,
+              scheduler_enrichment_enabled, scheduler_artifact_enabled,
+              scheduler_score_recompute_enabled
+       FROM settings WHERE id = 1`,
+    ).get()).toEqual(before);
+  });
+
   it("requires tenant-wide queue read authority before entering tenant database context", async () => {
     tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
 
