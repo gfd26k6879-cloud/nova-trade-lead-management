@@ -19,17 +19,18 @@ const REVIEWER_A = "30000000-0000-4000-8000-000000000001";
 const HASH_A = `sha256:${"a".repeat(64)}`;
 const HASH_B = `sha256:${"b".repeat(64)}`;
 
-function draftUnderstanding(
+function understandingSource(
   tenantId = TENANT_A,
   workspaceId: string | null = WORKSPACE_A,
-): BusinessUnderstandingReviewSnapshot {
-  const result = buildBusinessUnderstandingProposal({
+) {
+  return {
     version: 1,
     tenantId,
     workspaceId,
     proposalRef: "understanding:icp-source-1",
     revision: 1,
     supersedesProposalRef: null,
+    supersedesVersionId: null,
     createdAt: "2026-08-30T12:00:00.000Z",
     producer: {
       runRef: "agent-run:understanding-icp-source-1",
@@ -67,7 +68,14 @@ function draftUnderstanding(
       evidenceIds: ["evidence:catalog-1"],
       uncertaintyReason: null,
     }],
-  });
+  };
+}
+
+function draftUnderstanding(
+  tenantId = TENANT_A,
+  workspaceId: string | null = WORKSPACE_A,
+): BusinessUnderstandingReviewSnapshot {
+  const result = buildBusinessUnderstandingProposal(understandingSource(tenantId, workspaceId));
   if (!result.ok) throw new Error(`understanding fixture failed: ${result.code}`);
   return result.proposal.review;
 }
@@ -89,7 +97,7 @@ function understandingTransition(
     actor: { kind: "human", actorId: REVIEWER_A },
     at,
     reason: `Human understanding decision: ${to}.`,
-    replacementVersionId: null,
+    replacement: null,
   };
 }
 
@@ -122,6 +130,16 @@ function understandingBinding(snapshot = approvedUnderstanding()) {
     claimSetHash: snapshot.claimSetHash,
     reviewHash: snapshot.reviewHash,
     snapshot,
+    authority: {
+      authorityVersion: 1,
+      tenantId: snapshot.tenantId,
+      workspaceId: snapshot.workspaceId,
+      understandingVersionId: snapshot.versionId,
+      understandingContentHash: snapshot.contentHash,
+      understandingClaimSetHash: snapshot.claimSetHash,
+      understandingReviewHash: snapshot.reviewHash,
+      source: understandingSource(snapshot.tenantId, snapshot.workspaceId),
+    },
   };
 }
 
@@ -173,7 +191,7 @@ function input(overrides: Record<string, unknown> = {}) {
     workspaceId: WORKSPACE_A,
     stableKey: "icp:industrial-formulators",
     revision: 1,
-    supersedesVersionId: null,
+    predecessor: null,
     createdAt: "2026-08-30T13:00:00.000Z",
     understanding: understandingBinding(),
     title: "Industrial formulators in an active product-change cycle",
@@ -212,7 +230,7 @@ function reviewTransition(
     actor: { kind: "human", actorId: REVIEWER_A },
     at,
     reason: `Human ICP decision: ${to}.`,
-    replacementVersionId: to === "superseded" ? `icp-version:${"f".repeat(64)}` : null,
+    replacement: null,
     ...overrides,
   };
 }
@@ -331,6 +349,37 @@ describe("ICP proposal and review boundary", () => {
     expect(buildIcpProposal(duplicateReference)).toEqual({ ok: false, code: "DUPLICATE_RULE" });
   });
 
+  it("rejects unresolved claim/evidence pairs and uncertainty claims against the bound authority", () => {
+    const unknownEvidence = structuredClone(input());
+    unknownEvidence.positiveCriteria[0].rationaleRefs[0].evidenceId = "evidence:invented";
+    expect(buildIcpProposal(unknownEvidence)).toEqual({ ok: false, code: "MISSING_RATIONALE_REFERENCE" });
+
+    const forgedCatalog = structuredClone(input());
+    forgedCatalog.understanding.authority.source.claims[0].claimId = "claim:invented";
+    expect(buildIcpProposal(forgedCatalog)).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+
+    const unknownClaim = structuredClone(input());
+    unknownClaim.uncertainties[0].relatedClaimIds = ["claim:invented"];
+    expect(buildIcpProposal(unknownClaim)).toEqual({ ok: false, code: "MISSING_RATIONALE_REFERENCE" });
+
+    const staleAuthority = structuredClone(input());
+    staleAuthority.understanding.authority.understandingReviewHash = HASH_B;
+    expect(buildIcpProposal(staleAuthority)).toEqual({ ok: false, code: "STALE_UNDERSTANDING" });
+  });
+
+  it("uses canonical text fingerprints across keys and positive/exclusion sets", () => {
+    const duplicateText = structuredClone(input());
+    duplicateText.positiveCriteria.push(positive({
+      criterionId: "criterion:copy",
+      ruleKey: "buying-trigger:different-key",
+    }));
+    expect(buildIcpProposal(duplicateText)).toEqual({ ok: false, code: "DUPLICATE_RULE" });
+
+    const crossSetText = structuredClone(input());
+    crossSetText.exclusions[0].rule = crossSetText.positiveCriteria[0].rule.toUpperCase();
+    expect(buildIcpProposal(crossSetText)).toEqual({ ok: false, code: "CONTRADICTORY_RULE" });
+  });
+
   it.each([
     ["extra field", { ...input(), activate: true }],
     ["empty positive criteria", input({ positiveCriteria: [] })],
@@ -338,6 +387,9 @@ describe("ICP proposal and review boundary", () => {
     ["unsafe targeting", input({ positiveCriteria: [positive({ rule: "Target buyers by race and religion." })] })],
     ["secret-bearing rationale", input({ exclusions: [exclusion({ rationale: "API_KEY=not-a-real-secret" })] })],
     ["invalid confidence", input({ positiveCriteria: [positive({ confidenceBasisPoints: 10_001 })] })],
+    ["default ignorable", input({ title: "Industrial\u034fformulators" })],
+    ["bidi control", input({ segment: "Industrial\u202eformulators" })],
+    ["NFKC secret", input({ useCase: "ＡＰＩ＿ＫＥＹ＝not-a-real-secret" })],
   ])("fails closed on malformed or unsafe %s", (_label, malformed) => {
     expect(buildIcpProposal(malformed).ok).toBe(false);
   });
@@ -354,7 +406,15 @@ describe("ICP proposal and review boundary", () => {
     const accessor = input();
     Object.defineProperty(accessor.exclusions[0], "rule", { enumerable: true, get: trap });
 
-    for (const value of [topProxy, nestedProxy, accessor]) {
+    const authorityProxy = input();
+    authorityProxy.understanding.authority = new Proxy(authorityProxy.understanding.authority, { getPrototypeOf: trap });
+    const authorityAccessor = input();
+    Object.defineProperty(authorityAccessor.understanding.authority.source.claims[0], "claimId", {
+      enumerable: true,
+      get: trap,
+    });
+
+    for (const value of [topProxy, nestedProxy, accessor, authorityProxy, authorityAccessor]) {
       expect(buildIcpProposal(value)).toEqual({ ok: false, code: "MALFORMED_INPUT" });
     }
     expect(executions).toBe(0);
@@ -387,13 +447,185 @@ describe("ICP proposal and review boundary", () => {
       review: { status: "approved", events: [{}, { actor: { kind: "human", actorId: REVIEWER_A } }] },
     });
     if (!approved.ok) return;
+    const replacement = buildIcpProposal(input({
+      revision: 2,
+      predecessor: {
+        predecessorVersion: 1,
+        stableKey: created.proposal.stableKey,
+        revision: created.proposal.revision,
+        supersedesVersionId: created.proposal.supersedesVersionId,
+        review: approved.review,
+      },
+      createdAt: "2026-08-30T13:03:00.000Z",
+      title: "Industrial formulators in a verified product-change cycle",
+    }));
+    expect(replacement.ok).toBe(true);
+    if (!replacement.ok) return;
+    const replacementInReview = transitionIcpReview(reviewTransition(
+      replacement.proposal.review,
+      "in_review",
+      "2026-08-30T13:04:00.000Z",
+    ));
+    if (!replacementInReview.ok) throw new Error(replacementInReview.code);
+    const replacementApproved = transitionIcpReview(reviewTransition(
+      replacementInReview.review,
+      "approved",
+      "2026-08-30T13:05:00.000Z",
+    ));
+    if (!replacementApproved.ok) throw new Error(replacementApproved.code);
     expect(transitionIcpReview(reviewTransition(
       approved.review,
       "superseded",
-      "2026-08-30T13:03:00.000Z",
-    ))).toMatchObject({ ok: true, review: { status: "superseded", replacementVersionId: `icp-version:${"f".repeat(64)}` } });
+      "2026-08-30T13:06:00.000Z",
+      {
+        replacement: {
+          replacementVersion: 1,
+          supersedesVersionId: approved.review.versionId,
+          review: replacementApproved.review,
+        },
+      },
+    ))).toMatchObject({
+      ok: true,
+      review: { status: "superseded", replacementVersionId: replacementApproved.review.versionId },
+    });
     expect(created.proposal.review.status).toBe("draft");
     expect(inReview.review.status).toBe("in_review");
+  });
+
+  it("requires canonical predecessor and replacement descriptors with exact lineage and chronology", () => {
+    const created = buildIcpProposal(input());
+    if (!created.ok) throw new Error(created.code);
+    const inReview = transitionIcpReview(reviewTransition(
+      created.proposal.review,
+      "in_review",
+      "2026-08-30T13:01:00.000Z",
+    ));
+    if (!inReview.ok) throw new Error(inReview.code);
+    const approved = transitionIcpReview(reviewTransition(
+      inReview.review,
+      "approved",
+      "2026-08-30T13:02:00.000Z",
+    ));
+    if (!approved.ok) throw new Error(approved.code);
+    const descriptor = {
+      predecessorVersion: 1,
+      stableKey: created.proposal.stableKey,
+      revision: 1,
+      supersedesVersionId: null,
+      review: approved.review,
+    };
+    expect(buildIcpProposal(input({
+      revision: 2,
+      predecessor: descriptor,
+      createdAt: "2026-08-30T13:03:00.000Z",
+    }))).toMatchObject({
+      ok: true,
+      proposal: { revision: 2, supersedesVersionId: approved.review.versionId },
+    });
+    expect(buildIcpProposal(input({ revision: 2, predecessor: null })))
+      .toEqual({ ok: false, code: "VERSION_CONFLICT" });
+    expect(buildIcpProposal(input({
+      revision: 2,
+      predecessor: { ...descriptor, stableKey: "icp:other" },
+    }))).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    expect(buildIcpProposal(input({
+      revision: 3,
+      predecessor: descriptor,
+    }))).toEqual({ ok: false, code: "VERSION_CONFLICT" });
+    expect(buildIcpProposal(input({
+      revision: 2,
+      predecessor: descriptor,
+      createdAt: "2026-08-30T13:02:00.000Z",
+    }))).toEqual({ ok: false, code: "VERSION_CONFLICT" });
+
+    let executions = 0;
+    const trap = (): never => {
+      executions += 1;
+      throw new Error("must not execute");
+    };
+    const proxy = new Proxy(descriptor, { getPrototypeOf: trap });
+    const accessor = structuredClone(descriptor) as unknown as Record<string, unknown>;
+    Object.defineProperty(accessor, "review", { enumerable: true, get: trap });
+    for (const predecessor of [proxy, accessor]) {
+      expect(buildIcpProposal(input({ revision: 2, predecessor })))
+        .toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    }
+    expect(executions).toBe(0);
+  });
+
+  it("rejects fabricated, unapproved, stale, and hostile replacement descriptors", () => {
+    const created = buildIcpProposal(input());
+    if (!created.ok) throw new Error(created.code);
+    const currentInReview = transitionIcpReview(reviewTransition(
+      created.proposal.review,
+      "in_review",
+      "2026-08-30T13:01:00.000Z",
+    ));
+    if (!currentInReview.ok) throw new Error(currentInReview.code);
+    const currentApproved = transitionIcpReview(reviewTransition(
+      currentInReview.review,
+      "approved",
+      "2026-08-30T13:02:00.000Z",
+    ));
+    if (!currentApproved.ok) throw new Error(currentApproved.code);
+    const replacement = buildIcpProposal(input({
+      revision: 2,
+      predecessor: {
+        predecessorVersion: 1,
+        stableKey: created.proposal.stableKey,
+        revision: 1,
+        supersedesVersionId: null,
+        review: currentApproved.review,
+      },
+      createdAt: "2026-08-30T13:03:00.000Z",
+    }));
+    if (!replacement.ok) throw new Error(replacement.code);
+    const replacementInReview = transitionIcpReview(reviewTransition(
+      replacement.proposal.review,
+      "in_review",
+      "2026-08-30T13:04:00.000Z",
+    ));
+    if (!replacementInReview.ok) throw new Error(replacementInReview.code);
+    const replacementApproved = transitionIcpReview(reviewTransition(
+      replacementInReview.review,
+      "approved",
+      "2026-08-30T13:05:00.000Z",
+    ));
+    if (!replacementApproved.ok) throw new Error(replacementApproved.code);
+    const descriptor = {
+      replacementVersion: 1,
+      supersedesVersionId: currentApproved.review.versionId,
+      review: replacementApproved.review,
+    };
+    const attempt = (candidate: unknown, at = "2026-08-30T13:06:00.000Z") => transitionIcpReview(reviewTransition(
+      currentApproved.review,
+      "superseded",
+      at,
+      { replacement: candidate },
+    ));
+
+    expect(attempt({ ...descriptor, supersedesVersionId: `icp-version:${"f".repeat(64)}` }))
+      .toEqual({ ok: false, code: "INVALID_TRANSITION" });
+    expect(attempt({ ...descriptor, review: replacement.proposal.review }))
+      .toEqual({ ok: false, code: "INVALID_TRANSITION" });
+    expect(attempt({
+      ...descriptor,
+      review: { ...structuredClone(replacementApproved.review), reviewHash: HASH_B },
+    })).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    expect(attempt(descriptor, "2026-08-30T13:05:00.000Z"))
+      .toEqual({ ok: false, code: "INVALID_TRANSITION" });
+
+    let executions = 0;
+    const trap = (): never => {
+      executions += 1;
+      throw new Error("must not execute");
+    };
+    const proxy = new Proxy(descriptor, { getPrototypeOf: trap });
+    const accessor = structuredClone(descriptor) as unknown as Record<string, unknown>;
+    Object.defineProperty(accessor, "review", { enumerable: true, get: trap });
+    expect(attempt(proxy)).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    expect(attempt(accessor)).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    expect(executions).toBe(0);
   });
 
   it("blocks automatic, direct, stale, and cross-scope review transitions", () => {

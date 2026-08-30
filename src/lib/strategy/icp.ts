@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { isProxy } from "node:util/types";
 
+import { buildBusinessUnderstandingProposal } from "@/lib/understanding/business-understanding";
+
 export const ICP_SCHEMA_VERSION = 1 as const;
 
 export type IcpCriterionDomain =
@@ -49,7 +51,26 @@ export type IcpUnderstandingBinding = Scope & Readonly<{
   contentHash: string;
   claimSetHash: string;
   reviewHash: string;
+  authorityHash: string;
   status: "approved";
+}>;
+
+export type IcpResolvedAuthority = Scope & Readonly<{
+  authorityVersion: 1;
+  understandingVersionId: string;
+  understandingContentHash: string;
+  understandingClaimSetHash: string;
+  understandingReviewHash: string;
+  claims: readonly Readonly<{ claimId: string; evidenceIds: readonly string[] }>[];
+}>;
+
+export type IcpUnderstandingAuthoritySource = Scope & Readonly<{
+  authorityVersion: 1;
+  understandingVersionId: string;
+  understandingContentHash: string;
+  understandingClaimSetHash: string;
+  understandingReviewHash: string;
+  source: unknown;
 }>;
 
 export type IcpReviewEvent = Readonly<{
@@ -65,6 +86,9 @@ export type IcpReviewSnapshot = Scope & Readonly<{
   reviewVersion: 1;
   versionId: string;
   contentHash: string;
+  stableKey: string;
+  revision: number;
+  supersedesVersionId: string | null;
   understandingVersionId: string;
   understandingContentHash: string;
   understandingReviewHash: string;
@@ -73,6 +97,20 @@ export type IcpReviewSnapshot = Scope & Readonly<{
   events: readonly IcpReviewEvent[];
   replacementVersionId: string | null;
   reviewHash: string;
+}>;
+
+export type IcpPredecessorDescriptor = Readonly<{
+  predecessorVersion: 1;
+  stableKey: string;
+  revision: number;
+  supersedesVersionId: string | null;
+  review: IcpReviewSnapshot;
+}>;
+
+export type IcpReplacementDescriptor = Readonly<{
+  replacementVersion: 1;
+  supersedesVersionId: string;
+  review: IcpReviewSnapshot;
 }>;
 
 export type IcpProposal = Scope & Readonly<{
@@ -119,14 +157,19 @@ export type IcpReviewResult =
 type PlainRecord = Record<string, unknown>;
 
 const INPUT_FIELDS = [
-  "version", "tenantId", "workspaceId", "stableKey", "revision", "supersedesVersionId", "createdAt",
+  "version", "tenantId", "workspaceId", "stableKey", "revision", "predecessor", "createdAt",
   "understanding", "title", "segment", "useCase", "positiveCriteria", "exclusions", "uncertainties",
 ] as const;
 const UNDERSTANDING_BINDING_FIELDS = [
-  "tenantId", "workspaceId", "versionId", "contentHash", "claimSetHash", "reviewHash", "snapshot",
+  "tenantId", "workspaceId", "versionId", "contentHash", "claimSetHash", "reviewHash", "snapshot", "authority",
+] as const;
+const AUTHORITY_FIELDS = [
+  "authorityVersion", "tenantId", "workspaceId", "understandingVersionId", "understandingContentHash",
+  "understandingClaimSetHash", "understandingReviewHash", "source",
 ] as const;
 const UNDERSTANDING_REVIEW_FIELDS = [
-  "reviewVersion", "versionId", "tenantId", "workspaceId", "contentHash", "claimSetHash", "createdAt",
+  "reviewVersion", "versionId", "proposalRef", "revision", "supersedesProposalRef", "tenantId", "workspaceId",
+  "contentHash", "claimSetHash", "supersedesVersionId", "createdAt",
   "status", "events", "replacementVersionId", "reviewHash",
 ] as const;
 const UNDERSTANDING_EVENT_FIELDS = ["from", "to", "actor", "at", "reason", "replacementVersionId"] as const;
@@ -137,15 +180,20 @@ const CRITERION_FIELDS = [
 const RATIONALE_REF_FIELDS = ["claimId", "evidenceId"] as const;
 const UNCERTAINTY_FIELDS = ["uncertaintyId", "domain", "statement", "impact", "relatedClaimIds"] as const;
 const ICP_REVIEW_FIELDS = [
-  "reviewVersion", "versionId", "tenantId", "workspaceId", "contentHash", "understandingVersionId",
+  "reviewVersion", "versionId", "tenantId", "workspaceId", "contentHash", "stableKey", "revision",
+  "supersedesVersionId", "understandingVersionId",
   "understandingContentHash", "understandingReviewHash", "createdAt", "status", "events",
   "replacementVersionId", "reviewHash",
 ] as const;
 const ICP_EVENT_FIELDS = ["from", "to", "actor", "at", "reason", "replacementVersionId"] as const;
 const REVIEW_TRANSITION_FIELDS = [
   "version", "tenantId", "workspaceId", "current", "expectedVersionId", "expectedContentHash",
-  "expectedReviewHash", "to", "actor", "at", "reason", "replacementVersionId",
+  "expectedReviewHash", "to", "actor", "at", "reason", "replacement",
 ] as const;
+const PREDECESSOR_FIELDS = [
+  "predecessorVersion", "stableKey", "revision", "supersedesVersionId", "review",
+] as const;
+const REPLACEMENT_FIELDS = ["replacementVersion", "supersedesVersionId", "review"] as const;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const REF = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,299}$/u;
@@ -207,7 +255,7 @@ function exactArray(value: unknown, maximum: number): readonly unknown[] | null 
 }
 
 function validUnicode(value: string): boolean {
-  if (/[\u0000-\u001f\u007f-\u009f]/u.test(value)) return false;
+  if (/[\u0000-\u001f\u007f-\u009f]|\p{Default_Ignorable_Code_Point}/u.test(value)) return false;
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
     if (code >= 0xd800 && code <= 0xdbff) {
@@ -272,13 +320,22 @@ function allowedReviewTransition(from: IcpReviewStatus, to: IcpReviewStatus): bo
 }
 
 function unsafeCriterionText(value: string): boolean {
-  return SECRET.test(value) || PROTECTED_TARGETING.test(value) || UNSAFE_LINK_OR_MARKUP.test(value);
+  const securityView = value.normalize("NFKC");
+  return SECRET.test(securityView) || PROTECTED_TARGETING.test(securityView) || UNSAFE_LINK_OR_MARKUP.test(securityView);
+}
+
+function canonicalText(value: string): string {
+  return value.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ");
 }
 
 type ParsedUnderstandingReview = Scope & Readonly<{
   versionId: string;
+  proposalRef: string;
+  revision: number;
+  supersedesProposalRef: string | null;
   contentHash: string;
   claimSetHash: string;
+  supersedesVersionId: string | null;
   createdAt: string;
   status: "draft" | "in_review" | "approved" | "rejected" | "superseded";
   reviewHash: string;
@@ -328,17 +385,30 @@ function parseUnderstandingReview(value: unknown): ParsedUnderstandingReview | n
   const workspaceId = record && workspace(record.workspaceId);
   const versionId = record && typeof record.versionId === "string" && UNDERSTANDING_VERSION_ID.test(record.versionId)
     ? record.versionId : null;
+  const proposalRef = record && reference(record.proposalRef);
+  const revision = record && integer(record.revision, 1, 1_000_000);
+  const supersedesProposalRef = record?.supersedesProposalRef === null
+    ? null
+    : record && reference(record.supersedesProposalRef);
   const contentHash = record && typeof record.contentHash === "string" && HASH.test(record.contentHash)
     ? record.contentHash : null;
   const claimSetHash = record && typeof record.claimSetHash === "string" && HASH.test(record.claimSetHash)
     ? record.claimSetHash : null;
+  const supersedesVersionId = record?.supersedesVersionId === null
+    ? null
+    : record && typeof record.supersedesVersionId === "string" && UNDERSTANDING_VERSION_ID.test(record.supersedesVersionId)
+      ? record.supersedesVersionId : undefined;
   const createdAt = record && timestamp(record.createdAt);
   const events = record && exactArray(record.events, MAX_REVIEW_EVENTS);
   const suppliedStatus = record && enumValue(record.status, UNDERSTANDING_REVIEW_STATUSES);
   if (!record || record.reviewVersion !== 1 || !tenantId || workspaceId === undefined || !versionId
+    || !proposalRef || revision === null || supersedesProposalRef === undefined
     || !contentHash || versionId !== `understanding-version:${contentHash.slice("sha256:".length)}`
-    || !claimSetHash || !createdAt || !events || !suppliedStatus
+    || !claimSetHash || supersedesVersionId === undefined || !createdAt || !events || !suppliedStatus
     || typeof record.reviewHash !== "string" || !HASH.test(record.reviewHash)) return null;
+  if ((revision === 1 && (supersedesProposalRef !== null || supersedesVersionId !== null))
+    || (revision > 1 && (supersedesProposalRef === null || supersedesVersionId === null))
+    || supersedesProposalRef === proposalRef || supersedesVersionId === versionId) return null;
 
   const parsedEvents: NonNullable<ReturnType<typeof parseUnderstandingReviewEvent>>[] = [];
   let status: ParsedUnderstandingReview["status"] = "draft";
@@ -356,10 +426,14 @@ function parseUnderstandingReview(value: unknown): ParsedUnderstandingReview | n
   const payload = Object.freeze({
     reviewVersion: 1 as const,
     versionId,
+    proposalRef,
+    revision,
+    supersedesProposalRef,
     tenantId,
     workspaceId,
     contentHash,
     claimSetHash,
+    supersedesVersionId,
     createdAt,
     status,
     events: Object.freeze(parsedEvents),
@@ -370,8 +444,12 @@ function parseUnderstandingReview(value: unknown): ParsedUnderstandingReview | n
     tenantId,
     workspaceId,
     versionId,
+    proposalRef,
+    revision,
+    supersedesProposalRef,
     contentHash,
     claimSetHash,
+    supersedesVersionId,
     createdAt,
     status,
     reviewHash: record.reviewHash,
@@ -381,6 +459,70 @@ function parseUnderstandingReview(value: unknown): ParsedUnderstandingReview | n
 
 function proposalFailure(code: IcpProposalFailureCode): IcpProposalResult {
   return Object.freeze({ ok: false, code });
+}
+
+type ParsedAuthority = Readonly<{
+  value: IcpResolvedAuthority;
+  hash: string;
+  claimEvidence: ReadonlyMap<string, ReadonlySet<string>>;
+}>;
+
+function parseResolvedAuthority(value: unknown): ParsedAuthority | null {
+  const record = exactRecord(value, AUTHORITY_FIELDS);
+  const tenantId = record && uuid(record.tenantId);
+  const workspaceId = record && workspace(record.workspaceId);
+  const versionId = record && typeof record.understandingVersionId === "string"
+    && UNDERSTANDING_VERSION_ID.test(record.understandingVersionId) ? record.understandingVersionId : null;
+  const contentHash = record && typeof record.understandingContentHash === "string"
+    && HASH.test(record.understandingContentHash) ? record.understandingContentHash : null;
+  const claimSetHash = record && typeof record.understandingClaimSetHash === "string"
+    && HASH.test(record.understandingClaimSetHash) ? record.understandingClaimSetHash : null;
+  const reviewHash = record && typeof record.understandingReviewHash === "string"
+    && HASH.test(record.understandingReviewHash) ? record.understandingReviewHash : null;
+  if (!record || record.authorityVersion !== 1 || !tenantId || workspaceId === undefined || !versionId
+    || !contentHash || !claimSetHash || !reviewHash) return null;
+
+  const rebuilt = buildBusinessUnderstandingProposal(record.source);
+  if (!rebuilt.ok || rebuilt.proposal.tenantId !== tenantId || rebuilt.proposal.workspaceId !== workspaceId
+    || rebuilt.proposal.versionId !== versionId || rebuilt.proposal.contentHash !== contentHash
+    || rebuilt.proposal.claimSetHash !== claimSetHash) return null;
+
+  const claims: Array<Readonly<{ claimId: string; evidenceIds: readonly string[] }>> = [];
+  const claimEvidence = new Map<string, ReadonlySet<string>>();
+  for (const domain of rebuilt.proposal.domains) {
+    for (const fact of domain.facts) {
+      if (claimEvidence.has(fact.claimId)) return null;
+      const evidenceIds = fact.citations.map((citation) => citation.evidenceId).sort(compareAscii);
+      const frozenEvidence = Object.freeze(evidenceIds);
+      claims.push(Object.freeze({ claimId: fact.claimId, evidenceIds: frozenEvidence }));
+      claimEvidence.set(fact.claimId, new Set(frozenEvidence));
+    }
+  }
+  for (const uncertainty of rebuilt.proposal.uncertainties) {
+    if (claimEvidence.has(uncertainty.claimId)) return null;
+    const evidenceIds = Object.freeze([] as string[]);
+    claims.push(Object.freeze({ claimId: uncertainty.claimId, evidenceIds }));
+    claimEvidence.set(uncertainty.claimId, new Set());
+  }
+  claims.sort((left, right) => compareAscii(left.claimId, right.claimId));
+  const authority: IcpResolvedAuthority = Object.freeze({
+    authorityVersion: 1,
+    tenantId,
+    workspaceId,
+    understandingVersionId: versionId,
+    understandingContentHash: contentHash,
+    understandingClaimSetHash: claimSetHash,
+    understandingReviewHash: reviewHash,
+    claims: Object.freeze(claims),
+  });
+  return Object.freeze({ value: authority, hash: sha256(authority), claimEvidence });
+}
+
+function authorityResolves(
+  authority: ParsedAuthority,
+  referenceValue: IcpRationaleReference,
+): boolean {
+  return authority.claimEvidence.get(referenceValue.claimId)?.has(referenceValue.evidenceId) === true;
 }
 
 type CriterionParseResult =
@@ -487,6 +629,9 @@ function icpReviewPayload(input: Readonly<{
   tenantId: string;
   workspaceId: string | null;
   contentHash: string;
+  stableKey: string;
+  revision: number;
+  supersedesVersionId: string | null;
   understandingVersionId: string;
   understandingContentHash: string;
   understandingReviewHash: string;
@@ -501,6 +646,9 @@ function icpReviewPayload(input: Readonly<{
     tenantId: input.tenantId,
     workspaceId: input.workspaceId,
     contentHash: input.contentHash,
+    stableKey: input.stableKey,
+    revision: input.revision,
+    supersedesVersionId: input.supersedesVersionId,
     understandingVersionId: input.understandingVersionId,
     understandingContentHash: input.understandingContentHash,
     understandingReviewHash: input.understandingReviewHash,
@@ -551,6 +699,12 @@ function parseIcpReview(value: unknown): IcpReviewSnapshot | null {
     ? record.versionId : null;
   const contentHash = record && typeof record.contentHash === "string" && HASH.test(record.contentHash)
     ? record.contentHash : null;
+  const stableKey = record && reference(record.stableKey);
+  const revision = record && integer(record.revision, 1, 1_000_000);
+  const supersedesVersionId = record?.supersedesVersionId === null
+    ? null
+    : record && typeof record.supersedesVersionId === "string" && ICP_VERSION_ID.test(record.supersedesVersionId)
+      ? record.supersedesVersionId : undefined;
   const understandingVersionId = record && typeof record.understandingVersionId === "string"
     && UNDERSTANDING_VERSION_ID.test(record.understandingVersionId) ? record.understandingVersionId : null;
   const understandingContentHash = record && typeof record.understandingContentHash === "string"
@@ -562,6 +716,8 @@ function parseIcpReview(value: unknown): IcpReviewSnapshot | null {
   const suppliedStatus = record && enumValue(record.status, REVIEW_STATUSES);
   if (!record || record.reviewVersion !== 1 || !tenantId || workspaceId === undefined || !versionId
     || !contentHash || versionId !== `icp-version:${contentHash.slice("sha256:".length)}`
+    || !stableKey || revision === null || supersedesVersionId === undefined
+    || (revision === 1 ? supersedesVersionId !== null : supersedesVersionId === null)
     || !understandingVersionId || !understandingContentHash || !understandingReviewHash
     || !createdAt || !events || !suppliedStatus
     || typeof record.reviewHash !== "string" || !HASH.test(record.reviewHash)) return null;
@@ -584,6 +740,9 @@ function parseIcpReview(value: unknown): IcpReviewSnapshot | null {
     tenantId,
     workspaceId,
     contentHash,
+    stableKey,
+    revision,
+    supersedesVersionId,
     understandingVersionId,
     understandingContentHash,
     understandingReviewHash,
@@ -599,6 +758,37 @@ function reviewFailure(code: Exclude<IcpReviewResult, { ok: true }>["code"]): Ic
   return Object.freeze({ ok: false, code });
 }
 
+function parsePredecessorDescriptor(value: unknown): IcpPredecessorDescriptor | null {
+  const record = exactRecord(value, PREDECESSOR_FIELDS);
+  const stableKey = record && reference(record.stableKey);
+  const revision = record && integer(record.revision, 1, 999_999);
+  const supersedesVersionId = record?.supersedesVersionId === null
+    ? null
+    : record && typeof record.supersedesVersionId === "string" && ICP_VERSION_ID.test(record.supersedesVersionId)
+      ? record.supersedesVersionId : undefined;
+  const review = record && parseIcpReview(record.review);
+  if (!record || record.predecessorVersion !== 1 || !stableKey || revision === null
+    || supersedesVersionId === undefined || !review || review.status !== "approved"
+    || stableKey !== review.stableKey || revision !== review.revision
+    || supersedesVersionId !== review.supersedesVersionId) return null;
+  return Object.freeze({ predecessorVersion: 1, stableKey, revision, supersedesVersionId, review });
+}
+
+function parseReplacementDescriptor(value: unknown): IcpReplacementDescriptor | null {
+  const record = exactRecord(value, REPLACEMENT_FIELDS);
+  const supersedesVersionId = record && typeof record.supersedesVersionId === "string"
+    && ICP_VERSION_ID.test(record.supersedesVersionId) ? record.supersedesVersionId : null;
+  const review = record && parseIcpReview(record.review);
+  if (!record || record.replacementVersion !== 1 || !supersedesVersionId || !review) return null;
+  return Object.freeze({ replacementVersion: 1, supersedesVersionId, review });
+}
+
+/**
+ * Pure canonical builder. The caller still owns repository existence and
+ * authenticity for supplied snapshots and producer input. This boundary
+ * rebuilds that input and only accepts its claim/evidence graph when the
+ * resulting version, content, and claim-set hashes match the approved review.
+ */
 export function buildIcpProposal(value: unknown): IcpProposalResult {
   try {
     const input = exactRecord(value, INPUT_FIELDS);
@@ -607,27 +797,25 @@ export function buildIcpProposal(value: unknown): IcpProposalResult {
     const workspaceId = workspace(input.workspaceId);
     const stableKey = reference(input.stableKey);
     const revision = integer(input.revision, 1, 1_000_000);
-    const supersedesVersionId = input.supersedesVersionId === null
-      ? null
-      : typeof input.supersedesVersionId === "string" && ICP_VERSION_ID.test(input.supersedesVersionId)
-        ? input.supersedesVersionId : undefined;
+    const predecessor = input.predecessor === null ? null : parsePredecessorDescriptor(input.predecessor);
     const createdAt = timestamp(input.createdAt);
     const title = boundedText(input.title, 500);
     const segment = boundedText(input.segment, 2_000);
     const useCase = boundedText(input.useCase, 2_000);
     const understandingInput = exactRecord(input.understanding, UNDERSTANDING_BINDING_FIELDS);
     const understanding = understandingInput && parseUnderstandingReview(understandingInput.snapshot);
+    const authority = understandingInput && parseResolvedAuthority(understandingInput.authority);
     const rawPositive = exactArray(input.positiveCriteria, MAX_RULES);
     const rawExclusions = exactArray(input.exclusions, MAX_RULES);
     const rawUncertainties = exactArray(input.uncertainties, MAX_UNCERTAINTIES);
     if (!tenantId || workspaceId === undefined || !stableKey || revision === null
-      || supersedesVersionId === undefined || !createdAt || !title || !segment || !useCase
-      || !understandingInput || !understanding || !rawPositive?.length || !rawExclusions?.length
+      || (input.predecessor !== null && !predecessor) || !createdAt || !title || !segment || !useCase
+      || !understandingInput || !understanding || !authority || !rawPositive?.length || !rawExclusions?.length
       || !rawUncertainties) return proposalFailure("MALFORMED_INPUT");
     if (unsafeCriterionText(title) || unsafeCriterionText(segment) || unsafeCriterionText(useCase)) {
       return proposalFailure("UNSAFE_CRITERION");
     }
-    if ((revision === 1 && supersedesVersionId !== null) || (revision > 1 && supersedesVersionId === null)) {
+    if ((revision === 1 && predecessor !== null) || (revision > 1 && predecessor === null)) {
       return proposalFailure("VERSION_CONFLICT");
     }
 
@@ -637,37 +825,72 @@ export function buildIcpProposal(value: unknown): IcpProposalResult {
     if (!bindingTenantId || bindingWorkspaceId === undefined
       || !sameScope(scope, { tenantId: bindingTenantId, workspaceId: bindingWorkspaceId })
       || !sameScope(scope, understanding)) return proposalFailure("SCOPE_MISMATCH");
+    if (!sameScope(scope, authority.value)) return proposalFailure("SCOPE_MISMATCH");
     if (understandingInput.versionId !== understanding.versionId
       || understandingInput.contentHash !== understanding.contentHash
       || understandingInput.claimSetHash !== understanding.claimSetHash
       || understandingInput.reviewHash !== understanding.reviewHash) return proposalFailure("STALE_UNDERSTANDING");
+    if (authority.value.understandingVersionId !== understanding.versionId
+      || authority.value.understandingContentHash !== understanding.contentHash
+      || authority.value.understandingClaimSetHash !== understanding.claimSetHash
+      || authority.value.understandingReviewHash !== understanding.reviewHash) {
+      return proposalFailure("STALE_UNDERSTANDING");
+    }
     if (understanding.status !== "approved") return proposalFailure("UNDERSTANDING_NOT_APPROVED");
     if (Date.parse(createdAt) <= Date.parse(understanding.lastEventAt)) return proposalFailure("STALE_UNDERSTANDING");
+    if (predecessor && (!sameScope(scope, predecessor.review)
+      || predecessor.stableKey !== stableKey
+      || predecessor.revision + 1 !== revision
+      || Date.parse(createdAt) <= Date.parse(predecessor.review.events.at(-1)?.at ?? predecessor.review.createdAt))) {
+      return proposalFailure("VERSION_CONFLICT");
+    }
+    const supersedesVersionId = predecessor?.review.versionId ?? null;
 
     const positiveCriteria: IcpCriterion[] = [];
     const exclusions: IcpCriterion[] = [];
     const criterionIds = new Set<string>();
     const positiveRuleKeys = new Set<string>();
     const exclusionRuleKeys = new Set<string>();
+    const positiveFingerprints = new Set<string>();
+    const positiveText = new Set<string>();
+    const exclusionFingerprints = new Set<string>();
+    const exclusionText = new Set<string>();
     for (const raw of rawPositive) {
       const parsed = parseCriterion(raw);
       if (!parsed.ok) return proposalFailure(parsed.code);
-      if (criterionIds.has(parsed.value.criterionId) || positiveRuleKeys.has(parsed.value.ruleKey)) {
+      const textFingerprint = canonicalText(parsed.value.rule);
+      const ruleFingerprint = `${parsed.value.domain}\u0000${textFingerprint}`;
+      if (criterionIds.has(parsed.value.criterionId) || positiveRuleKeys.has(parsed.value.ruleKey)
+        || positiveFingerprints.has(ruleFingerprint) || positiveText.has(textFingerprint)) {
         return proposalFailure("DUPLICATE_RULE");
+      }
+      if (parsed.value.rationaleRefs.some((item) => !authorityResolves(authority, item))) {
+        return proposalFailure("MISSING_RATIONALE_REFERENCE");
       }
       criterionIds.add(parsed.value.criterionId);
       positiveRuleKeys.add(parsed.value.ruleKey);
+      positiveFingerprints.add(ruleFingerprint);
+      positiveText.add(textFingerprint);
       positiveCriteria.push(parsed.value);
     }
     for (const raw of rawExclusions) {
       const parsed = parseCriterion(raw);
       if (!parsed.ok) return proposalFailure(parsed.code);
-      if (criterionIds.has(parsed.value.criterionId) || exclusionRuleKeys.has(parsed.value.ruleKey)) {
+      const textFingerprint = canonicalText(parsed.value.rule);
+      const ruleFingerprint = `${parsed.value.domain}\u0000${textFingerprint}`;
+      if (criterionIds.has(parsed.value.criterionId) || exclusionRuleKeys.has(parsed.value.ruleKey)
+        || exclusionFingerprints.has(ruleFingerprint) || exclusionText.has(textFingerprint)) {
         return proposalFailure("DUPLICATE_RULE");
       }
-      if (positiveRuleKeys.has(parsed.value.ruleKey)) return proposalFailure("CONTRADICTORY_RULE");
+      if (positiveRuleKeys.has(parsed.value.ruleKey) || positiveFingerprints.has(ruleFingerprint)
+        || positiveText.has(textFingerprint)) return proposalFailure("CONTRADICTORY_RULE");
+      if (parsed.value.rationaleRefs.some((item) => !authorityResolves(authority, item))) {
+        return proposalFailure("MISSING_RATIONALE_REFERENCE");
+      }
       criterionIds.add(parsed.value.criterionId);
       exclusionRuleKeys.add(parsed.value.ruleKey);
+      exclusionFingerprints.add(ruleFingerprint);
+      exclusionText.add(textFingerprint);
       exclusions.push(parsed.value);
     }
     positiveCriteria.sort((left, right) => compareAscii(left.ruleKey, right.ruleKey)
@@ -682,6 +905,9 @@ export function buildIcpProposal(value: unknown): IcpProposalResult {
       if (!parsed.ok) return proposalFailure(parsed.code);
       if (uncertaintyIds.has(parsed.value.uncertaintyId)
         || criterionIds.has(parsed.value.uncertaintyId)) return proposalFailure("DUPLICATE_RULE");
+      if (parsed.value.relatedClaimIds.some((claimId) => !authority.claimEvidence.has(claimId))) {
+        return proposalFailure("MISSING_RATIONALE_REFERENCE");
+      }
       uncertaintyIds.add(parsed.value.uncertaintyId);
       uncertainties.push(parsed.value);
     }
@@ -694,6 +920,7 @@ export function buildIcpProposal(value: unknown): IcpProposalResult {
       contentHash: understanding.contentHash,
       claimSetHash: understanding.claimSetHash,
       reviewHash: understanding.reviewHash,
+      authorityHash: authority.hash,
       status: "approved" as const,
     });
     const content = Object.freeze({
@@ -720,6 +947,9 @@ export function buildIcpProposal(value: unknown): IcpProposalResult {
       tenantId,
       workspaceId,
       contentHash,
+      stableKey,
+      revision,
+      supersedesVersionId,
       understandingVersionId: understanding.versionId,
       understandingContentHash: understanding.contentHash,
       understandingReviewHash: understanding.reviewHash,
@@ -737,7 +967,8 @@ export function buildIcpProposal(value: unknown): IcpProposalResult {
 
 /**
  * Pure lifecycle transition. A caller service still owns role authorization,
- * separation of duty, audit persistence, and the one-current-version rule.
+ * separation of duty, audit persistence, repository existence checks for
+ * supplied descriptors, and the one-current-version rule.
  */
 export function transitionIcpReview(value: unknown): IcpReviewResult {
   try {
@@ -751,12 +982,9 @@ export function transitionIcpReview(value: unknown): IcpReviewResult {
     const to = enumValue(input.to, REVIEW_STATUSES);
     const at = timestamp(input.at);
     const reason = boundedText(input.reason, 2_000);
-    const replacementVersionId = input.replacementVersionId === null
-      ? null
-      : typeof input.replacementVersionId === "string" && ICP_VERSION_ID.test(input.replacementVersionId)
-        ? input.replacementVersionId : undefined;
+    const replacement = input.replacement === null ? null : parseReplacementDescriptor(input.replacement);
     if (!current || !tenantId || workspaceId === undefined || !actor || !actorId || !to || to === "draft"
-      || !at || !reason || replacementVersionId === undefined
+      || !at || !reason || (input.replacement !== null && !replacement)
       || typeof input.expectedVersionId !== "string" || !ICP_VERSION_ID.test(input.expectedVersionId)
       || typeof input.expectedContentHash !== "string" || !HASH.test(input.expectedContentHash)
       || typeof input.expectedReviewHash !== "string" || !HASH.test(input.expectedReviewHash)) {
@@ -766,10 +994,27 @@ export function transitionIcpReview(value: unknown): IcpReviewResult {
     if (input.expectedVersionId !== current.versionId || input.expectedContentHash !== current.contentHash
       || input.expectedReviewHash !== current.reviewHash) return reviewFailure("STALE_VERSION");
     if (actor.kind !== "human") return reviewFailure("HUMAN_REVIEW_REQUIRED");
+    if (replacement && !sameScope(current, replacement.review)) return reviewFailure("SCOPE_MISMATCH");
+    const currentLastAt = current.events.at(-1)?.at ?? current.createdAt;
+    const replacementLastAt = replacement?.review.events.at(-1)?.at ?? null;
+    const validReplacement = replacement !== null
+      && replacement.review.status === "approved"
+      && replacement.review.stableKey === current.stableKey
+      && replacement.review.revision === current.revision + 1
+      && replacement.supersedesVersionId === current.versionId
+      && replacement.review.supersedesVersionId === current.versionId
+      && replacement.review.versionId !== current.versionId
+      && Date.parse(replacement.review.createdAt) > Date.parse(current.createdAt)
+      && replacementLastAt !== null
+      && Date.parse(replacementLastAt) > Date.parse(currentLastAt)
+      && Date.parse(at) > Date.parse(replacementLastAt);
     if (!allowedReviewTransition(current.status, to)
-      || Date.parse(at) <= Date.parse(current.events.at(-1)?.at ?? current.createdAt)
-      || (to === "superseded" && (!replacementVersionId || replacementVersionId === current.versionId))
-      || (to !== "superseded" && replacementVersionId !== null)) return reviewFailure("INVALID_TRANSITION");
+      || Date.parse(at) <= Date.parse(currentLastAt)
+      || (to === "superseded" ? !validReplacement : replacement !== null)) {
+      return reviewFailure("INVALID_TRANSITION");
+    }
+
+    const replacementVersionId = replacement?.review.versionId ?? null;
 
     const event: IcpReviewEvent = Object.freeze({
       from: current.status,
@@ -784,6 +1029,9 @@ export function transitionIcpReview(value: unknown): IcpReviewResult {
       tenantId: current.tenantId,
       workspaceId: current.workspaceId,
       contentHash: current.contentHash,
+      stableKey: current.stableKey,
+      revision: current.revision,
+      supersedesVersionId: current.supersedesVersionId,
       understandingVersionId: current.understandingVersionId,
       understandingContentHash: current.understandingContentHash,
       understandingReviewHash: current.understandingReviewHash,
