@@ -37,6 +37,8 @@ export default async function TeamBoardPage() {
     return <TeamUnavailable reason="tenant_scope_unavailable" canOpenDashboard={session.role === "admin"} />;
   }
 
+  const canViewFullTeam = tenantSession.role === "owner" || tenantSession.role === "admin";
+
   let summary: TeamBoardSummary;
   try {
     summary = await runWithTenantContext(
@@ -44,7 +46,7 @@ export default async function TeamBoardPage() {
       `team-board-page:${randomUUID()}`,
       () => withTenantDbContext(() => withDbStatementTimeout(10_000, async () => {
         await ensureDbReady();
-        return session.role === "admin" ? getTeamBoardSummary() : getResearcherTeamBoardSummary(session.userId);
+        return canViewFullTeam ? getTeamBoardSummary() : getResearcherTeamBoardSummary(session.userId);
       })),
     );
     logRouteTiming(200);
@@ -54,7 +56,7 @@ export default async function TeamBoardPage() {
     return <TeamUnavailable reason={reason} canOpenDashboard={session.role === "admin"} />;
   }
 
-  if (session.role !== "admin") {
+  if (!canViewFullTeam) {
     return <ResearcherTeamBoard summary={summary} />;
   }
 

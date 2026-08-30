@@ -107,6 +107,26 @@ describe("TeamBoardPage tenant boundary", () => {
     expect(queryMocks.getTeamBoardSummary).not.toHaveBeenCalled();
   });
 
+  it("uses the canonical tenant role when legacy and tenant roles disagree", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "admin@example.com", role: "admin" });
+    authMocks.getTenantSession.mockResolvedValue({ ...TENANT_SESSION, role: "researcher" });
+
+    await TeamBoardPage();
+
+    expect(queryMocks.getResearcherTeamBoardSummary).toHaveBeenCalledWith("user-1");
+    expect(queryMocks.getTeamBoardSummary).not.toHaveBeenCalled();
+  });
+
+  it("grants the full board to a canonical tenant admin despite a lower legacy role", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "admin@example.com", role: "researcher" });
+    authMocks.getTenantSession.mockResolvedValue({ ...TENANT_SESSION, role: "admin" });
+
+    await TeamBoardPage();
+
+    expect(queryMocks.getTeamBoardSummary).toHaveBeenCalledOnce();
+    expect(queryMocks.getResearcherTeamBoardSummary).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["missing canonical scope", null],
     ["a different canonical identity", { ...TENANT_SESSION, userId: "other-user" }],
