@@ -73,6 +73,7 @@ function request(overrides: Record<string, unknown> = {}) {
       conflict: "none",
       revokedAt: null,
       claimTextHash: claimHash,
+      quoteHash: sha256("Industrial flooring epoxy systems"),
       citationId: "citation:fixture-001",
     }],
     ...overrides,
@@ -119,6 +120,22 @@ describe("F13 cited outreach validation", () => {
     const missing = mutable(request());
     missing.draft.claims[0].citationIds = ["citation:missing"];
     expect(validateOutreachDraftCitations(missing)).toEqual({ ok: false, code: "CITATION_UNRESOLVABLE" });
+  });
+
+  it("requires citations for every declared claim and fails closed on an empty inventory", () => {
+    const mislabeled = mutable(request());
+    Object.assign(mislabeled.draft.claims[0], { material: false, citationIds: [] });
+    expect(validateOutreachDraftCitations(mislabeled)).toEqual({ ok: false, code: "CITATION_REQUIRED" });
+
+    const omitted = mutable(request());
+    omitted.draft.claims = [];
+    expect(validateOutreachDraftCitations(omitted)).toEqual({ ok: false, code: "CITATION_REQUIRED" });
+  });
+
+  it("binds the citation quote hash to evidence", () => {
+    const input = mutable(request());
+    input.citations[0].quoteHash = sha256("fabricated quote");
+    expect(validateOutreachDraftCitations(input)).toEqual({ ok: false, code: "CITATION_UNRESOLVABLE" });
   });
 
   it.each([
@@ -169,6 +186,28 @@ describe("F13 cited outreach validation", () => {
     expect(validateOutreachDraftCitations(knowledgeWithAccount)).toEqual({ ok: false, code: "SCOPE_MISMATCH" });
   });
 
+  it("rejects out-of-scope and unused citation or evidence records", () => {
+    const foreign = mutable(request());
+    foreign.citations.push({
+      ...foreign.citations[0], citationId: "citation:foreign", evidenceId: "evidence:foreign",
+      tenantId: "tenant:other", workspaceId: "workspace:other", accountId: "account:other",
+    });
+    foreign.evidence.push({
+      ...foreign.evidence[0], evidenceId: "evidence:foreign", citationId: "citation:foreign",
+      tenantId: "tenant:other", workspaceId: "workspace:other", accountId: "account:other",
+    });
+    expect(validateOutreachDraftCitations(foreign)).toEqual({ ok: false, code: "SCOPE_MISMATCH" });
+
+    const unused = mutable(request());
+    unused.citations.push({
+      ...unused.citations[0], citationId: "citation:unused", evidenceId: "evidence:unused",
+    });
+    unused.evidence.push({
+      ...unused.evidence[0], evidenceId: "evidence:unused", citationId: "citation:unused",
+    });
+    expect(validateOutreachDraftCitations(unused)).toEqual({ ok: false, code: "CITATION_UNRESOLVABLE" });
+  });
+
   it("invalidates citations when claim text, its hash, its span, or the draft content changes", () => {
     const cases = [
       (input: ReturnType<typeof request>) => { input.draft.claims[0].text = "industrial flooring"; },
@@ -194,6 +233,30 @@ describe("F13 cited outreach validation", () => {
     const duplicateCitation = mutable(request());
     duplicateCitation.citations.push({ ...duplicateCitation.citations[0] });
     expect(validateOutreachDraftCitations(duplicateCitation)).toEqual({ ok: false, code: "DUPLICATE_ID" });
+  });
+
+  it("rejects malformed Unicode and spans that split surrogate pairs", () => {
+    const malformed = mutable(request());
+    malformed.draft.subject = "Broken \ud83d";
+    malformed.draft.contentHash = draftContentHash(malformed.draft.subject, malformed.draft.body);
+    expect(validateOutreachDraftCitations(malformed)).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+
+    const split = mutable(request());
+    split.draft.body = "X😀Y";
+    split.draft.contentHash = draftContentHash(split.draft.subject, split.draft.body);
+    split.draft.claims = [{
+      ...split.draft.claims[0], start: 1, end: 2, text: "\ud83d", textHash: sha256("\ud83d"),
+    }];
+    expect(validateOutreachDraftCitations(split).ok).toBe(false);
+
+    const whole = mutable(request());
+    whole.draft.body = "X😀Y";
+    whole.draft.contentHash = draftContentHash(whole.draft.subject, whole.draft.body);
+    whole.draft.claims = [{
+      ...whole.draft.claims[0], start: 1, end: 3, text: "😀", textHash: sha256("😀"),
+    }];
+    whole.evidence[0].claimTextHash = sha256("😀");
+    expect(validateOutreachDraftCitations(whole).ok).toBe(true);
   });
 
   it.each([

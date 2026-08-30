@@ -16,7 +16,8 @@ const CITATION_FIELDS = [
 ] as const;
 const EVIDENCE_FIELDS = [
   "evidenceVersion", "evidenceId", "sourceKind", "tenantId", "workspaceId", "accountId",
-  "approvalState", "support", "freshness", "conflict", "revokedAt", "claimTextHash", "citationId",
+  "approvalState", "support", "freshness", "conflict", "revokedAt", "claimTextHash", "quoteHash",
+  "citationId",
 ] as const;
 
 const HASH = /^sha256:[0-9a-f]{64}$/u;
@@ -100,6 +101,7 @@ type ParsedCitation = Readonly<{
   workspaceId: string;
   accountId: string | null;
   state: string;
+  quoteHash: string;
 }>;
 
 type ParsedEvidence = Readonly<{
@@ -114,6 +116,7 @@ type ParsedEvidence = Readonly<{
   conflict: string;
   revokedAt: string | null;
   claimTextHash: string;
+  quoteHash: string;
   citationId: string;
 }>;
 
@@ -181,7 +184,29 @@ function containsForbiddenDeliveryField(value: unknown, seen = new Set<object>()
 }
 
 function safeId(value: unknown): value is string {
-  return typeof value === "string" && SAFE_ID.test(value) && !DEFAULT_IGNORABLE.test(value);
+  return typeof value === "string" && isWellFormedUnicode(value)
+    && SAFE_ID.test(value) && !DEFAULT_IGNORABLE.test(value);
+}
+
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (index + 1 >= value.length || next < 0xdc00 || next > 0xdfff) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isCodePointBoundary(value: string, index: number): boolean {
+  if (index <= 0 || index >= value.length) return true;
+  const previous = value.charCodeAt(index - 1);
+  const current = value.charCodeAt(index);
+  return !(previous >= 0xd800 && previous <= 0xdbff && current >= 0xdc00 && current <= 0xdfff);
 }
 
 function hasUnsafeContent(value: string): boolean {
@@ -192,7 +217,7 @@ function hasUnsafeContent(value: string): boolean {
 
 function safeText(value: unknown, maximum: number, allowEmpty = false): value is string {
   return typeof value === "string" && value.length <= maximum && (allowEmpty || value.length > 0)
-    && !hasUnsafeContent(value);
+    && isWellFormedUnicode(value) && !hasUnsafeContent(value);
 }
 
 function integer(value: unknown, minimum: number, maximum: number): number | null {
@@ -286,10 +311,13 @@ function validate(value: unknown): OutreachCitationValidationResult {
       || typeof item.state !== "string" || !CITATION_STATES.has(item.state)
       || typeof item.quoteHash !== "string" || !HASH.test(item.quoteHash)
       || !safeText(item.locator, 2_048)) return failure("MALFORMED_INPUT");
+    if (item.tenantId !== tenantId || item.workspaceId !== workspaceId
+      || (item.accountId !== null && item.accountId !== accountId)) return failure("SCOPE_MISMATCH");
     if (citations.has(item.citationId)) return failure("DUPLICATE_ID");
     citations.set(item.citationId, Object.freeze({
       citationId: item.citationId, evidenceId: item.evidenceId, tenantId: item.tenantId,
       workspaceId: item.workspaceId, accountId: item.accountId, state: item.state,
+      quoteHash: item.quoteHash,
     }));
   }
 
@@ -306,17 +334,30 @@ function validate(value: unknown): OutreachCitationValidationResult {
       || typeof item.freshness !== "string" || !FRESHNESS_STATES.has(item.freshness)
       || typeof item.conflict !== "string" || !CONFLICT_STATES.has(item.conflict)
       || revokedAt === undefined || typeof item.claimTextHash !== "string" || !HASH.test(item.claimTextHash)
+      || typeof item.quoteHash !== "string" || !HASH.test(item.quoteHash)
       || !safeId(item.citationId)) return failure("MALFORMED_INPUT");
+    if (item.tenantId !== tenantId || item.workspaceId !== workspaceId
+      || (item.sourceKind === "account" && item.accountId !== accountId)
+      || (item.sourceKind === "knowledge" && item.accountId !== null)) return failure("SCOPE_MISMATCH");
     if (evidence.has(item.evidenceId)) return failure("DUPLICATE_ID");
     evidence.set(item.evidenceId, Object.freeze({
       evidenceId: item.evidenceId, sourceKind: item.sourceKind, tenantId: item.tenantId,
       workspaceId: item.workspaceId, accountId: item.accountId, approvalState: item.approvalState,
       support: item.support, freshness: item.freshness, conflict: item.conflict,
-      revokedAt, claimTextHash: item.claimTextHash, citationId: item.citationId,
+      revokedAt, claimTextHash: item.claimTextHash, quoteHash: item.quoteHash,
+      citationId: item.citationId,
     }));
   }
 
+  // Without a trusted exhaustive claim-classification receipt, accepting content with
+  // no declared claims would let a caller omit every material assertion.
+  if ((subject.length > 0 || body.length > 0) && rawClaims.length === 0) {
+    return failure("CITATION_REQUIRED");
+  }
+
   const claimIds = new Set<string>();
+  const usedCitationIds = new Set<string>();
+  const usedEvidenceIds = new Set<string>();
   const spans: Array<Readonly<{ field: "subject" | "body"; start: number; end: number }>> = [];
   const claims: ValidatedOutreachClaim[] = [];
   for (const rawClaim of rawClaims) {
@@ -340,11 +381,14 @@ function validate(value: unknown): OutreachCitationValidationResult {
     if (claim.text !== validatedSourceText.slice(start, end) || claim.textHash !== hash(claim.text)) {
       return failure("CLAIM_SPAN_MISMATCH");
     }
+    if (!isCodePointBoundary(validatedSourceText, start) || !isCodePointBoundary(validatedSourceText, end)) {
+      return failure("CLAIM_SPAN_MISMATCH");
+    }
     if (spans.some((span) => span.field === field && start < span.end && end > span.start)) {
       return failure("CLAIM_SPAN_MISMATCH");
     }
     spans.push(Object.freeze({ field, start, end }));
-    if (claim.material && citationIds.length === 0) return failure("CITATION_REQUIRED");
+    if (citationIds.length === 0) return failure("CITATION_REQUIRED");
 
     const normalizedCitationIds: string[] = [];
     const evidenceIds: string[] = [];
@@ -359,6 +403,7 @@ function validate(value: unknown): OutreachCitationValidationResult {
       if (!linkedEvidence || linkedEvidence.citationId !== linkedCitation.citationId) {
         return failure("CITATION_UNRESOLVABLE");
       }
+      if (linkedEvidence.quoteHash !== linkedCitation.quoteHash) return failure("CITATION_UNRESOLVABLE");
       if (linkedCitation.tenantId !== tenantId || linkedCitation.workspaceId !== workspaceId
         || linkedEvidence.tenantId !== tenantId || linkedEvidence.workspaceId !== workspaceId
         || linkedCitation.accountId !== linkedEvidence.accountId) return failure("SCOPE_MISMATCH");
@@ -376,6 +421,8 @@ function validate(value: unknown): OutreachCitationValidationResult {
       if (linkedEvidence.claimTextHash !== claim.textHash) return failure("CITATION_UNRESOLVABLE");
       normalizedCitationIds.push(rawCitationId);
       evidenceIds.push(linkedEvidence.evidenceId);
+      usedCitationIds.add(linkedCitation.citationId);
+      usedEvidenceIds.add(linkedEvidence.evidenceId);
     }
     normalizedCitationIds.sort();
     evidenceIds.sort();
@@ -385,6 +432,9 @@ function validate(value: unknown): OutreachCitationValidationResult {
       citationIds: Object.freeze(normalizedCitationIds), evidenceIds: Object.freeze(evidenceIds),
       uncertainty: claim.uncertainty,
     }));
+  }
+  if (usedCitationIds.size !== citations.size || usedEvidenceIds.size !== evidence.size) {
+    return failure("CITATION_UNRESOLVABLE");
   }
   claims.sort((left, right) => left.field.localeCompare(right.field) || left.start - right.start
     || left.end - right.end || left.claimId.localeCompare(right.claimId));
