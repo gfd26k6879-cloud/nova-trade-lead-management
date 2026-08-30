@@ -1,10 +1,13 @@
+import { randomUUID } from "node:crypto";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { logoutAction } from "@/app/login/actions";
-import { requirePermission } from "@/lib/auth";
-import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
+import { getTenantSession, requirePermission } from "@/lib/auth";
+import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout, withTenantDbContext } from "@/lib/db/index";
 import { ensureDbReady, getResearcherWorkbench, getScoreBandThresholds } from "@/lib/db/queries";
 import { startRouteTiming } from "@/lib/route-timing";
+import { assertTenantPermission } from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
 import { QueueClient } from "./queue-client";
 
 export const metadata: Metadata = { title: "Workbench | Nova Trade Lead Management" };
@@ -12,6 +15,25 @@ export const metadata: Metadata = { title: "Workbench | Nova Trade Lead Manageme
 export default async function QueuePage() {
   const logRouteTiming = startRouteTiming("/queue");
   const session = await requirePermission("view:workspace");
+  let tenantSession: Awaited<ReturnType<typeof getTenantSession>>;
+  try {
+    tenantSession = await getTenantSession({});
+  } catch {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <QueueScopeUnavailable />;
+  }
+  if (!tenantSession || tenantSession.userId !== session.userId || tenantSession.workspaceId !== null) {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <QueueScopeUnavailable />;
+  }
+
+  try {
+    await assertTenantPermission(tenantSession, "account:read", { action: "queue.page.read" });
+  } catch {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <QueueScopeUnavailable />;
+  }
+
   let loaded: {
     workbench: Awaited<ReturnType<typeof getResearcherWorkbench>>;
     scoreThresholds: Awaited<ReturnType<typeof getScoreBandThresholds>>;
@@ -19,12 +41,16 @@ export default async function QueuePage() {
   let failureReason: ReturnType<typeof classifyQueueLoadFailure> | null = null;
 
   try {
-    const { workbench, scoreThresholds } = await withDbStatementTimeout(10_000, async () => {
-      await ensureDbReady();
-      const workbench = await getResearcherWorkbench(session.userId, { viewerRole: session.role });
-      const scoreThresholds = await getScoreBandThresholds();
-      return { workbench, scoreThresholds };
-    });
+    const { workbench, scoreThresholds } = await runWithTenantContext(
+      tenantSession,
+      `queue-page:${randomUUID()}`,
+      () => withTenantDbContext(() => withDbStatementTimeout(10_000, async () => {
+        await ensureDbReady();
+        const workbench = await getResearcherWorkbench(session.userId, { viewerRole: session.role });
+        const scoreThresholds = await getScoreBandThresholds();
+        return { workbench, scoreThresholds };
+      })),
+    );
     loaded = { workbench, scoreThresholds };
   } catch (error) {
     failureReason = classifyQueueLoadFailure(error);
@@ -42,6 +68,22 @@ export default async function QueuePage() {
       scoreThresholds={loaded.scoreThresholds}
       currentUser={{ userId: session.userId, email: session.email, role: session.role }}
     />
+  );
+}
+
+function QueueScopeUnavailable() {
+  return (
+    <section className="glass rounded-3xl p-8" role="alert">
+      <div className="max-w-2xl">
+        <p className="section-label">Workbench temporarily unavailable</p>
+        <h1 className="mt-3 text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>
+          The workbench could not be loaded.
+        </h1>
+        <p className="mt-3 text-sm leading-6" style={{ color: "var(--text-secondary)" }}>
+          No lead data was requested. Reload the workspace to try again.
+        </p>
+      </div>
+    </section>
   );
 }
 
