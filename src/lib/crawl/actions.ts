@@ -99,7 +99,7 @@ import {
   TenantAuthorizationError,
   type TenantPolicyContext,
 } from "@/lib/tenancy/authorize";
-import { runWithTenantContext } from "@/lib/tenancy/context";
+import { getTenantContext, runWithTenantContext } from "@/lib/tenancy/context";
 import { createTenantQueryRepository } from "@/lib/tenancy/queries";
 import { tenantPolicySchema } from "@/lib/tenancy/schemas";
 
@@ -829,22 +829,38 @@ export async function resumeRecommendedSchedulerWorkersAction() {
   return { success: true, openAiReady, googleReady };
 }
 
-export async function getSchedulerOperationsAction() {
-  await requirePermission("crawl:manage");
-  try {
-    return await withDbStatementTimeout(8_000, async () => {
-      await ensureDbReady();
-      return getSchedulerOperationsSummary();
-    });
-  } catch (error) {
-    if (isDbStatementTimeoutError(error)) {
-      return buildSchedulerOperationsFallback("db_statement_timeout");
-    }
-    if (isTransientDbError(error)) {
-      return buildSchedulerOperationsFallback("transient_db_error");
-    }
-    throw error;
+export async function getSchedulerOperationsAction(
+  selector: TenantSessionSelector = {},
+) {
+  const tenantSession = await requireTenantPermission(selector, "queue:read", {
+    action: "scheduler.operations.read",
+  });
+  const legacySession = await requirePermission("crawl:manage");
+  if (legacySession.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
   }
+  if (tenantSession.workspaceId !== null) {
+    throw new TenantAuthorizationError(403, "WORKSPACE_SCOPE_INVALID");
+  }
+
+  const correlationId = getTenantContext()?.correlationId ?? `scheduler-operations:${randomUUID()}`;
+  return runWithTenantContext(tenantSession, correlationId, () =>
+    withTenantDbContext(async () => {
+      try {
+        return await withDbStatementTimeout(8_000, async () => {
+          await ensureDbReady();
+          return getSchedulerOperationsSummary();
+        });
+      } catch (error) {
+        if (isDbStatementTimeoutError(error)) {
+          return buildSchedulerOperationsFallback("db_statement_timeout");
+        }
+        if (isTransientDbError(error)) {
+          return buildSchedulerOperationsFallback("transient_db_error");
+        }
+        throw error;
+      }
+    }));
 }
 
 export async function getDashboardStatsAction(): Promise<DashboardStatsResult> {

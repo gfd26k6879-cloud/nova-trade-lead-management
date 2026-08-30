@@ -18,6 +18,7 @@ const dbIndexMocks = vi.hoisted(() => ({
 const tenantAuthorizationMocks = vi.hoisted(() => ({
   requireTenantPermission: vi.fn(),
   runWithTenantContext: vi.fn((_session: unknown, _correlationId: unknown, fn: () => unknown) => fn()),
+  getTenantContext: vi.fn(),
   getCurrentTenantPolicy: vi.fn(),
 }));
 
@@ -37,6 +38,7 @@ vi.mock("@/lib/tenancy/authorize", async (importOriginal) => ({
 vi.mock("@/lib/tenancy/context", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/tenancy/context")>(),
   runWithTenantContext: tenantAuthorizationMocks.runWithTenantContext,
+  getTenantContext: tenantAuthorizationMocks.getTenantContext,
 }));
 
 vi.mock("@/lib/tenancy/queries", () => ({
@@ -85,6 +87,7 @@ import {
   getCoverageSelectedRunAction,
   getDashboardAnalyticsAction,
   getDashboardStatsAction,
+  getSchedulerOperationsAction,
   estimateDiscoveryRunAction,
   promoteProbeToLeadHarvestAction,
   resumeCrawlRunAction,
@@ -93,6 +96,7 @@ import {
   stopCrawlRunAction,
 } from "@/lib/crawl/actions";
 import { PlacesApiError } from "@/lib/google-places";
+import { TenantAuthorizationError } from "@/lib/tenancy/authorize";
 import { TENANT_POLICY_DEFAULTS } from "@/lib/tenancy/schemas";
 
 const originalGooglePlacesApiKey = process.env.GOOGLE_PLACES_API_KEY;
@@ -144,6 +148,8 @@ beforeEach(() => {
     role: "admin",
   });
   tenantAuthorizationMocks.runWithTenantContext.mockClear();
+  tenantAuthorizationMocks.getTenantContext.mockReset();
+  tenantAuthorizationMocks.getTenantContext.mockReturnValue(null);
   tenantAuthorizationMocks.getCurrentTenantPolicy.mockReset();
   tenantAuthorizationMocks.getCurrentTenantPolicy.mockResolvedValue(sourcePolicy());
 });
@@ -155,6 +161,116 @@ afterEach(() => {
     process.env.GOOGLE_PLACES_API_KEY = originalGooglePlacesApiKey;
   }
   testDb.close();
+});
+
+describe("scheduler operations action", () => {
+  const TENANT_WIDE_SESSION = Object.freeze({
+    ...TENANT_SESSION,
+    workspaceId: null,
+  });
+
+  it("requires tenant-wide queue read authority before entering tenant database context", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+
+    const result = await getSchedulerOperationsAction({
+      tenantId: TENANT_ID,
+      workspaceId: null,
+    });
+
+    expect(result).toBeDefined();
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_ID, workspaceId: null },
+      "queue:read",
+      { action: "scheduler.operations.read" },
+    );
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("crawl:manage");
+    expect(tenantAuthorizationMocks.runWithTenantContext).toHaveBeenCalledWith(
+      TENANT_WIDE_SESSION,
+      expect.stringMatching(/^scheduler-operations:/),
+      expect.any(Function),
+    );
+    expect(dbIndexMocks.withTenantDbContext).toHaveBeenCalledOnce();
+    expect(tenantAuthorizationMocks.requireTenantPermission.mock.invocationCallOrder[0]).toBeLessThan(
+      tenantAuthorizationMocks.runWithTenantContext.mock.invocationCallOrder[0],
+    );
+    expect(tenantAuthorizationMocks.runWithTenantContext.mock.invocationCallOrder[0]).toBeLessThan(
+      dbIndexMocks.withTenantDbContext.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("rejects workspace-scoped scheduler reads before database work", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_SESSION);
+
+    await expect(getSchedulerOperationsAction({
+      tenantId: TENANT_ID,
+      workspaceId: WORKSPACE_ID,
+    })).rejects.toMatchObject({
+      code: "WORKSPACE_SCOPE_INVALID",
+      status: 403,
+    });
+
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
+
+  it("rejects composed identities before tenant context or scheduler database reads", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+    authMocks.requirePermission.mockResolvedValueOnce({
+      userId: "different-user",
+      email: "different@example.com",
+      displayName: "Different user",
+      role: "admin",
+    });
+
+    await expect(getSchedulerOperationsAction()).rejects.toMatchObject({
+      code: "TENANT_SCOPE_MISMATCH",
+      status: 403,
+    });
+
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
+
+  it("preserves an established correlation when called by the Scheduler page boundary", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+    tenantAuthorizationMocks.getTenantContext.mockReturnValueOnce({
+      tenantId: TENANT_ID,
+      workspaceId: null,
+      membershipId: TENANT_WIDE_SESSION.membershipId,
+      role: TENANT_WIDE_SESSION.role,
+      roleBindingId: TENANT_WIDE_SESSION.roleBindingId,
+      actorAuthIdentityId: TENANT_WIDE_SESSION.userId,
+      correlationId: "scheduler-page:existing",
+    });
+
+    await getSchedulerOperationsAction();
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      {},
+      "queue:read",
+      { action: "scheduler.operations.read" },
+    );
+    expect(tenantAuthorizationMocks.runWithTenantContext).toHaveBeenCalledWith(
+      TENANT_WIDE_SESSION,
+      "scheduler-page:existing",
+      expect.any(Function),
+    );
+  });
+
+  it("propagates canonical tenant authorization failures without reading scheduler data", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockRejectedValueOnce(
+      new TenantAuthorizationError(403, "TENANT_SCOPE_REQUIRED"),
+    );
+
+    await expect(getSchedulerOperationsAction({ tenantId: "forged-tenant" })).rejects.toMatchObject({
+      code: "TENANT_SCOPE_REQUIRED",
+      status: 403,
+    });
+
+    expect(authMocks.requirePermission).not.toHaveBeenCalled();
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
 });
 
 describe("crawl discovery item actions", () => {
