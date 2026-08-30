@@ -65,6 +65,8 @@ describe("mutating worker route methods", () => {
   });
 
   it.each([
+    ["/api/crawl/process-next", getProcessNext],
+    ["/api/crawl/enrich-next", getEnrichNext],
     ["/api/ai/verify-next", getVerifyNext],
     ["/api/ai/artifacts/process-next", getArtifactProcessNext],
   ] as const)("%s keeps method errors private and uncached", async (_path, getRoute) => {
@@ -156,7 +158,8 @@ describe("mutating worker route methods", () => {
     expect(artifactResponse.headers.get("cache-control")).toContain("no-store");
   });
 
-  it("keeps crawl and enrichment triggers bound to their exact worker", async () => {
+  it("binds crawl and enrichment triggers to their exact tenant worker authorization", async () => {
+    internalWorkerRouteMocks.runTenantInternalWorkerRoute.mockResolvedValue(NextResponse.json({ status: "idle" }));
     const processRequest = new NextRequest(
       "https://example.test/api/crawl/process-next?worker=enrichment&tenantId=forged",
       { method: "POST", body: JSON.stringify({ worker: "enrichment", workspaceId: "forged" }) },
@@ -169,20 +172,31 @@ describe("mutating worker route methods", () => {
     await postProcessNext(processRequest);
     await postEnrichNext(enrichRequest);
 
-    expect(internalWorkerRouteMocks.runInternalWorkerRoute).toHaveBeenNthCalledWith(
+    expect(internalWorkerRouteMocks.runTenantInternalWorkerRoute).toHaveBeenNthCalledWith(
       1,
       processRequest,
       "crawl",
-      "crawl:manage",
-      workerMocks.processNextUnit,
+      "queue:operate",
+      expect.any(Function),
+      expect.objectContaining({
+        resolveLease: expect.any(Function),
+        sessionPermission: "queue:operate",
+        action: "crawl:process",
+      }),
     );
-    expect(internalWorkerRouteMocks.runInternalWorkerRoute).toHaveBeenNthCalledWith(
+    expect(internalWorkerRouteMocks.runTenantInternalWorkerRoute).toHaveBeenNthCalledWith(
       2,
       enrichRequest,
       "enrichment",
-      "crawl:manage",
-      workerMocks.enrichNextLead,
+      "queue:operate",
+      expect.any(Function),
+      expect.objectContaining({
+        resolveLease: expect.any(Function),
+        sessionPermission: "queue:operate",
+        action: "enrichment:process",
+      }),
     );
+    expect(internalWorkerRouteMocks.runInternalWorkerRoute).not.toHaveBeenCalled();
   });
 
   it("does not include the deleted legacy batch tick route", () => {
