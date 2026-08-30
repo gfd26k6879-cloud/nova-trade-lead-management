@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBusinessUnderstandingProposal } from "@/lib/understanding/business-understanding";
+import {
+  buildBusinessUnderstandingProposal,
+  transitionBusinessUnderstandingReview,
+  type BusinessUnderstandingReviewSnapshot,
+} from "@/lib/understanding/business-understanding";
 
 const TENANT_A = "10000000-0000-4000-8000-000000000001";
 const TENANT_B = "10000000-0000-4000-8000-000000000002";
 const WORKSPACE_A = "20000000-0000-4000-8000-000000000001";
 const WORKSPACE_B = "20000000-0000-4000-8000-000000000002";
+const REVIEWER_A = "30000000-0000-4000-8000-000000000001";
 const HASH_A = `sha256:${"a".repeat(64)}`;
 const HASH_B = `sha256:${"b".repeat(64)}`;
 
@@ -35,6 +40,7 @@ function claim(overrides: Record<string, unknown> = {}) {
     statement: "The catalog lists epoxy resin systems and metalworking-fluid components.",
     origin: "observed",
     status: "supported",
+    confidenceBasisPoints: 9_000,
     material: true,
     evidenceIds: ["evidence:catalog-page-2"],
     uncertaintyReason: null,
@@ -53,12 +59,39 @@ function input(overrides: Record<string, unknown> = {}) {
     createdAt: "2026-08-29T19:00:00.000Z",
     producer: {
       runRef: "agent-run:understanding-1",
+      runInputHash: HASH_A,
       agentVersion: "understanding-synthesizer:v1",
+      modelRef: "fixture:openai-responses-stub",
       promptRef: "business-understanding@1",
+      promptHash: HASH_A,
       policyRef: "evidence-policy:v1",
+      policyHash: HASH_B,
     },
     evidence: [evidence()],
     claims: [claim()],
+    ...overrides,
+  };
+}
+
+function reviewTransition(
+  current: BusinessUnderstandingReviewSnapshot,
+  to: "in_review" | "approved" | "rejected" | "superseded",
+  at: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    version: 1,
+    tenantId: TENANT_A,
+    workspaceId: WORKSPACE_A,
+    current,
+    expectedVersionId: current.versionId,
+    expectedContentHash: current.contentHash,
+    expectedReviewHash: current.reviewHash,
+    to,
+    actor: { kind: "human", actorId: REVIEWER_A },
+    at,
+    reason: `Human decision to move the version to ${to}.`,
+    replacementVersionId: to === "superseded" ? `understanding-version:${"f".repeat(64)}` : null,
     ...overrides,
   };
 }
@@ -96,6 +129,7 @@ describe("business-understanding proposal service", () => {
           statement: "The technical approval sequence is not yet known.",
           origin: "unknown",
           status: "unknown",
+          confidenceBasisPoints: 0,
           evidenceIds: [],
           uncertaintyReason: "No eligible evidence describes technical approval roles or sequence.",
         }),
@@ -114,7 +148,8 @@ describe("business-understanding proposal service", () => {
         supersedesProposalRef: null,
         status: "review_required",
         reviewState: "pending",
-        producer: { runRef: "agent-run:understanding-1" },
+        producer: { runRef: "agent-run:understanding-1", runInputHash: HASH_A, promptHash: HASH_A },
+        review: { status: "draft", events: [], replacementVersionId: null },
         domains: [
           { domain: "buying_process", state: "unknown", facts: [] },
           { domain: "channel_positions", state: "partial" },
@@ -126,6 +161,7 @@ describe("business-understanding proposal service", () => {
           materialClaimsWithCurrentEvidence: 2,
           explicitUnknowns: 1,
           currentEvidenceBasisPoints: 6666,
+          materialConfidenceBasisPoints: 6000,
         },
       },
     });
@@ -140,6 +176,10 @@ describe("business-understanding proposal service", () => {
     }]);
     expect(result.proposal.claimSetHash).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(result.proposal.contentHash).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(result.proposal.versionId).toBe(
+      `understanding-version:${result.proposal.contentHash.slice("sha256:".length)}`,
+    );
+    expect(result.proposal.domains[2]?.facts[0]?.confidenceBasisPoints).toBe(9_000);
     expect(JSON.stringify(result.proposal)).not.toMatch(/approvedAt|approvedBy|storage|raw/i);
   });
 
@@ -263,6 +303,7 @@ describe("business-understanding proposal service", () => {
       ok: true,
       proposal: {
         status: "review_required",
+        review: { status: "draft" },
         domains: [{ state: "conflict", facts: [{ claimStatus: "conflicted", reviewState: "pending" }] }],
         coverage: { materialClaimsWithCurrentEvidence: 0, currentEvidenceBasisPoints: 0 },
       },
@@ -274,6 +315,7 @@ describe("business-understanding proposal service", () => {
     ["proposed without evidence", claim({ status: "proposed", evidenceIds: [] })],
     ["unknown without reason", claim({ status: "unknown", origin: "unknown", evidenceIds: [], uncertaintyReason: null })],
     ["unknown with evidence", claim({ status: "unknown", origin: "unknown", uncertaintyReason: "Unresolved.", evidenceIds: ["evidence:catalog-page-2"] })],
+    ["unknown with confidence", claim({ status: "unknown", origin: "unknown", confidenceBasisPoints: 1, uncertaintyReason: "Unresolved.", evidenceIds: [] })],
     ["inferred marked supported", claim({ origin: "inferred" })],
     ["unbounded negative absence marked supported", claim({ claimClass: "negative_absence" })],
     ["unbounded negative absence marked proposed", claim({ claimClass: "negative_absence", status: "proposed" })],
@@ -324,6 +366,116 @@ describe("business-understanding proposal service", () => {
     expect(buildBusinessUnderstandingProposal(input({ claims: [new Proxy(claim(), {})] })))
       .toEqual({ ok: false, code: "MALFORMED_INPUT" });
     expect(reads).toBe(0);
+  });
+
+  it("requires explicit human review transitions and preserves every immutable version state", () => {
+    const created = buildBusinessUnderstandingProposal(input());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const inReview = transitionBusinessUnderstandingReview(reviewTransition(
+      created.proposal.review,
+      "in_review",
+      "2026-08-29T19:01:00.000Z",
+    ));
+    expect(inReview).toMatchObject({ ok: true, review: { status: "in_review", events: [{ to: "in_review" }] } });
+    if (!inReview.ok) return;
+
+    const rejected = transitionBusinessUnderstandingReview(reviewTransition(
+      inReview.review,
+      "rejected",
+      "2026-08-29T19:02:00.000Z",
+    ));
+    expect(rejected).toMatchObject({ ok: true, review: { status: "rejected", events: [{}, { to: "rejected" }] } });
+
+    const approved = transitionBusinessUnderstandingReview(reviewTransition(
+      inReview.review,
+      "approved",
+      "2026-08-29T19:02:00.000Z",
+    ));
+    expect(approved).toMatchObject({
+      ok: true,
+      review: {
+        status: "approved",
+        events: [
+          { from: "draft", to: "in_review", actor: { kind: "human", actorId: REVIEWER_A } },
+          { from: "in_review", to: "approved", actor: { kind: "human", actorId: REVIEWER_A } },
+        ],
+      },
+    });
+    if (!approved.ok) return;
+
+    const superseded = transitionBusinessUnderstandingReview(reviewTransition(
+      approved.review,
+      "superseded",
+      "2026-08-29T19:03:00.000Z",
+    ));
+    expect(superseded).toMatchObject({
+      ok: true,
+      review: { status: "superseded", replacementVersionId: `understanding-version:${"f".repeat(64)}` },
+    });
+    expect(created.proposal.review.status).toBe("draft");
+    expect(inReview.review.status).toBe("in_review");
+    expect(approved.review.status).toBe("approved");
+    expect(Object.isFrozen(superseded.ok && superseded.review)).toBe(true);
+  });
+
+  it("rejects automatic, illegal, stale, cross-scope, proxy, and accessor review decisions", () => {
+    const created = buildBusinessUnderstandingProposal(input());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const draft = created.proposal.review;
+
+    expect(transitionBusinessUnderstandingReview(reviewTransition(
+      draft,
+      "approved",
+      "2026-08-29T19:01:00.000Z",
+    ))).toEqual({ ok: false, code: "INVALID_TRANSITION" });
+    expect(transitionBusinessUnderstandingReview(reviewTransition(
+      draft,
+      "in_review",
+      "2026-08-29T19:01:00.000Z",
+      { actor: { kind: "agent", actorId: REVIEWER_A } },
+    ))).toEqual({ ok: false, code: "HUMAN_REVIEW_REQUIRED" });
+    expect(transitionBusinessUnderstandingReview(reviewTransition(
+      draft,
+      "in_review",
+      "2026-08-29T19:01:00.000Z",
+      { expectedReviewHash: HASH_B },
+    ))).toEqual({ ok: false, code: "STALE_VERSION" });
+    expect(transitionBusinessUnderstandingReview(reviewTransition(
+      draft,
+      "in_review",
+      "2026-08-29T19:01:00.000Z",
+      { tenantId: TENANT_B },
+    ))).toEqual({ ok: false, code: "SCOPE_MISMATCH" });
+
+    let executions = 0;
+    const hostile = new Proxy(draft, {
+      getPrototypeOf() {
+        executions += 1;
+        throw new Error("must not execute");
+      },
+    });
+    const accessor = structuredClone(draft) as Record<string, unknown>;
+    Object.defineProperty(accessor, "status", {
+      enumerable: true,
+      get() {
+        executions += 1;
+        return "draft";
+      },
+    });
+    expect(transitionBusinessUnderstandingReview(reviewTransition(
+      hostile,
+      "in_review",
+      "2026-08-29T19:01:00.000Z",
+    ))).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    expect(transitionBusinessUnderstandingReview(reviewTransition(
+      accessor as unknown as BusinessUnderstandingReviewSnapshot,
+      "in_review",
+      "2026-08-29T19:01:00.000Z",
+    ))).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    expect(executions).toBe(0);
   });
 
   it("deeply snapshots and freezes proposal output", () => {
