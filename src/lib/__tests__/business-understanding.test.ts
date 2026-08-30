@@ -511,6 +511,39 @@ describe("business-understanding proposal service", () => {
       ok: true,
       review: { replacementVersionId: replacement.versionId },
     });
+
+    const invalidLineages = [
+      {
+        label: "skipped revisions",
+        proposalRef: "understanding:proposal-revision-999",
+        revision: 999,
+        supersedesProposalRef: "understanding:proposal-1",
+      },
+      {
+        label: "unrelated proposal lineage",
+        proposalRef: "understanding:proposal-unrelated",
+        revision: 2,
+        supersedesProposalRef: "understanding:unrelated-prior",
+      },
+      {
+        label: "skipped revision with unrelated proposal lineage",
+        proposalRef: "understanding:proposal-unrelated-999",
+        revision: 999,
+        supersedesProposalRef: "understanding:unrelated-prior",
+      },
+    ] as const;
+    for (const invalid of invalidLineages) {
+      const invalidReplacement = approvedReview({
+        proposalRef: invalid.proposalRef,
+        revision: invalid.revision,
+        supersedesProposalRef: invalid.supersedesProposalRef,
+        supersedesVersionId: current.versionId,
+        createdAt: "2026-08-29T19:03:00.000Z",
+      }, "2026-08-29T19:04:00.000Z", "2026-08-29T19:05:00.000Z");
+      expect(attempt({ ...descriptor, review: invalidReplacement }), invalid.label)
+        .toEqual({ ok: false, code: "INVALID_TRANSITION" });
+    }
+
     expect(transitionBusinessUnderstandingReview(reviewTransition(current, "superseded", "2026-08-29T19:06:00.000Z", {
       replacementVersionId: `understanding-version:${"f".repeat(64)}`,
     }))).toEqual({ ok: false, code: "MALFORMED_INPUT" });
@@ -645,6 +678,15 @@ describe("business-understanding proposal service", () => {
       "2026-08-29T19:01:00.000Z",
       { tenantId: TENANT_B },
     ))).toEqual({ ok: false, code: "SCOPE_MISMATCH" });
+    for (const reason of ["\u034f", "\ufe0f", "\u200b", "\u2060", "\u202e"]) {
+      expect(transitionBusinessUnderstandingReview(reviewTransition(
+        draft,
+        "in_review",
+        "2026-08-29T19:01:00.000Z",
+        { reason },
+      )), `default-ignorable review reason U+${reason.codePointAt(0)?.toString(16)}`)
+        .toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    }
 
     let executions = 0;
     const hostile = new Proxy(draft, {

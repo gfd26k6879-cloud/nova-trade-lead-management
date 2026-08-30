@@ -113,6 +113,9 @@ export type BusinessUnderstandingReviewEvent = Readonly<{
 export type BusinessUnderstandingReviewSnapshot = Scope & Readonly<{
   reviewVersion: 1;
   versionId: string;
+  proposalRef: string;
+  revision: number;
+  supersedesProposalRef: string | null;
   contentHash: string;
   claimSetHash: string;
   supersedesVersionId: string | null;
@@ -205,8 +208,9 @@ const CLAIM_FIELDS = [
   "origin", "status", "confidenceBasisPoints", "material", "evidenceIds", "uncertaintyReason",
 ] as const;
 const REVIEW_FIELDS = [
-  "reviewVersion", "versionId", "tenantId", "workspaceId", "contentHash", "claimSetHash",
-  "supersedesVersionId", "createdAt", "status", "events", "replacementVersionId", "reviewHash",
+  "reviewVersion", "versionId", "proposalRef", "revision", "supersedesProposalRef", "tenantId", "workspaceId",
+  "contentHash", "claimSetHash", "supersedesVersionId", "createdAt", "status", "events",
+  "replacementVersionId", "reviewHash",
 ] as const;
 const REVIEW_EVENT_FIELDS = ["from", "to", "actor", "at", "reason", "replacementVersionId"] as const;
 const REVIEW_ACTOR_FIELDS = ["kind", "actorId"] as const;
@@ -305,6 +309,13 @@ function boundedText(value: unknown, maximum = 2_000): string | null {
     } else if (code >= 0xdc00 && code <= 0xdfff) return null;
   }
   return value;
+}
+
+function reviewReason(value: unknown): string | null {
+  const reason = boundedText(value, 2_000);
+  return reason && !/[\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufe00-\ufe0f\ufeff]/u.test(reason)
+    ? reason
+    : null;
 }
 
 function reference(value: unknown): string | null {
@@ -443,6 +454,9 @@ function allowedReviewTransition(
 
 function reviewPayload(input: Readonly<{
   versionId: string;
+  proposalRef: string;
+  revision: number;
+  supersedesProposalRef: string | null;
   tenantId: string;
   workspaceId: string | null;
   contentHash: string;
@@ -456,6 +470,9 @@ function reviewPayload(input: Readonly<{
   return Object.freeze({
     reviewVersion: 1 as const,
     versionId: input.versionId,
+    proposalRef: input.proposalRef,
+    revision: input.revision,
+    supersedesProposalRef: input.supersedesProposalRef,
     tenantId: input.tenantId,
     workspaceId: input.workspaceId,
     contentHash: input.contentHash,
@@ -486,7 +503,7 @@ function parseReviewEvent(
   const to = enumValue(record.to, REVIEW_STATUSES);
   const actorId = uuid(actor.actorId);
   const at = canonicalTimestamp(record.at);
-  const reason = boundedText(record.reason, 2_000);
+  const reason = reviewReason(record.reason);
   const replacementVersionId = record.replacementVersionId === null
     ? null
     : typeof record.replacementVersionId === "string" && VERSION_ID.test(record.replacementVersionId)
@@ -511,6 +528,13 @@ function parseReviewSnapshot(value: unknown): BusinessUnderstandingReviewSnapsho
   const workspaceId = record && optionalWorkspace(record.workspaceId);
   const versionId = record && typeof record.versionId === "string" && VERSION_ID.test(record.versionId)
     ? record.versionId : null;
+  const proposalRef = record && reference(record.proposalRef);
+  const revision = record && integer(record.revision, 1, 1_000_000);
+  const supersedesProposalRef = record && record.supersedesProposalRef === null
+    ? null
+    : record
+      ? reference(record.supersedesProposalRef) ?? undefined
+      : undefined;
   const contentHash = record && typeof record.contentHash === "string" && HASH.test(record.contentHash)
     ? record.contentHash : null;
   const claimSetHash = record && typeof record.claimSetHash === "string" && HASH.test(record.claimSetHash)
@@ -523,9 +547,13 @@ function parseReviewSnapshot(value: unknown): BusinessUnderstandingReviewSnapsho
   const events = record && exactArray(record.events, 100);
   const suppliedStatus = record && enumValue(record.status, REVIEW_STATUSES);
   if (!record || record.reviewVersion !== 1 || !tenantId || workspaceId === undefined || !versionId
+    || !proposalRef || revision === null || supersedesProposalRef === undefined
     || !contentHash || versionId !== `understanding-version:${contentHash.slice("sha256:".length)}`
     || !claimSetHash || supersedesVersionId === undefined || !createdAt || !events || !suppliedStatus
     || typeof record.reviewHash !== "string" || !HASH.test(record.reviewHash)) return null;
+  if ((revision === 1 && (supersedesProposalRef !== null || supersedesVersionId !== null))
+    || (revision > 1 && (supersedesProposalRef === null || supersedesVersionId === null))
+    || supersedesProposalRef === proposalRef || supersedesVersionId === versionId) return null;
 
   const parsedEvents: BusinessUnderstandingReviewEvent[] = [];
   let status: BusinessUnderstandingReviewStatus = "draft";
@@ -542,6 +570,9 @@ function parseReviewSnapshot(value: unknown): BusinessUnderstandingReviewSnapsho
   if (status !== suppliedStatus || record.replacementVersionId !== replacementVersionId) return null;
   const canonical = createReviewSnapshot({
     versionId,
+    proposalRef,
+    revision,
+    supersedesProposalRef,
     tenantId,
     workspaceId,
     contentHash,
@@ -766,6 +797,9 @@ export function buildBusinessUnderstandingProposal(input: unknown): BusinessUnde
     if (supersedesVersionId === versionId) return reject("VERSION_CONFLICT");
     const review = createReviewSnapshot({
       versionId,
+      proposalRef,
+      revision,
+      supersedesProposalRef,
       tenantId,
       workspaceId,
       contentHash,
@@ -805,7 +839,7 @@ export function transitionBusinessUnderstandingReview(value: unknown): BusinessU
     const actorId = actor && uuid(actor.actorId);
     const to = enumValue(input.to, REVIEW_STATUSES);
     const at = canonicalTimestamp(input.at);
-    const reason = boundedText(input.reason, 2_000);
+    const reason = reviewReason(input.reason);
     const replacement = input.replacement === null ? null : parseReplacementDescriptor(input.replacement);
     if (!current || !tenantId || workspaceId === undefined || !actor || !actorId || !to || to === "draft"
       || !at || !reason || (input.replacement !== null && !replacement)
@@ -828,6 +862,8 @@ export function transitionBusinessUnderstandingReview(value: unknown): BusinessU
       && replacement.review.status === "approved"
       && replacement.review.versionId !== current.versionId
       && replacement.supersedesVersionId === current.versionId
+      && replacement.review.revision === current.revision + 1
+      && replacement.review.supersedesProposalRef === current.proposalRef
       && Date.parse(replacement.review.createdAt) > Date.parse(current.createdAt)
       && replacementLastAt !== null
       && Date.parse(replacementLastAt) > Date.parse(currentLastAt)
@@ -850,6 +886,9 @@ export function transitionBusinessUnderstandingReview(value: unknown): BusinessU
     });
     const review = createReviewSnapshot({
       versionId: current.versionId,
+      proposalRef: current.proposalRef,
+      revision: current.revision,
+      supersedesProposalRef: current.supersedesProposalRef,
       tenantId: current.tenantId,
       workspaceId: current.workspaceId,
       contentHash: current.contentHash,
