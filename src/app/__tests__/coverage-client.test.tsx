@@ -2,19 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
-}));
-
-vi.mock("sonner", () => ({
-  toast: {
-    error: vi.fn(),
-    info: vi.fn(),
-    success: vi.fn(),
-  },
-}));
-
-vi.mock("@/lib/crawl/actions", () => ({
+const crawlActionMocks = vi.hoisted(() => ({
   getCoverageCellLedgerAction: vi.fn(),
   getCoverageDiscoveryItemListAction: vi.fn(),
   getCoverageMarketSummaryAction: vi.fn(),
@@ -32,11 +20,33 @@ vi.mock("@/lib/crawl/actions", () => ({
   stopCrawlRunAction: vi.fn(),
 }));
 
-vi.mock("@/lib/leads/actions", () => ({
+const leadActionMocks = vi.hoisted(() => ({
   refreshStaleUnitsAction: vi.fn(),
 }));
 
-import { CoverageClient } from "@/app/(protected)/coverage/coverage-client";
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+    info: vi.fn(),
+    success: vi.fn(),
+  },
+}));
+
+vi.mock("@/lib/crawl/actions", () => crawlActionMocks);
+
+vi.mock("@/lib/leads/actions", () => leadActionMocks);
+
+import {
+  CoverageClient,
+  loadCoverageFailedUnits,
+  pauseCoverageDiscovery,
+  promoteCoverageProbe,
+  refreshCoverageStaleUnits,
+} from "@/app/(protected)/coverage/coverage-client";
 
 const baseRun = {
   id: "run-1",
@@ -109,12 +119,43 @@ function renderCoverage(overrides: Partial<React.ComponentProps<typeof CoverageC
       crawlWorker={{ enabled: true, googlePlacesKeyConfigured: true, googlePlacesKeySource: "env" }}
       geography={null}
       unitPreview={[]}
+      crawlWorkspaces={[{
+        tenantId: "10000000-0000-4000-8000-000000000001",
+        workspaceId: "20000000-0000-4000-8000-000000000001",
+        name: "Primary workspace",
+      }]}
+      initialCrawlWorkspaceId="20000000-0000-4000-8000-000000000001"
       {...overrides}
     />,
   );
 }
 
 describe("CoverageClient discovery monitor", () => {
+  it("passes the selected concrete workspace to monitor control and promotion actions", async () => {
+    const workspace = {
+      tenantId: "10000000-0000-4000-8000-000000000001",
+      workspaceId: "20000000-0000-4000-8000-000000000001",
+      name: "Primary workspace",
+    };
+
+    await pauseCoverageDiscovery("run-1", workspace);
+    await promoteCoverageProbe("run-1", workspace);
+    await loadCoverageFailedUnits("run-1", workspace);
+    await refreshCoverageStaleUnits("run-1", 7, workspace);
+
+    expect(crawlActionMocks.pauseCrawlRunAction).toHaveBeenCalledWith("run-1", workspace);
+    expect(crawlActionMocks.promoteProbeToLeadHarvestAction).toHaveBeenCalledWith("run-1", workspace);
+    expect(crawlActionMocks.getFailedUnitErrorsAction).toHaveBeenCalledWith("run-1", workspace);
+    expect(leadActionMocks.refreshStaleUnitsAction).toHaveBeenCalledWith("run-1", 7, workspace);
+  });
+
+  it("renders the concrete workspace used by coverage actions", () => {
+    const html = renderCoverage();
+
+    expect(html).toContain("Discovery workspace");
+    expect(html).toContain("Primary workspace");
+  });
+
   it("renders blocked runs with exact cause and safe actions", () => {
     const html = renderCoverage({
       run: {

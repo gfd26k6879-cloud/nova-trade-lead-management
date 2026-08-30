@@ -8,6 +8,8 @@ import {
 } from "@/lib/dashboard-fallbacks";
 import { startRouteTiming } from "@/lib/route-timing";
 import { assertTenantPermission } from "@/lib/tenancy/authorize";
+import { listCrawlWorkspaceOptions } from "@/lib/crawl/workspace-scope";
+import type { CrawlWorkspaceOption } from "@/lib/crawl/workspace-scope";
 import { DashboardClient } from "./dashboard-client";
 
 export const metadata: Metadata = { title: "Admin Command Center | Nova Trade Lead Management" };
@@ -39,6 +41,13 @@ export default async function DashboardPage() {
     return <DashboardUnavailable />;
   }
 
+  let crawlWorkspaces: CrawlWorkspaceOption[] = [];
+  try {
+    crawlWorkspaces = await listCrawlWorkspaceOptions(tenantSession);
+  } catch {
+    crawlWorkspaces = [];
+  }
+
   logRouteTiming(200, { mode: "fast_shell" });
 
   return (
@@ -47,6 +56,7 @@ export default async function DashboardPage() {
       teamSummary={emptyTeamBoardSummary()}
       weeklyStats={emptyStatisticsSummary()}
       fulfillmentSummary={emptyAdminFulfillmentSummary()}
+      crawlWorkspaces={crawlWorkspaces}
     />
   );
 }

@@ -6,6 +6,10 @@ let testDb: Database.Database;
 const TENANT_A = "10000000-0000-4000-8000-000000000001";
 const TENANT_B = "20000000-0000-4000-8000-000000000001";
 
+const tenantContextMocks = vi.hoisted(() => ({
+  requireTenantContext: vi.fn(),
+}));
+
 vi.mock("@/lib/db/index", () => {
   return {
     getDb: () => testDb,
@@ -27,7 +31,7 @@ vi.mock("@/lib/db/index", () => {
 
 vi.mock("@/lib/tenancy/context", () => ({
   getTenantContext: () => null,
-  requireTenantContext: () => ({ tenantId: TENANT_A, workspaceId: null }),
+  requireTenantContext: tenantContextMocks.requireTenantContext,
 }));
 
 import {
@@ -85,6 +89,7 @@ function insertLead(input: {
   aiVerificationStatus?: string;
   aiWebsiteViabilityStatus?: string | null;
   aiQueueStatus?: string;
+  tenantId?: string;
 }) {
   testDb.prepare(
     `INSERT INTO leads (
@@ -112,7 +117,7 @@ function insertLead(input: {
     input.leadQuality ?? 80,
     input.assignedTo ?? null,
     input.reminder ?? null,
-    TENANT_A,
+    input.tenantId ?? TENANT_A,
   );
 }
 
@@ -121,6 +126,9 @@ beforeEach(() => {
   testDb.exec(`
     ALTER TABLE leads ADD COLUMN tenant_id TEXT;
     ALTER TABLE outreach_events ADD COLUMN tenant_id TEXT;
+    ALTER TABLE demos ADD COLUMN tenant_id TEXT;
+    ALTER TABLE lead_ai_artifacts ADD COLUMN tenant_id TEXT;
+    ALTER TABLE user_market_access ADD COLUMN tenant_id TEXT;
     ALTER TABLE lead_notes ADD COLUMN tenant_id TEXT;
     ALTER TABLE admin_requests ADD COLUMN tenant_id TEXT;
     ALTER TABLE admin_requests ADD COLUMN workspace_id TEXT;
@@ -128,8 +136,11 @@ beforeEach(() => {
       ('${TENANT_A}', 'researcher-workbench', 'Researcher Workbench', 'active'),
       ('${TENANT_B}', 'other-team', 'Other Team', 'active');
   `);
+  tenantContextMocks.requireTenantContext.mockReset();
+  tenantContextMocks.requireTenantContext.mockReturnValue({ tenantId: TENANT_A, workspaceId: null });
   insertUser("user-1", "one@example.com", "One");
   insertUser("user-2", "two@example.com", "Two");
+  testDb.prepare("UPDATE user_market_access SET tenant_id = ?").run(TENANT_A);
 });
 
 afterEach(() => {
@@ -137,6 +148,49 @@ afterEach(() => {
 });
 
 describe("researcher workbench queries", () => {
+  it("requires a tenant-wide context before queue database reads", async () => {
+    tenantContextMocks.requireTenantContext.mockImplementationOnce(() => {
+      throw new Error("Tenant context is required");
+    });
+    await expect(getResearcherWorkbench("user-1")).rejects.toThrow("Tenant context is required");
+
+    tenantContextMocks.requireTenantContext.mockReturnValueOnce({ tenantId: TENANT_A, workspaceId: "workspace-a" });
+    await expect(getResearcherWorkbench("user-1")).rejects.toThrow("Tenant-wide context is required");
+  });
+
+  it("keeps queue candidates, assignees, metadata, market access, and summaries tenant-bound", async () => {
+    insertLead({ id: "tenant-a-visible", assignedTo: "user-1", reminder: "2026-05-15" });
+    insertLead({ id: "tenant-b-hidden", assignedTo: "user-1", tenantId: TENANT_B, salesPriority: 999 });
+
+    testDb.prepare(
+      `INSERT INTO lead_ai_artifacts (id, lead_id, artifact_type, status, input_hash, prompt_version, tenant_id)
+       VALUES ('foreign-artifact', 'tenant-a-visible', 'business_detail', 'complete', 'hash', 'v1', ?)`,
+    ).run(TENANT_B);
+    testDb.prepare(
+      `INSERT INTO demos (id, lead_id, slug, is_published, tenant_id)
+       VALUES ('foreign-demo', 'tenant-a-visible', 'foreign-demo', 1, ?)`,
+    ).run(TENANT_B);
+    testDb.prepare(
+      `INSERT INTO admin_requests (id, lead_id, request_type, status, tenant_id)
+       VALUES ('foreign-request', 'tenant-a-visible', 'website_request', 'new', ?)`,
+    ).run(TENANT_B);
+    testDb.prepare(
+      `INSERT INTO outreach_events (id, lead_id, channel, actor_user_id, created_at, tenant_id)
+       VALUES ('foreign-contact', 'tenant-a-visible', 'call', 'user-1', '2026-05-15T11:00:00.000Z', ?)`,
+    ).run(TENANT_B);
+
+    const workbench = await getResearcherWorkbench("user-1");
+
+    expect(workbench.myLeads.map((lead) => lead.id)).toEqual(["tenant-a-visible"]);
+    expect(workbench.myLeads[0]).toMatchObject({
+      assigned_user_email: "one@example.com",
+      business_detail_status: null,
+      demo_slug: null,
+      open_website_request_id: null,
+    });
+    expect(workbench.summary).toMatchObject({ myClaimed: 1, dueToday: 1, contactedThisWeek: 0 });
+  });
+
   it("derives members from current tenant roles without exposing global hierarchy metadata", async () => {
     testDb.prepare(
       `INSERT INTO app_users (id, user_id, email, display_name, role, status, created_at, updated_at)

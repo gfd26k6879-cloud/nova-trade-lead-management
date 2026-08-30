@@ -31,6 +31,7 @@ import type {
   LocationCellCoverage,
   MarketCoverageSummary,
 } from "@/lib/db/queries";
+import type { CrawlWorkspaceOption } from "@/lib/crawl/workspace-scope";
 import { getStatusToneStyle } from "@/lib/status-tone";
 
 interface FailedUnit {
@@ -151,11 +152,33 @@ interface Props {
   crawlWorker?: CrawlWorkerState | null;
   geography: GeographyProgress | null;
   unitPreview: CrawlUnitPreview[];
+  crawlWorkspaces: CrawlWorkspaceOption[];
+  initialCrawlWorkspaceId: string | null;
 }
 
 type PanelStatus = "idle" | "loading" | "ready" | "error" | "timeout";
 
 type CoverageLoadError = "db_statement_timeout" | "transient_db_error" | "coverage_load_timeout" | "coverage_data_unavailable";
+
+export function pauseCoverageDiscovery(runId: string, workspace: CrawlWorkspaceOption) {
+  return pauseCrawlRunAction(runId, workspace);
+}
+
+export function promoteCoverageProbe(runId: string, workspace: CrawlWorkspaceOption) {
+  return promoteProbeToLeadHarvestAction(runId, workspace);
+}
+
+export function loadCoverageFailedUnits(runId: string, workspace: CrawlWorkspaceOption) {
+  return getFailedUnitErrorsAction(runId, workspace);
+}
+
+export function refreshCoverageStaleUnits(
+  runId: string,
+  olderThanDays: number,
+  workspace: CrawlWorkspaceOption,
+) {
+  return refreshStaleUnitsAction(runId, olderThanDays, workspace);
+}
 
 export function CoverageClient({
   selectedRunId = null,
@@ -168,6 +191,8 @@ export function CoverageClient({
   crawlWorker: initialCrawlWorker = null,
   geography: initialGeography,
   unitPreview: initialUnitPreview,
+  crawlWorkspaces,
+  initialCrawlWorkspaceId,
 }: Props) {
   const router = useRouter();
   const [markets, setMarkets] = useState(initialMarkets);
@@ -198,6 +223,8 @@ export function CoverageClient({
   const [busy, setBusy] = useState<"pause" | "resume" | "stop" | "retry" | "refresh" | "promote" | "diagnostic" | "workers" | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; actionLabel: string; action: () => Promise<void> } | null>(null);
   const [refreshDays, setRefreshDays] = useState(7);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(initialCrawlWorkspaceId ?? "");
+  const selectedCrawlWorkspace = crawlWorkspaces.find((workspace) => workspace.workspaceId === selectedWorkspaceId) ?? null;
   const effectiveRunId = run?.id ?? selectedRunId ?? null;
 
   useEffect(() => {
@@ -214,7 +241,7 @@ export function CoverageClient({
   const loadDiscoveryPanel = useCallback(async () => {
     setDiscoveryStatus("loading");
     try {
-      const result = await withCoverageClientTimeout(getCoverageSelectedRunAction(selectedRunId));
+      const result = await withCoverageClientTimeout(getCoverageSelectedRunAction(selectedRunId, selectedCrawlWorkspace ?? undefined));
       setRun(result.run);
       setCrawlWorker(result.crawlWorker);
       setPanelWarning("selected_run", result.loadError);
@@ -225,12 +252,12 @@ export function CoverageClient({
       setPanelWarning("selected_run", "coverage_load_timeout");
       setDiscoveryStatus("timeout");
     }
-  }, [selectedRunId, setPanelWarning]);
+  }, [selectedCrawlWorkspace, selectedRunId, setPanelWarning]);
 
   const loadDiscoveryItemsPanel = useCallback(async () => {
     setDiscoveryItemsStatus("loading");
     try {
-      const result = await withCoverageClientTimeout(getCoverageDiscoveryItemListAction(30));
+      const result = await withCoverageClientTimeout(getCoverageDiscoveryItemListAction(30, selectedCrawlWorkspace ?? undefined));
       setDiscoveryItems(result.discoveryItems);
       setPanelWarning("discovery_items", result.loadError);
       setDiscoveryItemsStatus(statusFromLoadError(result.loadError));
@@ -239,12 +266,12 @@ export function CoverageClient({
       setPanelWarning("discovery_items", "coverage_load_timeout");
       setDiscoveryItemsStatus("timeout");
     }
-  }, [setPanelWarning]);
+  }, [selectedCrawlWorkspace, setPanelWarning]);
 
   const loadMarketPanel = useCallback(async (runId: string | null) => {
     setMarketsStatus("loading");
     try {
-      const result = await withCoverageClientTimeout(getCoverageMarketSummaryAction(runId));
+      const result = await withCoverageClientTimeout(getCoverageMarketSummaryAction(runId, selectedCrawlWorkspace ?? undefined));
       setMarkets(result.markets);
       setPanelWarning("market_summary", result.loadError);
       setMarketsStatus(statusFromLoadError(result.loadError));
@@ -253,12 +280,12 @@ export function CoverageClient({
       setPanelWarning("market_summary", "coverage_load_timeout");
       setMarketsStatus("timeout");
     }
-  }, [setPanelWarning]);
+  }, [selectedCrawlWorkspace, setPanelWarning]);
 
   const loadCellPanel = useCallback(async (runId: string | null) => {
     setCellsStatus("loading");
     try {
-      const result = await withCoverageClientTimeout(getCoverageCellLedgerAction(runId));
+      const result = await withCoverageClientTimeout(getCoverageCellLedgerAction(runId, selectedCrawlWorkspace ?? undefined));
       setCells(result.cells);
       setPanelWarning("cell_coverage", result.loadError);
       setCellsStatus(statusFromLoadError(result.loadError));
@@ -267,12 +294,12 @@ export function CoverageClient({
       setPanelWarning("cell_coverage", "coverage_load_timeout");
       setCellsStatus("timeout");
     }
-  }, [setPanelWarning]);
+  }, [selectedCrawlWorkspace, setPanelWarning]);
 
   const loadProgressPanel = useCallback(async (runId: string | null) => {
     setProgressStatus("loading");
     try {
-      const result = await withCoverageClientTimeout(getCoverageRunProgressAction(runId));
+      const result = await withCoverageClientTimeout(getCoverageRunProgressAction(runId, selectedCrawlWorkspace ?? undefined));
       setProgress(result.progress);
       setGeography(result.geography);
       setPanelWarning("run_progress", result.loadError);
@@ -283,12 +310,12 @@ export function CoverageClient({
       setPanelWarning("run_progress", "coverage_load_timeout");
       setProgressStatus("timeout");
     }
-  }, [setPanelWarning]);
+  }, [selectedCrawlWorkspace, setPanelWarning]);
 
   const loadUnitPreviewPanel = useCallback(async (runId: string | null) => {
     setUnitPreviewStatus("loading");
     try {
-      const result = await withCoverageClientTimeout(getCoverageUnitPreviewAction(runId));
+      const result = await withCoverageClientTimeout(getCoverageUnitPreviewAction(runId, selectedCrawlWorkspace ?? undefined));
       setUnitPreview(result.unitPreview);
       setPanelWarning("unit_preview", result.loadError);
       setUnitPreviewStatus(statusFromLoadError(result.loadError));
@@ -297,12 +324,12 @@ export function CoverageClient({
       setPanelWarning("unit_preview", "coverage_load_timeout");
       setUnitPreviewStatus("timeout");
     }
-  }, [setPanelWarning]);
+  }, [selectedCrawlWorkspace, setPanelWarning]);
 
   const loadProbeCandidatesPanel = useCallback(async (runId: string | null) => {
     setProbeCandidatesStatus("loading");
     try {
-      const result = await withCoverageClientTimeout(getCoverageProbeCandidatesAction(runId));
+      const result = await withCoverageClientTimeout(getCoverageProbeCandidatesAction(runId, selectedCrawlWorkspace ?? undefined));
       setProbeCandidates(result.candidates);
       setPanelWarning("probe_candidates", result.loadError);
       setProbeCandidatesStatus(statusFromLoadError(result.loadError));
@@ -311,7 +338,7 @@ export function CoverageClient({
       setPanelWarning("probe_candidates", "coverage_load_timeout");
       setProbeCandidatesStatus("timeout");
     }
-  }, [setPanelWarning]);
+  }, [selectedCrawlWorkspace, setPanelWarning]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadDiscoveryPanel(), 0);
@@ -402,11 +429,14 @@ export function CoverageClient({
   const canPromoteProbe = Boolean(run?.id && run.status === "done" && selectedDiscoveryMode === "coverage_probe");
 
   const handleRunSelect = (value: string) => {
+    const workspaceQuery = selectedCrawlWorkspace
+      ? `workspace=${encodeURIComponent(selectedCrawlWorkspace.workspaceId)}`
+      : "";
     if (value === "default") {
-      router.push("/coverage");
+      router.push(workspaceQuery ? `/coverage?${workspaceQuery}` : "/coverage");
       return;
     }
-    router.push(`/coverage?run=${encodeURIComponent(value)}`);
+    router.push(`/coverage?run=${encodeURIComponent(value)}${workspaceQuery ? `&${workspaceQuery}` : ""}`);
   };
 
   const refreshRunPanels = useCallback(async () => {
@@ -420,9 +450,9 @@ export function CoverageClient({
   }, [effectiveRunId, loadDiscoveryItemsPanel, loadDiscoveryPanel, loadProgressPanel, loadUnitPreviewPanel]);
 
   const handlePause = async () => {
-    if (!run?.id) return;
+    if (!run?.id || !selectedCrawlWorkspace) return;
     setBusy("pause");
-    const result = await pauseCrawlRunAction(run.id);
+    const result = await pauseCoverageDiscovery(run.id, selectedCrawlWorkspace);
     if ("error" in result) toast.error(result.error ?? "Unable to pause run");
     else toast.info("Discovery paused");
     await refreshRunPanels();
@@ -430,9 +460,9 @@ export function CoverageClient({
   };
 
   const handleResume = async () => {
-    if (!run?.id) return;
+    if (!run?.id || !selectedCrawlWorkspace) return;
     setBusy("resume");
-    const result = await resumeCrawlRunAction(run.id);
+    const result = await resumeCrawlRunAction(run.id, selectedCrawlWorkspace);
     if ("error" in result) toast.error(result.error ?? "Unable to resume run");
     else toast.success("Discovery resumed");
     await refreshRunPanels();
@@ -440,9 +470,9 @@ export function CoverageClient({
   };
 
   const handleStop = async () => {
-    if (!run?.id) return;
+    if (!run?.id || !selectedCrawlWorkspace) return;
     setBusy("stop");
-    const result = await stopCrawlRunAction(run.id);
+    const result = await stopCrawlRunAction(run.id, selectedCrawlWorkspace);
     if ("error" in result) toast.error(result.error ?? "Unable to cancel remaining units");
     else toast.success(`Remaining discovery units canceled. ${result.canceledUnits} queued units canceled.`);
     await refreshRunPanels();
@@ -450,9 +480,9 @@ export function CoverageClient({
   };
 
   const handleRetry = async () => {
-    if (!run?.id) return;
+    if (!run?.id || !selectedCrawlWorkspace) return;
     setBusy("retry");
-    const result = await retryFailedUnitsAction(run.id);
+    const result = await retryFailedUnitsAction(run.id, selectedCrawlWorkspace);
     if ("error" in result) toast.error(result.error ?? "Unable to retry failed units");
     else toast.success(`${result.retriedCount} units queued for retry`);
     await refreshRunPanels();
@@ -460,9 +490,9 @@ export function CoverageClient({
   };
 
   const handleDiagnostic = async () => {
-    if (!run?.id) return;
+    if (!run?.id || !selectedCrawlWorkspace) return;
     setBusy("diagnostic");
-    const result = await runGoogleDiscoveryDiagnosticAction(run.id);
+    const result = await runGoogleDiscoveryDiagnosticAction(run.id, selectedCrawlWorkspace);
     if (result.diagnostic.ok) {
       toast.success(`Google diagnostic passed using ${formatKeySource(result.diagnostic.keySource)} key.`);
     } else {
@@ -493,15 +523,15 @@ export function CoverageClient({
       setShowErrors(false);
       return;
     }
-    if (!run?.id) return;
-    setErrors(await getFailedUnitErrorsAction(run.id));
+    if (!run?.id || !selectedCrawlWorkspace) return;
+    setErrors(await loadCoverageFailedUnits(run.id, selectedCrawlWorkspace));
     setShowErrors(true);
   };
 
   const handleRefreshStale = async () => {
-    if (!run?.id) return;
+    if (!run?.id || !selectedCrawlWorkspace) return;
     setBusy("refresh");
-    const result = await refreshStaleUnitsAction(run.id, refreshDays);
+    const result = await refreshCoverageStaleUnits(run.id, refreshDays, selectedCrawlWorkspace);
     if ("error" in result) toast.error(result.error ?? "Unable to refresh stale units");
     else toast.success(`${result.count} stale units reset for re-crawl`);
     await refreshRunPanels();
@@ -509,16 +539,16 @@ export function CoverageClient({
   };
 
   const handlePromoteProbe = async () => {
-    if (!run?.id) return;
+    if (!run?.id || !selectedCrawlWorkspace) return;
     setBusy("promote");
-    const result = await promoteProbeToLeadHarvestAction(run.id);
+    const result = await promoteCoverageProbe(run.id, selectedCrawlWorkspace);
     if ("error" in result) {
       toast.error(result.error ?? "Unable to promote this probe");
       setBusy(null);
       return;
     }
     toast.success(`Created lead harvest with ${result.unitCount} unit${result.unitCount === 1 ? "" : "s"}.`);
-    router.push(`/coverage?run=${encodeURIComponent(result.runId)}`);
+    router.push(`/coverage?run=${encodeURIComponent(result.runId)}&workspace=${encodeURIComponent(selectedCrawlWorkspace.workspaceId)}`);
     setBusy(null);
   };
 
@@ -553,6 +583,30 @@ export function CoverageClient({
             <Link href="/dashboard#discovery" className="btn-primary text-xs">Start New Discovery</Link>
           </div>
         </div>
+
+        <label className="mt-4 block max-w-sm text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
+          Discovery workspace
+          <select
+            className="glass-select mt-1 w-full"
+            value={selectedWorkspaceId}
+            onChange={(event) => {
+              const workspaceId = event.target.value;
+              setSelectedWorkspaceId(workspaceId);
+              router.push(`/coverage?workspace=${encodeURIComponent(workspaceId)}`);
+            }}
+            disabled={crawlWorkspaces.length === 0 || busy !== null}
+          >
+            {crawlWorkspaces.length === 0 && <option value="">No active workspace</option>}
+            {crawlWorkspaces.map((workspace) => (
+              <option key={workspace.workspaceId} value={workspace.workspaceId}>{workspace.name}</option>
+            ))}
+          </select>
+        </label>
+        {!selectedCrawlWorkspace && (
+          <p className="mt-3 text-sm" style={{ color: "var(--warning-text)" }}>
+            An active workspace is required before discovery items can be controlled or promoted.
+          </p>
+        )}
 
         {discoveryStatus === "loading" ? (
           <EmptyPanel label="Loading selected discovery item..." />
@@ -624,10 +678,10 @@ export function CoverageClient({
                 ]}
                 actions={(
                   <>
-                    <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={handleDiagnostic}>
+                    <button type="button" className="btn-glass text-xs" disabled={busy !== null || !selectedCrawlWorkspace} onClick={handleDiagnostic}>
                       {busy === "diagnostic" ? "Checking..." : "Run Google diagnostic"}
                     </button>
-                    <button type="button" className="btn-primary text-xs" disabled={busy !== null} onClick={() => setConfirmAction({
+                    <button type="button" className="btn-primary text-xs" disabled={busy !== null || !selectedCrawlWorkspace} onClick={() => setConfirmAction({
                       title: "Resume after fixing the block?",
                       message: `This runs a Google diagnostic first, then resumes ${run.name ?? "this discovery item"} only if the diagnostic passes and the remaining call cap is safe.`,
                       actionLabel: busy === "resume" ? "Resuming..." : "Resume after fix",
@@ -651,7 +705,7 @@ export function CoverageClient({
                 ]}
                 actions={(
                   <>
-                    <button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={handleDiagnostic}>
+                    <button type="button" className="btn-glass text-xs" disabled={busy !== null || !selectedCrawlWorkspace} onClick={handleDiagnostic}>
                       {busy === "diagnostic" ? "Checking..." : "Run Google diagnostic"}
                     </button>
                     <button type="button" className="btn-primary text-xs" disabled={busy !== null || !crawlWorker?.googlePlacesKeyConfigured} onClick={handleResumeRecommendedWorkers}>
@@ -676,8 +730,8 @@ export function CoverageClient({
               <div className="h-full rounded-full transition-all duration-500" style={{ width: `${runPct}%`, background: runPct === 100 ? "var(--success-text)" : "var(--accent)" }} />
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2">
-              {(run.status === "running" || run.status === "queued") && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handlePause}>{busy === "pause" ? "Pausing..." : "Pause Discovery"}</button>}
-              {(run.status === "paused" || run.status === "blocked") && <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={() => setConfirmAction({
+              {(run.status === "running" || run.status === "queued") && <button type="button" className="btn-glass text-sm" disabled={busy !== null || !selectedCrawlWorkspace} onClick={handlePause}>{busy === "pause" ? "Pausing..." : "Pause Discovery"}</button>}
+              {(run.status === "paused" || run.status === "blocked") && <button type="button" className="btn-primary text-sm" disabled={busy !== null || !selectedCrawlWorkspace} onClick={() => setConfirmAction({
                 title: run.status === "blocked" ? "Resume after fixing the block?" : "Resume this discovery item?",
                 message: run.status === "blocked"
                   ? `This runs a Google diagnostic first, then resumes ${run.name ?? "this discovery item"} only if Google and the remaining call cap are safe.`
@@ -685,16 +739,16 @@ export function CoverageClient({
                 actionLabel: "Resume this item",
                 action: handleResume,
               })}>{busy === "resume" ? "Resuming..." : run.status === "blocked" ? "Resume after fix" : "Resume this discovery item"}</button>}
-              {run.id && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handleDiagnostic}>{busy === "diagnostic" ? "Checking..." : "Run Google diagnostic"}</button>}
+              {run.id && <button type="button" className="btn-glass text-sm" disabled={busy !== null || !selectedCrawlWorkspace} onClick={handleDiagnostic}>{busy === "diagnostic" ? "Checking..." : "Run Google diagnostic"}</button>}
               {waitingForWorker && <button type="button" className="btn-glass text-sm" disabled={busy !== null || !crawlWorker?.googlePlacesKeyConfigured} onClick={handleResumeRecommendedWorkers}>{busy === "workers" ? "Updating..." : "Enable recommended workers"}</button>}
-              {canStop && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={() => setConfirmAction({
+              {canStop && <button type="button" className="btn-glass text-sm" disabled={busy !== null || !selectedCrawlWorkspace} onClick={() => setConfirmAction({
                 title: "Cancel this item's remaining units?",
                 message: `This will mark ${pendingUnits} open units for ${run.name ?? "this discovery item"} as canceled. Completed leads and history stay saved, but queued units will not be processed unless recreated later.`,
                 actionLabel: "Cancel remaining units",
                 action: handleStop,
               })}>{busy === "stop" ? "Canceling..." : "Cancel this item's remaining units"}</button>}
-              {(terminalFailedUnits + retryWaitUnits) > 0 && <button type="button" className="btn-glass text-sm" disabled={busy !== null} onClick={handleRetry}>{busy === "retry" ? "Retrying..." : `Retry retryable units (${terminalFailedUnits + retryWaitUnits})`}</button>}
-              {canPromoteProbe && <button type="button" className="btn-primary text-sm" disabled={busy !== null} onClick={() => setConfirmAction({
+              {(terminalFailedUnits + retryWaitUnits) > 0 && <button type="button" className="btn-glass text-sm" disabled={busy !== null || !selectedCrawlWorkspace} onClick={handleRetry}>{busy === "retry" ? "Retrying..." : `Retry retryable units (${terminalFailedUnits + retryWaitUnits})`}</button>}
+              {canPromoteProbe && <button type="button" className="btn-primary text-sm" disabled={busy !== null || !selectedCrawlWorkspace} onClick={() => setConfirmAction({
                 title: "Promote probe to lead harvest?",
                 message: `This creates a separate lead harvest using the same market, cell, and categories from ${run.name ?? "this probe"}. The original probe remains unchanged.`,
                 actionLabel: busy === "promote" ? "Creating..." : "Create lead harvest",
@@ -764,8 +818,8 @@ export function CoverageClient({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {terminalFailedUnits > 0 && <button type="button" className="btn-glass text-xs" onClick={handleShowErrors}>{showErrors ? "Hide Errors" : "Show Errors"}</button>}
-            {run?.id && doneUnits > 0 && <><input type="number" className="glass-input w-16 text-xs" value={refreshDays} min={1} onChange={(event) => setRefreshDays(Number(event.target.value))} aria-label="Days threshold" /><button type="button" className="btn-glass text-xs" disabled={busy !== null} onClick={handleRefreshStale}>{busy === "refresh" ? "Refreshing..." : "Refresh Stale"}</button></>}
+            {terminalFailedUnits > 0 && <button type="button" className="btn-glass text-xs" disabled={!selectedCrawlWorkspace} onClick={handleShowErrors}>{showErrors ? "Hide Errors" : "Show Errors"}</button>}
+            {run?.id && doneUnits > 0 && <><input type="number" className="glass-input w-16 text-xs" value={refreshDays} min={1} onChange={(event) => setRefreshDays(Number(event.target.value))} aria-label="Days threshold" /><button type="button" className="btn-glass text-xs" disabled={busy !== null || !selectedCrawlWorkspace} onClick={handleRefreshStale}>{busy === "refresh" ? "Refreshing..." : "Refresh Stale"}</button></>}
           </div>
         </div>
         {showErrors && errors.length > 0 && <div className="mb-5 space-y-2">{errors.map((err, index) => <Alert key={`${err.zip}-${err.category}-${index}`} tone="error" text={`${err.zip} / ${err.category}: ${err.last_error || "No error message"}`} />)}</div>}

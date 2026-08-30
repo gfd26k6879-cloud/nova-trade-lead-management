@@ -30,6 +30,7 @@ import type {
 } from "@/lib/db/queries";
 import type { DashboardStatsResult } from "@/lib/dashboard-fallbacks";
 import type { DiscoverySizeEstimate, DiscoveryMode, PaginationPolicy } from "@/lib/discovery-sizing";
+import type { CrawlWorkspaceOption } from "@/lib/crawl/workspace-scope";
 import { getStatusToneStyle, type StatusTone } from "@/lib/status-tone";
 
 const CATEGORY_OPTIONS = [
@@ -132,16 +133,36 @@ function panelLoadReasonLabel(reason: string | undefined, fallback: string): str
   return fallback;
 }
 
+export function startDashboardDiscovery(
+  payload: Parameters<typeof startCrawlRunAction>[0],
+  workspace: CrawlWorkspaceOption,
+) {
+  return startCrawlRunAction(payload, workspace);
+}
+
+export function estimateDashboardDiscovery(
+  payload: Parameters<typeof estimateDiscoveryRunAction>[0],
+  workspace: CrawlWorkspaceOption,
+) {
+  return estimateDiscoveryRunAction(payload, workspace);
+}
+
+export function pauseDashboardDiscovery(runId: string | undefined, workspace: CrawlWorkspaceOption) {
+  return pauseCrawlRunAction(runId, workspace);
+}
+
 export function DashboardClient({
   initialStats,
   teamSummary,
   weeklyStats,
   fulfillmentSummary,
+  crawlWorkspaces,
 }: {
   initialStats: DashboardStatsResult;
   teamSummary: TeamBoardSummary;
   weeklyStats: StatisticsSummary;
   fulfillmentSummary: AdminFulfillmentSummary;
+  crawlWorkspaces: CrawlWorkspaceOption[];
 }) {
   const [stats, setStats] = useState<DashboardStatsResult>(initialStats);
   const [currentTeamSummary, setCurrentTeamSummary] = useState(teamSummary);
@@ -155,6 +176,7 @@ export function DashboardClient({
   const [discoveryItemsStatus, setDiscoveryItemsStatus] = useState<DashboardPanelStatus>("loading");
   const [discoveryItemsError, setDiscoveryItemsError] = useState<string | null>(null);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(crawlWorkspaces[0]?.workspaceId ?? "");
   const [locationScope, setLocationScope] = useState<LocationScopeValue>({ state: "CO", counties: [], zipCodes: [] });
   const [discoveryMode, setDiscoveryMode] = useState<DiscoveryMode>(initialStats.googleDiscoveryDefaults.discoveryMode);
   const [paginationPolicy, setPaginationPolicy] = useState<PaginationPolicy>(initialStats.googleDiscoveryDefaults.paginationPolicy);
@@ -183,6 +205,7 @@ export function DashboardClient({
   const [summaryRetryNonce, setSummaryRetryNonce] = useState(0);
   const [coreStatus, setCoreStatus] = useState<DashboardCoreStatus>("loadingCore");
   const [coreError, setCoreError] = useState<string | null>(null);
+  const selectedCrawlWorkspace = crawlWorkspaces.find((workspace) => workspace.workspaceId === selectedWorkspaceId) ?? null;
 
   useEffect(() => {
     document.title = "Admin Command Center | Nova Trade Lead Management";
@@ -298,7 +321,7 @@ export function DashboardClient({
       setDiscoveryItemsError("This panel is taking too long. Retry this panel.");
     }, 10_000);
     try {
-      const result = await getDiscoveryItemsAction();
+      const result = await getDiscoveryItemsAction(selectedCrawlWorkspace ?? undefined);
       window.clearTimeout(timeout);
       setDiscoveryItems(result.items);
       if (result.loadError) {
@@ -313,7 +336,7 @@ export function DashboardClient({
       setDiscoveryItemsStatus("error");
       setDiscoveryItemsError(error instanceof Error ? error.message : "Discovery items could not be loaded.");
     }
-  }, []);
+  }, [selectedCrawlWorkspace]);
 
   useEffect(() => {
     if (coreStatus === "loadingCore") return;
@@ -418,7 +441,13 @@ export function DashboardClient({
       if (!active) return;
       setSizeEstimateStatus("loading");
       setSizeEstimateError(null);
-      estimateDiscoveryRunAction(buildDiscoveryPayload())
+      if (!selectedCrawlWorkspace) {
+        setSizeEstimate(null);
+        setSizeEstimateError("Choose an active workspace before estimating discovery.");
+        setSizeEstimateStatus("error");
+        return;
+      }
+      estimateDashboardDiscovery(buildDiscoveryPayload(), selectedCrawlWorkspace)
         .then((result) => {
           if (!active) return;
           if ("error" in result) {
@@ -441,11 +470,15 @@ export function DashboardClient({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [buildDiscoveryPayload, locationScope.cellIds?.length, locationScope.zipCodes.length, selectedCategories.length]);
+  }, [buildDiscoveryPayload, locationScope.cellIds?.length, locationScope.zipCodes.length, selectedCategories.length, selectedCrawlWorkspace]);
 
   const handleStart = async () => {
+    if (!selectedCrawlWorkspace) {
+      toast.error("Choose an active workspace before starting discovery.");
+      return;
+    }
     setLoading(true);
-    const result = await startCrawlRunAction(buildDiscoveryPayload());
+    const result = await startDashboardDiscovery(buildDiscoveryPayload(), selectedCrawlWorkspace);
     if ("error" in result) {
       toast.error(result.error ?? "Unknown error");
     } else {
@@ -459,8 +492,9 @@ export function DashboardClient({
   };
 
   const handlePause = async (runId?: string | null) => {
+    if (!selectedCrawlWorkspace) return;
     setLoading(true);
-    const result = await pauseCrawlRunAction(runId ?? undefined);
+    const result = await pauseDashboardDiscovery(runId ?? undefined, selectedCrawlWorkspace);
     if ("error" in result) toast.error(result.error ?? "Unable to pause discovery item");
     else toast.info("Discovery item paused");
     setIsProcessing(false);
@@ -469,8 +503,9 @@ export function DashboardClient({
   };
 
   const handleResume = async (runId?: string | null) => {
+    if (!selectedCrawlWorkspace) return;
     setLoading(true);
-    const result = await resumeCrawlRunAction(runId ?? undefined);
+    const result = await resumeCrawlRunAction(runId ?? undefined, selectedCrawlWorkspace);
     if ("error" in result) {
       toast.error(result.error ?? "Unable to resume discovery item");
     } else {
@@ -482,8 +517,9 @@ export function DashboardClient({
   };
 
   const handleStop = async (runId?: string | null) => {
+    if (!selectedCrawlWorkspace) return;
     setLoading(true);
-    const result = await stopCrawlRunAction(runId ?? undefined);
+    const result = await stopCrawlRunAction(runId ?? undefined, selectedCrawlWorkspace);
     if ("error" in result) {
       toast.error(result.error ?? "Unable to cancel remaining units");
     } else {
@@ -495,8 +531,9 @@ export function DashboardClient({
   };
 
   const handleRetry = async (runId?: string | null) => {
+    if (!selectedCrawlWorkspace) return;
     setLoading(true);
-    const result = await retryFailedUnitsAction(runId ?? undefined);
+    const result = await retryFailedUnitsAction(runId ?? undefined, selectedCrawlWorkspace);
     if ("error" in result) {
       toast.error(result.error ?? "Unknown error");
     } else {
@@ -593,11 +630,15 @@ export function DashboardClient({
     );
   };
 
-  const isRunning = stats.processingRunStatus === "running";
-  const isQueued = stats.processingRunStatus === "queued";
+  const processingWorkspaceItem = discoveryItems.find((item) => item.status === "running" || item.status === "queued") ?? null;
+  const isRunning = processingWorkspaceItem?.status === "running";
+  const isQueued = processingWorkspaceItem?.status === "queued";
   const isIdle = !isRunning && !isQueued;
   const activeRunLabel = isRunning ? "running" : isQueued ? "queued" : "idle";
-  const visibleRun = discoveryItems.find((item) => item.id === stats.runId) ?? null;
+  const visibleRun = processingWorkspaceItem
+    ?? discoveryItems.find((item) => item.id === stats.runId)
+    ?? discoveryItems[0]
+    ?? null;
   const pausedDiscoveryItems = discoveryItems.filter((item) => item.status === "paused");
   const selectedCellCount = locationScope.cellIds?.length ?? locationScope.zipCodes.length;
   const selectedMarketLabel = locationScope.marketLabel ?? (locationScope.countryCode
@@ -617,6 +658,7 @@ export function DashboardClient({
   const activeSizeEstimateError = hasEstimateSelection ? sizeEstimateError : null;
   const startDisabled = coreStatus !== "ready"
     || loading
+    || selectedCrawlWorkspace === null
     || selectedCategories.length === 0
     || selectedCellCount === 0
     || activeSizeEstimateStatus !== "ready"
@@ -636,6 +678,7 @@ export function DashboardClient({
     ...(coreStatus !== "ready" ? ["Admin controls are still loading."] : []),
     ...(selectedCategories.length === 0 ? ["Choose at least one category, such as Dentists."] : []),
     ...(selectedCellCount === 0 ? ["Choose at least one postal/postcode cell."] : []),
+    ...(selectedCrawlWorkspace === null ? ["Choose an active workspace."] : []),
     ...(hasEstimateSelection && activeSizeEstimateStatus !== "ready" ? ["Wait for the run scope estimate to finish."] : []),
     ...(activeSizeEstimate?.blockingReasons ?? []),
   ];
@@ -777,6 +820,20 @@ export function DashboardClient({
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
+          <label className="min-w-56 text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
+            Discovery workspace
+            <select
+              className="glass-input mt-1 w-full"
+              value={selectedWorkspaceId}
+              onChange={(event) => setSelectedWorkspaceId(event.target.value)}
+              disabled={loading || crawlWorkspaces.length === 0}
+            >
+              {crawlWorkspaces.length === 0 && <option value="">No active workspace</option>}
+              {crawlWorkspaces.map((workspace) => (
+                <option key={workspace.workspaceId} value={workspace.workspaceId}>{workspace.name}</option>
+              ))}
+            </select>
+          </label>
           {isIdle && (
             <>
               <button
@@ -816,7 +873,7 @@ export function DashboardClient({
             <button type="button" className="btn-glass" onClick={() => setConfirmAction({
               title: "Cancel remaining units",
               message: "This marks the processing item's unprocessed market/cell/category units as canceled. Completed leads stay saved.",
-              action: () => handleStop(stats.processingRunId),
+              action: () => handleStop(processingWorkspaceItem?.id),
             })} disabled={loading}>
               Cancel remaining units
             </button>

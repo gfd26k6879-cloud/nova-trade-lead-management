@@ -2,11 +2,13 @@ import type { Metadata } from "next";
 import { getTenantSession, requirePermission } from "@/lib/auth";
 import { startRouteTiming } from "@/lib/route-timing";
 import { assertTenantPermission } from "@/lib/tenancy/authorize";
+import { listCrawlWorkspaceOptions } from "@/lib/crawl/workspace-scope";
+import type { CrawlWorkspaceOption } from "@/lib/crawl/workspace-scope";
 import { CoverageClient } from "./coverage-client";
 
 export const metadata: Metadata = { title: "Coverage | Nova Trade Lead Management" };
 
-type CoverageSearchParams = { run?: string | string[] };
+type CoverageSearchParams = { run?: string | string[]; workspace?: string | string[] };
 
 export default async function CoveragePage({ searchParams }: { searchParams?: CoverageSearchParams | Promise<CoverageSearchParams> }) {
   const logRouteTiming = startRouteTiming("/coverage");
@@ -35,13 +37,24 @@ export default async function CoveragePage({ searchParams }: { searchParams?: Co
     return <CoverageUnavailable />;
   }
 
+  let crawlWorkspaces: CrawlWorkspaceOption[] = [];
+  try {
+    crawlWorkspaces = await listCrawlWorkspaceOptions(tenantSession);
+  } catch {
+    crawlWorkspaces = [];
+  }
+
   const params = await Promise.resolve(searchParams ?? {});
   const selectedRunId = Array.isArray(params.run) ? params.run[0] : params.run ?? null;
+  const requestedWorkspaceId = Array.isArray(params.workspace) ? params.workspace[0] : params.workspace ?? null;
+  const initialCrawlWorkspaceId = crawlWorkspaces.some((workspace) => workspace.workspaceId === requestedWorkspaceId)
+    ? requestedWorkspaceId
+    : crawlWorkspaces[0]?.workspaceId ?? null;
   logRouteTiming(200, { mode: "fast_shell" });
 
   return (
     <CoverageClient
-      key={selectedRunId ?? "default"}
+      key={`${initialCrawlWorkspaceId ?? "no-workspace"}:${selectedRunId ?? "default"}`}
       selectedRunId={selectedRunId}
       markets={[]}
       cells={[]}
@@ -51,6 +64,8 @@ export default async function CoveragePage({ searchParams }: { searchParams?: Co
       progress={null}
       geography={null}
       unitPreview={[]}
+      crawlWorkspaces={crawlWorkspaces}
+      initialCrawlWorkspaceId={initialCrawlWorkspaceId}
     />
   );
 }

@@ -2,7 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/crawl/actions", () => ({
+const crawlActionMocks = vi.hoisted(() => ({
   estimateDiscoveryRunAction: vi.fn(),
   getDashboardAnalyticsAction: vi.fn(),
   getDashboardStatsAction: vi.fn(),
@@ -14,6 +14,8 @@ vi.mock("@/lib/crawl/actions", () => ({
   startCrawlRunAction: vi.fn(),
   stopCrawlRunAction: vi.fn(),
 }));
+
+vi.mock("@/lib/crawl/actions", () => crawlActionMocks);
 
 vi.mock("@/lib/leads/actions", () => ({
   queueMissingAiVerificationsAction: vi.fn(),
@@ -28,7 +30,12 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import { DashboardClient } from "@/app/(protected)/dashboard/dashboard-client";
+import {
+  DashboardClient,
+  estimateDashboardDiscovery,
+  pauseDashboardDiscovery,
+  startDashboardDiscovery,
+} from "@/app/(protected)/dashboard/dashboard-client";
 import {
   emptyAdminFulfillmentSummary,
   emptyDashboardStats,
@@ -37,6 +44,32 @@ import {
 } from "@/lib/dashboard-fallbacks";
 
 describe("DashboardClient admin command center", () => {
+  it("passes the selected concrete workspace to start and control actions", async () => {
+    const workspace = {
+      tenantId: "10000000-0000-4000-8000-000000000001",
+      workspaceId: "20000000-0000-4000-8000-000000000001",
+      name: "Primary workspace",
+    };
+    const payload = ["dentist"];
+    const estimatePayload = {
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe" as const,
+      paginationPolicy: "first_page_only" as const,
+      testRun: true,
+    };
+
+    await startDashboardDiscovery(payload, workspace);
+    await estimateDashboardDiscovery(estimatePayload, workspace);
+    await pauseDashboardDiscovery("run-1", workspace);
+
+    expect(crawlActionMocks.startCrawlRunAction).toHaveBeenCalledWith(payload, workspace);
+    expect(crawlActionMocks.estimateDiscoveryRunAction).toHaveBeenCalledWith(estimatePayload, workspace);
+    expect(crawlActionMocks.pauseCrawlRunAction).toHaveBeenCalledWith("run-1", workspace);
+  });
+
   it("puts lead inventory and discovery controls on the default surface", () => {
     const html = renderToStaticMarkup(
       <DashboardClient
@@ -44,12 +77,19 @@ describe("DashboardClient admin command center", () => {
         teamSummary={{ ...emptyTeamBoardSummary(), unassignedReady: 23 }}
         weeklyStats={emptyStatisticsSummary()}
         fulfillmentSummary={{ ...emptyAdminFulfillmentSummary(), openTotal: 2, openWebsiteRequests: 1, openQuoteRequests: 1 }}
+        crawlWorkspaces={[{
+          tenantId: "10000000-0000-4000-8000-000000000001",
+          workspaceId: "20000000-0000-4000-8000-000000000001",
+          name: "Primary workspace",
+        }]}
       />,
     );
 
     expect(html).toContain("Admin Command Center");
     expect(html).toContain("Lead Inventory");
     expect(html).toContain("Start Discovery");
+    expect(html).toContain("Discovery workspace");
+    expect(html).toContain("Primary workspace");
     expect(html).toContain("Postal / postcode search");
     expect(html).toContain("Run scope");
     expect(html).toContain("Test capped run");

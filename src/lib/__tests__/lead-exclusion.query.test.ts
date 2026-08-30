@@ -4,6 +4,11 @@ import { createTestDb } from "./test-helpers";
 
 let testDb: Database.Database;
 const TENANT_A = "10000000-0000-4000-8000-000000000001";
+const TENANT_B = "20000000-0000-4000-8000-000000000001";
+
+const tenantContextMocks = vi.hoisted(() => ({
+  requireTenantContext: vi.fn(),
+}));
 
 vi.mock("@/lib/db/index", () => {
   return {
@@ -16,10 +21,7 @@ vi.mock("@/lib/db/index", () => {
 
 vi.mock("@/lib/tenancy/context", () => ({
   getTenantContext: vi.fn(() => null),
-  requireTenantContext: vi.fn(() => ({
-    tenantId: "10000000-0000-4000-8000-000000000001",
-    workspaceId: null,
-  })),
+  requireTenantContext: tenantContextMocks.requireTenantContext,
 }));
 
 import {
@@ -56,7 +58,14 @@ function insertLead(
 
 beforeEach(() => {
   testDb = createTestDb();
-  testDb.exec(`ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}'`);
+  testDb.exec(`
+    ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    ALTER TABLE lead_ai_artifacts ADD COLUMN tenant_id TEXT;
+    ALTER TABLE demos ADD COLUMN tenant_id TEXT;
+    ALTER TABLE admin_requests ADD COLUMN tenant_id TEXT;
+  `);
+  tenantContextMocks.requireTenantContext.mockReset();
+  tenantContextMocks.requireTenantContext.mockReturnValue({ tenantId: TENANT_A, workspaceId: null });
 });
 
 afterEach(() => {
@@ -64,6 +73,22 @@ afterEach(() => {
 });
 
 describe("lead exclusion query behavior", () => {
+  it("keeps now-queue candidates inside the current tenant", async () => {
+    const ownId = insertLead(testDb, 920, { score: 20 });
+    const foreignId = insertLead(testDb, 921, { score: 100 });
+    testDb.prepare("UPDATE leads SET tenant_id = ? WHERE id = ?").run(TENANT_B, foreignId);
+    testDb.prepare(
+      `UPDATE leads SET
+         phone = '303-555-0100', contactability_score = 1, estimated_deal_value = 3500,
+         ai_verification_status = 'no_site_found', ai_website_viability_status = 'directory_only',
+         ai_queue_status = 'verified', quality_bucket = 'ready_to_call', qualification_status = 'qualified'`,
+    ).run();
+
+    const queue = await getNowQueue(10);
+
+    expect(queue.map((lead) => lead.id)).toEqual([ownId]);
+  });
+
   it("fails closed for stored nonzero exclusion values across mapped and SQL-filtered surfaces", async () => {
     const storedValues = [0, 1, 2, -1] as const;
     const ids = storedValues.map((value, index) => {

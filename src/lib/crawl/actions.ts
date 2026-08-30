@@ -364,6 +364,123 @@ type StartCrawlPayload = string[] | z.infer<typeof startPlannerSchema> | z.infer
 
 type EstimateCrawlPayload = z.infer<typeof startPlannerSchema> | z.infer<typeof startMarketPlannerSchema>;
 
+async function requireCrawlPermission(
+  selector: TenantSessionSelector,
+  permission: "source:review" | "source:execute" | "queue:operate",
+  action: string,
+): Promise<TenantSession> {
+  const tenantSession = await requireTenantPermission(selector, permission, { action });
+  const legacySession = await requirePermission("crawl:manage");
+  if (legacySession.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
+  }
+  return tenantSession;
+}
+
+async function withCrawlPermission<T>(
+  selector: TenantSessionSelector,
+  permission: "source:review" | "source:execute" | "queue:operate",
+  action: string,
+  callback: (session: TenantSession, db: DbClient) => Promise<T>,
+): Promise<T> {
+  const tenantSession = await requireCrawlPermission(selector, permission, action);
+  return runWithTenantContext(tenantSession, `${action}:${randomUUID()}`, () =>
+    withTenantDbContext((db) => callback(tenantSession, db)));
+}
+
+async function withCrawlWorkspacePermission<T>(
+  selector: TenantSessionSelector,
+  permission: "source:review",
+  action: string,
+  callback: (session: TenantSession, db: DbClient) => Promise<T>,
+): Promise<T> {
+  const tenantSession = await requireTenantPermission(selector, "workspace:read");
+  const legacySession = await requirePermission("crawl:manage");
+  if (legacySession.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
+  }
+  if (tenantSession.workspaceId === null) {
+    throw new TenantAuthorizationError(403, "WORKSPACE_SCOPE_INVALID");
+  }
+  return runWithTenantContext(tenantSession, `${action}:${randomUUID()}`, () =>
+    withTenantDbContext(async (db) => {
+      const currentPolicy = await createTenantQueryRepository(db).getCurrentTenantPolicy(tenantSession.tenantId);
+      const parsedPolicy = tenantPolicySchema.safeParse(currentPolicy);
+      await assertTenantPermission(tenantSession, permission, {
+        action,
+        policyEvaluator: (context: TenantPolicyContext) => ({
+          allowed: context.tenantId === tenantSession.tenantId
+            && context.workspaceId === tenantSession.workspaceId
+            && parsedPolicy.success
+            && parsedPolicy.data.tenantId === tenantSession.tenantId
+            && parsedPolicy.data.sourceResearchEnabled,
+          context,
+        }),
+      });
+      return callback(tenantSession, db);
+    }));
+}
+
+async function assertCrawlSourceExecution(
+  session: TenantSession,
+  db: DbClient,
+  action: string,
+): Promise<void> {
+  const currentPolicy = await createTenantQueryRepository(db).getCurrentTenantPolicy(session.tenantId);
+  const parsedPolicy = tenantPolicySchema.safeParse(currentPolicy);
+  await assertTenantPermission(session, "source:execute", {
+    action,
+    policyEvaluator: (context: TenantPolicyContext) => ({
+      allowed: context.tenantId === session.tenantId
+        && context.workspaceId === session.workspaceId
+        && parsedPolicy.success
+        && parsedPolicy.data.tenantId === session.tenantId
+        && parsedPolicy.data.sourceResearchEnabled
+        && !parsedPolicy.data.requireSourcePlanApproval,
+      context,
+    }),
+  });
+}
+
+async function assertTenantCrawlRun(
+  db: DbClient,
+  session: TenantSession,
+  run: CrawlRun | null | undefined,
+): Promise<CrawlRun> {
+  if (!run) {
+    throw new TenantAuthorizationError(404, "RESOURCE_NOT_FOUND_OR_FORBIDDEN");
+  }
+  const owned = await db.prepare(
+    `SELECT id FROM crawl_runs
+     WHERE tenant_id = ?
+       AND (? IS NULL OR workspace_id = ?)
+       AND id = ?`,
+  ).get<{ id: string }>(session.tenantId, session.workspaceId, session.workspaceId, run.id);
+  if (!owned) {
+    throw new TenantAuthorizationError(404, "RESOURCE_NOT_FOUND_OR_FORBIDDEN");
+  }
+  return run;
+}
+
+async function assertTenantDiscoveryItems(
+  db: DbClient,
+  session: TenantSession,
+  items: readonly DiscoveryItemSummary[],
+): Promise<void> {
+  if (items.length === 0) return;
+  const ids = Array.from(new Set(items.map((item) => item.id)));
+  const placeholders = ids.map(() => "?").join(", ");
+  const owned = await db.prepare(
+    `SELECT id FROM crawl_runs
+     WHERE tenant_id = ?
+       AND (? IS NULL OR workspace_id = ?)
+       AND id IN (${placeholders})`,
+  ).all<{ id: string }>(session.tenantId, session.workspaceId, session.workspaceId, ...ids);
+  if (new Set(owned.map((row) => row.id)).size !== ids.length) {
+    throw new TenantAuthorizationError(404, "RESOURCE_NOT_FOUND_OR_FORBIDDEN");
+  }
+}
+
 async function requireCrawlSourceExecution(
   session: TenantSession,
   db: DbClient,
@@ -400,13 +517,21 @@ export async function startCrawlRunAction(
     withTenantDbContext(async (db) => {
       await ensureDbReady();
       await requireCrawlSourceExecution(tenantSession, db);
-      return startAuthorizedCrawlRun(payload, actor);
+      return startAuthorizedCrawlRun(payload, actor, tenantSession);
     }));
 }
 
-async function startAuthorizedCrawlRun(payload: StartCrawlPayload, actor: AppSession) {
+async function startAuthorizedCrawlRun(
+  payload: StartCrawlPayload,
+  actor: AppSession,
+  tenantSession: TenantSession,
+) {
 
-  const existing = await getProcessingCrawlRun();
+  const crawlScope = {
+    tenantId: tenantSession.tenantId,
+    workspaceId: tenantSession.workspaceId,
+  };
+  const existing = await getProcessingCrawlRun(crawlScope);
   if (existing) {
     return { error: "A discovery item is already processing. Pause or complete it before starting another Google-consuming run." };
   }
@@ -494,6 +619,7 @@ async function startAuthorizedCrawlRun(payload: StartCrawlPayload, actor: AppSes
   }
 
   const run = await createCrawlRun(categories, marketSelection ? {
+    ...crawlScope,
     marketId: marketSelection.marketId,
     createdByUserId: actor.userId,
     selection: {
@@ -508,6 +634,7 @@ async function startAuthorizedCrawlRun(payload: StartCrawlPayload, actor: AppSes
       sizeEstimate,
     },
   } : {
+    ...crawlScope,
     createdByUserId: actor.userId,
     selection: {
       state: plannerSelection?.state ?? null,
@@ -588,8 +715,11 @@ async function startAuthorizedCrawlRun(payload: StartCrawlPayload, actor: AppSes
   };
 }
 
-export async function estimateDiscoveryRunAction(payload: EstimateCrawlPayload): Promise<DiscoverySizeEstimate | { error: string }> {
-  await requirePermission("crawl:manage");
+export async function estimateDiscoveryRunAction(
+  payload: EstimateCrawlPayload,
+  selector: TenantSessionSelector = {},
+): Promise<DiscoverySizeEstimate | { error: string }> {
+  return withCrawlWorkspacePermission(selector, "source:review", "crawl.discovery.estimate", async () => {
   const logActionTiming = startRouteTiming("action:estimateDiscoveryRunAction");
   try {
     const estimate = await withReadOnlyActionDeadline(
@@ -634,6 +764,7 @@ export async function estimateDiscoveryRunAction(payload: EstimateCrawlPayload):
     logActionTiming(500, { reason: "estimate_action_error" });
     throw error;
   }
+  });
 }
 
 export async function getPlannerMarketsAction() {
@@ -678,107 +809,153 @@ export async function getPlannerZipCodesAction(state: string, county: string, ca
   })));
 }
 
-export async function pauseCrawlRunAction(runId?: string) {
-  await requirePermission("crawl:manage");
-  await ensureDbReady();
-  const run = runId ? await getSelectedOrDefaultVisibleCrawlRun(runId) : await getProcessingCrawlRun();
-  if (!run) return { error: "No active run to pause." };
-  if (run.status !== "running" && run.status !== "queued") return { error: "Only a running or queued discovery item can be paused." };
-  await updateCrawlRunStatus(run.id, "paused");
-  await createAuditLog("crawl_run_paused", "crawl_run", run.id);
-  return { success: true };
-}
-
-export async function stopCrawlRunAction(runId?: string) {
-  await requirePermission("crawl:manage");
-  await ensureDbReady();
-  const run = await getSelectedOrDefaultVisibleCrawlRun(runId);
-  if (!run) return { error: "No active discovery run to stop." };
-  if (run.status !== "running" && run.status !== "queued" && run.status !== "paused" && run.status !== "blocked") {
-    return { error: "Only a running, queued, paused, or blocked discovery item can have remaining units canceled." };
-  }
-  const result = await cancelCrawlRun(run.id);
-  await createAuditLog("crawl_run_canceled", "crawl_run", run.id, {
-    canceledUnits: result.canceledUnits,
+export async function pauseCrawlRunAction(
+  runId?: string,
+  selector: TenantSessionSelector = {},
+) {
+  return withCrawlPermission(selector, "queue:operate", "crawl.run.pause", async (session, db) => {
+    await ensureDbReady();
+    const scope = { tenantId: session.tenantId, workspaceId: session.workspaceId };
+    const candidate = runId
+      ? await getSelectedOrDefaultVisibleCrawlRun(runId, scope)
+      : await getProcessingCrawlRun(scope);
+    if (!candidate) return { error: "No active run to pause." };
+    const run = await assertTenantCrawlRun(db, session, candidate);
+    if (run.status !== "running" && run.status !== "queued") return { error: "Only a running or queued discovery item can be paused." };
+    await updateCrawlRunStatus(run.id, "paused");
+    await createAuditLog("crawl_run_paused", "crawl_run", run.id);
+    return { success: true };
   });
-  return { success: true, runId: run.id, canceledUnits: result.canceledUnits };
 }
 
-export async function resumeCrawlRunAction(runId?: string) {
-  await requirePermission("crawl:manage");
-  await ensureDbReady();
-  const processing = await getProcessingCrawlRun();
-  if (processing) return { error: "Another discovery item is already processing. Pause or complete it before resuming this item." };
-  const latest = runId ? await getSelectedOrDefaultVisibleCrawlRun(runId) : await getLatestPausedCrawlRun();
-  if (!latest || (latest.status !== "paused" && latest.status !== "blocked")) return { error: "No paused or blocked run to resume." };
-  const estimate = await estimateRemainingDiscoveryRun(latest, "open");
-  if (!estimate.canStart) {
-    return { error: discoveryBlockMessage(estimate, "This paused discovery item exceeds the current Google safety cap."), estimate };
-  }
-  const diagnosticCapError = diagnosticCapBlockMessage(estimate);
-  if (diagnosticCapError) {
-    return { error: diagnosticCapError, estimate };
-  }
-  const diagnostic = await runGoogleDiscoveryDiagnostic(
-    normalizeDiscoveryMode(latest.selection_json?.discoveryMode, estimate.mode),
-    { crawlRunId: latest.id, category: latest.categories[0] ?? null },
-  );
-  const diagnosticError = googleDiagnosticFailureMessage(diagnostic);
-  if (!diagnostic.ok && diagnosticError) {
-    await blockCrawlRun(latest.id, diagnosticError, diagnostic.errorCode);
-    return { error: diagnosticError, estimate, diagnostic };
-  }
-  await updateCrawlRunStatus(latest.id, "running");
-  await createAuditLog("crawl_run_resumed", "crawl_run", latest.id);
-  return { success: true, estimate };
-}
-
-export async function retryFailedUnitsAction(runId?: string) {
-  await requirePermission("crawl:manage");
-  await ensureDbReady();
-  const run = await getSelectedOrDefaultVisibleCrawlRun(runId);
-  if (!run) return { error: "No run found." };
-  if (run.status === "canceled") return { error: "This run was stopped. Start a new discovery instead of retrying it." };
-  const estimate = await estimateRemainingDiscoveryRun(run, "open_or_failed");
-  if (!estimate.canStart) {
-    return { error: discoveryBlockMessage(estimate, "Retrying failed units exceeds the current Google safety cap."), estimate };
-  }
-  const diagnosticCapError = diagnosticCapBlockMessage(estimate);
-  if (diagnosticCapError) {
-    return { error: diagnosticCapError, estimate };
-  }
-  const diagnostic = await runGoogleDiscoveryDiagnostic(
-    normalizeDiscoveryMode(run.selection_json?.discoveryMode, estimate.mode),
-    { crawlRunId: run.id, category: run.categories[0] ?? null },
-  );
-  const diagnosticError = googleDiagnosticFailureMessage(diagnostic);
-  if (!diagnostic.ok && diagnosticError) {
-    await blockCrawlRun(run.id, diagnosticError, diagnostic.errorCode);
-    return { error: diagnosticError, estimate, diagnostic };
-  }
-  const count = await retryFailed(run.id);
-  if (run.status === "done" || run.status === "error" || run.status === "blocked") {
-    await updateCrawlRunStatus(run.id, "running");
-  }
-  return { retriedCount: count, estimate };
-}
-
-export async function runGoogleDiscoveryDiagnosticAction(runId?: string) {
-  await requirePermission("crawl:manage");
-  await ensureDbReady();
-  const run = runId ? await getSelectedOrDefaultVisibleCrawlRun(runId) : await getProcessingCrawlRun();
-  const settings = await getSettings();
-  const mode = run
-    ? normalizeDiscoveryMode(run.selection_json?.discoveryMode, settings.google_default_discovery_mode)
-    : settings.google_default_discovery_mode;
-  const diagnostic = await runGoogleDiscoveryDiagnostic(mode, {
-    crawlRunId: run?.id ?? null,
-    category: run?.categories?.[0] ?? null,
+export async function stopCrawlRunAction(
+  runId?: string,
+  selector: TenantSessionSelector = {},
+) {
+  return withCrawlPermission(selector, "queue:operate", "crawl.run.stop", async (session, db) => {
+    await ensureDbReady();
+    const scope = { tenantId: session.tenantId, workspaceId: session.workspaceId };
+    const candidate = await getSelectedOrDefaultVisibleCrawlRun(runId, scope);
+    if (!candidate) return { error: "No active discovery run to stop." };
+    const run = await assertTenantCrawlRun(db, session, candidate);
+    if (run.status !== "running" && run.status !== "queued" && run.status !== "paused" && run.status !== "blocked") {
+      return { error: "Only a running, queued, paused, or blocked discovery item can have remaining units canceled." };
+    }
+    const result = await cancelCrawlRun(run.id);
+    await createAuditLog("crawl_run_canceled", "crawl_run", run.id, {
+      canceledUnits: result.canceledUnits,
+    });
+    return { success: true, runId: run.id, canceledUnits: result.canceledUnits };
   });
-  if (!diagnostic.ok && run?.id) {
-    await blockCrawlRun(run.id, `Google diagnostic failed before Discovery could run: ${diagnostic.error}`, diagnostic.errorCode);
-  }
-  return { diagnostic };
+}
+
+export async function resumeCrawlRunAction(
+  runId?: string,
+  selector: TenantSessionSelector = {},
+) {
+  return withCrawlPermission(selector, "queue:operate", "crawl.run.resume", async (session, db) => {
+    await ensureDbReady();
+    const scope = { tenantId: session.tenantId, workspaceId: session.workspaceId };
+    const processing = await getProcessingCrawlRun(scope);
+    if (processing) {
+      await assertTenantCrawlRun(db, session, processing);
+      return { error: "Another discovery item is already processing. Pause or complete it before resuming this item." };
+    }
+    const candidate = runId
+      ? await getSelectedOrDefaultVisibleCrawlRun(runId, scope)
+      : await getLatestPausedCrawlRun(scope);
+    if (!candidate) return { error: "No paused or blocked run to resume." };
+    const latest = await assertTenantCrawlRun(db, session, candidate);
+    if (latest.status !== "paused" && latest.status !== "blocked") return { error: "No paused or blocked run to resume." };
+    await assertCrawlSourceExecution(session, db, "crawl.run.resume");
+    const estimate = await estimateRemainingDiscoveryRun(latest, "open");
+    if (!estimate.canStart) {
+      return { error: discoveryBlockMessage(estimate, "This paused discovery item exceeds the current Google safety cap."), estimate };
+    }
+    const diagnosticCapError = diagnosticCapBlockMessage(estimate);
+    if (diagnosticCapError) {
+      return { error: diagnosticCapError, estimate };
+    }
+    const diagnostic = await runGoogleDiscoveryDiagnostic(
+      normalizeDiscoveryMode(latest.selection_json?.discoveryMode, estimate.mode),
+      { crawlRunId: latest.id, category: latest.categories[0] ?? null },
+    );
+    const diagnosticError = googleDiagnosticFailureMessage(diagnostic);
+    if (!diagnostic.ok && diagnosticError) {
+      await blockCrawlRun(latest.id, diagnosticError, diagnostic.errorCode);
+      return { error: diagnosticError, estimate, diagnostic };
+    }
+    await updateCrawlRunStatus(latest.id, "running");
+    await createAuditLog("crawl_run_resumed", "crawl_run", latest.id);
+    return { success: true, estimate };
+  });
+}
+
+export async function retryFailedUnitsAction(
+  runId?: string,
+  selector: TenantSessionSelector = {},
+) {
+  return withCrawlPermission(selector, "queue:operate", "crawl.run.retry", async (session, db) => {
+    await ensureDbReady();
+    const scope = { tenantId: session.tenantId, workspaceId: session.workspaceId };
+    const candidate = await getSelectedOrDefaultVisibleCrawlRun(runId, scope);
+    if (!candidate) return { error: "No run found." };
+    const run = await assertTenantCrawlRun(db, session, candidate);
+    if (run.status === "canceled") return { error: "This run was stopped. Start a new discovery instead of retrying it." };
+    await assertCrawlSourceExecution(session, db, "crawl.run.retry");
+    const estimate = await estimateRemainingDiscoveryRun(run, "open_or_failed");
+    if (!estimate.canStart) {
+      return { error: discoveryBlockMessage(estimate, "Retrying failed units exceeds the current Google safety cap."), estimate };
+    }
+    const diagnosticCapError = diagnosticCapBlockMessage(estimate);
+    if (diagnosticCapError) {
+      return { error: diagnosticCapError, estimate };
+    }
+    const diagnostic = await runGoogleDiscoveryDiagnostic(
+      normalizeDiscoveryMode(run.selection_json?.discoveryMode, estimate.mode),
+      { crawlRunId: run.id, category: run.categories[0] ?? null },
+    );
+    const diagnosticError = googleDiagnosticFailureMessage(diagnostic);
+    if (!diagnostic.ok && diagnosticError) {
+      await blockCrawlRun(run.id, diagnosticError, diagnostic.errorCode);
+      return { error: diagnosticError, estimate, diagnostic };
+    }
+    const count = await retryFailed(run.id);
+    if (run.status === "done" || run.status === "error" || run.status === "blocked") {
+      await updateCrawlRunStatus(run.id, "running");
+    }
+    return { retriedCount: count, estimate };
+  });
+}
+
+export async function runGoogleDiscoveryDiagnosticAction(
+  runId?: string,
+  selector: TenantSessionSelector = {},
+) {
+  return withCrawlPermission(selector, "queue:operate", "crawl.discovery.diagnostic", async (session, db) => {
+    await ensureDbReady();
+    const scope = { tenantId: session.tenantId, workspaceId: session.workspaceId };
+    const candidate = runId
+      ? await getSelectedOrDefaultVisibleCrawlRun(runId, scope)
+      : await getProcessingCrawlRun(scope);
+    if (runId && !candidate) {
+      throw new TenantAuthorizationError(404, "RESOURCE_NOT_FOUND_OR_FORBIDDEN");
+    }
+    const run = candidate ? await assertTenantCrawlRun(db, session, candidate) : null;
+    await assertCrawlSourceExecution(session, db, "crawl.discovery.diagnostic");
+    const settings = await getSettings();
+    const mode = run
+      ? normalizeDiscoveryMode(run.selection_json?.discoveryMode, settings.google_default_discovery_mode)
+      : settings.google_default_discovery_mode;
+    const diagnostic = await runGoogleDiscoveryDiagnostic(mode, {
+      crawlRunId: run?.id ?? null,
+      category: run?.categories?.[0] ?? null,
+    });
+    if (!diagnostic.ok && run?.id) {
+      await blockCrawlRun(run.id, `Google diagnostic failed before Discovery could run: ${diagnostic.error}`, diagnostic.errorCode);
+    }
+    return { diagnostic };
+  });
 }
 
 export async function updateSchedulerWorkerEnabledAction(workerName: SchedulerWorkerName, enabled: boolean) {
@@ -1001,8 +1178,10 @@ async function getDashboardAnalyticsActionInternal(): Promise<Partial<DashboardS
   };
 }
 
-export async function getDashboardSummaryPanelsAction(): Promise<DashboardSummaryPanelsResult> {
-  await requirePermission("crawl:manage");
+export async function getDashboardSummaryPanelsAction(
+  selector: TenantSessionSelector = {},
+): Promise<DashboardSummaryPanelsResult> {
+  return withCrawlPermission(selector, "source:review", "dashboard.summary.read", async () => {
   const logActionTiming = startRouteTiming("action:getDashboardSummaryPanelsAction");
   try {
     const panels = await withReadOnlyActionDeadline(
@@ -1027,10 +1206,13 @@ export async function getDashboardSummaryPanelsAction(): Promise<DashboardSummar
     logActionTiming(503, { reason: loadError });
     return emptyDashboardSummaryPanels(loadError);
   }
+  });
 }
 
-export async function getDiscoveryItemsAction(): Promise<{ items: DiscoveryItemSummary[]; loadError?: DashboardSummaryLoadError }> {
-  await requirePermission("crawl:manage");
+export async function getDiscoveryItemsAction(
+  selector: TenantSessionSelector = {},
+): Promise<{ items: DiscoveryItemSummary[]; loadError?: DashboardSummaryLoadError }> {
+  return withCrawlPermission(selector, "source:review", "dashboard.discovery-items.read", async (session, db) => {
   const logActionTiming = startRouteTiming("action:getDiscoveryItemsAction");
   try {
     const items = await withReadOnlyActionDeadline(
@@ -1038,12 +1220,18 @@ export async function getDiscoveryItemsAction(): Promise<{ items: DiscoveryItemS
       10_000,
       withDbStatementTimeout(6_000, async () => {
         await ensureDbReady();
-        return listDiscoveryItems(12);
+        const items = await listDiscoveryItems(12, {
+          tenantId: session.tenantId,
+          workspaceId: session.workspaceId,
+        });
+        await assertTenantDiscoveryItems(db, session, items);
+        return items;
       }),
     );
     logActionTiming(200);
     return { items };
   } catch (error) {
+    if (error instanceof TenantAuthorizationError) throw error;
     const loadError = error instanceof ReadOnlyActionDeadlineError
       ? "discovery_items_unavailable"
       : isDbStatementTimeoutError(error)
@@ -1054,14 +1242,18 @@ export async function getDiscoveryItemsAction(): Promise<{ items: DiscoveryItemS
     logActionTiming(503, { reason: error instanceof ReadOnlyActionDeadlineError ? "dashboard_action_deadline" : loadError });
     return { items: [], loadError };
   }
+  });
 }
 
-export async function getCoverageDiscoveryItemsAction(selectedRunId?: string | null): Promise<{
+export async function getCoverageDiscoveryItemsAction(
+  selectedRunId?: string | null,
+  selector: TenantSessionSelector = {},
+): Promise<{
   run: CoverageRunSummary | null;
   discoveryItems: DiscoveryItemSummary[];
   loadError?: CoverageLoadError;
 }> {
-  await requirePermission("crawl:manage");
+  return withCrawlPermission(selector, "source:review", "coverage.discovery-items.read", async (session, db) => {
   const logActionTiming = startRouteTiming("action:getCoverageDiscoveryItems");
   try {
     const result = await withReadOnlyActionDeadline(
@@ -1069,26 +1261,36 @@ export async function getCoverageDiscoveryItemsAction(selectedRunId?: string | n
       10_000,
       withDbStatementTimeout(8_000, async () => {
         await ensureDbReady();
-        const run = await timedCoverageStep("getCoverageDiscoveryItems", "selected_run", () => getSelectedOrDefaultVisibleCrawlRun(selectedRunId ?? undefined));
-        const discoveryItems = await timedCoverageStep("getCoverageDiscoveryItems", "item_list", () => listDiscoveryItems(30));
+        const scope = { tenantId: session.tenantId, workspaceId: session.workspaceId };
+        const candidate = await timedCoverageStep("getCoverageDiscoveryItems", "selected_run", () =>
+          getSelectedOrDefaultVisibleCrawlRun(selectedRunId ?? undefined, scope));
+        const run = candidate ? await assertTenantCrawlRun(db, session, candidate) : null;
+        const discoveryItems = await timedCoverageStep("getCoverageDiscoveryItems", "item_list", () =>
+          listDiscoveryItems(30, scope));
+        await assertTenantDiscoveryItems(db, session, discoveryItems);
         return { run: summarizeCoverageRun(run), discoveryItems };
       }),
     );
     logActionTiming(200);
     return result;
   } catch (error) {
+    if (error instanceof TenantAuthorizationError) throw error;
     const loadError = classifyCoverageFailure(error);
     logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
     return { run: null, discoveryItems: [], loadError };
   }
+  });
 }
 
-export async function getCoverageSelectedRunAction(selectedRunId?: string | null): Promise<{
+export async function getCoverageSelectedRunAction(
+  selectedRunId?: string | null,
+  selector: TenantSessionSelector = {},
+): Promise<{
   run: CoverageRunSummary | null;
   crawlWorker: { enabled: boolean; googlePlacesKeyConfigured: boolean; googlePlacesKeySource: "ui" | "env" | "none" } | null;
   loadError?: CoverageLoadError;
 }> {
-  await requirePermission("crawl:manage");
+  return withCrawlPermission(selector, "source:review", "coverage.selected-run.read", async (session, db) => {
   const logActionTiming = startRouteTiming("action:getCoverageSelectedRun");
   try {
     const result = await withReadOnlyActionDeadline(
@@ -1096,12 +1298,14 @@ export async function getCoverageSelectedRunAction(selectedRunId?: string | null
       10_000,
       withDbStatementTimeout(8_000, async () => {
         await ensureDbReady();
+        const scope = { tenantId: session.tenantId, workspaceId: session.workspaceId };
         const [run, settings] = await Promise.all([
-          timedCoverageStep("getCoverageSelectedRun", "selected_run", () => getSelectedOrDefaultVisibleCrawlRun(selectedRunId ?? undefined)),
+          timedCoverageStep("getCoverageSelectedRun", "selected_run", () =>
+            getSelectedOrDefaultVisibleCrawlRun(selectedRunId ?? undefined, scope)),
           getSettings(),
         ]);
         return {
-          run,
+          run: run ? await assertTenantCrawlRun(db, session, run) : null,
           crawlWorker: {
             enabled: settings.scheduler_crawl_enabled,
             googlePlacesKeyConfigured: settings.google_places_api_key_configured,
@@ -1113,17 +1317,22 @@ export async function getCoverageSelectedRunAction(selectedRunId?: string | null
     logActionTiming(200);
     return { run: summarizeCoverageRun(result.run), crawlWorker: result.crawlWorker };
   } catch (error) {
+    if (error instanceof TenantAuthorizationError) throw error;
     const loadError = classifyCoverageFailure(error);
     logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
     return { run: null, crawlWorker: null, loadError };
   }
+  });
 }
 
-export async function getCoverageDiscoveryItemListAction(limit = 30): Promise<{
+export async function getCoverageDiscoveryItemListAction(
+  limit = 30,
+  selector: TenantSessionSelector = {},
+): Promise<{
   discoveryItems: DiscoveryItemSummary[];
   loadError?: CoverageLoadError;
 }> {
-  await requirePermission("crawl:manage");
+  return withCrawlPermission(selector, "source:review", "coverage.discovery-item-list.read", async (session, db) => {
   const logActionTiming = startRouteTiming("action:getCoverageDiscoveryItemList");
   try {
     const discoveryItems = await withReadOnlyActionDeadline(
@@ -1132,23 +1341,33 @@ export async function getCoverageDiscoveryItemListAction(limit = 30): Promise<{
       withDbStatementTimeout(8_000, async () => {
         await ensureDbReady();
         const safeLimit = Math.max(1, Math.min(Math.floor(limit), 50));
-        return timedCoverageStep("getCoverageDiscoveryItemList", "item_list", () => listDiscoveryItems(safeLimit));
+        const items = await timedCoverageStep("getCoverageDiscoveryItemList", "item_list", () => listDiscoveryItems(safeLimit, {
+          tenantId: session.tenantId,
+          workspaceId: session.workspaceId,
+        }));
+        await assertTenantDiscoveryItems(db, session, items);
+        return items;
       }),
     );
     logActionTiming(200);
     return { discoveryItems };
   } catch (error) {
+    if (error instanceof TenantAuthorizationError) throw error;
     const loadError = classifyCoverageFailure(error);
     logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
     return { discoveryItems: [], loadError };
   }
+  });
 }
 
-export async function getCoverageMarketSummaryAction(runId?: string | null): Promise<{
+export async function getCoverageMarketSummaryAction(
+  runId?: string | null,
+  selector: TenantSessionSelector = {},
+): Promise<{
   markets: MarketCoverageSummary[];
   loadError?: CoverageLoadError;
 }> {
-  await requirePermission("crawl:manage");
+  return withCrawlPermission(selector, "source:review", "coverage.market-summary.read", async (session, db) => {
   const logActionTiming = startRouteTiming("action:getCoverageMarketSummary");
   try {
     const markets = await withReadOnlyActionDeadline(
@@ -1156,23 +1375,32 @@ export async function getCoverageMarketSummaryAction(runId?: string | null): Pro
       10_000,
       withDbStatementTimeout(8_000, async () => {
         await ensureDbReady();
-        return getMarketCoverageSummary(runId ?? undefined);
+        const scope = { tenantId: session.tenantId, workspaceId: session.workspaceId };
+        if (runId) {
+          await assertTenantCrawlRun(db, session, await getSelectedOrDefaultVisibleCrawlRun(runId, scope));
+        }
+        return getMarketCoverageSummary(runId ?? undefined, scope);
       }),
     );
     logActionTiming(200);
     return { markets };
   } catch (error) {
+    if (error instanceof TenantAuthorizationError) throw error;
     const loadError = classifyCoverageFailure(error);
     logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
     return { markets: [], loadError };
   }
+  });
 }
 
-export async function getCoverageCellLedgerAction(runId?: string | null): Promise<{
+export async function getCoverageCellLedgerAction(
+  runId?: string | null,
+  selector: TenantSessionSelector = {},
+): Promise<{
   cells: LocationCellCoverage[];
   loadError?: CoverageLoadError;
 }> {
-  await requirePermission("crawl:manage");
+  return withCrawlPermission(selector, "source:review", "coverage.cell-ledger.read", async (session, db) => {
   const logActionTiming = startRouteTiming("action:getCoverageCellLedger");
   try {
     const cells = await withReadOnlyActionDeadline(
@@ -1180,24 +1408,33 @@ export async function getCoverageCellLedgerAction(runId?: string | null): Promis
       10_000,
       withDbStatementTimeout(8_000, async () => {
         await ensureDbReady();
-        return getLocationCellCoverage(runId ?? undefined);
+        const scope = { tenantId: session.tenantId, workspaceId: session.workspaceId };
+        if (runId) {
+          await assertTenantCrawlRun(db, session, await getSelectedOrDefaultVisibleCrawlRun(runId, scope));
+        }
+        return getLocationCellCoverage(runId ?? undefined, scope);
       }),
     );
     logActionTiming(200);
     return { cells };
   } catch (error) {
+    if (error instanceof TenantAuthorizationError) throw error;
     const loadError = classifyCoverageFailure(error);
     logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
     return { cells: [], loadError };
   }
+  });
 }
 
-export async function getCoverageRunProgressAction(runId?: string | null): Promise<{
+export async function getCoverageRunProgressAction(
+  runId?: string | null,
+  selector: TenantSessionSelector = {},
+): Promise<{
   progress: CrawlProgress | null;
   geography: GeographyProgress | null;
   loadError?: CoverageLoadError;
 }> {
-  await requirePermission("crawl:manage");
+  return withCrawlPermission(selector, "source:review", "coverage.run-progress.read", async (session, db) => {
   const logActionTiming = startRouteTiming("action:getCoverageRunProgress");
   if (!runId) {
     logActionTiming(200, { mode: "no_run" });
@@ -1209,6 +1446,10 @@ export async function getCoverageRunProgressAction(runId?: string | null): Promi
       10_000,
       withDbStatementTimeout(8_000, async () => {
         await ensureDbReady();
+        await assertTenantCrawlRun(db, session, await getSelectedOrDefaultVisibleCrawlRun(runId, {
+          tenantId: session.tenantId,
+          workspaceId: session.workspaceId,
+        }));
         const progress = await getCrawlProgress(runId);
         const geography = await getRunGeographyProgress(runId);
         return { progress, geography };
@@ -1217,17 +1458,22 @@ export async function getCoverageRunProgressAction(runId?: string | null): Promi
     logActionTiming(200);
     return result;
   } catch (error) {
+    if (error instanceof TenantAuthorizationError) throw error;
     const loadError = classifyCoverageFailure(error);
     logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
     return { progress: null, geography: null, loadError };
   }
+  });
 }
 
-export async function getCoverageUnitPreviewAction(runId?: string | null): Promise<{
+export async function getCoverageUnitPreviewAction(
+  runId?: string | null,
+  selector: TenantSessionSelector = {},
+): Promise<{
   unitPreview: CrawlUnitPreview[];
   loadError?: CoverageLoadError;
 }> {
-  await requirePermission("crawl:manage");
+  return withCrawlPermission(selector, "source:review", "coverage.unit-preview.read", async (session, db) => {
   const logActionTiming = startRouteTiming("action:getCoverageUnitPreview");
   if (!runId) {
     logActionTiming(200, { mode: "no_run" });
@@ -1239,23 +1485,32 @@ export async function getCoverageUnitPreviewAction(runId?: string | null): Promi
       10_000,
       withDbStatementTimeout(8_000, async () => {
         await ensureDbReady();
+        await assertTenantCrawlRun(db, session, await getSelectedOrDefaultVisibleCrawlRun(runId, {
+          tenantId: session.tenantId,
+          workspaceId: session.workspaceId,
+        }));
         return getCrawlUnitPreview(runId, 100);
       }),
     );
     logActionTiming(200);
     return { unitPreview };
   } catch (error) {
+    if (error instanceof TenantAuthorizationError) throw error;
     const loadError = classifyCoverageFailure(error);
     logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
     return { unitPreview: [], loadError };
   }
+  });
 }
 
-export async function getCoverageProbeCandidatesAction(runId?: string | null): Promise<{
+export async function getCoverageProbeCandidatesAction(
+  runId?: string | null,
+  selector: TenantSessionSelector = {},
+): Promise<{
   candidates: DiscoveryRunCandidate[];
   loadError?: CoverageLoadError;
 }> {
-  await requirePermission("crawl:manage");
+  return withCrawlPermission(selector, "source:review", "coverage.probe-candidates.read", async (session, db) => {
   const logActionTiming = startRouteTiming("action:getCoverageProbeCandidates");
   if (!runId) {
     logActionTiming(200, { mode: "no_run" });
@@ -1267,81 +1522,111 @@ export async function getCoverageProbeCandidatesAction(runId?: string | null): P
       10_000,
       withDbStatementTimeout(8_000, async () => {
         await ensureDbReady();
+        await assertTenantCrawlRun(db, session, await getSelectedOrDefaultVisibleCrawlRun(runId, {
+          tenantId: session.tenantId,
+          workspaceId: session.workspaceId,
+        }));
         return getDiscoveryRunCandidates(runId, 100);
       }),
     );
     logActionTiming(200);
     return { candidates };
   } catch (error) {
+    if (error instanceof TenantAuthorizationError) throw error;
     const loadError = classifyCoverageFailure(error);
     logActionTiming(503, { reason: logReadFailureReason(error, loadError) });
     return { candidates: [], loadError };
   }
+  });
 }
 
-export async function promoteProbeToLeadHarvestAction(runId: string): Promise<
+export async function promoteProbeToLeadHarvestAction(
+  runId: string,
+  selector: TenantSessionSelector = {},
+): Promise<
   | { runId: string; unitCount: number; selectedCellCount: number; categories: string[]; promotedFromRunId: string; estimate: DiscoverySizeEstimate }
   | { error: string; estimate?: DiscoverySizeEstimate }
 > {
-  await requirePermission("crawl:manage");
-  await ensureDbReady();
-  const run = await getSelectedOrDefaultVisibleCrawlRun(runId);
-  if (!run) return { error: "Discovery item not found." };
-  if (run.status !== "done") return { error: "Only a completed coverage probe can be promoted to lead harvest." };
-
-  const selection = run.selection_json ?? {};
-  const sourceMode = normalizeDiscoveryMode(selection.discoveryMode, "lead_harvest");
-  if (sourceMode !== "coverage_probe") {
-    return { error: "Only coverage probe discovery items can be promoted. This item is already a lead harvest or does not have probe metadata." };
+  const tenantSession = await requireTenantPermission(selector, "workspace:read");
+  const actor = await requirePermission("crawl:manage");
+  if (actor.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
   }
 
-  const marketId = typeof selection.marketId === "string" && selection.marketId.trim()
-    ? selection.marketId.trim()
-    : run.market_id;
-  const rawCellIds = Array.isArray(selection.cellIds) ? selection.cellIds.map((value) => String(value)) : [];
-  const rawCategories = Array.isArray(selection.categories) ? selection.categories.map((value) => String(value)) : run.categories;
-  const cellIds = normalizeDistinct(rawCellIds);
-  const categories = normalizeDistinct(rawCategories);
-  if (!marketId || cellIds.length === 0 || categories.length === 0) {
-    return { error: "This probe does not have enough market/cell/category metadata to promote safely. Start a new lead harvest manually." };
-  }
+  return runWithTenantContext(tenantSession, `crawl-promote:${randomUUID()}`, () =>
+    withTenantDbContext(async (db) => {
+      await ensureDbReady();
+      const crawlScope = {
+        tenantId: tenantSession.tenantId,
+        workspaceId: tenantSession.workspaceId,
+      };
+      const run = await getSelectedOrDefaultVisibleCrawlRun(runId, crawlScope);
+      if (!run) {
+        throw new TenantAuthorizationError(404, "RESOURCE_NOT_FOUND_OR_FORBIDDEN");
+      }
+      await assertTenantCrawlRun(db, tenantSession, run);
+      if (run.status !== "done") {
+        return { error: "Only a completed coverage probe can be promoted to lead harvest." };
+      }
 
-  const processing = await getProcessingCrawlRun();
-  if (processing) {
-    return { error: "A discovery item is already processing. Let it finish or pause it before promoting this probe." };
-  }
+      const selection = run.selection_json ?? {};
+      const sourceMode = normalizeDiscoveryMode(selection.discoveryMode, "lead_harvest");
+      if (sourceMode !== "coverage_probe") {
+        return { error: "Only coverage probe discovery items can be promoted. This item is already a lead harvest or does not have probe metadata." };
+      }
 
-  const result = await startCrawlRunAction({
-    marketId,
-    cellIds,
-    categories,
-    discoveryMode: "lead_harvest",
-    paginationPolicy: normalizePaginationPolicy(selection.paginationPolicy, "auto_yield_based"),
-    promotedFromRunId: run.id,
-  });
+      const marketId = typeof selection.marketId === "string" && selection.marketId.trim()
+        ? selection.marketId.trim()
+        : run.market_id;
+      const rawCellIds = Array.isArray(selection.cellIds) ? selection.cellIds.map((value) => String(value)) : [];
+      const rawCategories = Array.isArray(selection.categories) ? selection.categories.map((value) => String(value)) : run.categories;
+      const cellIds = normalizeDistinct(rawCellIds);
+      const categories = normalizeDistinct(rawCategories);
+      if (!marketId || cellIds.length === 0 || categories.length === 0) {
+        return { error: "This probe does not have enough market/cell/category metadata to promote safely. Start a new lead harvest manually." };
+      }
 
-  if ("error" in result && result.error) return { error: result.error, estimate: result.estimate };
+      const processing = await getProcessingCrawlRun(crawlScope);
+      if (processing) {
+        return { error: "A discovery item is already processing. Let it finish or pause it before promoting this probe." };
+      }
 
-  if (!result.runId) return { error: "Lead harvest was not created. Try again from the completed probe." };
-  const createdRunId = result.runId;
-  const createdUnitCount = result.unitCount ?? 0;
-  const createdSelectedCellCount = result.selectedCellCount ?? cellIds.length;
+      const result = await startCrawlRunAction({
+        marketId,
+        cellIds,
+        categories,
+        discoveryMode: "lead_harvest",
+        paginationPolicy: normalizePaginationPolicy(selection.paginationPolicy, "auto_yield_based"),
+        promotedFromRunId: run.id,
+      }, crawlScope);
 
-  await createAuditLog("coverage_probe_promoted_to_lead_harvest", "crawl_run", createdRunId, {
-    promotedFromRunId: run.id,
-    marketId,
-    cellIds,
-    categories,
-  });
+      if ("error" in result && result.error) {
+        return { error: result.error, estimate: result.estimate };
+      }
+      if (!result.runId) {
+        return { error: "Lead harvest was not created. Try again from the completed probe." };
+      }
 
-  return {
-    runId: createdRunId,
-    unitCount: createdUnitCount,
-    selectedCellCount: createdSelectedCellCount,
-    categories,
-    promotedFromRunId: run.id,
-    estimate: result.estimate,
-  };
+      const createdRunId = result.runId;
+      const createdUnitCount = result.unitCount ?? 0;
+      const createdSelectedCellCount = result.selectedCellCount ?? cellIds.length;
+
+      await createAuditLog("coverage_probe_promoted_to_lead_harvest", "crawl_run", createdRunId, {
+        promotedFromRunId: run.id,
+        marketId,
+        cellIds,
+        categories,
+      });
+
+      return {
+        runId: createdRunId,
+        unitCount: createdUnitCount,
+        selectedCellCount: createdSelectedCellCount,
+        categories,
+        promotedFromRunId: run.id,
+        estimate: result.estimate,
+      };
+    }));
 }
 
 function schedulerSettingKey(workerName: SchedulerWorkerName) {
@@ -1352,12 +1637,18 @@ function schedulerSettingKey(workerName: SchedulerWorkerName) {
   return "scheduler_score_recompute_enabled" as const;
 }
 
-export async function getFailedUnitErrorsAction(runId?: string) {
-  await requirePermission("crawl:manage");
-  await ensureDbReady();
-  const run = await getSelectedOrDefaultVisibleCrawlRun(runId);
-  if (!run) return [];
-  return getFailedUnitErrors(run.id);
+export async function getFailedUnitErrorsAction(
+  runId?: string,
+  selector: TenantSessionSelector = {},
+) {
+  return withCrawlWorkspacePermission(selector, "source:review", "coverage.failed-units.read", async (session, db) => {
+    await ensureDbReady();
+    const scope = { tenantId: session.tenantId, workspaceId: session.workspaceId };
+    const candidate = await getSelectedOrDefaultVisibleCrawlRun(runId, scope);
+    if (!candidate) return [];
+    const run = await assertTenantCrawlRun(db, session, candidate);
+    return getFailedUnitErrors(run.id);
+  });
 }
 
 export async function getCrawlProgressAction() {

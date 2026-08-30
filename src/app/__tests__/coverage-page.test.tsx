@@ -11,6 +11,10 @@ const tenantAuthorizationMocks = vi.hoisted(() => ({
   assertTenantPermission: vi.fn(),
 }));
 
+const crawlWorkspaceMocks = vi.hoisted(() => ({
+  listCrawlWorkspaceOptions: vi.fn(),
+}));
+
 const dbIndexMocks = vi.hoisted(() => ({
   withDbStatementTimeout: vi.fn((_timeoutMs: number, fn: () => Promise<unknown>) => fn()),
   isDbStatementTimeoutError: vi.fn((error: unknown) => (error as { code?: string }).code === "57014"),
@@ -30,10 +34,12 @@ const queryMocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/auth", () => authMocks);
 vi.mock("@/lib/tenancy/authorize", () => tenantAuthorizationMocks);
+vi.mock("@/lib/crawl/workspace-scope", () => crawlWorkspaceMocks);
 vi.mock("@/lib/db/index", () => dbIndexMocks);
 vi.mock("@/lib/db/queries", () => queryMocks);
 vi.mock("@/app/(protected)/coverage/coverage-client", () => ({
-  CoverageClient: () => React.createElement("div", null, "Coverage shell loaded"),
+  CoverageClient: ({ initialCrawlWorkspaceId }: { initialCrawlWorkspaceId: string | null }) =>
+    React.createElement("div", null, `Coverage shell loaded ${initialCrawlWorkspaceId ?? "no-workspace"}`),
 }));
 
 import CoveragePage from "@/app/(protected)/coverage/page";
@@ -48,6 +54,7 @@ const TENANT_SESSION = {
   roleBindingId: "30000000-0000-4000-8000-000000000001",
   role: "owner",
 } as const;
+const WORKSPACE_ID = "40000000-0000-4000-8000-000000000001";
 
 describe("CoveragePage", () => {
   beforeEach(() => {
@@ -59,6 +66,11 @@ describe("CoveragePage", () => {
     });
     authMocks.getTenantSession.mockResolvedValue(TENANT_SESSION);
     tenantAuthorizationMocks.assertTenantPermission.mockResolvedValue(TENANT_SESSION);
+    crawlWorkspaceMocks.listCrawlWorkspaceOptions.mockResolvedValue([{
+      tenantId: TENANT_SESSION.tenantId,
+      workspaceId: WORKSPACE_ID,
+      name: "Primary workspace",
+    }]);
   });
 
   it("renders a fast shell without running heavy coverage reads during SSR", async () => {
@@ -66,6 +78,8 @@ describe("CoveragePage", () => {
     const text = renderToStaticMarkup(node as React.ReactElement);
 
     expect(text).toContain("Coverage shell loaded");
+    expect(text).toContain(WORKSPACE_ID);
+    expect(crawlWorkspaceMocks.listCrawlWorkspaceOptions).toHaveBeenCalledWith(TENANT_SESSION);
     expect(authMocks.requirePermission).toHaveBeenCalledWith("crawl:manage");
     expect(authMocks.getTenantSession).toHaveBeenCalledWith({});
     expect(tenantAuthorizationMocks.assertTenantPermission).toHaveBeenCalledWith(

@@ -15,6 +15,10 @@ const crawlActionMocks = vi.hoisted(() => ({
   getDashboardStatsAction: vi.fn(),
 }));
 
+const crawlWorkspaceMocks = vi.hoisted(() => ({
+  listCrawlWorkspaceOptions: vi.fn(),
+}));
+
 const dbIndexMocks = vi.hoisted(() => ({
   withDbStatementTimeout: vi.fn((_timeoutMs: number, fn: () => Promise<unknown>) => fn()),
   isDbStatementTimeoutError: vi.fn((error: unknown) => (error as { code?: string }).code === "57014"),
@@ -38,16 +42,19 @@ const queryMocks = vi.hoisted(() => ({
 vi.mock("@/lib/auth", () => authMocks);
 vi.mock("@/lib/tenancy/authorize", () => tenantAuthorizationMocks);
 vi.mock("@/lib/crawl/actions", () => crawlActionMocks);
+vi.mock("@/lib/crawl/workspace-scope", () => crawlWorkspaceMocks);
 vi.mock("@/lib/db/index", () => dbIndexMocks);
 vi.mock("@/lib/db/queries", () => queryMocks);
 vi.mock("@/app/(protected)/dashboard/dashboard-client", () => ({
-  DashboardClient: () => React.createElement("div", null, "Dashboard loaded"),
+  DashboardClient: ({ crawlWorkspaces }: { crawlWorkspaces: Array<{ workspaceId: string }> }) =>
+    React.createElement("div", null, `Dashboard loaded ${crawlWorkspaces[0]?.workspaceId ?? "no-workspace"}`),
 }));
 
 import DashboardPage from "@/app/(protected)/dashboard/page";
 
 const TENANT_ID = "10000000-0000-4000-8000-000000000001";
 const USER_ID = "20000000-0000-4000-8000-000000000001";
+const WORKSPACE_ID = "40000000-0000-4000-8000-000000000001";
 
 const LEGACY_SESSION = {
   userId: USER_ID,
@@ -69,6 +76,11 @@ describe("DashboardPage", () => {
     authMocks.requirePermission.mockResolvedValue(LEGACY_SESSION);
     authMocks.getTenantSession.mockResolvedValue(TENANT_SESSION);
     tenantAuthorizationMocks.assertTenantPermission.mockResolvedValue(TENANT_SESSION);
+    crawlWorkspaceMocks.listCrawlWorkspaceOptions.mockResolvedValue([{
+      tenantId: TENANT_ID,
+      workspaceId: WORKSPACE_ID,
+      name: "Primary workspace",
+    }]);
   });
 
   it("renders the dashboard shell only after exact tenant-wide report authorization", async () => {
@@ -77,6 +89,8 @@ describe("DashboardPage", () => {
     const text = renderToStaticMarkup(node as React.ReactElement);
 
     expect(text).toContain("Dashboard loaded");
+    expect(text).toContain(WORKSPACE_ID);
+    expect(crawlWorkspaceMocks.listCrawlWorkspaceOptions).toHaveBeenCalledWith(TENANT_SESSION);
     expect(authMocks.requirePermission).toHaveBeenCalledWith("crawl:manage");
     expect(authMocks.getTenantSession).toHaveBeenCalledWith({});
     expect(tenantAuthorizationMocks.assertTenantPermission).toHaveBeenCalledWith(

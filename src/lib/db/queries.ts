@@ -3204,9 +3204,28 @@ export async function userCanAccessMarket(userId: string, marketId: string | nul
   return Boolean(row);
 }
 
-export async function getMarketCoverageSummary(runId?: string): Promise<MarketCoverageSummary[]> {
+export async function getMarketCoverageSummary(
+  runId?: string,
+  scope?: CrawlRunScope,
+): Promise<MarketCoverageSummary[]> {
   const db = await getDb();
   const runFilter = runId ? "AND cu.crawl_run_id = ?" : "";
+  const scopeRunFilter = scope
+    ? `AND EXISTS (
+         SELECT 1 FROM crawl_runs cr
+         WHERE cr.id = cu.crawl_run_id
+           AND cr.tenant_id = ?
+           AND (? IS NULL OR cr.workspace_id = ?)
+       )`
+    : "";
+  const leadScopeFilter = scope
+    ? "AND l.tenant_id = ? AND (? IS NULL OR l.workspace_id = ?)"
+    : "";
+  const args = [
+    ...(scope ? [scope.tenantId, scope.workspaceId, scope.workspaceId] : []),
+    ...(runId ? [runId] : []),
+    ...(scope ? [scope.tenantId, scope.workspaceId, scope.workspaceId] : []),
+  ];
   const rows = await db.prepare(
     `SELECT
        m.id as marketId,
@@ -3222,21 +3241,40 @@ export async function getMarketCoverageSummary(runId?: string): Promise<MarketCo
        COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) as openUnits,
        COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) as canceledUnits,
        COALESCE(SUM(cu.discovered_count), 0) as leadsDiscovered,
-       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.market_id = m.id), 0) as activeLeads,
+       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.market_id = m.id ${leadScopeFilter}), 0) as activeLeads,
        MAX(COALESCE(cu.finished_at, cu.started_at, cu.created_at)) as lastRunAt
      FROM location_markets m
      LEFT JOIN location_cells c ON c.market_id = m.id
-     LEFT JOIN crawl_units cu ON cu.location_cell_id = c.id ${runFilter}
+     LEFT JOIN crawl_units cu ON cu.location_cell_id = c.id ${runFilter} ${scopeRunFilter}
      WHERE m.status <> 'archived'
      GROUP BY m.id, m.name, m.country_code, m.admin_area1
      ORDER BY m.country_code, m.name`
-  ).all(...(runId ? [runId] : [])) as Array<Record<string, unknown>>;
+  ).all(...args) as Array<Record<string, unknown>>;
   return rows.map(normalizeMarketCoverageSummary);
 }
 
-export async function getLocationCellCoverage(runId?: string): Promise<LocationCellCoverage[]> {
+export async function getLocationCellCoverage(
+  runId?: string,
+  scope?: CrawlRunScope,
+): Promise<LocationCellCoverage[]> {
   const db = await getDb();
   const runFilter = runId ? "AND cu.crawl_run_id = ?" : "";
+  const scopeRunFilter = scope
+    ? `AND EXISTS (
+         SELECT 1 FROM crawl_runs cr
+         WHERE cr.id = cu.crawl_run_id
+           AND cr.tenant_id = ?
+           AND (? IS NULL OR cr.workspace_id = ?)
+       )`
+    : "";
+  const leadScopeFilter = scope
+    ? "AND l.tenant_id = ? AND (? IS NULL OR l.workspace_id = ?)"
+    : "";
+  const args = [
+    ...(scope ? [scope.tenantId, scope.workspaceId, scope.workspaceId] : []),
+    ...(runId ? [runId] : []),
+    ...(scope ? [scope.tenantId, scope.workspaceId, scope.workspaceId] : []),
+  ];
   const rows = await db.prepare(
     `SELECT
        c.id as cellId,
@@ -3255,15 +3293,15 @@ export async function getLocationCellCoverage(runId?: string): Promise<LocationC
        COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) as openUnits,
        COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) as canceledUnits,
        COALESCE(SUM(cu.discovered_count), 0) as leadsDiscovered,
-       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.location_cell_id = c.id), 0) as activeLeads,
+       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.location_cell_id = c.id ${leadScopeFilter}), 0) as activeLeads,
        MAX(COALESCE(cu.finished_at, cu.started_at, cu.created_at)) as lastRunAt
      FROM location_cells c
      INNER JOIN location_markets m ON m.id = c.market_id
-     LEFT JOIN crawl_units cu ON cu.location_cell_id = c.id ${runFilter}
+     LEFT JOIN crawl_units cu ON cu.location_cell_id = c.id ${runFilter} ${scopeRunFilter}
      WHERE c.is_active = 1
      GROUP BY c.id, c.market_id, m.name, m.country_code, c.country_code, c.cell_type, c.cell_label, c.postal_code, c.locality, c.admin_area1, c.admin_area2
      ORDER BY m.country_code, m.name, c.cell_type, c.cell_label`
-  ).all(...(runId ? [runId] : [])) as Array<Record<string, unknown>>;
+  ).all(...args) as Array<Record<string, unknown>>;
   return rows.map(normalizeLocationCellCoverage);
 }
 
@@ -3538,7 +3576,7 @@ function parseCrawlRunRow(row: Record<string, unknown>): CrawlRun {
   } as unknown as CrawlRun;
 }
 
-interface CrawlRunScope {
+export interface CrawlRunScope {
   tenantId: string;
   workspaceId: string | null;
 }
@@ -3550,7 +3588,7 @@ export async function getCrawlRun(id: string, scope?: CrawlRunScope): Promise<Cr
       `SELECT * FROM crawl_runs
        WHERE id = ?
          AND tenant_id = ?
-         AND (workspace_id = ? OR (workspace_id IS NULL AND ? IS NULL))`,
+         AND (? IS NULL OR workspace_id = ?)`,
     ).get(id, scope.tenantId, scope.workspaceId, scope.workspaceId) as Record<string, unknown> | undefined
     : await db.prepare("SELECT * FROM crawl_runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
   if (!row) return null;
@@ -3563,7 +3601,7 @@ export async function getProcessingCrawlRun(scope?: CrawlRunScope): Promise<Craw
     ? await db.prepare(
       `SELECT * FROM crawl_runs
        WHERE tenant_id = ?
-         AND (workspace_id = ? OR (workspace_id IS NULL AND ? IS NULL))
+         AND (? IS NULL OR workspace_id = ?)
          AND status IN ('running', 'queued')
        ORDER BY created_at DESC
        LIMIT 1`,
@@ -3577,10 +3615,10 @@ export async function getActiveCrawlRun(): Promise<CrawlRun | null>{
   return getDefaultVisibleCrawlRun();
 }
 
-export async function getDefaultVisibleCrawlRun(): Promise<CrawlRun | null>{
-  const processing = await getProcessingCrawlRun();
+export async function getDefaultVisibleCrawlRun(scope?: CrawlRunScope): Promise<CrawlRun | null>{
+  const processing = await getProcessingCrawlRun(scope);
   if (processing) return processing;
-  return getLatestCrawlRun();
+  return getLatestCrawlRun(scope);
 }
 
 export async function getSelectedOrDefaultVisibleCrawlRun(
@@ -3589,30 +3627,52 @@ export async function getSelectedOrDefaultVisibleCrawlRun(
 ): Promise<CrawlRun | null>{
   const cleanRunId = normalizeNullableText(runId);
   if (cleanRunId) return getCrawlRun(cleanRunId, scope);
-  return getDefaultVisibleCrawlRun();
+  return getDefaultVisibleCrawlRun(scope);
 }
 
-export async function getLatestPausedCrawlRun(): Promise<CrawlRun | null>{
+export async function getLatestPausedCrawlRun(scope?: CrawlRunScope): Promise<CrawlRun | null>{
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM crawl_runs WHERE status = 'paused' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+  const row = scope
+    ? await db.prepare(
+      `SELECT * FROM crawl_runs
+       WHERE tenant_id = ?
+         AND (? IS NULL OR workspace_id = ?)
+         AND status = 'paused'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(scope.tenantId, scope.workspaceId, scope.workspaceId) as Record<string, unknown> | undefined
+    : await db.prepare("SELECT * FROM crawl_runs WHERE status = 'paused' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
   if (!row) return null;
   return parseCrawlRunRow(row);
 }
 
-export async function getLatestCrawlRun(): Promise<CrawlRun | null>{
+export async function getLatestCrawlRun(scope?: CrawlRunScope): Promise<CrawlRun | null>{
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM crawl_runs ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+  const row = scope
+    ? await db.prepare(
+      `SELECT * FROM crawl_runs
+       WHERE tenant_id = ?
+         AND (? IS NULL OR workspace_id = ?)
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(scope.tenantId, scope.workspaceId, scope.workspaceId) as Record<string, unknown> | undefined
+    : await db.prepare("SELECT * FROM crawl_runs ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
   if (!row) return null;
   return parseCrawlRunRow(row);
 }
 
-export async function listDiscoveryItems(limit = 12): Promise<DiscoveryItemSummary[]> {
+export async function listDiscoveryItems(limit = 12, scope?: CrawlRunScope): Promise<DiscoveryItemSummary[]> {
   const db = await getDb();
   const boundedLimit = Math.max(1, Math.min(Math.floor(limit), 50));
+  const scopeFilter = scope
+    ? "WHERE tenant_id = ? AND (? IS NULL OR workspace_id = ?)"
+    : "";
+  const scopeArgs = scope ? [scope.tenantId, scope.workspaceId, scope.workspaceId] : [];
   const rows = await db.prepare(
     `WITH latest_runs AS (
        SELECT *
        FROM crawl_runs
+       ${scopeFilter}
        ORDER BY created_at DESC
        LIMIT ?
      ),
@@ -3671,7 +3731,7 @@ export async function listDiscoveryItems(limit = 12): Promise<DiscoveryItemSumma
      LEFT JOIN unit_counts uc ON uc.crawl_run_id = cr.id
      ORDER BY cr.created_at DESC
      `
-  ).all(boundedLimit) as Array<Record<string, unknown>>;
+  ).all(...scopeArgs, boundedLimit) as Array<Record<string, unknown>>;
 
   return rows.map((row) => {
     const categories = safeParseJson<string[]>(row.categories, []);
@@ -9668,6 +9728,7 @@ export async function getNowQueue(
   limit = 25,
   options: { assignedToUserId?: string; unassignedOnly?: boolean; visibleToUserId?: string; includeAllAssignedActive?: boolean } = {},
 ): Promise<QueueLead[]>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const candidateLimit = Math.max(limit * 20, 200);
@@ -9675,15 +9736,24 @@ export async function getNowQueue(
   const assignmentConditions: string[] = [];
   const assignmentParams: unknown[] = [];
   if (options.assignedToUserId) {
-    assignmentConditions.push("assigned_to_user_id = ?");
+    assignmentConditions.push(`l.assigned_to_user_id = ?
+      AND EXISTS (
+        SELECT 1 FROM tenant_memberships assigned_member
+        WHERE assigned_member.tenant_id = l.tenant_id
+          AND assigned_member.auth_identity_id = l.assigned_to_user_id
+          AND assigned_member.status = 'active'
+      )`);
     assignmentParams.push(options.assignedToUserId);
   }
   if (options.unassignedOnly) {
-    assignmentConditions.push(leadUnassignedCondition("assigned_to_user_id"));
+    assignmentConditions.push(leadUnassignedCondition("l.assigned_to_user_id"));
   }
   if (options.visibleToUserId) {
-    assignmentConditions.push("market_id IN (SELECT market_id FROM user_market_access WHERE user_id = ?)");
-    assignmentParams.push(options.visibleToUserId);
+    assignmentConditions.push(`l.market_id IN (
+      SELECT uma.market_id FROM user_market_access uma
+      WHERE uma.tenant_id = ? AND uma.user_id = ?
+    )`);
+    assignmentParams.push(tenantId, options.visibleToUserId);
   }
   const assignmentWhere = assignmentConditions.length > 0 ? `AND ${assignmentConditions.join(" AND ")}` : "";
   const candidateWhere = includeAllAssignedActive
@@ -9707,9 +9777,10 @@ export async function getNowQueue(
   const rows = await db.prepare(`
     WITH candidates AS (
       SELECT id
-      FROM leads
+      FROM leads l
       WHERE ${candidateWhere}
-      ORDER BY ${leadWebsiteNeedRankExpression("leads")} DESC, sales_priority_score DESC, lead_quality_score DESC, score DESC
+        AND l.tenant_id = ?
+      ORDER BY ${leadWebsiteNeedRankExpression("l")} DESC, sales_priority_score DESC, lead_quality_score DESC, score DESC
       LIMIT ?
     ),
     ranked AS (
@@ -9759,28 +9830,32 @@ export async function getNowQueue(
         (
           SELECT a.status
           FROM lead_ai_artifacts a
-          WHERE a.lead_id = l.id AND a.artifact_type = 'business_detail'
+          WHERE a.tenant_id = l.tenant_id
+            AND a.lead_id = l.id AND a.artifact_type = 'business_detail'
           ORDER BY a.created_at DESC
           LIMIT 1
         ) as business_detail_status,
         (
           SELECT a.status
           FROM lead_ai_artifacts a
-          WHERE a.lead_id = l.id AND a.artifact_type = 'competitive_report'
+          WHERE a.tenant_id = l.tenant_id
+            AND a.lead_id = l.id AND a.artifact_type = 'competitive_report'
           ORDER BY a.created_at DESC
           LIMIT 1
         ) as competitive_report_status,
         (
           SELECT d.slug
           FROM demos d
-          WHERE d.lead_id = l.id AND d.is_published = 1
+          WHERE d.tenant_id = l.tenant_id
+            AND d.lead_id = l.id AND d.is_published = 1
           ORDER BY d.created_at DESC
           LIMIT 1
         ) as demo_slug,
         (
           SELECT ar.id
           FROM admin_requests ar
-          WHERE ar.lead_id = l.id
+          WHERE ar.tenant_id = l.tenant_id
+            AND ar.lead_id = l.id
             AND ar.request_type = 'website_request'
             AND ar.status IN ('new','seen','in_progress','waiting_on_researcher')
           ORDER BY ar.created_at DESC
@@ -9789,7 +9864,8 @@ export async function getNowQueue(
         (
           SELECT ar.id
           FROM admin_requests ar
-          WHERE ar.lead_id = l.id
+          WHERE ar.tenant_id = l.tenant_id
+            AND ar.lead_id = l.id
             AND ar.request_type = 'quote_request'
             AND ar.status IN ('new','seen','in_progress','waiting_on_researcher')
           ORDER BY ar.created_at DESC
@@ -9810,7 +9886,7 @@ export async function getNowQueue(
           ELSE 0.2
         END as freshness
       FROM leads l
-      LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+      ${TENANT_BOUND_ASSIGNEE_JOIN}
       INNER JOIN candidates c ON c.id = l.id
     )
     SELECT *
@@ -9823,7 +9899,7 @@ export async function getNowQueue(
       win_probability_score DESC,
       score DESC
     LIMIT ?
-  `).all(...assignmentParams, candidateLimit, today, limit) as Array<Record<string, unknown>>;
+  `).all(...assignmentParams, tenantId, candidateLimit, today, limit) as Array<Record<string, unknown>>;
 
   return rows.map((row) => ({
     id: row.id as string,
@@ -9877,18 +9953,32 @@ export async function getNowQueue(
 }
 
 export async function getResearcherWorkbench(userId: string, options: { viewerRole?: string } = {}): Promise<ResearcherWorkbench> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const visibleToUserId = options.viewerRole === "admin" ? undefined : userId;
+  const activeMembership = await db.prepare(
+    `SELECT 1 FROM tenant_memberships
+     WHERE tenant_id = ? AND auth_identity_id = ? AND status = 'active'
+     LIMIT 1`,
+  ).get(tenantId, userId);
+  if (!activeMembership) {
+    return {
+      nextAction: null,
+      myLeads: [],
+      unclaimedLeads: [],
+      summary: { myClaimed: 0, dueToday: 0, contactedThisWeek: 0, bestUnclaimed: 0 },
+    };
+  }
   const [myLeads, unclaimedLeads] = await Promise.all([
     getNowQueue(25, { assignedToUserId: userId, visibleToUserId, includeAllAssignedActive: true }),
     getNowQueue(25, { unassignedOnly: true, visibleToUserId }),
   ]);
   const marketCondition = visibleToUserId
-    ? "AND l.market_id IN (SELECT market_id FROM user_market_access WHERE user_id = ?)"
+    ? "AND l.market_id IN (SELECT market_id FROM user_market_access WHERE tenant_id = ? AND user_id = ?)"
     : "";
-  const marketParams = visibleToUserId ? [visibleToUserId] : [];
+  const marketParams = visibleToUserId ? [tenantId, visibleToUserId] : [];
 
   const summaryRow = await db.prepare(
     `SELECT
@@ -9898,11 +9988,12 @@ export async function getResearcherWorkbench(userId: string, options: { viewerRo
      FROM leads l
      WHERE COALESCE(l.is_excluded, 0) = 0
        AND l.archived_at IS NULL
+       AND l.tenant_id = ?
        ${marketCondition}`
-  ).get(userId, userId, today, ...marketParams) as Record<string, unknown>;
+  ).get(userId, userId, today, tenantId, ...marketParams) as Record<string, unknown>;
   const contactRow = await db.prepare(
-    "SELECT COUNT(*) as count FROM outreach_events WHERE actor_user_id = ? AND created_at >= ?"
-  ).get(userId, weekAgo) as { count: number } | undefined;
+    "SELECT COUNT(*) as count FROM outreach_events WHERE tenant_id = ? AND actor_user_id = ? AND created_at >= ?"
+  ).get(tenantId, userId, weekAgo) as { count: number } | undefined;
 
   return {
     nextAction: myLeads[0] ?? null,
@@ -10642,6 +10733,7 @@ export function resolveStatisticsRange(input: StatisticsRangeInput = {}): Resolv
 }
 
 export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Promise<StatisticsSummary>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const range = resolveStatisticsRange(input);
   const leadWindow = dateWindow("l.discovered_at", range);
@@ -10655,22 +10747,24 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
   const aiVerificationWindow = dateWindow("av.created_at", range);
   const runWindow = dateWindow("cr.created_at", range);
 
-  const totalDiscovered = await countRows(db, "leads l", leadWindow, "l.archived_at IS NULL");
-  const activeLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL");
-  const qualifiedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status = 'qualified'");
+  const totalDiscovered = await countRows(db, "leads l", leadWindow, "l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const activeLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const qualifiedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status = 'qualified' AND l.tenant_id = ?", [tenantId]);
   const queueCandidates = await countRows(
     db,
     "leads l",
     leadWindow,
-    `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")} AND l.qualification_status IN ('qualified','needs_verification') AND l.status IN ('new','verified','contacted') AND l.score > 0`,
+    `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")} AND l.qualification_status IN ('qualified','needs_verification') AND l.status IN ('new','verified','contacted') AND l.score > 0 AND l.tenant_id = ?`,
+    [tenantId],
   );
-  const excludedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 1 AND l.archived_at IS NULL");
-  const demosCreated = await countRows(db, "demos d", demoWindow);
+  const excludedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 1 AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const demosCreated = await countRows(db, "demos d", demoWindow, "d.tenant_id = ?", [tenantId]);
   const qualifiedNoSiteLeads = await countRows(
     db,
     "leads l",
     leadWindow,
-    `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status = 'qualified' AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")}`,
+    `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status = 'qualified' AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")} AND l.tenant_id = ?`,
+    [tenantId],
   );
   const contactableLeads = await countRows(
     db,
@@ -10679,47 +10773,49 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND (COALESCE(l.phone, '') != '' OR EXISTS (
       SELECT 1 FROM ai_lead_verifications av
       WHERE av.lead_id = l.id
+        AND av.tenant_id = l.tenant_id
         AND (COALESCE(av.found_email, '') != '' OR COALESCE(av.found_phone, '') != '')
-    ))`,
+    )) AND l.tenant_id = ?`,
+    [tenantId],
   );
-  const contactedLeads = await countDistinctRows(db, "outreach_events oe", "oe.lead_id", outreachWindow);
-  const replies = await countRows(db, "leads l", replyWindow, "l.first_reply_at IS NOT NULL AND l.archived_at IS NULL");
-  const meetings = await countRows(db, "leads l", meetingWindow, "l.meeting_booked_at IS NOT NULL AND l.archived_at IS NULL");
-  const closedWon = await countRows(db, "leads l", statusWindow, "l.status = 'closed_won' AND l.archived_at IS NULL");
-  const closedLost = await countRows(db, "leads l", statusWindow, "l.status = 'closed_lost' AND l.archived_at IS NULL");
+  const contactedLeads = await countDistinctRows(db, "outreach_events oe", "oe.lead_id", outreachWindow, "oe.tenant_id = ?", [tenantId]);
+  const replies = await countRows(db, "leads l", replyWindow, "l.first_reply_at IS NOT NULL AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const meetings = await countRows(db, "leads l", meetingWindow, "l.meeting_booked_at IS NOT NULL AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const closedWon = await countRows(db, "leads l", statusWindow, "l.status = 'closed_won' AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const closedLost = await countRows(db, "leads l", statusWindow, "l.status = 'closed_lost' AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
 
   const economicsRow = await db.prepare(
     `SELECT COALESCE(SUM(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status IN ('qualified','needs_verification') THEN l.estimated_deal_value ELSE 0 END), 0) as pipeline_value,
             COALESCE(AVG(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.estimated_deal_value > 0 THEN l.estimated_deal_value END), 0) as average_deal_value
-     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL")}`
-  ).get(...leadWindow.params) as { pipeline_value: number; average_deal_value: number };
+     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL AND l.tenant_id = ?")}`
+  ).get(...leadWindow.params, tenantId) as { pipeline_value: number; average_deal_value: number };
 
   const apiRow = await db.prepare(
     `SELECT COALESCE(COUNT(*), 0) as calls, COALESCE(SUM(a.estimated_cost), 0) as cost
-     FROM api_usage_events a ${whereFromWindow(apiWindow, "a.success = 1 AND COALESCE(a.was_cached, 0) = 0")}`
-  ).get(...apiWindow.params) as { calls: number; cost: number };
+     FROM api_usage_events a ${whereFromWindow(apiWindow, "a.success = 1 AND COALESCE(a.was_cached, 0) = 0 AND a.tenant_id = ?")}`
+  ).get(...apiWindow.params, tenantId) as { calls: number; cost: number };
 
   const demoProofRow = await db.prepare(
     `SELECT COALESCE(COUNT(*), 0) as published,
             COALESCE(SUM(d.view_count), 0) as views
-     FROM demos d ${whereFromWindow(demoWindow, "d.is_published = 1 AND d.revoked_at IS NULL")}`
-  ).get(...demoWindow.params) as { published: number; views: number };
+     FROM demos d ${whereFromWindow(demoWindow, "d.is_published = 1 AND d.revoked_at IS NULL AND d.tenant_id = ?")}`
+  ).get(...demoWindow.params, tenantId) as { published: number; views: number };
 
   const failureRow = await db.prepare(
     `SELECT COALESCE(COUNT(cu.id), 0) as total_units,
             COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) as failed_units,
             COALESCE(COUNT(DISTINCT CASE WHEN cr.status IN ('blocked','error') THEN cr.id END), 0) as blocked_runs
      FROM crawl_runs cr
-     LEFT JOIN crawl_units cu ON cu.crawl_run_id = cr.id
-     ${whereFromWindow(runWindow, "1 = 1")}`
-  ).get(...runWindow.params) as { total_units: number; failed_units: number; blocked_runs: number };
+     LEFT JOIN crawl_units cu ON cu.crawl_run_id = cr.id AND cu.tenant_id = cr.tenant_id
+     ${whereFromWindow(runWindow, "cr.tenant_id = ?")}`
+  ).get(...runWindow.params, tenantId) as { total_units: number; failed_units: number; blocked_runs: number };
 
   const aiUsageRow = await db.prepare(
     `SELECT COALESCE(COUNT(*), 0) as calls,
             COALESCE(SUM(ai.estimated_cost), 0) as cost,
             COALESCE(SUM(CASE WHEN COALESCE(ai.was_cached, 0) = 1 THEN 1 ELSE 0 END), 0) as cached
-     FROM ai_usage_events ai ${whereFromWindow(aiUsageWindow, "ai.success = 1")}`
-  ).get(...aiUsageWindow.params) as { calls: number; cost: number; cached: number };
+     FROM ai_usage_events ai ${whereFromWindow(aiUsageWindow, "ai.success = 1 AND ai.tenant_id = ?")}`
+  ).get(...aiUsageWindow.params, tenantId) as { calls: number; cost: number; cached: number };
 
   const aiVerificationRow = await db.prepare(
     `SELECT COALESCE(COUNT(*), 0) as verifications,
@@ -10727,8 +10823,8 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
             COALESCE(SUM(CASE WHEN av.status = 'weak_site_found' THEN 1 ELSE 0 END), 0) as weak_site_found,
             COALESCE(SUM(CASE WHEN av.status IN ('no_site_found','weak_site_found') THEN 1 ELSE 0 END), 0) as website_opportunity_found,
             COALESCE(SUM(CASE WHEN av.status IN ('uncertain','mismatch') THEN 1 ELSE 0 END), 0) as uncertain
-     FROM ai_lead_verifications av ${whereFromWindow(aiVerificationWindow, "av.error IS NULL")}`
-  ).get(...aiVerificationWindow.params) as {
+     FROM ai_lead_verifications av ${whereFromWindow(aiVerificationWindow, "av.error IS NULL AND av.tenant_id = ?")}`
+  ).get(...aiVerificationWindow.params, tenantId) as {
     verifications: number;
     usable_site_found: number;
     weak_site_found: number;
@@ -10746,17 +10842,17 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
        COALESCE(SUM(CASE WHEN l.ai_verification_status = 'no_site_found' OR l.ai_website_viability_status = 'directory_only' THEN 1 ELSE 0 END), 0) as ai_no_site,
        COALESCE(SUM(CASE WHEN l.ai_verification_status = 'site_found' AND l.ai_website_viability_status = 'usable' THEN 1 ELSE 0 END), 0) as usable_site_found,
        COALESCE(SUM(CASE WHEN l.quality_bucket = 'broken_site_opportunity' OR l.ai_website_viability_status IN ('broken','parked','placeholder') THEN 1 ELSE 0 END), 0) as broken_site_found
-     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL")}`
-  ).get(...leadWindow.params) as Record<string, number>;
+     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL AND l.tenant_id = ?")}`
+  ).get(...leadWindow.params, tenantId) as Record<string, number>;
   const qualityPipelineRows = await getQualityValueRows(
     db,
     `SELECT COALESCE(l.quality_bucket, 'needs_ai_verify') as key,
             COUNT(*) as count,
             COALESCE(SUM(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL THEN l.estimated_deal_value ELSE 0 END), 0) as value
-     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL")}
+     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.quality_bucket, 'needs_ai_verify')
      ORDER BY value DESC, count DESC`,
-    leadWindow.params,
+    [...leadWindow.params, tenantId],
     "bucket",
   );
   const topReadyByType = await getQualityValueRows(
@@ -10764,11 +10860,11 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     `SELECT COALESCE(l.business_type, 'local_services') as key,
             COUNT(*) as count,
             COALESCE(SUM(l.estimated_deal_value), 0) as value
-     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.quality_bucket = 'ready_to_call'")}
+     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.quality_bucket = 'ready_to_call' AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')
      ORDER BY count DESC, value DESC
      LIMIT 8`,
-    leadWindow.params,
+    [...leadWindow.params, tenantId],
     "businessType",
   );
   const topValueByType = await getQualityValueRows(
@@ -10776,27 +10872,29 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     `SELECT COALESCE(l.business_type, 'local_services') as key,
             COUNT(*) as count,
             COALESCE(SUM(l.estimated_deal_value), 0) as value
-     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.quality_bucket IN ('ready_to_call','broken_site_opportunity')")}
+     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.quality_bucket IN ('ready_to_call','broken_site_opportunity') AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')
      ORDER BY value DESC, count DESC
      LIMIT 8`,
-    leadWindow.params,
+    [...leadWindow.params, tenantId],
     "businessType",
   );
 
-  const businessTypes = await getStatisticsBusinessTypes(db, range);
-  const verification = await getVerificationCoverage(db, leadWindow);
+  const businessTypes = await getStatisticsBusinessTypes(db, range, tenantId);
+  const verification = await getVerificationCoverage(db, leadWindow, tenantId);
   const failedUnits = await countRows(
     db,
-    "crawl_units cu INNER JOIN crawl_runs cr ON cr.id = cu.crawl_run_id",
+    "crawl_units cu INNER JOIN crawl_runs cr ON cr.id = cu.crawl_run_id AND cr.tenant_id = cu.tenant_id",
     runWindow,
-    "cu.status = 'failed'",
+    "cu.status = 'failed' AND cu.tenant_id = ?",
+    [tenantId],
   );
   const enrichmentBacklog = await countRows(
     db,
     "leads l",
     { clause: "", params: [] },
-    "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.enrichment_status = 'pending' AND l.score > 0",
+    "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.enrichment_status = 'pending' AND l.score > 0 AND l.tenant_id = ?",
+    [tenantId],
   );
 
   return {
@@ -10868,24 +10966,24 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     },
     businessTypes,
     dataQuality: {
-      websiteStatus: await getLeadBreakdown(db, "website_status", leadWindow),
-      qualificationStatus: await getLeadBreakdown(db, "qualification_status", leadWindow),
-      enrichmentStatus: await getLeadBreakdown(db, "enrichment_status", leadWindow),
-      exclusionReasons: await getExclusionReasonBreakdown(db, leadWindow),
+      websiteStatus: await getLeadBreakdown(db, "website_status", leadWindow, tenantId),
+      qualificationStatus: await getLeadBreakdown(db, "qualification_status", leadWindow, tenantId),
+      enrichmentStatus: await getLeadBreakdown(db, "enrichment_status", leadWindow, tenantId),
+      exclusionReasons: await getExclusionReasonBreakdown(db, leadWindow, tenantId),
       verificationAverage: verification.average,
       verificationCheckedLeads: verification.checkedLeads,
     },
     operations: {
-      apiByEndpoint: await getApiBreakdown(db, "endpoint", apiWindow),
-      apiBySku: await getApiBreakdown(db, "sku", apiWindow),
-      crawlRunsByStatus: await getCrawlRunBreakdown(db, runWindow),
+      apiByEndpoint: await getApiBreakdown(db, "endpoint", apiWindow, tenantId),
+      apiBySku: await getApiBreakdown(db, "sku", apiWindow, tenantId),
+      crawlRunsByStatus: await getCrawlRunBreakdown(db, runWindow, tenantId),
       failedUnits,
       enrichmentBacklog,
     },
   };
 }
 
-async function getStatisticsBusinessTypes(db: DbClient, range: ResolvedStatisticsRange): Promise<StatisticsBusinessTypeRow[]> {
+async function getStatisticsBusinessTypes(db: DbClient, range: ResolvedStatisticsRange, tenantId: string): Promise<StatisticsBusinessTypeRow[]> {
   const leadWindow = dateWindow("l.discovered_at", range);
   const outreachWindow = dateWindow("oe.created_at", range);
   const demoWindow = dateWindow("d.created_at", range);
@@ -10906,39 +11004,39 @@ async function getStatisticsBusinessTypes(db: DbClient, range: ResolvedStatistic
             COALESCE(AVG(l.score), 0) as average_score,
             COALESCE(AVG(CASE WHEN l.estimated_deal_value > 0 THEN l.estimated_deal_value END), 0) as average_deal_value,
             COALESCE(SUM(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.qualification_status IN ('qualified','needs_verification') THEN l.estimated_deal_value ELSE 0 END), 0) as pipeline_value
-     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL")}
+     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`
-  ).all(...leadWindow.params) as Array<Record<string, unknown>>;
+  ).all(...leadWindow.params, tenantId) as Array<Record<string, unknown>>;
 
   const contacted = await countByBusinessType(db,
     `SELECT COALESCE(l.business_type, 'local_services') as business_type, COUNT(DISTINCT oe.lead_id) as count
-     FROM outreach_events oe INNER JOIN leads l ON l.id = oe.lead_id ${whereFromWindow(outreachWindow)}
+     FROM outreach_events oe INNER JOIN leads l ON l.id = oe.lead_id AND l.tenant_id = oe.tenant_id ${whereFromWindow(outreachWindow, "oe.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`,
-    outreachWindow.params,
+    [...outreachWindow.params, tenantId],
   );
   const demos = await countByBusinessType(db,
     `SELECT COALESCE(l.business_type, 'local_services') as business_type, COUNT(*) as count
-     FROM demos d INNER JOIN leads l ON l.id = d.lead_id ${whereFromWindow(demoWindow)}
+     FROM demos d INNER JOIN leads l ON l.id = d.lead_id AND l.tenant_id = d.tenant_id ${whereFromWindow(demoWindow, "d.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`,
-    demoWindow.params,
+    [...demoWindow.params, tenantId],
   );
   const meetings = await countByBusinessType(db,
     `SELECT COALESCE(l.business_type, 'local_services') as business_type, COUNT(*) as count
-     FROM leads l ${whereFromWindow(meetingWindow, "l.meeting_booked_at IS NOT NULL")}
+     FROM leads l ${whereFromWindow(meetingWindow, "l.meeting_booked_at IS NOT NULL AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`,
-    meetingWindow.params,
+    [...meetingWindow.params, tenantId],
   );
   const won = await countByBusinessType(db,
     `SELECT COALESCE(l.business_type, 'local_services') as business_type, COUNT(*) as count
-     FROM leads l ${whereFromWindow(statusWindow, "l.status = 'closed_won'")}
+     FROM leads l ${whereFromWindow(statusWindow, "l.status = 'closed_won' AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`,
-    statusWindow.params,
+    [...statusWindow.params, tenantId],
   );
   const lost = await countByBusinessType(db,
     `SELECT COALESCE(l.business_type, 'local_services') as business_type, COUNT(*) as count
-     FROM leads l ${whereFromWindow(statusWindow, "l.status = 'closed_lost'")}
+     FROM leads l ${whereFromWindow(statusWindow, "l.status = 'closed_lost' AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`,
-    statusWindow.params,
+    [...statusWindow.params, tenantId],
   );
 
   const baseByType = new Map(baseRows.map((row) => [String(row.business_type), row]));
@@ -10968,13 +11066,13 @@ async function getStatisticsBusinessTypes(db: DbClient, range: ResolvedStatistic
   }).sort((a, b) => b.qualified - a.qualified || b.active - a.active || b.total - a.total);
 }
 
-async function getLeadBreakdown(db: DbClient, column: "website_status" | "qualification_status" | "enrichment_status", window: SqlWindow): Promise<StatisticsBreakdownRow[]> {
+async function getLeadBreakdown(db: DbClient, column: "website_status" | "qualification_status" | "enrichment_status", window: SqlWindow, tenantId: string): Promise<StatisticsBreakdownRow[]> {
   const rows = await db.prepare(
     `SELECT COALESCE(l.${column}, 'unknown') as key, COUNT(*) as count
-     FROM leads l ${whereFromWindow(window)}
+     FROM leads l ${whereFromWindow(window, "l.tenant_id = ?")}
      GROUP BY COALESCE(l.${column}, 'unknown')
      ORDER BY count DESC`
-  ).all(...window.params) as Array<{ key: string; count: number }>;
+  ).all(...window.params, tenantId) as Array<{ key: string; count: number }>;
   return rows.map((row) => ({
     key: row.key,
     label: row.key.replace(/_/g, " "),
@@ -10982,24 +11080,24 @@ async function getLeadBreakdown(db: DbClient, column: "website_status" | "qualif
   }));
 }
 
-async function getExclusionReasonBreakdown(db: DbClient, window: SqlWindow): Promise<StatisticsBreakdownRow[]> {
+async function getExclusionReasonBreakdown(db: DbClient, window: SqlWindow, tenantId: string): Promise<StatisticsBreakdownRow[]> {
   const rows = await db.prepare(
     `SELECT COALESCE(NULLIF(TRIM(l.exclusion_reason), ''), 'No reason recorded') as key, COUNT(*) as count
-     FROM leads l ${whereFromWindow(window, "COALESCE(l.is_excluded, 0) = 1")}
+     FROM leads l ${whereFromWindow(window, "COALESCE(l.is_excluded, 0) = 1 AND l.tenant_id = ?")}
      GROUP BY COALESCE(NULLIF(TRIM(l.exclusion_reason), ''), 'No reason recorded')
      ORDER BY count DESC
      LIMIT 8`
-  ).all(...window.params) as Array<{ key: string; count: number }>;
+  ).all(...window.params, tenantId) as Array<{ key: string; count: number }>;
   return rows.map((row) => ({ key: row.key, label: row.key, count: row.count }));
 }
 
-async function getApiBreakdown(db: DbClient, column: "endpoint" | "sku", window: SqlWindow): Promise<Array<{ key: string; calls: number; cost: number }>> {
+async function getApiBreakdown(db: DbClient, column: "endpoint" | "sku", window: SqlWindow, tenantId: string): Promise<Array<{ key: string; calls: number; cost: number }>> {
   const rows = await db.prepare(
     `SELECT a.${column} as key, COUNT(*) as calls, COALESCE(SUM(a.estimated_cost), 0) as cost
-     FROM api_usage_events a ${whereFromWindow(window, "a.success = 1 AND COALESCE(a.was_cached, 0) = 0")}
+     FROM api_usage_events a ${whereFromWindow(window, "a.success = 1 AND COALESCE(a.was_cached, 0) = 0 AND a.tenant_id = ?")}
      GROUP BY a.${column}
      ORDER BY cost DESC, calls DESC`
-  ).all(...window.params) as Array<Record<string, unknown>>;
+  ).all(...window.params, tenantId) as Array<Record<string, unknown>>;
   return rows.map((row) => ({
     key: String((row as Record<string, unknown>).key),
     calls: Number((row as Record<string, unknown>).calls ?? 0),
@@ -11007,20 +11105,20 @@ async function getApiBreakdown(db: DbClient, column: "endpoint" | "sku", window:
   }));
 }
 
-async function getCrawlRunBreakdown(db: DbClient, window: SqlWindow): Promise<StatisticsBreakdownRow[]> {
+async function getCrawlRunBreakdown(db: DbClient, window: SqlWindow, tenantId: string): Promise<StatisticsBreakdownRow[]> {
   const rows = await db.prepare(
     `SELECT cr.status as key, COUNT(*) as count
-     FROM crawl_runs cr ${whereFromWindow(window)}
+     FROM crawl_runs cr ${whereFromWindow(window, "cr.tenant_id = ?")}
      GROUP BY cr.status
      ORDER BY count DESC`
-  ).all(...window.params) as Array<{ key: string; count: number }>;
+  ).all(...window.params, tenantId) as Array<{ key: string; count: number }>;
   return rows.map((row) => ({ key: row.key, label: row.key.replace(/_/g, " "), count: row.count }));
 }
 
-async function getVerificationCoverage(db: DbClient, window: SqlWindow): Promise<{ average: number; checkedLeads: number }> {
+async function getVerificationCoverage(db: DbClient, window: SqlWindow, tenantId: string): Promise<{ average: number; checkedLeads: number }> {
   const rows = await db.prepare(
-    `SELECT l.verification FROM leads l ${whereFromWindow(window)}`
-  ).all(...window.params) as Array<{ verification: string | null }>;
+    `SELECT l.verification FROM leads l ${whereFromWindow(window, "l.tenant_id = ?")}`
+  ).all(...window.params, tenantId) as Array<{ verification: string | null }>;
   if (rows.length === 0) return { average: 0, checkedLeads: 0 };
 
   let totalCoverage = 0;
@@ -11055,13 +11153,13 @@ function whereFromWindow(window: SqlWindow, extra?: string): string {
   return conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 }
 
-async function countRows(db: DbClient, from: string, window: SqlWindow, extra?: string): Promise<number> {
-  const row = await db.prepare(`SELECT COUNT(*) as count FROM ${from} ${whereFromWindow(window, extra)}`).get(...window.params) as { count: number };
+async function countRows(db: DbClient, from: string, window: SqlWindow, extra?: string, extraParams: string[] = []): Promise<number> {
+  const row = await db.prepare(`SELECT COUNT(*) as count FROM ${from} ${whereFromWindow(window, extra)}`).get(...window.params, ...extraParams) as { count: number };
   return row.count ?? 0;
 }
 
-async function countDistinctRows(db: DbClient, from: string, column: string, window: SqlWindow, extra?: string): Promise<number> {
-  const row = await db.prepare(`SELECT COUNT(DISTINCT ${column}) as count FROM ${from} ${whereFromWindow(window, extra)}`).get(...window.params) as { count: number };
+async function countDistinctRows(db: DbClient, from: string, column: string, window: SqlWindow, extra?: string, extraParams: string[] = []): Promise<number> {
+  const row = await db.prepare(`SELECT COUNT(DISTINCT ${column}) as count FROM ${from} ${whereFromWindow(window, extra)}`).get(...window.params, ...extraParams) as { count: number };
   return row.count ?? 0;
 }
 
