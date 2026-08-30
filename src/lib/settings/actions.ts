@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import {
   ensureDbReady,
   getSettings as querySettings,
@@ -15,6 +16,12 @@ import {
   type Settings,
 } from "@/lib/db/queries";
 import { requirePermission } from "@/lib/auth";
+import type { TenantSessionSelector } from "@/lib/app-users";
+import { withTenantDbContext } from "@/lib/db";
+import { requireTenantPermission } from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
+import { createTenantQueryRepository } from "@/lib/tenancy/queries";
+import { tenantPolicySchema } from "@/lib/tenancy/schemas";
 import { z } from "zod";
 
 const openAiApiKeySchema = z.string().trim().min(20).max(500).refine((value) => !/\s/.test(value), {
@@ -28,6 +35,37 @@ const googlePlacesApiKeySchema = z.string().trim().min(20).max(500).refine((valu
 const googleMapsBrowserApiKeySchema = z.string().trim().min(20).max(500).refine((value) => !/\s/.test(value), {
   message: "API key cannot contain spaces.",
 });
+
+export class TenantPolicySettingsUnavailableError extends Error {
+  readonly code = "TENANT_POLICY_SETTINGS_UNAVAILABLE" as const;
+
+  constructor() {
+    super("Tenant policy settings are unavailable.");
+    this.name = "TenantPolicySettingsUnavailableError";
+  }
+}
+
+/**
+ * Reads tenant-owned policy settings through the canonical tenant boundary.
+ * Provider credentials intentionally remain outside this action and continue
+ * to require the separate platform settings permission below.
+ */
+export async function getTenantPolicySettingsAction(selector: TenantSessionSelector) {
+  const tenantSession = await requireTenantPermission(selector, "tenant:read", {
+    action: "settings.tenant_policy.read",
+  });
+
+  return runWithTenantContext(tenantSession, `tenant-settings-read:${randomUUID()}`, () =>
+    withTenantDbContext(async (db) => {
+      await ensureDbReady();
+      const policy = await createTenantQueryRepository(db).getCurrentTenantPolicy(tenantSession.tenantId);
+      const parsed = tenantPolicySchema.safeParse(policy);
+      if (!parsed.success || parsed.data.tenantId !== tenantSession.tenantId) {
+        throw new TenantPolicySettingsUnavailableError();
+      }
+      return parsed.data;
+    }));
+}
 
 export async function getSettingsAction(): Promise<Settings> {
   await requirePermission("settings:manage");
