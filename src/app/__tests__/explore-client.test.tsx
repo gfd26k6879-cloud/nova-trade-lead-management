@@ -17,9 +17,13 @@ vi.mock("@/lib/leads/actions", () => ({
   claimLeadAction: vi.fn(),
 }));
 
-import { ExploreClient } from "@/app/(protected)/explore/explore-client";
+import { buildExploreMapRequest, ExploreClient, type ExploreMapScope } from "@/app/(protected)/explore/explore-client";
 
-function renderExplore(role: "admin" | "researcher" = "admin", leads: Lead[] = []) {
+const TENANT_ID = "10000000-0000-4000-8000-000000000001";
+const WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
+const TENANT_WIDE_SCOPE: ExploreMapScope = { tenantId: TENANT_ID, workspaceId: null };
+
+function renderExplore(role: "admin" | "researcher" = "admin", leads: Lead[] = [], mapScope: ExploreMapScope | null = TENANT_WIDE_SCOPE) {
   return renderToStaticMarkup(
     <ExploreClient
       leads={leads}
@@ -28,11 +32,19 @@ function renderExplore(role: "admin" | "researcher" = "admin", leads: Lead[] = [
       totalMapped={0}
       mapPointLimit={200}
       zipCoverage={[]}
-      filters={{ mode: "work_ready", sortBy: "opportunity", view: "cards", archived: "active", includeExcluded: false }}
+      filters={{
+        mode: "work_ready",
+        sortBy: "opportunity",
+        view: "cards",
+        map: currentParams.get("map") ?? undefined,
+        archived: "active",
+        includeExcluded: false,
+      }}
       scoreThresholds={getDefaultScoreBandThresholds()}
       businessTypeCounts={[{ id: "dental", label: "Dental", total: 3, active: 2 }]}
       currentUser={{ userId: "user-1", email: "user@example.com", role }}
       googleMapsApiKey={null}
+      mapScope={mapScope}
     />,
   );
 }
@@ -249,5 +261,37 @@ describe("ExploreClient search surface", () => {
     expect(tokenSearch).toContain("rootRef.current?.contains(target)");
     expect(tokenSearch).toContain("setOpen(false)");
     expect(tokenSearch).toContain("setBuilderOpen(false)");
+  });
+
+  it("uses only trusted tenant-wide scope for the map request", () => {
+    const request = buildExploreMapRequest(
+      `map=open&city=Denver&tenantId=attacker&workspaceId=${WORKSPACE_ID}&includeTotal=true`,
+      TENANT_WIDE_SCOPE,
+    );
+    const url = new URL(request ?? "", "https://example.test");
+
+    expect(url.pathname).toBe("/api/explore/map");
+    expect(url.searchParams.get("tenantId")).toBe(TENANT_ID);
+    expect(url.searchParams.has("workspaceId")).toBe(false);
+    expect(url.searchParams.has("includeTotal")).toBe(false);
+    expect(url.searchParams.get("city")).toBe("Denver");
+    expect(url.searchParams.get("limit")).toBe("200");
+  });
+
+  it("does not build a map request without a canonical tenant-wide scope", () => {
+    expect(buildExploreMapRequest("map=open", null)).toBeNull();
+    expect(buildExploreMapRequest("map=open", { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID })).toBeNull();
+    expect(buildExploreMapRequest("map=open", { tenantId: "not-a-uuid", workspaceId: null })).toBeNull();
+  });
+
+  it("renders an accessible fail-closed map state when trusted scope is unavailable", () => {
+    currentParams = new URLSearchParams("map=open&tenantId=attacker-controlled");
+    const html = renderExplore("admin", [], null);
+
+    expect(html).toContain("Map unavailable");
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('data-map-state="unavailable"');
+    expect(html).toContain("A trusted tenant-wide session could not be verified.");
+    expect(html).not.toContain("Retry map");
   });
 });

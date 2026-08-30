@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { requirePermission } from "@/lib/auth";
+import { getTenantSession, requirePermission } from "@/lib/auth";
 import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
 import { ensureDbReady, getBusinessTypeCounts, getLeads, getScoreBandThresholds } from "@/lib/db/queries";
 import { DEFAULT_MAP_POINT_LIMIT, buildExploreQueryState, type ExploreParams } from "@/lib/explore-filters";
@@ -17,6 +17,10 @@ interface Props {
 export default async function ExplorePage({ searchParams }: Props) {
 const logRouteTiming = startRouteTiming("/explore");
   const session = await requirePermission("view:workspace");
+  const tenantSession = await getTenantSession({});
+  const mapScope = tenantSession?.userId === session.userId
+    ? { tenantId: tenantSession.tenantId, workspaceId: tenantSession.workspaceId }
+    : null;
   const params = await searchParams;
   const queryState = buildExploreQueryState(params);
   const filters = constrainExploreFiltersForSession(session, queryState.filters);
@@ -61,6 +65,7 @@ const logRouteTiming = startRouteTiming("/explore");
       businessTypeCounts={loaded.businessTypeCounts}
       currentUser={{ userId: session.userId, email: session.email, role: session.role }}
       googleMapsApiKey={null}
+      mapScope={mapScope}
     />
   );
 }

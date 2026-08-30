@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 const authMocks = vi.hoisted(() => ({
+  getTenantSession: vi.fn(),
   requirePermission: vi.fn(),
 }));
 
@@ -28,9 +29,13 @@ vi.mock("@/app/(protected)/explore/explore-client", () => ({
 
 import ExplorePage from "@/app/(protected)/explore/page";
 
+const TENANT_ID = "10000000-0000-4000-8000-000000000001";
+const WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
+
 describe("ExplorePage", () => {
   it("renders a retryable unavailable state when lead loading times out", async () => {
     authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "admin@example.com", role: "admin" });
+    authMocks.getTenantSession.mockResolvedValue(null);
     const timeout = Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" });
     dbIndexMocks.withDbStatementTimeout.mockRejectedValue(timeout);
 
@@ -47,6 +52,7 @@ describe("ExplorePage", () => {
 
   it("renders lead explorer when the timeout-wrapped read succeeds", async () => {
     authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "admin@example.com", role: "admin" });
+    authMocks.getTenantSession.mockResolvedValue(null);
     queryMocks.ensureDbReady.mockResolvedValue(undefined);
     queryMocks.getScoreBandThresholds.mockResolvedValue({});
     queryMocks.getBusinessTypeCounts.mockResolvedValue([]);
@@ -62,6 +68,7 @@ describe("ExplorePage", () => {
 
   it("passes only constrained active inventory filters to researcher Explore reads", async () => {
     authMocks.requirePermission.mockResolvedValue({ userId: "researcher-1", email: "one@example.com", role: "researcher" });
+    authMocks.getTenantSession.mockResolvedValue(null);
     queryMocks.ensureDbReady.mockResolvedValue(undefined);
     queryMocks.getScoreBandThresholds.mockResolvedValue({});
     queryMocks.getBusinessTypeCounts.mockResolvedValue([]);
@@ -93,5 +100,52 @@ describe("ExplorePage", () => {
       status: undefined,
       visibleToUserId: "researcher-1",
     }));
+  });
+
+  it("passes only the identity-bound canonical map scope to the client", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "admin@example.com", role: "admin" });
+    authMocks.getTenantSession.mockResolvedValue({
+      userId: "user-1",
+      email: "admin@example.com",
+      displayName: null,
+      tenantId: TENANT_ID,
+      workspaceId: null,
+      membershipId: "30000000-0000-4000-8000-000000000001",
+      roleBindingId: "40000000-0000-4000-8000-000000000001",
+      role: "owner",
+    });
+    queryMocks.ensureDbReady.mockResolvedValue(undefined);
+    queryMocks.getScoreBandThresholds.mockResolvedValue({});
+    queryMocks.getBusinessTypeCounts.mockResolvedValue([]);
+    queryMocks.getLeads.mockResolvedValue({ leads: [], total: 0 });
+    dbIndexMocks.withDbStatementTimeout.mockImplementation((_timeoutMs: number, fn: () => Promise<unknown>) => fn());
+
+    const node = await ExplorePage({ searchParams: Promise.resolve({ tenantId: "attacker-controlled" } as never) });
+
+    expect(authMocks.getTenantSession).toHaveBeenCalledWith({});
+    expect((node as React.ReactElement<{ mapScope: unknown }>).props.mapScope).toEqual({ tenantId: TENANT_ID, workspaceId: null });
+  });
+
+  it("fails the client map scope closed when canonical and legacy identities differ", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "admin@example.com", role: "admin" });
+    authMocks.getTenantSession.mockResolvedValue({
+      userId: "other-user",
+      email: "other@example.com",
+      displayName: null,
+      tenantId: TENANT_ID,
+      workspaceId: WORKSPACE_ID,
+      membershipId: "30000000-0000-4000-8000-000000000001",
+      roleBindingId: "40000000-0000-4000-8000-000000000001",
+      role: "owner",
+    });
+    queryMocks.ensureDbReady.mockResolvedValue(undefined);
+    queryMocks.getScoreBandThresholds.mockResolvedValue({});
+    queryMocks.getBusinessTypeCounts.mockResolvedValue([]);
+    queryMocks.getLeads.mockResolvedValue({ leads: [], total: 0 });
+    dbIndexMocks.withDbStatementTimeout.mockImplementation((_timeoutMs: number, fn: () => Promise<unknown>) => fn());
+
+    const node = await ExplorePage({ searchParams: Promise.resolve({}) });
+
+    expect((node as React.ReactElement<{ mapScope: unknown }>).props.mapScope).toBeNull();
   });
 });

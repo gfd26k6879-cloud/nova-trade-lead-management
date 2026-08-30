@@ -27,7 +27,12 @@ import { ExploreTokenSearch } from "./explore-token-search";
 
 type ExplorerView = "cards" | "table";
 type GoogleMapsLoadState = "loading" | "ready" | "error";
-type MapFetchState = "idle" | "loading" | "ready" | "error" | "timeout";
+type MapFetchState = "idle" | "loading" | "ready" | "error" | "timeout" | "unavailable";
+
+export interface ExploreMapScope {
+  tenantId: string;
+  workspaceId: string | null;
+}
 
 type GoogleLatLngLiteral = { lat: number; lng: number };
 
@@ -124,6 +129,7 @@ interface Props {
   businessTypeCounts: Array<{ id: string; label: string; total: number; active: number }>;
   currentUser: { userId: string; email: string; role: AppRole };
   googleMapsApiKey: string | null;
+  mapScope: ExploreMapScope | null;
 }
 
 const SORT_OPTIONS = [
@@ -139,6 +145,8 @@ const SORT_OPTIONS = [
 ];
 const MAP_LIST_LIMIT = 80;
 const MAP_FETCH_TIMEOUT_MS = 10_000;
+const MAP_SCOPE_UNAVAILABLE_MESSAGE = "A trusted tenant-wide session could not be verified. The lead list remains usable.";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 type BadgeTone = "neutral" | "danger" | "success" | "warning" | "accent";
 
 interface BadgeMetadata {
@@ -159,6 +167,7 @@ export function ExploreClient({
   businessTypeCounts,
   currentUser,
   googleMapsApiKey,
+  mapScope,
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -166,9 +175,13 @@ export function ExploreClient({
   const [message, setMessage] = useState<string | null>(null);
   const [manualLeadOpen, setManualLeadOpen] = useState(false);
   const [mapReloadToken, setMapReloadToken] = useState(0);
-  const [mapFetchState, setMapFetchState] = useState<MapFetchState>(filters.map === "open" ? "loading" : "idle");
-  const [mapError, setMapError] = useState<string | null>(null);
+  const mapScopeReady = mapScope !== null && mapScope.workspaceId === null && UUID.test(mapScope.tenantId);
+  const [mapFetchState, setMapFetchState] = useState<MapFetchState>(
+    filters.map === "open" ? (mapScopeReady ? "loading" : "unavailable") : "idle",
+  );
+  const [mapError, setMapError] = useState<string | null>(mapScopeReady ? null : MAP_SCOPE_UNAVAILABLE_MESSAGE);
   const [mapData, setMapData] = useState({
+    scopeTenantId: mapScopeReady ? mapScope?.tenantId ?? null : null,
     points: mapPoints,
     totalMapped,
     mapPointLimit,
@@ -186,9 +199,15 @@ export function ExploreClient({
   const mapDrawerRef = useRef<HTMLDivElement | null>(null);
   const searchParamsString = searchParams.toString();
   const showColoradoAreaPresets = shouldShowColoradoAreaPresets(filters);
-  const selectedMapPoint = mapData.points.find((lead) => lead.id === selectedLeadId) ?? mapData.points[0] ?? null;
-  const zipCoverageWithLeadCounts = useMemo(() => mergeZipCoverageWithMapPoints(mapData.zipCoverage, mapData.points), [mapData.zipCoverage, mapData.points]);
-  const visibleMapList = useMemo(() => mapData.points.slice(0, MAP_LIST_LIMIT), [mapData.points]);
+  const mapDataMatchesScope = mapScopeReady && mapData.scopeTenantId === mapScope?.tenantId;
+  const scopedMapPoints = useMemo(() => mapDataMatchesScope ? mapData.points : [], [mapData.points, mapDataMatchesScope]);
+  const scopedZipCoverage = useMemo(() => mapDataMatchesScope ? mapData.zipCoverage : [], [mapData.zipCoverage, mapDataMatchesScope]);
+  const selectedMapPoint = scopedMapPoints.find((lead) => lead.id === selectedLeadId) ?? scopedMapPoints[0] ?? null;
+  const zipCoverageWithLeadCounts = useMemo(
+    () => mergeZipCoverageWithMapPoints(scopedZipCoverage, scopedMapPoints),
+    [scopedMapPoints, scopedZipCoverage],
+  );
+  const visibleMapList = useMemo(() => scopedMapPoints.slice(0, MAP_LIST_LIMIT), [scopedMapPoints]);
   const pageUnclaimed = leads.filter((lead) => !lead.assigned_to_user_id).length;
   const pageMapped = leads.filter((lead) => typeof lead.lat === "number" && typeof lead.lng === "number").length;
   const pageNoWebsite = leads.filter((lead) => lead.website_status === "none").length;
@@ -259,6 +278,15 @@ export function ExploreClient({
       return;
     }
 
+    const requestUrl = buildExploreMapRequest(searchParamsString, mapScope);
+    if (!requestUrl) {
+      const unavailableStateId = window.setTimeout(() => {
+        setMapFetchState("unavailable");
+        setMapError(MAP_SCOPE_UNAVAILABLE_MESSAGE);
+      }, 0);
+      return () => window.clearTimeout(unavailableStateId);
+    }
+
     const controller = new AbortController();
     let timedOut = false;
     const loadingStateId = window.setTimeout(() => {
@@ -270,11 +298,7 @@ export function ExploreClient({
       timedOut = true;
       controller.abort();
     }, MAP_FETCH_TIMEOUT_MS);
-    const params = new URLSearchParams(searchParamsString);
-    params.set("limit", "200");
-    params.delete("includeTotal");
-
-    fetch(`/api/explore/map?${params.toString()}`, { signal: controller.signal })
+    fetch(requestUrl, { signal: controller.signal })
       .then(async (response) => {
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
@@ -291,6 +315,7 @@ export function ExploreClient({
       .then((payload) => {
         const nextPoints = payload.points ?? [];
         setMapData({
+          scopeTenantId: mapScope?.tenantId ?? null,
           points: nextPoints,
           totalMapped: Number(payload.totalMapped ?? nextPoints.length),
           mapPointLimit: Number(payload.mapPointLimit ?? 200),
@@ -321,7 +346,7 @@ export function ExploreClient({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [leads, mapOpen, mapReloadToken, searchParamsString]);
+  }, [leads, mapOpen, mapReloadToken, mapScope, searchParamsString]);
 
   return (
     <PageShell
@@ -382,9 +407,10 @@ export function ExploreClient({
               </SegmentButton>
               <span className="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium" style={{ background: "var(--chip-bg)", border: "1px solid var(--chip-border)", color: "var(--accent)" }}>
                 {mapFetchState === "loading" && "Map loading"}
-                {mapFetchState === "ready" && `${mapData.points.length} shown / ${mapData.totalMapped} mapped`}
+                {mapFetchState === "ready" && `${scopedMapPoints.length} shown / ${mapDataMatchesScope ? mapData.totalMapped : 0} mapped`}
                 {mapFetchState === "error" && "Map error - retry"}
                 {mapFetchState === "timeout" && "Map taking too long - retry"}
+                {mapFetchState === "unavailable" && "Map unavailable"}
                 {mapFetchState === "idle" && "Map available"}
               </span>
               <SegmentButton active={view === "cards"} onClick={() => pushFilters({ view: "cards" })}>Cards</SegmentButton>
@@ -400,13 +426,13 @@ export function ExploreClient({
       {mapOpen && (
         <section id="explore-map-drawer" ref={mapDrawerRef} tabIndex={-1} className="grid scroll-mt-24 gap-5 outline-none xl:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.65fr)]">
           <LeadMap
-            points={mapData.points}
+            points={scopedMapPoints}
             zipCoverage={zipCoverageWithLeadCounts}
             total={total}
-            totalMapped={mapData.totalMapped}
+            totalMapped={mapDataMatchesScope ? mapData.totalMapped : 0}
             mapPointLimit={mapData.mapPointLimit}
             selectedLeadId={selectedMapPoint?.id ?? null}
-            googleMapsApiKey={mapData.googleMapsApiKey}
+            googleMapsApiKey={mapDataMatchesScope ? mapData.googleMapsApiKey : null}
             mapState={mapFetchState}
             mapError={mapError}
             onSelect={setSelectedLeadId}
@@ -418,7 +444,7 @@ export function ExploreClient({
             points={visibleMapList}
             selectedPoint={selectedMapPoint}
             selectedLeadId={selectedMapPoint?.id ?? null}
-            totalMapped={mapData.totalMapped}
+            totalMapped={mapDataMatchesScope ? mapData.totalMapped : 0}
             listLimit={MAP_LIST_LIMIT}
             currentUserId={currentUser.userId}
             scoreThresholds={scoreThresholds}
@@ -559,6 +585,14 @@ function LeadMap({
         />
       )}
 
+      {mapState === "unavailable" && (
+        <MapLoadState
+          title="Map unavailable"
+          detail={mapError ?? MAP_SCOPE_UNAVAILABLE_MESSAGE}
+          onHide={onHide}
+        />
+      )}
+
       {mapState === "ready" && !googleMapsEnabled && (
         <div className="rounded-xl p-6 text-sm" style={{ background: "var(--search-surface)", border: "1px solid var(--search-border)", color: "var(--text-secondary)" }}>
           Google Maps is not configured for this environment. Add the browser key in Settings or Vercel, then reopen the drawer.
@@ -613,20 +647,37 @@ function MapLoadState({
 }: {
   title: string;
   detail: string;
-  retryLabel: string;
-  onRetry: () => void;
+  retryLabel?: string;
+  onRetry?: () => void;
   onHide: () => void;
 }) {
   return (
-    <div className="rounded-xl p-6 text-sm" style={{ background: "var(--search-surface)", border: "1px solid var(--search-border)", color: "var(--text-secondary)" }}>
+    <div
+      className="rounded-xl p-6 text-sm"
+      role={onRetry ? "status" : "alert"}
+      data-map-state={onRetry ? "recoverable" : "unavailable"}
+      style={{ background: "var(--search-surface)", border: "1px solid var(--search-border)", color: "var(--text-secondary)" }}
+    >
       <h4 className="font-semibold" style={{ color: "var(--text-primary)" }}>{title}</h4>
       <p className="mt-2">{detail}</p>
       <div className="mt-4 flex flex-wrap gap-2">
-        <button type="button" className="btn-primary text-sm" onClick={onRetry}>{retryLabel}</button>
+        {onRetry && retryLabel && <button type="button" className="btn-primary text-sm" onClick={onRetry}>{retryLabel}</button>}
         <button type="button" className="btn-glass text-sm" onClick={onHide}>Hide map</button>
       </div>
     </div>
   );
+}
+
+export function buildExploreMapRequest(searchParamsString: string, mapScope: ExploreMapScope | null): string | null {
+  if (!mapScope || mapScope.workspaceId !== null || !UUID.test(mapScope.tenantId)) return null;
+
+  const params = new URLSearchParams(searchParamsString);
+  params.delete("tenantId");
+  params.delete("workspaceId");
+  params.delete("includeTotal");
+  params.set("limit", "200");
+  params.set("tenantId", mapScope.tenantId);
+  return `/api/explore/map?${params.toString()}`;
 }
 
 function shouldShowColoradoAreaPresets(filters: Props["filters"]): boolean {
