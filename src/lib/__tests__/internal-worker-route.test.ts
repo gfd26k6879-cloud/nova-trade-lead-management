@@ -33,6 +33,12 @@ function request(path = "/api/crawl/process-next") {
   return new NextRequest(`https://example.test${path}`);
 }
 
+function expectPrivateNoStore(response: Response) {
+  expect(response.headers.get("Cache-Control")).toBe("private, no-store, max-age=0, must-revalidate, no-transform");
+  expect(response.headers.get("Pragma")).toBe("no-cache");
+  expect(response.headers.get("Expires")).toBe("0");
+}
+
 function tenantAuthorization(tenantId: string, source: "cron" | "session" = "cron") {
   return {
     source,
@@ -83,6 +89,7 @@ describe("runInternalWorkerRoute", () => {
     );
 
     expect(response.status).toBe(504);
+    expectPrivateNoStore(response);
     await expect(response.json()).resolves.toEqual({
       status: "error",
       error: "Worker exceeded internal timeout before Vercel runtime limit.",
@@ -165,6 +172,7 @@ describe("runInternalWorkerRoute", () => {
     );
 
     expect(response.status).toBe(500);
+    expectPrivateNoStore(response);
     await expect(response.json()).resolves.toEqual({ status: "error", error: "Worker failed." });
     expect(queryMocks.startWorkerRun).not.toHaveBeenCalled();
     expect(queryMocks.completeWorkerRun).not.toHaveBeenCalled();
@@ -213,6 +221,7 @@ describe("runInternalWorkerRoute", () => {
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStore(response);
     await expect(response.json()).resolves.toEqual({ ...taskResult, error: "Worker failed." });
     expect(queryMocks.completeWorkerRun).toHaveBeenCalledWith(
       "run-1",
@@ -290,9 +299,10 @@ describe("runInternalWorkerRoute", () => {
   });
 
   it.each([
-    [new UnauthorizedError(), 401, "Authentication required"],
-    [new ForbiddenError(), 403, "You do not have permission to perform this action"],
-  ])("rejects unauthorized requests before database initialization without recording a run", async (error, status, message) => {
+    [new UnauthorizedError("Authentication failed for tenant-private"), 401, "Authentication required"],
+    [new ForbiddenError("Tenant tenant-private is outside caller scope"), 403, "You do not have permission to perform this action"],
+  ])("rejects unauthorized requests without returning caller-specific details or recording a run", async (error, status, message) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     authMocks.authorizeInternalWorkerRequest.mockRejectedValue(error);
     const task = vi.fn();
 
@@ -304,11 +314,33 @@ describe("runInternalWorkerRoute", () => {
     );
 
     expect(response.status).toBe(status);
+    expectPrivateNoStore(response);
     await expect(response.json()).resolves.toEqual({ status: "error", error: message });
+    expect(warn).toHaveBeenCalledWith("route_timing", expect.objectContaining({ status, error: error.message }));
     expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
     expect(queryMocks.markStaleWorkerRunsInterrupted).not.toHaveBeenCalled();
     expect(queryMocks.startWorkerRun).not.toHaveBeenCalled();
     expect(queryMocks.completeWorkerRun).not.toHaveBeenCalled();
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it("marks disabled worker responses private and non-cacheable", async () => {
+    queryMocks.isSchedulerWorkerEnabled.mockReturnValue(false);
+    const task = vi.fn();
+
+    const response = await runInternalWorkerRoute(
+      request(),
+      "crawl",
+      "crawl:manage",
+      task,
+    );
+
+    expect(response.status).toBe(200);
+    expectPrivateNoStore(response);
+    await expect(response.json()).resolves.toEqual({
+      status: "disabled",
+      reason: "Scheduler toggle is paused.",
+    });
     expect(task).not.toHaveBeenCalled();
   });
 
@@ -329,6 +361,7 @@ describe("runInternalWorkerRoute", () => {
     );
 
     expect(response.status).toBe(200);
+    expectPrivateNoStore(response);
     await expect(response.json()).resolves.toMatchObject({
       status: "ok",
       tenantId: "00000000-0000-4000-8000-000000000001",
@@ -358,6 +391,7 @@ describe("runInternalWorkerRoute", () => {
     );
 
     expect(response.status).toBe(401);
+    expectPrivateNoStore(response);
     const body: unknown = await response.json();
     expect(body).toEqual({ status: "error", error: "Worker authorization failed" });
     expect(JSON.stringify(body)).not.toContain(secret);
@@ -383,6 +417,7 @@ describe("runInternalWorkerRoute", () => {
     );
 
     expect(response.status).toBe(500);
+    expectPrivateNoStore(response);
     await expect(response.json()).resolves.toEqual({ status: "error", error: "Worker failed." });
     expect(getWorkerTenantContext()).toBeNull();
     expect(queryMocks.completeWorkerRun).toHaveBeenCalledWith(

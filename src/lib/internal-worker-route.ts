@@ -20,6 +20,7 @@ import {
   type SchedulerWorkerName,
 } from "@/lib/db/queries";
 import type { Permission, TenantPermission } from "@/lib/permissions";
+import { applyNoStoreHeaders } from "@/lib/http-cache";
 import {
   assertWorkerTenantContext,
   runWithWorkerTenantContext,
@@ -37,6 +38,8 @@ const DEFAULT_WORKER_ROUTE_TIMEOUT_MS = 45_000;
 const WORKER_ROUTE_TIMEOUT_MESSAGE = "Worker exceeded internal timeout before Vercel runtime limit.";
 const WORKER_FAILED_MESSAGE = "Worker failed.";
 const WORKER_AUTHORIZATION_FAILED_MESSAGE = "Worker authorization failed";
+const WORKER_AUTHENTICATION_REQUIRED_MESSAGE = "Authentication required";
+const WORKER_FORBIDDEN_MESSAGE = "You do not have permission to perform this action";
 
 class WorkerRouteTimeoutError extends Error {
   constructor() {
@@ -117,7 +120,7 @@ async function runWorkerRouteBody(
     const result = { status: "disabled", reason: "Scheduler toggle is paused." };
     await withWorkerDbTimeout(workerName, () => completeWorkerRun(run.id, "disabled", result, 200));
     logRouteTiming(200, { workerName, result: "disabled" });
-    return NextResponse.json(result);
+    return workerJsonResponse(result);
   }
 
   const run = await withWorkerDbTimeout(workerName, () => startWorkerRun(workerName, source));
@@ -135,14 +138,14 @@ async function runWorkerRouteBody(
     // Preserve full operator diagnostics in the run record; redact only the HTTP representation.
     await withWorkerDbTimeout(workerName, () => completeWorkerRun(run.id, status, result, 200, result.error ?? null));
     logRouteTiming(200, { workerName, workerStatus: status });
-    return NextResponse.json(safeWorkerTaskResult(result));
+    return workerJsonResponse(safeWorkerTaskResult(result));
   } catch (err) {
     const message = safeInternalErrors ? safeWorkerErrorMessage(err) : err instanceof Error ? err.message : String(err);
     const publicMessage = safeWorkerErrorMessage(err);
     const httpStatus = classifyWorkerHttpStatus(err);
     await withWorkerDbTimeout(workerName, () => completeWorkerRun(run.id, "error", { status: "error", error: message }, httpStatus, message));
     logRouteTiming(httpStatus, { workerName, reason: classifyWorkerFailureReason(err), error: message });
-    return NextResponse.json({ status: "error", error: publicMessage }, { status: httpStatus });
+    return workerJsonResponse({ status: "error", error: publicMessage }, { status: httpStatus });
   }
 }
 
@@ -154,21 +157,25 @@ function handleWorkerRouteError(
 ): NextResponse {
   if (isTenantWorkerAuthorizationError(err)) {
     logRouteTiming(err.status, { workerName, reason: "worker_authorization_failed" });
-    return NextResponse.json({ status: "error", error: WORKER_AUTHORIZATION_FAILED_MESSAGE }, { status: err.status });
+    return workerJsonResponse({ status: "error", error: WORKER_AUTHORIZATION_FAILED_MESSAGE }, { status: err.status });
   }
   if (err instanceof UnauthorizedError) {
-    logRouteTiming(err.status, { workerName, reason: "unauthorized" });
-    return NextResponse.json({ status: "error", error: err.message }, { status: err.status });
+    logRouteTiming(err.status, { workerName, reason: "unauthorized", error: err.message });
+    return workerJsonResponse({ status: "error", error: WORKER_AUTHENTICATION_REQUIRED_MESSAGE }, { status: err.status });
   }
   if (err instanceof ForbiddenError) {
-    logRouteTiming(err.status, { workerName, reason: "forbidden" });
-    return NextResponse.json({ status: "error", error: err.message }, { status: err.status });
+    logRouteTiming(err.status, { workerName, reason: "forbidden", error: err.message });
+    return workerJsonResponse({ status: "error", error: WORKER_FORBIDDEN_MESSAGE }, { status: err.status });
   }
   const message = safeInternalErrors ? safeWorkerErrorMessage(err) : err instanceof Error ? err.message : String(err);
   const publicMessage = safeWorkerErrorMessage(err);
   const httpStatus = classifyWorkerHttpStatus(err);
   logRouteTiming(httpStatus, { workerName, reason: classifyWorkerFailureReason(err), error: message });
-  return NextResponse.json({ status: "error", error: publicMessage }, { status: httpStatus });
+  return workerJsonResponse({ status: "error", error: publicMessage }, { status: httpStatus });
+}
+
+function workerJsonResponse(body: unknown, init?: ResponseInit): NextResponse {
+  return applyNoStoreHeaders(NextResponse.json(body, init));
 }
 
 function safeWorkerErrorMessage(error: unknown): string {
