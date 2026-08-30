@@ -3,6 +3,8 @@ import Database from "better-sqlite3";
 import { createTestDb } from "./test-helpers";
 
 let testDb: Database.Database;
+const TENANT_A = "10000000-0000-4000-8000-000000000001";
+const TENANT_B = "20000000-0000-4000-8000-000000000001";
 
 vi.mock("@/lib/db/index", () => {
   return {
@@ -25,22 +27,23 @@ import {
 } from "@/lib/db/queries";
 import { queueMissingAiVerifications } from "@/lib/ai/verification-worker";
 
-function insertLead(id = "lead-1") {
+function insertLead(id = "lead-1", tenantId = TENANT_A) {
   testDb.prepare(
     `INSERT INTO leads (
       id, place_id, name, address, phone, categories, website_status, score, status,
       qualification_status, contactability_score, estimated_deal_value,
-      discovered_at, created_at, updated_at
+      tenant_id, discovered_at, created_at, updated_at
     ) VALUES (
       ?, ?, 'Gateway Park Dental', '123 Main St, Denver, CO', '303-555-0100', '["dentist"]', 'none', 12, 'new',
-      'qualified', 1, 4500,
+      'qualified', 1, 4500, ?,
       '2026-05-01T10:00:00.000Z', '2026-05-01T10:00:00.000Z', '2026-05-01T10:00:00.000Z'
     )`
-  ).run(id, `place-${id}`);
+  ).run(id, `place-${id}`, tenantId);
 }
 
 beforeEach(() => {
   testDb = createTestDb();
+  testDb.exec("ALTER TABLE leads ADD COLUMN tenant_id TEXT");
   insertLead();
 });
 
@@ -126,13 +129,15 @@ describe("AI queue queries", () => {
     insertLead("lead-2");
     testDb.prepare("UPDATE leads SET status = 'closed_lost' WHERE id = 'lead-2'").run();
     insertLead("lead-3");
+    insertLead("lead-foreign", TENANT_B);
 
-    const result = await queueMissingAiVerifications();
+    const result = await queueMissingAiVerifications(TENANT_A);
     expect("error" in result).toBe(false);
 
     const rows = testDb.prepare("SELECT id, ai_queue_status FROM leads ORDER BY id").all() as Array<Record<string, unknown>>;
     expect(rows.find((row) => row.id === "lead-1")?.ai_queue_status).toBe("queued");
     expect(rows.find((row) => row.id === "lead-2")?.ai_queue_status).toBe("not_checked");
     expect(rows.find((row) => row.id === "lead-3")?.ai_queue_status).toBe("queued");
+    expect(rows.find((row) => row.id === "lead-foreign")?.ai_queue_status).toBe("not_checked");
   });
 });

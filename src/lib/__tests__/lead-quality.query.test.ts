@@ -229,9 +229,9 @@ describe("lead quality queries", () => {
     });
     insertLead({ id: "denver-ai", name: "Denver AI Candidate", enrichmentStatus: "enriched" });
 
-    const aiCandidates = await getQualityAiVerificationCandidates({ limit: 10, countryCode: "CA", marketId: "market-london-ca", zip: "N6H" });
-    const actionIds = await getQualityActionCandidateIds({ limit: 10, countryCode: "CA", marketId: "market-london-ca", zip: "N6H" });
-    const queued = await queueLeadsForEnrichment(actionIds);
+    const aiCandidates = await getQualityAiVerificationCandidates({ tenantId: TENANT_A, limit: 10, countryCode: "CA", marketId: "market-london-ca", zip: "N6H" });
+    const actionIds = await getQualityActionCandidateIds({ tenantId: TENANT_A, limit: 10, countryCode: "CA", marketId: "market-london-ca", zip: "N6H" });
+    const queued = await queueLeadsForEnrichment(actionIds, TENANT_A);
     const status = testDb.prepare("SELECT enrichment_status FROM leads WHERE id = 'london-ai'").get() as { enrichment_status: string };
 
     expect(aiCandidates.map((lead) => lead.id)).toEqual(["london-ai"]);

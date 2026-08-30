@@ -6487,19 +6487,20 @@ export async function leaseNextAiVerificationJob(maxAttempts = 3): Promise<Lead 
   return row ? parseLeadRow(row) : null;
 }
 
-export async function getAiVerificationBackfillCandidates(limit = 10000): Promise<Lead[]> {
+export async function getAiVerificationBackfillCandidates(limit: number, tenantId: string): Promise<Lead[]> {
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT *
      FROM leads
-     WHERE ai_queue_status NOT IN ('queued','running')
+     WHERE tenant_id = ?
+       AND ai_queue_status NOT IN ('queued','running')
        AND COALESCE(is_excluded, 0) = 0
        AND archived_at IS NULL
        AND status NOT IN ('closed_won','closed_lost')
        AND COALESCE(business_status, '') NOT IN ('CLOSED_PERMANENTLY','CLOSED_TEMPORARILY')
      ORDER BY sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at ASC
      LIMIT ?`
-  ).all(Math.max(1, Math.floor(limit))) as Array<Record<string, unknown>>;
+  ).all(tenantId, Math.max(1, Math.floor(limit))) as Array<Record<string, unknown>>;
   return rows.map(parseLeadRow);
 }
 
@@ -6525,7 +6526,11 @@ export async function getAiQueueStats(): Promise<AiQueueStats> {
   return stats;
 }
 
-export async function getAiVerificationCandidates(limit: number, businessType?: BusinessType | string | null): Promise<Lead[]>{
+export async function getAiVerificationCandidates(
+  limit: number,
+  tenantId: string,
+  businessType?: BusinessType | string | null,
+): Promise<Lead[]>{
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
   const conditions = [
@@ -6537,6 +6542,7 @@ export async function getAiVerificationCandidates(limit: number, businessType?: 
     "COALESCE(l.is_excluded, 0) = 0",
     "l.archived_at IS NULL",
   ];
+  conditions.unshift("l.tenant_id = ?");
   const params: unknown[] = [];
   if (businessType) {
     conditions.push("l.business_type = ?");
@@ -6552,7 +6558,7 @@ export async function getAiVerificationCandidates(limit: number, businessType?: 
        l.win_probability_score DESC,
        l.score DESC
      LIMIT ?`
-  ).all(...params, safeLimit) as Array<Record<string, unknown>>;
+  ).all(tenantId, ...params, safeLimit) as Array<Record<string, unknown>>;
 
   return rows.map(parseLeadRow);
 }
@@ -7336,6 +7342,7 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
 }
 
 export async function getQualityAiVerificationCandidates(input: {
+  tenantId: string;
   limit: number;
   businessType?: BusinessType | string | null;
   denverOnly?: boolean;
@@ -7362,7 +7369,8 @@ export async function getQualityAiVerificationCandidates(input: {
     "COALESCE(l.is_excluded, 0) = 0",
     "l.archived_at IS NULL",
   ];
-  const params: unknown[] = [];
+  conditions.unshift("l.tenant_id = ?");
+  const params: unknown[] = [input.tenantId];
   if (input.businessType) {
     conditions.push("l.business_type = ?");
     params.push(input.businessType);
@@ -7414,12 +7422,14 @@ export async function getQualityAiVerificationCandidates(input: {
   return rows.map(parseLeadRow);
 }
 
-export async function getQualityActionCandidateIds(filters: QualityFilters & { limit: number; ids?: string[] }): Promise<string[]>{
+export async function getQualityActionCandidateIds(
+  filters: QualityFilters & { tenantId: string; limit: number; ids?: string[] },
+): Promise<string[]>{
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(100, Math.floor(filters.limit)));
   const { where, params } = buildQualityWhere(filters);
-  const idConditions: string[] = [];
-  const idParams: unknown[] = [];
+  const idConditions: string[] = ["l.tenant_id = ?"];
+  const idParams: unknown[] = [filters.tenantId];
   if (filters.ids && filters.ids.length > 0) {
     idConditions.push(`l.id IN (${filters.ids.map(() => "?").join(",")})`);
     idParams.push(...filters.ids);
@@ -7444,7 +7454,7 @@ export async function getQualityActionCandidateIds(filters: QualityFilters & { l
   return rows.map((row) => row.id);
 }
 
-export async function queueLeadsForEnrichment(ids: string[]): Promise<number>{
+export async function queueLeadsForEnrichment(ids: string[], tenantId: string): Promise<number>{
   const db = await getDb();
   const uniqueIds = Array.from(new Set(ids)).filter(Boolean).slice(0, 100);
   if (uniqueIds.length === 0) return 0;
@@ -7454,10 +7464,11 @@ export async function queueLeadsForEnrichment(ids: string[]): Promise<number>{
      SET enrichment_status = 'pending',
          enriched_at = NULL,
          updated_at = ?
-     WHERE id IN (${placeholders})
+     WHERE tenant_id = ?
+       AND id IN (${placeholders})
        AND COALESCE(is_excluded, 0) = 0
        AND archived_at IS NULL`
-  ).run(nowISO(), ...uniqueIds);
+  ).run(nowISO(), tenantId, ...uniqueIds);
   return Number(result.changes ?? 0);
 }
 

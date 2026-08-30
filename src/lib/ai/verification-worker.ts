@@ -62,7 +62,7 @@ export interface AiVerificationRunOptions {
 export async function enqueueAiVerificationForLead(
   leadId: string,
   reason: string,
-  options: { force?: boolean; settings?: Settings } = {},
+  options: { force?: boolean; settings?: Settings; tenantId?: string } = {},
 ): Promise<{ status: "queued" | "skipped" | "cached" | "disabled"; leadId: string; reason: string }> {
   const settings = options.settings ?? await getSettings();
   if (!settings.ai_enabled) return { status: "disabled", leadId, reason: "AI verification is disabled." };
@@ -72,6 +72,9 @@ export async function enqueueAiVerificationForLead(
 
   const lead = await getLeadById(leadId);
   if (!lead) return { status: "skipped", leadId, reason: "Lead not found." };
+  if (options.tenantId && (lead as Lead & { tenant_id?: string | null }).tenant_id !== options.tenantId) {
+    return { status: "skipped", leadId, reason: "Lead not found." };
+  }
   if (!isLeadEligibleForAiVerification(lead)) {
     return { status: "skipped", leadId, reason: "Lead is closed, excluded, or not operational." };
   }
@@ -157,11 +160,17 @@ export async function processNextAiVerificationJob(signal?: AbortSignal): Promis
   };
 }
 
-export async function queueMissingAiVerifications(limit = 10000): Promise<AiVerificationBackfillResult | { error: string }> {
+export async function queueMissingAiVerifications(
+  tenantId: string,
+  limit = 10000,
+): Promise<AiVerificationBackfillResult | { error: string }> {
   const settings = await getSettings();
   if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
 
-  const leads = await getAiVerificationBackfillCandidates(limit);
+  const leads = await getAiVerificationBackfillCandidates(limit, tenantId);
+  if (leads.some((lead) => (lead as Lead & { tenant_id?: string | null }).tenant_id !== tenantId)) {
+    return { error: "Lead not found" };
+  }
   let queued = 0;
   let skippedFresh = 0;
   let skippedIneligible = 0;

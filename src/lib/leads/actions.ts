@@ -324,6 +324,13 @@ async function allLeadIdsBelongToTenant(tenantSession: TenantSession, ids: reado
   return true;
 }
 
+function allCandidateLeadsBelongToTenant(
+  tenantSession: TenantSession,
+  leads: readonly NonNullable<Awaited<ReturnType<typeof queryLeadById>>>[],
+): boolean {
+  return leads.every((lead) => tenantOwnedLeadOrNull(tenantSession, lead) !== null);
+}
+
 const RESEARCHER_AI_CLAIM_REQUIRED_MESSAGE = "Claim this lead before running AI tools.";
 const RESEARCHER_AI_REQUEST_SOURCES = ["researcher_ai_check", "researcher_pitch_pack"];
 
@@ -1114,12 +1121,12 @@ export async function runResearcherAiCheckAction(leadId: string, selector: Tenan
   );
 }
 
-export async function queueMissingAiVerificationsAction() {
-  await requirePermission("ai:verify");
-  await ensureDbReady();
-  const result = await queueMissingAiVerifications();
-  revalidateLeadViews();
-  return result;
+export async function queueMissingAiVerificationsAction(selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "ai:verify", "lead.ai.missing.queue", "manager-mutation", async (tenantSession) => {
+    const result = await queueMissingAiVerifications(tenantSession.tenantId, 10000);
+    revalidateLeadViews();
+    return result;
+  });
 }
 
 export async function queueLeadAiArtifactAction(
@@ -1513,45 +1520,49 @@ export async function updateLeadAiFeedbackAction(leadId: string, input: unknown)
   return { success: true, changes };
 }
 
-export async function runAiVerificationBatchAction(input: { limit?: number; businessType?: string } = {}) {
-  await requirePermission("ai:verify");
-  await ensureDbReady();
-  const settings = await getSettings();
-  if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
+export async function runAiVerificationBatchAction(
+  input: { limit?: number; businessType?: string } = {},
+  selector: TenantSessionSelector = {},
+) {
+  return withTenantWideLeadActor(selector, "ai:verify", "lead.ai.batch.verify", "manager-mutation", async (tenantSession) => {
+    const settings = await getSettings();
+    if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
 
-  const requestedLimit = Math.max(1, Math.floor(input.limit ?? 10));
-  const safeLimit = Math.min(requestedLimit, settings.ai_batch_limit);
-  const leads = await getAiVerificationCandidates(safeLimit, input.businessType);
-  const results: Array<{ leadId: string; success: boolean; cached?: boolean; error?: string }> = [];
+    const requestedLimit = Math.max(1, Math.floor(input.limit ?? 10));
+    const safeLimit = Math.min(requestedLimit, settings.ai_batch_limit);
+    const leads = await getAiVerificationCandidates(safeLimit, tenantSession.tenantId, input.businessType);
+    if (!allCandidateLeadsBelongToTenant(tenantSession, leads)) return { error: "Lead not found" };
+    const results: Array<{ leadId: string; success: boolean; cached?: boolean; error?: string }> = [];
 
-  for (const lead of leads) {
-    const result = await performAiVerification(lead, false, settings);
-    if ("success" in result && result.success && result.verification.input_hash) {
-      await markLeadAiVerified(lead.id, result.verification.input_hash);
+    for (const lead of leads) {
+      const result = await performAiVerification(lead, false, settings);
+      if ("success" in result && result.success && result.verification.input_hash) {
+        await markLeadAiVerified(lead.id, result.verification.input_hash);
+      }
+      results.push({
+        leadId: lead.id,
+        success: !("error" in result),
+        cached: "cached" in result ? result.cached : false,
+        error: "error" in result ? result.error : undefined,
+      });
     }
-    results.push({
-      leadId: lead.id,
-      success: !("error" in result),
-      cached: "cached" in result ? result.cached : false,
-      error: "error" in result ? result.error : undefined,
-    });
-  }
 
-  await createAuditLog("ai_batch_verification", "leads", undefined, {
-    requestedLimit,
-    processed: results.length,
-    businessType: input.businessType ?? null,
+    await createAuditLog("ai_batch_verification", "leads", undefined, {
+      requestedLimit,
+      processed: results.length,
+      businessType: input.businessType ?? null,
+    });
+    revalidateLeadViews();
+    revalidatePath("/statistics");
+    return {
+      success: true,
+      processed: results.length,
+      verified: results.filter((row) => row.success && !row.cached).length,
+      cached: results.filter((row) => row.cached).length,
+      errors: results.filter((row) => row.error).length,
+      results,
+    };
   });
-  revalidateLeadViews();
-  revalidatePath("/statistics");
-  return {
-    success: true,
-    processed: results.length,
-    verified: results.filter((row) => row.success && !row.cached).length,
-    cached: results.filter((row) => row.cached).length,
-    errors: results.filter((row) => row.error).length,
-    results,
-  };
 }
 
 export async function runQualityAiVerificationBatchAction(input: {
@@ -1569,67 +1580,72 @@ export async function runQualityAiVerificationBatchAction(input: {
   zip?: string;
   denverOnly?: boolean;
   ids?: string[];
-} = {}) {
-  await requirePermission("ai:verify");
-  await ensureDbReady();
-  const parsed = qualityAiBatchSchema.safeParse(input);
-  if (!parsed.success) return { error: "Invalid quality AI batch request." };
-
-  const settings = await getSettings();
-  if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
-
-  const requestedLimit = Math.max(1, Math.floor(parsed.data.limit ?? parsed.data.ids?.length ?? 10));
-  const safeLimit = Math.min(requestedLimit, settings.ai_batch_limit, parsed.data.ids?.length ?? requestedLimit);
-  const leads = await getQualityAiVerificationCandidates({
-    limit: safeLimit,
-    businessType: parsed.data.businessType,
-    recommendedOffer: parsed.data.recommendedOffer,
-    qualityBucket: parsed.data.qualityBucket,
-    phoneVerificationStatus: parsed.data.phoneVerificationStatus,
-    aiVerificationStatus: parsed.data.aiVerificationStatus,
-    enrichmentStatus: parsed.data.enrichmentStatus,
-    countryCode: parsed.data.countryCode,
-    marketId: parsed.data.marketId,
-    locationCellId: parsed.data.locationCellId,
-    city: parsed.data.city,
-    zip: parsed.data.zip,
-    denverOnly: parsed.data.denverOnly,
-    ids: parsed.data.ids,
-  });
-  const results: Array<{ leadId: string; success: boolean; cached?: boolean; error?: string }> = [];
-
-  for (const lead of leads) {
-    const result = await performAiVerification(lead, false, settings);
-    if ("success" in result && result.success && result.verification.input_hash) {
-      await markLeadAiVerified(lead.id, result.verification.input_hash);
+} = {}, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "ai:verify", "lead.ai.quality_batch.verify", "manager-mutation", async (tenantSession) => {
+    const parsed = qualityAiBatchSchema.safeParse(input);
+    if (!parsed.success) return { error: "Invalid quality AI batch request." };
+    if (parsed.data.ids && !await allLeadIdsBelongToTenant(tenantSession, parsed.data.ids)) {
+      return { error: "Lead not found" };
     }
-    results.push({
-      leadId: lead.id,
-      success: !("error" in result),
-      cached: "cached" in result ? result.cached : false,
-      error: "error" in result ? result.error : undefined,
-    });
-  }
 
-  await createAuditLog("quality_ai_batch_verification", "leads", undefined, {
-    requestedLimit,
-    processed: results.length,
-    businessType: parsed.data.businessType ?? null,
-    countryCode: parsed.data.countryCode ?? null,
-    marketId: parsed.data.marketId ?? null,
-    locationCellId: parsed.data.locationCellId ?? null,
-    denverOnly: parsed.data.denverOnly ?? false,
-    selectedCount: parsed.data.ids?.length ?? 0,
+    const settings = await getSettings();
+    if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
+
+    const requestedLimit = Math.max(1, Math.floor(parsed.data.limit ?? parsed.data.ids?.length ?? 10));
+    const safeLimit = Math.min(requestedLimit, settings.ai_batch_limit, parsed.data.ids?.length ?? requestedLimit);
+    const leads = await getQualityAiVerificationCandidates({
+      tenantId: tenantSession.tenantId,
+      limit: safeLimit,
+      businessType: parsed.data.businessType,
+      recommendedOffer: parsed.data.recommendedOffer,
+      qualityBucket: parsed.data.qualityBucket,
+      phoneVerificationStatus: parsed.data.phoneVerificationStatus,
+      aiVerificationStatus: parsed.data.aiVerificationStatus,
+      enrichmentStatus: parsed.data.enrichmentStatus,
+      countryCode: parsed.data.countryCode,
+      marketId: parsed.data.marketId,
+      locationCellId: parsed.data.locationCellId,
+      city: parsed.data.city,
+      zip: parsed.data.zip,
+      denverOnly: parsed.data.denverOnly,
+      ids: parsed.data.ids,
+    });
+    if (!allCandidateLeadsBelongToTenant(tenantSession, leads)) return { error: "Lead not found" };
+    const results: Array<{ leadId: string; success: boolean; cached?: boolean; error?: string }> = [];
+
+    for (const lead of leads) {
+      const result = await performAiVerification(lead, false, settings);
+      if ("success" in result && result.success && result.verification.input_hash) {
+        await markLeadAiVerified(lead.id, result.verification.input_hash);
+      }
+      results.push({
+        leadId: lead.id,
+        success: !("error" in result),
+        cached: "cached" in result ? result.cached : false,
+        error: "error" in result ? result.error : undefined,
+      });
+    }
+
+    await createAuditLog("quality_ai_batch_verification", "leads", undefined, {
+      requestedLimit,
+      processed: results.length,
+      businessType: parsed.data.businessType ?? null,
+      countryCode: parsed.data.countryCode ?? null,
+      marketId: parsed.data.marketId ?? null,
+      locationCellId: parsed.data.locationCellId ?? null,
+      denverOnly: parsed.data.denverOnly ?? false,
+      selectedCount: parsed.data.ids?.length ?? 0,
+    });
+    revalidateLeadViews();
+    return {
+      success: true,
+      processed: results.length,
+      verified: results.filter((row) => row.success && !row.cached).length,
+      cached: results.filter((row) => row.cached).length,
+      errors: results.filter((row) => row.error).length,
+      results,
+    };
   });
-  revalidateLeadViews();
-  return {
-    success: true,
-    processed: results.length,
-    verified: results.filter((row) => row.success && !row.cached).length,
-    cached: results.filter((row) => row.cached).length,
-    errors: results.filter((row) => row.error).length,
-    results,
-  };
 }
 
 export async function queueQualityAiVerificationBatchAction(input: {
@@ -1647,58 +1663,67 @@ export async function queueQualityAiVerificationBatchAction(input: {
   zip?: string;
   denverOnly?: boolean;
   ids?: string[];
-} = {}) {
-  await requirePermission("ai:verify");
-  await ensureDbReady();
-  const parsed = qualityAiBatchSchema.safeParse(input);
-  if (!parsed.success) return { error: "Invalid quality AI queue request." };
+} = {}, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "ai:verify", "lead.ai.quality_batch.queue", "manager-mutation", async (tenantSession) => {
+    const parsed = qualityAiBatchSchema.safeParse(input);
+    if (!parsed.success) return { error: "Invalid quality AI queue request." };
+    if (parsed.data.ids && !await allLeadIdsBelongToTenant(tenantSession, parsed.data.ids)) {
+      return { error: "Lead not found" };
+    }
 
-  const settings = await getSettings();
-  if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
+    const settings = await getSettings();
+    if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
 
-  const requestedLimit = Math.max(1, Math.floor(parsed.data.limit ?? parsed.data.ids?.length ?? 25));
-  const safeLimit = Math.min(requestedLimit, settings.ai_batch_limit, parsed.data.ids?.length ?? requestedLimit);
-  const leads = await getQualityAiVerificationCandidates({
-    limit: safeLimit,
-    businessType: parsed.data.businessType,
-    recommendedOffer: parsed.data.recommendedOffer,
-    qualityBucket: parsed.data.qualityBucket,
-    phoneVerificationStatus: parsed.data.phoneVerificationStatus,
-    aiVerificationStatus: parsed.data.aiVerificationStatus,
-    enrichmentStatus: parsed.data.enrichmentStatus,
-    countryCode: parsed.data.countryCode,
-    marketId: parsed.data.marketId,
-    locationCellId: parsed.data.locationCellId,
-    city: parsed.data.city,
-    zip: parsed.data.zip,
-    denverOnly: parsed.data.denverOnly,
-    ids: parsed.data.ids,
+    const requestedLimit = Math.max(1, Math.floor(parsed.data.limit ?? parsed.data.ids?.length ?? 25));
+    const safeLimit = Math.min(requestedLimit, settings.ai_batch_limit, parsed.data.ids?.length ?? requestedLimit);
+    const leads = await getQualityAiVerificationCandidates({
+      tenantId: tenantSession.tenantId,
+      limit: safeLimit,
+      businessType: parsed.data.businessType,
+      recommendedOffer: parsed.data.recommendedOffer,
+      qualityBucket: parsed.data.qualityBucket,
+      phoneVerificationStatus: parsed.data.phoneVerificationStatus,
+      aiVerificationStatus: parsed.data.aiVerificationStatus,
+      enrichmentStatus: parsed.data.enrichmentStatus,
+      countryCode: parsed.data.countryCode,
+      marketId: parsed.data.marketId,
+      locationCellId: parsed.data.locationCellId,
+      city: parsed.data.city,
+      zip: parsed.data.zip,
+      denverOnly: parsed.data.denverOnly,
+      ids: parsed.data.ids,
+    });
+    if (!allCandidateLeadsBelongToTenant(tenantSession, leads)) return { error: "Lead not found" };
+    const results = [];
+    for (const lead of leads) {
+      results.push(await enqueueAiVerificationForLead(lead.id, "quality_workspace", {
+        force: true,
+        settings,
+        tenantId: tenantSession.tenantId,
+      }));
+    }
+
+    await createAuditLog("quality_ai_batch_queued", "leads", undefined, {
+      requestedLimit,
+      processed: results.length,
+      businessType: parsed.data.businessType ?? null,
+      countryCode: parsed.data.countryCode ?? null,
+      marketId: parsed.data.marketId ?? null,
+      locationCellId: parsed.data.locationCellId ?? null,
+      denverOnly: parsed.data.denverOnly ?? false,
+      selectedCount: parsed.data.ids?.length ?? 0,
+    });
+    revalidateLeadViews();
+    return {
+      success: true,
+      processed: results.length,
+      queued: results.filter((row) => row.status === "queued").length,
+      skipped: results.filter((row) => row.status === "skipped").length,
+      cached: results.filter((row) => row.status === "cached").length,
+      disabled: results.filter((row) => row.status === "disabled").length,
+      results,
+    };
   });
-  const results = [];
-  for (const lead of leads) {
-    results.push(await enqueueAiVerificationForLead(lead.id, "quality_workspace", { force: true, settings }));
-  }
-
-  await createAuditLog("quality_ai_batch_queued", "leads", undefined, {
-    requestedLimit,
-    processed: results.length,
-    businessType: parsed.data.businessType ?? null,
-    countryCode: parsed.data.countryCode ?? null,
-    marketId: parsed.data.marketId ?? null,
-    locationCellId: parsed.data.locationCellId ?? null,
-    denverOnly: parsed.data.denverOnly ?? false,
-    selectedCount: parsed.data.ids?.length ?? 0,
-  });
-  revalidateLeadViews();
-  return {
-    success: true,
-    processed: results.length,
-    queued: results.filter((row) => row.status === "queued").length,
-    skipped: results.filter((row) => row.status === "skipped").length,
-    cached: results.filter((row) => row.status === "cached").length,
-    disabled: results.filter((row) => row.status === "disabled").length,
-    results,
-  };
 }
 
 export async function queueQualityEnrichmentBatchAction(input: {
@@ -1716,32 +1741,37 @@ export async function queueQualityEnrichmentBatchAction(input: {
   zip?: string;
   denverOnly?: boolean;
   ids?: string[];
-} = {}) {
-  await requirePermission("crawl:manage");
-  await ensureDbReady();
-  const parsed = qualityAiBatchSchema.safeParse(input);
-  if (!parsed.success) return { error: "Invalid quality enrichment queue request." };
+} = {}, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(selector, "crawl:manage", "lead.enrichment.quality_batch.queue", "manager-mutation", async (tenantSession) => {
+    const parsed = qualityAiBatchSchema.safeParse(input);
+    if (!parsed.success) return { error: "Invalid quality enrichment queue request." };
+    if (parsed.data.ids && !await allLeadIdsBelongToTenant(tenantSession, parsed.data.ids)) {
+      return { error: "Lead not found" };
+    }
 
-  const requestedLimit = Math.max(1, Math.floor(parsed.data.limit ?? parsed.data.ids?.length ?? 25));
-  const safeLimit = Math.min(requestedLimit, parsed.data.ids?.length ?? requestedLimit, 100);
-  const ids = await getQualityActionCandidateIds({
-    ...(parsed.data as QualityFilters),
-    ids: parsed.data.ids,
-    limit: safeLimit,
+    const requestedLimit = Math.max(1, Math.floor(parsed.data.limit ?? parsed.data.ids?.length ?? 25));
+    const safeLimit = Math.min(requestedLimit, parsed.data.ids?.length ?? requestedLimit, 100);
+    const ids = await getQualityActionCandidateIds({
+      ...(parsed.data as QualityFilters),
+      tenantId: tenantSession.tenantId,
+      ids: parsed.data.ids,
+      limit: safeLimit,
+    });
+    if (!await allLeadIdsBelongToTenant(tenantSession, ids)) return { error: "Lead not found" };
+    const queued = await queueLeadsForEnrichment(ids, tenantSession.tenantId);
+    await createAuditLog("quality_enrichment_batch_queued", "leads", undefined, {
+      requestedLimit,
+      queued,
+      selectedCount: parsed.data.ids?.length ?? 0,
+      businessType: parsed.data.businessType ?? null,
+      countryCode: parsed.data.countryCode ?? null,
+      marketId: parsed.data.marketId ?? null,
+      locationCellId: parsed.data.locationCellId ?? null,
+      denverOnly: parsed.data.denverOnly ?? false,
+    });
+    revalidateLeadViews();
+    return { success: true, processed: ids.length, queued };
   });
-  const queued = await queueLeadsForEnrichment(ids);
-  await createAuditLog("quality_enrichment_batch_queued", "leads", undefined, {
-    requestedLimit,
-    queued,
-    selectedCount: parsed.data.ids?.length ?? 0,
-    businessType: parsed.data.businessType ?? null,
-    countryCode: parsed.data.countryCode ?? null,
-    marketId: parsed.data.marketId ?? null,
-    locationCellId: parsed.data.locationCellId ?? null,
-    denverOnly: parsed.data.denverOnly ?? false,
-  });
-  revalidateLeadViews();
-  return { success: true, processed: ids.length, queued };
 }
 
 export async function applyAiRecommendationAction(verificationId: string, action: string) {
