@@ -126,6 +126,20 @@ describe("TeamBoardPage tenant boundary", () => {
     expect(tenantContextMocks.runWithTenantContext).not.toHaveBeenCalled();
   });
 
+  it("fails closed when canonical tenant resolution rejects", async () => {
+    authMocks.getTenantSession.mockRejectedValue(new Error("sensitive resolver detail"));
+
+    const node = await TeamBoardPage();
+    const text = renderToStaticMarkup(node as React.ReactElement);
+
+    expect(text).toContain("tenant_scope_unavailable");
+    expect(text).not.toContain("sensitive resolver detail");
+    expect(authorizationMocks.assertTenantPermission).not.toHaveBeenCalled();
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+    expect(tenantContextMocks.runWithTenantContext).not.toHaveBeenCalled();
+  });
+
   it("normalizes canonical permission denial before any database access", async () => {
     authorizationMocks.assertTenantPermission.mockRejectedValue(new Error("sensitive authorization detail"));
 

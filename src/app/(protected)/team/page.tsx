@@ -14,7 +14,13 @@ export const metadata: Metadata = { title: "Team Board | Nova Trade Lead Managem
 export default async function TeamBoardPage() {
   const logRouteTiming = startRouteTiming("/team");
   const session = await requirePermission("view:workspace");
-  const tenantSession = await getTenantSession({});
+  let tenantSession: Awaited<ReturnType<typeof getTenantSession>>;
+  try {
+    tenantSession = await getTenantSession({});
+  } catch {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <TeamUnavailable reason="tenant_scope_unavailable" canOpenDashboard={session.role === "admin"} />;
+  }
   if (
     !tenantSession
     || tenantSession.userId !== session.userId
