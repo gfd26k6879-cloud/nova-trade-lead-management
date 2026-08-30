@@ -111,6 +111,9 @@ async function requireBoundAdminRequestActor(
   action: string,
 ): Promise<{ tenantSession: TenantSession; legacySession: AppSession }> {
   const tenantSession = await requireTenantPermission(selector, "workspace:read", { action });
+  if (tenantSession.workspaceId !== null) {
+    throw new TenantAuthorizationError(403, "WORKSPACE_SCOPE_INVALID");
+  }
   const legacySession = await requirePermission(legacyPermission);
   if (legacySession.userId !== tenantSession.userId) {
     throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");

@@ -50,7 +50,7 @@ const tenantSession = {
   email: "one@example.com",
   displayName: "One",
   tenantId: "00000000-0000-4000-8000-000000000001",
-  workspaceId: "00000000-0000-4000-8000-000000000002",
+  workspaceId: null,
   membershipId: "00000000-0000-4000-8000-000000000003",
   roleBindingId: "00000000-0000-4000-8000-000000000004",
   role: "researcher",
@@ -149,6 +149,42 @@ describe("admin request server actions", () => {
     expect(tenantMocks.withTenantDbContext).not.toHaveBeenCalled();
     expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
     expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+  });
+
+  it("rejects workspace-scoped request creation before legacy authorization or database access", async () => {
+    tenantMocks.requireTenantPermission.mockResolvedValue({
+      ...tenantSession,
+      workspaceId: "00000000-0000-4000-8000-000000000002",
+    });
+
+    await expect(createAdminRequestAction("lead-1", { requestType: "website_request" })).rejects.toMatchObject({
+      status: 403,
+      code: "WORKSPACE_SCOPE_INVALID",
+    });
+
+    expect(authMocks.requirePermission).not.toHaveBeenCalled();
+    expect(tenantMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(tenantMocks.withTenantDbContext).not.toHaveBeenCalled();
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+  });
+
+  it("rejects workspace-scoped status updates before legacy authorization or database access", async () => {
+    tenantMocks.requireTenantPermission.mockResolvedValue({
+      ...tenantSession,
+      workspaceId: "00000000-0000-4000-8000-000000000002",
+    });
+
+    await expect(updateAdminRequestStatusAction("request-1", "done")).rejects.toMatchObject({
+      status: 403,
+      code: "WORKSPACE_SCOPE_INVALID",
+    });
+
+    expect(authMocks.requirePermission).not.toHaveBeenCalled();
+    expect(tenantMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(tenantMocks.withTenantDbContext).not.toHaveBeenCalled();
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.updateAdminRequestStatus).not.toHaveBeenCalled();
   });
 
   it("fails closed for a lead outside the canonical tenant scope", async () => {
