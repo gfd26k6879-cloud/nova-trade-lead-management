@@ -4,6 +4,18 @@ const authMocks = vi.hoisted(() => ({
   requirePermission: vi.fn(),
 }));
 
+const tenantAuthorizationMocks = vi.hoisted(() => ({
+  requireTenantPermission: vi.fn(),
+}));
+
+const tenantContextMocks = vi.hoisted(() => ({
+  runWithTenantContext: vi.fn((_session: unknown, _correlationId: unknown, callback: () => unknown) => callback()),
+}));
+
+const tenantDbMocks = vi.hoisted(() => ({
+  withTenantDbContext: vi.fn((callback: () => unknown) => callback()),
+}));
+
 const queryMocks = vi.hoisted(() => ({
   ensureDbReady: vi.fn(),
   getLeads: vi.fn(),
@@ -74,15 +86,47 @@ const artifactMocks = vi.hoisted(() => ({
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requirePermission: authMocks.requirePermission }));
+vi.mock("@/lib/tenancy/authorize", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tenancy/authorize")>();
+  return { ...actual, requireTenantPermission: tenantAuthorizationMocks.requireTenantPermission };
+});
+vi.mock("@/lib/tenancy/context", () => ({
+  runWithTenantContext: tenantContextMocks.runWithTenantContext,
+}));
+vi.mock("@/lib/db", () => ({ withTenantDbContext: tenantDbMocks.withTenantDbContext }));
 vi.mock("@/lib/db/queries", () => queryMocks);
 vi.mock("@/lib/ai/verification-worker", () => verificationMocks);
 vi.mock("@/lib/ai/artifact-worker", () => artifactMocks);
 
-import { generateResearcherPitchPackAction, runResearcherAiCheckAction, submitResearcherAiFeedbackAction } from "@/lib/leads/actions";
+import {
+  generateResearcherPitchPackAction,
+  queueLeadAiArtifactAction,
+  queueLeadPitchPackAction,
+  runAiVerificationAction,
+  runResearcherAiCheckAction,
+  submitResearcherAiFeedbackAction,
+} from "@/lib/leads/actions";
 
+const TENANT_A = "00000000-0000-4000-8000-000000000001";
+const TENANT_B = "00000000-0000-4000-8000-000000000002";
+const MEMBERSHIP_A = "20000000-0000-4000-8000-000000000001";
+const ROLE_BINDING_A = "30000000-0000-4000-8000-000000000001";
+const TENANT_SELECTOR = { tenantId: TENANT_A };
 const researcherSession = { userId: "researcher-1", email: "one@example.com", role: "researcher" };
+const tenantResearcherSession = {
+  userId: "researcher-1",
+  email: "one@example.com",
+  displayName: "Researcher One",
+  tenantId: TENANT_A,
+  workspaceId: null,
+  membershipId: MEMBERSHIP_A,
+  role: "researcher" as const,
+  roleBindingId: ROLE_BINDING_A,
+};
 const claimedLead = {
   id: "lead-1",
+  tenant_id: TENANT_A,
+  workspace_id: null,
   market_id: "market-colorado",
   archived_at: null,
   is_excluded: false,
@@ -101,6 +145,8 @@ const settings = {
 beforeEach(() => {
   vi.clearAllMocks();
   authMocks.requirePermission.mockResolvedValue(researcherSession);
+  tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue(tenantResearcherSession);
+  tenantDbMocks.withTenantDbContext.mockImplementation((callback: () => unknown) => callback());
   queryMocks.ensureDbReady.mockResolvedValue(undefined);
   queryMocks.getLeadById.mockResolvedValue(claimedLead);
   queryMocks.userCanAccessMarket.mockResolvedValue(true);
@@ -119,6 +165,13 @@ beforeEach(() => {
     cached: false,
     verification: { id: "verification-1", input_hash: "hash-1" },
   });
+  artifactMocks.queueLeadAiArtifact.mockResolvedValue({
+    status: "queued",
+    leadId: "lead-1",
+    artifactType: "business_detail",
+    artifactId: "artifact-business",
+    skippedExisting: false,
+  });
   artifactMocks.queueLeadPitchPack.mockResolvedValue({
     businessDetail: { status: "queued", leadId: "lead-1", artifactType: "business_detail", artifactId: "artifact-business", skippedExisting: false },
     competitiveReport: { status: "queued", leadId: "lead-1", artifactType: "competitive_report", artifactId: "artifact-report", skippedExisting: false },
@@ -133,6 +186,33 @@ beforeEach(() => {
 });
 
 describe("researcher-safe AI lead actions", () => {
+  it("runs manager AI verification only after binding the requested lead to the tenant", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue({ ...tenantResearcherSession, role: "owner" });
+    authMocks.requirePermission.mockResolvedValue({ ...researcherSession, role: "admin" });
+
+    const result = await runAiVerificationAction("lead-1", { force: true }, TENANT_SELECTOR);
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(TENANT_SELECTOR, "account:read", {
+      action: "lead.ai.verify",
+    });
+    expect(tenantDbMocks.withTenantDbContext).toHaveBeenCalledOnce();
+    expect(verificationMocks.performAiVerification).toHaveBeenCalledWith(claimedLead, true);
+    expect(result).toMatchObject({ success: true, verification: { id: "verification-1" } });
+  });
+
+  it("preserves manager artifact and pitch-pack queues for a tenant-owned lead", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue({ ...tenantResearcherSession, role: "owner" });
+    authMocks.requirePermission.mockResolvedValue({ ...researcherSession, role: "admin" });
+
+    await expect(queueLeadAiArtifactAction("lead-1", "business_detail", { force: true }))
+      .resolves.toMatchObject({ status: "queued", artifactId: "artifact-business" });
+    await expect(queueLeadPitchPackAction("lead-1", { force: true }))
+      .resolves.toMatchObject({ businessDetail: { artifactId: "artifact-business" } });
+
+    expect(artifactMocks.queueLeadAiArtifact).toHaveBeenCalledWith("lead-1", "business_detail", { force: true });
+    expect(artifactMocks.queueLeadPitchPack).toHaveBeenCalledWith("lead-1", { force: true });
+  });
+
   it("runs a claimed-lead researcher AI check without applying canonical verification", async () => {
     const result = await runResearcherAiCheckAction("lead-1");
 
@@ -243,5 +323,51 @@ describe("researcher-safe AI lead actions", () => {
 
     expect(result).toEqual({ error: "Claim this lead before running AI tools." });
     expect(queryMocks.createAiFeedbackEvent).not.toHaveBeenCalled();
+  });
+
+  it("blocks every manager AI queue/provider path for a foreign-tenant lead", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue({ ...tenantResearcherSession, role: "owner" });
+    authMocks.requirePermission.mockResolvedValue({ ...researcherSession, role: "admin" });
+    queryMocks.getLeadById.mockResolvedValue({ ...claimedLead, tenant_id: TENANT_B });
+
+    await expect(runAiVerificationAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(queueLeadAiArtifactAction("lead-1", "business_detail")).resolves.toEqual({ error: "Lead not found" });
+    await expect(queueLeadPitchPackAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+
+    expect(verificationMocks.performAiVerification).not.toHaveBeenCalled();
+    expect(artifactMocks.queueLeadAiArtifact).not.toHaveBeenCalled();
+    expect(artifactMocks.queueLeadPitchPack).not.toHaveBeenCalled();
+    expect(queryMocks.markLeadAiVerified).not.toHaveBeenCalled();
+  });
+
+  it("blocks every researcher AI provider/job/feedback path for a foreign-tenant lead", async () => {
+    queryMocks.getLeadById.mockResolvedValue({ ...claimedLead, tenant_id: TENANT_B });
+
+    await expect(runResearcherAiCheckAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(generateResearcherPitchPackAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(submitResearcherAiFeedbackAction("lead-1", {
+      feedbackKind: "pitch",
+      verdict: "not_useful",
+    })).resolves.toEqual({ error: "Lead not found" });
+
+    expect(verificationMocks.performAiVerification).not.toHaveBeenCalled();
+    expect(artifactMocks.queueLeadPitchPack).not.toHaveBeenCalled();
+    expect(artifactMocks.processLeadArtifactJobById).not.toHaveBeenCalled();
+    expect(queryMocks.createAiFeedbackEvent).not.toHaveBeenCalled();
+    expect(queryMocks.getSettings).not.toHaveBeenCalled();
+  });
+
+  it("does not let a legacy admin permission elevate a canonical reviewer into manager AI authority", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue({ ...tenantResearcherSession, role: "reviewer" });
+    authMocks.requirePermission.mockResolvedValue({ ...researcherSession, role: "admin" });
+
+    await expect(runAiVerificationAction("lead-1")).rejects.toMatchObject({
+      code: "PERMISSION_DENIED",
+      status: 403,
+    });
+
+    expect(tenantDbMocks.withTenantDbContext).not.toHaveBeenCalled();
+    expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+    expect(verificationMocks.performAiVerification).not.toHaveBeenCalled();
   });
 });

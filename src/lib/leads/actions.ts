@@ -79,12 +79,16 @@ import {
 import { processLeadArtifactJobById, queueLeadAiArtifact, queueLeadPitchPack } from "@/lib/ai/artifact-worker";
 import type { LeadAiArtifactType } from "@/lib/db/queries";
 import {
+  assertTenantPermission,
   assertTenantResourceOwnership,
   requireTenantPermission,
   TenantAuthorizationError,
+  type TenantPolicyContext,
 } from "@/lib/tenancy/authorize";
 import { runWithTenantContext } from "@/lib/tenancy/context";
 import { withTenantDbContext } from "@/lib/db";
+import { createTenantQueryRepository } from "@/lib/tenancy/queries";
+import { tenantPolicySchema } from "@/lib/tenancy/schemas";
 
 const statusSchema = z.enum(["new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost"]);
 const channelSchema = z.enum(["call", "text", "email", "walkin", "other"]);
@@ -326,8 +330,9 @@ const RESEARCHER_AI_REQUEST_SOURCES = ["researcher_ai_check", "researcher_pitch_
 async function requireLeadOwnershipForResearcherAi(
   id: string,
   session: { userId: string; role: string },
+  knownLead?: Awaited<ReturnType<typeof queryLeadById>>,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const ownership = await requireLeadOwnershipForMutation(id, session);
+  const ownership = await requireLeadOwnershipForMutation(id, session, knownLead);
   if (ownership.ok) return ownership;
   if (ownership.error === "Lead not found") return ownership;
   return { ok: false, error: RESEARCHER_AI_CLAIM_REQUIRED_MESSAGE };
@@ -968,16 +973,55 @@ export async function markLeadQualityBucketAction(id: string, bucket: string) {
   return { success: true };
 }
 
-export async function refreshStaleUnitsAction(runId: string, olderThanDays: number) {
-  await requirePermission("crawl:manage");
-  await ensureDbReady();
-  if (olderThanDays < 1) return { error: "Days must be at least 1" };
-  const count = await dbRefreshStale(runId, olderThanDays);
-  if (count > 0) {
-    await updateCrawlRunStatus(runId, "running");
-    await createAuditLog("refresh_stale_units", "crawl_run", runId, { olderThanDays, count });
+export async function refreshStaleUnitsAction(
+  runId: string,
+  olderThanDays: number,
+  selector: TenantSessionSelector = {},
+) {
+  const tenantSession = await requireTenantPermission(selector, "workspace:read");
+  const legacySession = await requirePermission("crawl:manage");
+  if (legacySession.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
   }
-  return { success: true, count };
+  if (tenantSession.workspaceId === null) {
+    throw new TenantAuthorizationError(403, "WORKSPACE_SCOPE_INVALID");
+  }
+
+  return runWithTenantContext(tenantSession, `crawl-stale-refresh:${randomUUID()}`, () =>
+    withTenantDbContext(async (db) => {
+      await ensureDbReady();
+      if (olderThanDays < 1) return { error: "Days must be at least 1" };
+
+      const ownedRun = await db.prepare(
+        `SELECT id FROM crawl_runs
+         WHERE id = ? AND tenant_id = ? AND workspace_id = ?`,
+      ).get<{ id: string }>(runId, tenantSession.tenantId, tenantSession.workspaceId);
+      if (!ownedRun) {
+        throw new TenantAuthorizationError(404, "RESOURCE_NOT_FOUND_OR_FORBIDDEN");
+      }
+
+      const currentPolicy = await createTenantQueryRepository(db).getCurrentTenantPolicy(tenantSession.tenantId);
+      const parsedPolicy = tenantPolicySchema.safeParse(currentPolicy);
+      await assertTenantPermission(tenantSession, "source:execute", {
+        action: "crawl.units.refresh-stale",
+        policyEvaluator: (context: TenantPolicyContext) => ({
+          allowed: context.tenantId === tenantSession.tenantId
+            && context.workspaceId === tenantSession.workspaceId
+            && parsedPolicy.success
+            && parsedPolicy.data.tenantId === tenantSession.tenantId
+            && parsedPolicy.data.sourceResearchEnabled
+            && !parsedPolicy.data.requireSourcePlanApproval,
+          context,
+        }),
+      });
+
+      const count = await dbRefreshStale(runId, olderThanDays);
+      if (count > 0) {
+        await updateCrawlRunStatus(runId, "running");
+        await createAuditLog("refresh_stale_units", "crawl_run", runId, { olderThanDays, count });
+      }
+      return { success: true, count };
+    }));
 }
 
 export async function bulkUpdateLeadStatusAction(ids: string[], status: string, selector: TenantSessionSelector = {}) {
@@ -1010,54 +1054,64 @@ export async function bulkUpdateLeadStatusAction(ids: string[], status: string, 
   );
 }
 
-export async function runAiVerificationAction(leadId: string, options: { force?: boolean } = {}) {
-  await requirePermission("ai:verify");
-  await ensureDbReady();
-  const lead = await queryLeadById(leadId);
-  if (!lead) return { error: "Lead not found" };
+export async function runAiVerificationAction(
+  leadId: string,
+  options: { force?: boolean } = {},
+  selector: TenantSessionSelector = {},
+) {
+  return withTenantWideLeadActor(selector, "ai:verify", "lead.ai.verify", "manager-mutation", async (tenantSession) => {
+    const lead = await getTenantOwnedLead(tenantSession, leadId);
+    if (!lead) return { error: "Lead not found" };
 
-  const result = await performAiVerification(lead, options.force ?? false);
-  if ("success" in result && result.success && result.verification.input_hash) {
-    await markLeadAiVerified(leadId, result.verification.input_hash);
-  }
-  revalidateLeadViews();
-  revalidatePath(`/leads/${leadId}`);
-  revalidatePath("/statistics");
-  return result;
+    const result = await performAiVerification(lead, options.force ?? false);
+    if ("success" in result && result.success && result.verification.input_hash) {
+      await markLeadAiVerified(leadId, result.verification.input_hash);
+    }
+    revalidateLeadViews();
+    revalidatePath(`/leads/${leadId}`);
+    revalidatePath("/statistics");
+    return result;
+  });
 }
 
-export async function runResearcherAiCheckAction(leadId: string) {
-  const session = await requirePermission("ai:researcher_tools");
-  await ensureDbReady();
-  const lead = await queryLeadById(leadId);
-  if (!lead) return { error: "Lead not found" };
+export async function runResearcherAiCheckAction(leadId: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(
+    selector,
+    "ai:researcher_tools",
+    "lead.ai.researcher_check",
+    "researcher-mutation",
+    async (tenantSession, session) => {
+      const lead = await getTenantOwnedLead(tenantSession, leadId);
+      if (!lead) return { error: "Lead not found" };
 
-  const ownership = await requireLeadOwnershipForResearcherAi(leadId, session);
-  if (!ownership.ok) return { error: ownership.error };
+      const ownership = await requireLeadOwnershipForResearcherAi(leadId, session, lead);
+      if (!ownership.ok) return { error: ownership.error };
 
-  const settings = await getSettings();
-  if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
-  const budget = await requireResearcherAiBudget(session, settings);
-  if (!budget.ok) return { error: budget.error };
+      const settings = await getSettings();
+      if (!settings.ai_enabled) return { error: "AI verification is disabled in Settings." };
+      const budget = await requireResearcherAiBudget(session, settings);
+      if (!budget.ok) return { error: budget.error };
 
-  await createAuditLog("researcher_ai_check_requested", "lead", leadId, {
-    actorUserId: session.userId,
-    actorRole: session.role,
-  });
-  const result = await performAiVerification(lead, false, settings, {
-    applyToLead: false,
-    actorUserId: session.userId,
-    requestSource: "researcher_ai_check",
-  });
-  await createAuditLog("researcher_ai_check_completed", "lead", leadId, {
-    actorUserId: session.userId,
-    actorRole: session.role,
-    success: !("error" in result),
-    verificationId: "verification" in result ? result.verification?.id ?? null : null,
-    error: "error" in result ? result.error : null,
-  });
-  revalidatePath(`/leads/${leadId}`);
-  return result;
+      await createAuditLog("researcher_ai_check_requested", "lead", leadId, {
+        actorUserId: session.userId,
+        actorRole: session.role,
+      });
+      const result = await performAiVerification(lead, false, settings, {
+        applyToLead: false,
+        actorUserId: session.userId,
+        requestSource: "researcher_ai_check",
+      });
+      await createAuditLog("researcher_ai_check_completed", "lead", leadId, {
+        actorUserId: session.userId,
+        actorRole: session.role,
+        success: !("error" in result),
+        verificationId: "verification" in result ? result.verification?.id ?? null : null,
+        error: "error" in result ? result.error : null,
+      });
+      revalidatePath(`/leads/${leadId}`);
+      return result;
+    },
+  );
 }
 
 export async function queueMissingAiVerificationsAction() {
@@ -1072,100 +1126,125 @@ export async function queueLeadAiArtifactAction(
   leadId: string,
   artifactType: LeadAiArtifactType,
   options: { force?: boolean } = {},
+  selector: TenantSessionSelector = {},
 ) {
-  await requirePermission("ai:verify");
-  await ensureDbReady();
-  const parsed = leadAiArtifactTypeSchema.safeParse(artifactType);
-  if (!parsed.success) return { error: "Invalid artifact type." };
-  const result = await queueLeadAiArtifact(leadId, parsed.data, options);
-  revalidateLeadViews();
-  revalidatePath(`/leads/${leadId}`);
-  return result;
+  return withTenantWideLeadActor(selector, "ai:verify", "lead.ai.artifact.queue", "manager-mutation", async (tenantSession) => {
+    const parsed = leadAiArtifactTypeSchema.safeParse(artifactType);
+    if (!parsed.success) return { error: "Invalid artifact type." };
+    const lead = await getTenantOwnedLead(tenantSession, leadId);
+    if (!lead) return { error: "Lead not found" };
+    const result = await queueLeadAiArtifact(lead.id, parsed.data, options);
+    revalidateLeadViews();
+    revalidatePath(`/leads/${leadId}`);
+    return result;
+  });
 }
 
-export async function queueLeadPitchPackAction(leadId: string, options: { force?: boolean } = {}) {
-  await requirePermission("ai:verify");
-  await ensureDbReady();
-  const result = await queueLeadPitchPack(leadId, options);
-  revalidateLeadViews();
-  revalidatePath(`/leads/${leadId}`);
-  return result;
+export async function queueLeadPitchPackAction(
+  leadId: string,
+  options: { force?: boolean } = {},
+  selector: TenantSessionSelector = {},
+) {
+  return withTenantWideLeadActor(selector, "ai:verify", "lead.ai.pitch_pack.queue", "manager-mutation", async (tenantSession) => {
+    const lead = await getTenantOwnedLead(tenantSession, leadId);
+    if (!lead) return { error: "Lead not found" };
+    const result = await queueLeadPitchPack(lead.id, options);
+    revalidateLeadViews();
+    revalidatePath(`/leads/${leadId}`);
+    return result;
+  });
 }
 
-export async function generateResearcherPitchPackAction(leadId: string) {
-  const session = await requirePermission("ai:researcher_tools");
-  await ensureDbReady();
-  const lead = await queryLeadById(leadId);
-  if (!lead) return { error: "Lead not found" };
+export async function generateResearcherPitchPackAction(leadId: string, selector: TenantSessionSelector = {}) {
+  return withTenantWideLeadActor(
+    selector,
+    "ai:researcher_tools",
+    "lead.ai.researcher_pitch_pack",
+    "researcher-mutation",
+    async (tenantSession, session) => {
+      const lead = await getTenantOwnedLead(tenantSession, leadId);
+      if (!lead) return { error: "Lead not found" };
 
-  const ownership = await requireLeadOwnershipForResearcherAi(leadId, session);
-  if (!ownership.ok) return { error: ownership.error };
+      const ownership = await requireLeadOwnershipForResearcherAi(leadId, session, lead);
+      if (!ownership.ok) return { error: ownership.error };
 
-  const settings = await getSettings();
-  if (!settings.ai_enabled) return { error: "AI is disabled in Settings." };
-  const budget = await requireResearcherAiBudget(session, settings);
-  if (!budget.ok) return { error: budget.error };
+      const settings = await getSettings();
+      if (!settings.ai_enabled) return { error: "AI is disabled in Settings." };
+      const budget = await requireResearcherAiBudget(session, settings);
+      if (!budget.ok) return { error: budget.error };
 
-  await createAuditLog("researcher_pitch_pack_requested", "lead", leadId, {
-    actorUserId: session.userId,
-    actorRole: session.role,
-  });
-  const queued = await queueLeadPitchPack(leadId, {
-    force: false,
-    settings,
-    actorUserId: session.userId,
-    requestSource: "researcher_pitch_pack",
-  });
-  const businessDetail = await processResearcherArtifactResult(queued.businessDetail, session);
-  const competitiveReport = await processResearcherArtifactResult(queued.competitiveReport, session);
-  const hasError = businessDetail.status === "error" || competitiveReport.status === "error";
-  await createAuditLog(hasError ? "researcher_pitch_pack_failed" : "researcher_pitch_pack_completed", "lead", leadId, {
-    actorUserId: session.userId,
-    actorRole: session.role,
-    businessDetail,
-    competitiveReport,
-  });
-  revalidateLeadViews();
-  revalidatePath(`/leads/${leadId}`);
-  return { businessDetail, competitiveReport };
-}
-
-export async function submitResearcherAiFeedbackAction(leadId: string, input: unknown) {
-  const session = await requirePermission("ai:researcher_tools");
-  await ensureDbReady();
-  const parsed = researcherAiFeedbackSchema.safeParse(input);
-  if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Invalid AI feedback." };
-  }
-
-  const lead = await queryLeadById(leadId);
-  if (!lead) return { error: "Lead not found" };
-  const ownership = await requireLeadOwnershipForResearcherAi(leadId, session);
-  if (!ownership.ok) return { error: ownership.error };
-
-  const feedback = await createAiFeedbackEvent({
-    lead_id: leadId,
-    verification_id: parsed.data.verificationId?.trim() || null,
-    artifact_id: parsed.data.artifactId?.trim() || null,
-    actor_user_id: session.userId,
-    feedback_kind: parsed.data.feedbackKind,
-    verdict: parsed.data.verdict,
-    corrected_website_url: parsed.data.correctedWebsiteUrl?.trim() || null,
-    reason: parsed.data.reason?.trim() || null,
-    metadata_json: {
-      actorRole: session.role,
-      source: "lead_detail",
+      await createAuditLog("researcher_pitch_pack_requested", "lead", leadId, {
+        actorUserId: session.userId,
+        actorRole: session.role,
+      });
+      const queued = await queueLeadPitchPack(lead.id, {
+        force: false,
+        settings,
+        actorUserId: session.userId,
+        requestSource: "researcher_pitch_pack",
+      });
+      const businessDetail = await processResearcherArtifactResult(queued.businessDetail, session);
+      const competitiveReport = await processResearcherArtifactResult(queued.competitiveReport, session);
+      const hasError = businessDetail.status === "error" || competitiveReport.status === "error";
+      await createAuditLog(hasError ? "researcher_pitch_pack_failed" : "researcher_pitch_pack_completed", "lead", leadId, {
+        actorUserId: session.userId,
+        actorRole: session.role,
+        businessDetail,
+        competitiveReport,
+      });
+      revalidateLeadViews();
+      revalidatePath(`/leads/${leadId}`);
+      return { businessDetail, competitiveReport };
     },
-  });
-  await createAuditLog("researcher_ai_feedback_submitted", "lead", leadId, {
-    actorUserId: session.userId,
-    actorRole: session.role,
-    feedbackKind: parsed.data.feedbackKind,
-    verdict: parsed.data.verdict,
-    feedbackId: feedback.id,
-  });
-  revalidatePath(`/leads/${leadId}`);
-  return { success: true, feedback };
+  );
+}
+
+export async function submitResearcherAiFeedbackAction(
+  leadId: string,
+  input: unknown,
+  selector: TenantSessionSelector = {},
+) {
+  return withTenantWideLeadActor(
+    selector,
+    "ai:researcher_tools",
+    "lead.ai.researcher_feedback",
+    "researcher-mutation",
+    async (tenantSession, session) => {
+      const parsed = researcherAiFeedbackSchema.safeParse(input);
+      if (!parsed.success) {
+        return { error: parsed.error.issues[0]?.message ?? "Invalid AI feedback." };
+      }
+
+      const lead = await getTenantOwnedLead(tenantSession, leadId);
+      if (!lead) return { error: "Lead not found" };
+      const ownership = await requireLeadOwnershipForResearcherAi(leadId, session, lead);
+      if (!ownership.ok) return { error: ownership.error };
+
+      const feedback = await createAiFeedbackEvent({
+        lead_id: lead.id,
+        verification_id: parsed.data.verificationId?.trim() || null,
+        artifact_id: parsed.data.artifactId?.trim() || null,
+        actor_user_id: session.userId,
+        feedback_kind: parsed.data.feedbackKind,
+        verdict: parsed.data.verdict,
+        corrected_website_url: parsed.data.correctedWebsiteUrl?.trim() || null,
+        reason: parsed.data.reason?.trim() || null,
+        metadata_json: {
+          actorRole: session.role,
+          source: "lead_detail",
+        },
+      });
+      await createAuditLog("researcher_ai_feedback_submitted", "lead", leadId, {
+        actorUserId: session.userId,
+        actorRole: session.role,
+        feedbackKind: parsed.data.feedbackKind,
+        verdict: parsed.data.verdict,
+        feedbackId: feedback.id,
+      });
+      revalidatePath(`/leads/${leadId}`);
+      return { success: true, feedback };
+    },
+  );
 }
 
 async function processResearcherArtifactResult(

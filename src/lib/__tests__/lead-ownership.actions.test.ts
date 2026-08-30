@@ -13,7 +13,13 @@ const tenantContextMocks = vi.hoisted(() => ({
 }));
 
 const tenantDbMocks = vi.hoisted(() => ({
-  withTenantDbContext: vi.fn((callback: () => unknown) => callback()),
+  get: vi.fn(),
+  prepare: vi.fn(),
+  withTenantDbContext: vi.fn(),
+}));
+
+const tenantPolicyMocks = vi.hoisted(() => ({
+  getCurrentTenantPolicy: vi.fn(),
 }));
 
 const queryMocks = vi.hoisted(() => ({
@@ -75,6 +81,11 @@ vi.mock("@/lib/tenancy/context", () => ({
   runWithTenantContext: tenantContextMocks.runWithTenantContext,
 }));
 vi.mock("@/lib/db", () => ({ withTenantDbContext: tenantDbMocks.withTenantDbContext }));
+vi.mock("@/lib/tenancy/queries", () => ({
+  createTenantQueryRepository: vi.fn(() => ({
+    getCurrentTenantPolicy: tenantPolicyMocks.getCurrentTenantPolicy,
+  })),
+}));
 vi.mock("@/lib/db/queries", () => queryMocks);
 
 import {
@@ -93,14 +104,17 @@ import {
   logOutreachEventAction,
   restoreArchivedLeadAction,
   restoreExcludedLeadAction,
+  refreshStaleUnitsAction,
   unclaimLeadAction,
   updateLeadNotesAction,
   updateLeadReminderAction,
   updateLeadStatusAction,
 } from "@/lib/leads/actions";
+import { TENANT_POLICY_DEFAULTS } from "@/lib/tenancy/schemas";
 
 const TENANT_A = "00000000-0000-4000-8000-000000000001";
 const TENANT_B = "00000000-0000-4000-8000-000000000002";
+const WORKSPACE_A = "00000000-0000-4000-8000-000000000003";
 const USER_A = "10000000-0000-4000-8000-000000000001";
 const MEMBERSHIP_A = "20000000-0000-4000-8000-000000000001";
 const ROLE_BINDING_A = "30000000-0000-4000-8000-000000000001";
@@ -132,13 +146,80 @@ const baseLead = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  tenantDbMocks.prepare.mockImplementation(() => ({ get: tenantDbMocks.get }));
+  tenantDbMocks.withTenantDbContext.mockImplementation((callback: (db: unknown) => unknown) => callback({
+    prepare: tenantDbMocks.prepare,
+  }));
   queryMocks.ensureDbReady.mockResolvedValue(undefined);
   queryMocks.createAuditLog.mockResolvedValue(undefined);
   queryMocks.userCanAccessMarket.mockResolvedValue(true);
+  tenantPolicyMocks.getCurrentTenantPolicy.mockResolvedValue({
+    ...TENANT_POLICY_DEFAULTS,
+    id: "50000000-0000-4000-8000-000000000001",
+    tenantId: TENANT_A,
+    version: 1,
+    sourceResearchEnabled: true,
+    requireSourcePlanApproval: false,
+    createdAt: "2026-08-30T00:00:00.000Z",
+    updatedAt: "2026-08-30T00:00:00.000Z",
+  });
   mockTenantRole("owner");
 });
 
 describe("lead ownership server actions", () => {
+  it("tenant-binds stale-unit refresh and checks source policy before writes", async () => {
+    const workspaceSession = {
+      userId: USER_A,
+      email: "owner@example.com",
+      displayName: "Owner",
+      tenantId: TENANT_A,
+      workspaceId: WORKSPACE_A,
+      membershipId: MEMBERSHIP_A,
+      role: "owner" as const,
+      roleBindingId: ROLE_BINDING_A,
+    };
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue(workspaceSession);
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "owner@example.com", role: "admin" });
+    tenantDbMocks.get.mockResolvedValue({ id: "run-1" });
+    queryMocks.refreshStaleUnits.mockResolvedValue(2);
+
+    await expect(refreshStaleUnitsAction(
+      "run-1",
+      7,
+      { tenantId: TENANT_A, workspaceId: WORKSPACE_A },
+    )).resolves.toEqual({ success: true, count: 2 });
+
+    expect(tenantDbMocks.get).toHaveBeenCalledWith("run-1", TENANT_A, WORKSPACE_A);
+    expect(tenantPolicyMocks.getCurrentTenantPolicy).toHaveBeenCalledWith(TENANT_A);
+    expect(queryMocks.refreshStaleUnits).toHaveBeenCalledWith("run-1", 7);
+    expect(queryMocks.updateCrawlRunStatus).toHaveBeenCalledWith("run-1", "running");
+  });
+
+  it("fails a foreign stale-unit refresh before policy or writes", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue({
+      userId: USER_A,
+      email: "owner@example.com",
+      displayName: "Owner",
+      tenantId: TENANT_A,
+      workspaceId: WORKSPACE_A,
+      membershipId: MEMBERSHIP_A,
+      role: "owner",
+      roleBindingId: ROLE_BINDING_A,
+    });
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "owner@example.com", role: "admin" });
+    tenantDbMocks.get.mockResolvedValue(undefined);
+
+    await expect(refreshStaleUnitsAction(
+      "foreign-run",
+      7,
+      { tenantId: TENANT_A, workspaceId: WORKSPACE_A },
+    )).rejects.toMatchObject({ code: "RESOURCE_NOT_FOUND_OR_FORBIDDEN", status: 404 });
+
+    expect(tenantPolicyMocks.getCurrentTenantPolicy).not.toHaveBeenCalled();
+    expect(queryMocks.refreshStaleUnits).not.toHaveBeenCalled();
+    expect(queryMocks.updateCrawlRunStatus).not.toHaveBeenCalled();
+  });
+
   it("normalizes minimum reviews before preserving the researcher access clamp", async () => {
     authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
     queryMocks.getLeads.mockResolvedValue({ leads: [], total: 0 });
