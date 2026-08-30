@@ -148,15 +148,20 @@ export function KnowledgeReviewPreview({
       </header>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(19rem,23rem)_minmax(0,1fr)]">
-        <section id="source-library" className="glass rounded-2xl p-4 sm:p-5" aria-labelledby="source-library-title">
-          <div className="flex items-start justify-between gap-3">
-            <div>
+        <section
+          id="source-library"
+          className="glass scroll-mt-4 rounded-2xl p-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--accent)] sm:p-5"
+          aria-labelledby="source-library-title"
+          tabIndex={-1}
+        >
+          <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
               <h2 id="source-library-title" className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>Source library</h2>
               <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
                 {sources.length} fixture sources · tenant-wide · {partialSources} partial
               </p>
             </div>
-            <Link className="btn-glass min-h-11 shrink-0 text-xs" href={intakeHref}>Review intake</Link>
+            <Link className="btn-glass min-h-11 w-full shrink-0 text-xs sm:w-auto" href={intakeHref}>Review intake</Link>
           </div>
 
           <ul className="mt-4 space-y-2" aria-label="Fixture knowledge sources">
@@ -169,12 +174,12 @@ export function KnowledgeReviewPreview({
                   className="rounded-xl border p-3"
                   style={{ background: index === 0 ? "var(--selection-bg)" : "var(--surface-muted)", borderColor: "var(--surface-card-border)" }}
                 >
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex flex-col items-start gap-2 sm:flex-row sm:justify-between sm:gap-3">
                     <div className="min-w-0">
                       <p className="break-words text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{source.name}</p>
                       <p className="mt-1 text-xs uppercase" style={{ color: "var(--text-tertiary)" }}>{source.format} · {source.version}</p>
                     </div>
-                    <span className="shrink-0 text-xs font-semibold" style={{ color: statusColor(meta.canonical) }}>
+                    <span className="max-w-full break-words text-xs font-semibold sm:shrink-0 sm:text-right" style={{ color: statusColor(meta.canonical) }}>
                       <span aria-hidden="true">{meta.symbol}</span> {source.statusLabel}
                     </span>
                   </div>
@@ -186,7 +191,12 @@ export function KnowledgeReviewPreview({
           </ul>
         </section>
 
-        <section id="extraction-review" className="glass rounded-2xl p-4 sm:p-5" aria-labelledby="extraction-review-title">
+        <section
+          id="extraction-review"
+          className="glass scroll-mt-4 rounded-2xl p-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--accent)] sm:p-5"
+          aria-labelledby="extraction-review-title"
+          tabIndex={-1}
+        >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
               <p className="section-label">Selected immutable source</p>
@@ -196,7 +206,7 @@ export function KnowledgeReviewPreview({
               <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>{selectedSource.format.toUpperCase()} · {selectedSource.version}</p>
             </div>
             <span
-              className="rounded-full border px-2.5 py-1 text-xs font-semibold"
+              className="max-w-full self-start break-words rounded-xl border px-2.5 py-1 text-left text-xs font-semibold leading-relaxed"
               data-selected-source-status="true"
               data-tone={selectedSourceStatus.tone}
               data-state={selectedSourceStatus.canonical}
@@ -250,7 +260,12 @@ export function KnowledgeReviewPreview({
         </section>
       </div>
 
-      <section id="understanding-review" className="glass rounded-2xl p-4 sm:p-5" aria-labelledby="understanding-review-title">
+      <section
+        id="understanding-review"
+        className="glass scroll-mt-4 rounded-2xl p-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--accent)] sm:p-5"
+        aria-labelledby="understanding-review-title"
+        tabIndex={-1}
+      >
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="section-label">Versioned synthesis</p>
@@ -258,9 +273,14 @@ export function KnowledgeReviewPreview({
             <p className="mt-1 text-sm font-medium" style={{ color: "var(--warning-text)" }}>{understanding.statusLabel}</p>
             <p className="mt-1 text-xs" style={{ color: "var(--text-tertiary)" }}>Generated {understanding.generatedAt}</p>
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <button className="btn-glass min-h-11" type="button" disabled>Request another question round</button>
-            <button className="btn-primary min-h-11" type="button" disabled>Approve understanding</button>
+          <div className="min-w-0 lg:max-w-xl">
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:justify-end">
+              <button className="btn-glass min-h-11 w-full whitespace-normal text-center sm:w-auto" type="button" disabled aria-describedby="fixture-review-actions-explanation">Request another question round</button>
+              <button className="btn-primary min-h-11 w-full whitespace-normal text-center sm:w-auto" type="button" disabled aria-describedby="fixture-review-actions-explanation">Approve understanding</button>
+            </div>
+            <p id="fixture-review-actions-explanation" className="mt-2 text-xs leading-relaxed lg:text-right" style={{ color: "var(--text-tertiary)" }}>
+              Actions are unavailable because this is a read-only fixture; no question request or approval can be submitted.
+            </p>
           </div>
         </div>
 
@@ -280,8 +300,8 @@ export function KnowledgeReviewPreview({
                   const meta = DOMAIN_STATE[domain.state];
                   return (
                     <article key={domain.name} data-state={meta.canonical} className="rounded-xl border p-3" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)" }}>
-                      <div className="flex items-center justify-between gap-2">
-                        <h4 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{domain.name}</h4>
+                      <div className="flex flex-col items-start gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-2">
+                        <h4 className="min-w-0 break-words text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{domain.name}</h4>
                         <span
                           className="text-xs font-semibold"
                           data-domain-status="true"
@@ -342,6 +362,15 @@ export function KnowledgeReviewPreview({
 
           <aside className="rounded-xl border p-4" data-state="STATE-PENDING" aria-labelledby="next-question-title" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)" }}>
             <p className="section-label">Adaptive question preview</p>
+            <p
+              className="mt-2 text-xs font-semibold"
+              data-state="STATE-UNKNOWN"
+              data-uncertainty-status="true"
+              aria-label="Question uncertainty status: Unresolved"
+              style={{ color: "var(--warning-text)" }}
+            >
+              <span aria-hidden="true">?</span> Uncertainty · unresolved
+            </p>
             <h3 id="next-question-title" className="mt-2 text-base font-semibold leading-snug" style={{ color: "var(--text-primary)" }}>{understanding.question.prompt}</h3>
             <div className="mt-4 space-y-3">
               <div>

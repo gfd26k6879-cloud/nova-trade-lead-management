@@ -119,8 +119,34 @@ describe("KnowledgeReviewPreview", () => {
     expect(html).toContain("What this unlocks");
     expect(html).toContain("Request another question round");
     expect(html).toContain("Approve understanding");
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Approve understanding<\/button>/);
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Request another question round<\/button>/);
+    expect(html).toContain("Actions are unavailable because this is a read-only fixture");
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-describedby="fixture-review-actions-explanation"[^>]*>Approve understanding<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-describedby="fixture-review-actions-explanation"[^>]*>Request another question round<\/button>/);
+  });
+
+  it("keeps landmark headings ordered and fragment targets keyboard-focusable", () => {
+    const html = renderToStaticMarkup(<KnowledgeReviewPreview {...FIXTURE} />);
+
+    expect(html.match(/<h1\b/g)).toHaveLength(1);
+    expect(html.match(/<h2\b/g)).toHaveLength(3);
+    expect(html.indexOf("<h1")).toBeLessThan(html.indexOf("<h2"));
+    expect(html.indexOf("<h2")).toBeLessThan(html.indexOf("<h3"));
+    expect(html.indexOf("<h3")).toBeLessThan(html.indexOf("<h4"));
+    expect(html).toContain('<nav aria-label="Knowledge review sections"');
+    for (const id of ["source-library", "extraction-review", "understanding-review"]) {
+      expect(html).toContain(`href="#${id}"`);
+      expect(html).toMatch(new RegExp(`<section id="${id}"[^>]*scroll-mt-4[^>]*tabindex="-1"`));
+    }
+  });
+
+  it("keeps actions touch-sized and narrow layouts wrapping instead of overflowing", () => {
+    const html = renderToStaticMarkup(<KnowledgeReviewPreview {...FIXTURE} />);
+
+    expect(html.match(/class="btn-glass min-h-11 text-xs" href="#[^"]+"/g)).toHaveLength(3);
+    expect(html).toMatch(/href="\/onboarding"[^>]*>Review intake<\/a>/);
+    expect(html).toMatch(/class="btn-glass min-h-11 w-full[^\"]*sm:w-auto"[^>]*href="\/onboarding"/);
+    expect(html).toMatch(/class="btn-glass min-h-11 w-full whitespace-normal text-center sm:w-auto"/);
+    expect(html).toMatch(/class="btn-primary min-h-11 w-full whitespace-normal text-center sm:w-auto"/);
   });
 
   it.each([
@@ -151,5 +177,6 @@ describe("KnowledgeReviewPreview", () => {
     expect(html).toMatch(/data-domain-status="true"[^>]*aria-label="Constraints status: Unknown"[^>]*>[\s\S]*?<span aria-hidden="true">\?<\/span>/);
     expect(html).toMatch(/data-claim-support-status="true"[^>]*aria-label="Claim support status: Supported claim"[^>]*>[\s\S]*?<span aria-hidden="true">✓<\/span>/);
     expect(html).toMatch(/data-claim-support-status="true"[^>]*aria-label="Claim support status: Unsupported claim; evidence is stale"[^>]*>[\s\S]*?<span aria-hidden="true">!<\/span>/);
+    expect(html).toMatch(/data-state="STATE-UNKNOWN"[^>]*data-uncertainty-status="true"[^>]*aria-label="Question uncertainty status: Unresolved"[^>]*>[\s\S]*?<span aria-hidden="true">\?<\/span> Uncertainty · unresolved/);
   });
 });
