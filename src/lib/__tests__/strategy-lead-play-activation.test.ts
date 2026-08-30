@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -421,6 +423,43 @@ describe("lead-play activation and rollback eligibility", () => {
     }))).toEqual({ ok: false, code: "STALE_STATE" });
   });
 
+  it("requires eligibility review strictly after play approval and strictly before activation", () => {
+    const play = approvedPlayV1();
+    const simulation = simulationFor(play);
+    for (const reviewedAt of ["2026-08-30T14:01:59.999Z", "2026-08-30T14:02:00.000Z"]) {
+      expect(reviewLeadPlaySimulationEligibility({
+        version: 1,
+        tenantId: TENANT_A,
+        workspaceId: WORKSPACE_A,
+        playSource: play.source,
+        playReview: play.review,
+        simulationInput: simulation.source,
+        simulation: simulation.simulation,
+        decision: "eligible",
+        actor: { kind: "human", actorId: REVIEWER },
+        reviewedAt,
+        reason: "Human reviewed the exact hypothetical fixture outcomes.",
+      })).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    }
+    const eligibilityAtActivation = reviewLeadPlaySimulationEligibility({
+      version: 1,
+      tenantId: TENANT_A,
+      workspaceId: WORKSPACE_A,
+      playSource: play.source,
+      playReview: play.review,
+      simulationInput: simulation.source,
+      simulation: simulation.simulation,
+      decision: "eligible",
+      actor: { kind: "human", actorId: REVIEWER },
+      reviewedAt: "2026-08-30T16:01:00.000Z",
+      reason: "Human reviewed the exact hypothetical fixture outcomes.",
+    });
+    if (!eligibilityAtActivation.ok) throw new Error(eligibilityAtActivation.code);
+    expect(transitionLeadPlayActivation(transitionInput(initialState(), play, simulation, {
+      simulationEligibility: eligibilityAtActivation.review,
+    }))).toEqual({ ok: false, code: "SIMULATION_ELIGIBILITY_REQUIRED" });
+  });
+
   it("fails closed on cross-scope, automatic, proxy, accessor, and non-human input", () => {
     const play = approvedPlayV1();
     const current = initialState();
@@ -493,5 +532,77 @@ describe("lead-play activation and rollback eligibility", () => {
     });
     if (!rollback.ok) return;
     expect(rollback.state.events[2]?.reason).toContain("rollback");
+  });
+
+  it("refuses to emit an unparseable state beyond the bounded event history", () => {
+    const play = approvedPlayV1();
+    const activated = transitionLeadPlayActivation(transitionInput(initialState(), play));
+    if (!activated.ok || !activated.state.active) throw new Error(activated.ok ? "missing active" : activated.code);
+    const v1 = activated.state.active;
+    const events = [activated.state.events[0]!];
+    const inactive = new Map<string, typeof v1>();
+    let active = v1;
+    const hex = (value: number) => value.toString(16).padStart(64, "0");
+    for (let sequence = 2; sequence <= 1_000; sequence += 1) {
+      const at = new Date(Date.parse("2026-08-30T16:01:00.000Z") + (sequence - 1) * 1_000).toISOString();
+      if (sequence % 2 === 0) {
+        const digest = hex(sequence);
+        const branch = Object.freeze({
+          versionId: `lead-play-version:${digest}`,
+          contentHash: `sha256:${digest}`,
+          reviewHash: `sha256:${hex(sequence + 2_000)}`,
+          revision: 2,
+          supersedesVersionId: v1.versionId,
+          simulationId: `lead-play-simulation:${hex(sequence + 4_000)}`,
+          simulationHash: `sha256:${hex(sequence + 6_000)}`,
+          simulationEligibilityHash: `sha256:${hex(sequence + 8_000)}`,
+        });
+        inactive.set(active.versionId, active);
+        events.push(Object.freeze({
+          sequence,
+          action: "activate" as const,
+          fromVersionId: active.versionId,
+          to: branch,
+          actor: Object.freeze({ kind: "human" as const, actorId: REVIEWER }),
+          at,
+          reason: "Human activated a reviewed direct successor version.",
+        }));
+        active = branch;
+      } else {
+        inactive.delete(v1.versionId);
+        inactive.set(active.versionId, active);
+        events.push(Object.freeze({
+          sequence,
+          action: "rollback" as const,
+          fromVersionId: active.versionId,
+          to: v1,
+          actor: Object.freeze({ kind: "human" as const, actorId: REVIEWER }),
+          at,
+          reason: "Human rolled back to the canonical prior version.",
+        }));
+        active = v1;
+      }
+    }
+    const inactiveBindings = [...inactive.values()].sort((left, right) => left.revision - right.revision
+      || (left.versionId < right.versionId ? -1 : left.versionId > right.versionId ? 1 : 0));
+    const payload = {
+      stateVersion: 1 as const,
+      tenantId: TENANT_A,
+      workspaceId: WORKSPACE_A,
+      stableKey: "lead-play:activation-fixture",
+      createdAt: "2026-08-30T16:00:00.000Z",
+      active,
+      inactive: inactiveBindings,
+      events,
+    };
+    const state = Object.freeze({
+      ...payload,
+      stateHash: `sha256:${createHash("sha256").update(JSON.stringify(payload)).digest("hex")}`,
+    }) as LeadPlayActivationState;
+    expect(transitionLeadPlayActivation(transitionInput(state, play, undefined, {
+      action: "rollback",
+      at: "2026-08-30T17:00:00.000Z",
+      reason: "Human requested a bounded rollback at the history limit.",
+    }))).toEqual({ ok: false, code: "INVALID_TRANSITION" });
   });
 });

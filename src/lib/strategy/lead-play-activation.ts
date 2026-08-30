@@ -280,6 +280,7 @@ type CanonicalSimulation = Readonly<{
     versionId: string;
     contentHash: string;
     reviewHash: string;
+    approvedAt: string;
   }>;
   simulation: LeadPlaySimulation;
 }>;
@@ -332,8 +333,12 @@ function canonicalSimulation(
     ? review.versionId : null;
   const contentHash = hash(review.contentHash);
   const reviewHash = hash(review.reviewHash);
+  const reviewEvents = Array.isArray(review.events) ? review.events : null;
+  const lastReviewEvent = reviewEvents?.at(-1);
+  const approvedAt = lastReviewEvent && !Array.isArray(lastReviewEvent) && typeof lastReviewEvent === "object"
+    ? timestamp(lastReviewEvent.at) : null;
   if (!tenantId || workspaceId === undefined || !stableKey || revision === null
-    || supersedesVersionId === undefined || !versionId || !contentHash || !reviewHash) {
+    || supersedesVersionId === undefined || !versionId || !contentHash || !reviewHash || !approvedAt) {
     return Object.freeze({ ok: false, code: "MALFORMED_INPUT" });
   }
   const play = Object.freeze({
@@ -345,6 +350,7 @@ function canonicalSimulation(
     versionId,
     contentHash,
     reviewHash,
+    approvedAt,
   });
   if (!sameScope(scope, play) || !sameScope(scope, simulated.simulation)) {
     return Object.freeze({ ok: false, code: "SCOPE_MISMATCH" });
@@ -387,6 +393,9 @@ export function reviewLeadPlaySimulationEligibility(value: unknown): LeadPlaySim
       input.simulation,
     );
     if (!canonical.ok) return eligibilityFailure(canonical.code);
+    if (Date.parse(reviewedAt) <= Date.parse(canonical.value.play.approvedAt)) {
+      return eligibilityFailure("MALFORMED_INPUT");
+    }
     const payload = Object.freeze({
       eligibilityVersion: LEAD_PLAY_ACTIVATION_VERSION,
       tenantId,
@@ -647,6 +656,7 @@ export function transitionLeadPlayActivation(value: unknown): LeadPlayActivation
     if (expectedStateHash !== current.stateHash) return transitionFailure("STALE_STATE");
     const lastAt = current.events.at(-1)?.at ?? current.createdAt;
     if (Date.parse(at) <= Date.parse(lastAt)) return transitionFailure("INVALID_TRANSITION");
+    if (current.events.length >= MAX_EVENTS) return transitionFailure("INVALID_TRANSITION");
 
     const canonical = canonicalSimulation(
       scope,
@@ -664,6 +674,7 @@ export function transitionLeadPlayActivation(value: unknown): LeadPlayActivation
       || eligibility.playReviewHash !== canonical.value.play.reviewHash
       || eligibility.simulationId !== canonical.value.simulation.simulationId
       || eligibility.simulationHash !== canonical.value.simulation.simulationHash
+      || Date.parse(eligibility.reviewedAt) <= Date.parse(canonical.value.play.approvedAt)
       || Date.parse(eligibility.reviewedAt) >= Date.parse(at)) {
       return transitionFailure("SIMULATION_ELIGIBILITY_REQUIRED");
     }
