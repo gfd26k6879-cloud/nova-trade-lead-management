@@ -5,6 +5,7 @@ const authMocks = vi.hoisted(() => ({
 }));
 
 const appUserMocks = vi.hoisted(() => ({
+  createAppUserForAuthUser: vi.fn(),
   getAppUserByUserId: vi.fn(),
   listAppUsers: vi.fn(),
   updateAppUserRole: vi.fn(),
@@ -28,7 +29,7 @@ vi.mock("next/cache", () => cacheMocks);
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requirePermission: authMocks.requirePermission }));
 vi.mock("@/lib/app-users", () => ({
-  createAppUserForAuthUser: vi.fn(),
+  createAppUserForAuthUser: appUserMocks.createAppUserForAuthUser,
   getAppUserByUserId: appUserMocks.getAppUserByUserId,
   listAppUsers: appUserMocks.listAppUsers,
   updateAppUserRole: appUserMocks.updateAppUserRole,
@@ -39,6 +40,10 @@ vi.mock("@/lib/db/queries", () => queryMocks);
 vi.mock("@/lib/supabase/admin", () => supabaseMocks);
 
 import {
+  createUserAction,
+  listUserMarketAccessAction,
+  listUsersAction,
+  resetUserPasswordAction,
   updateUserMarketAccessAction,
   updateUserRoleAction,
   updateUserStatusAction,
@@ -56,18 +61,67 @@ beforeEach(() => {
 
 function expectNoGlobalUserSideEffects(): void {
   expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+  expect(appUserMocks.createAppUserForAuthUser).not.toHaveBeenCalled();
   expect(appUserMocks.getAppUserByUserId).not.toHaveBeenCalled();
   expect(appUserMocks.listAppUsers).not.toHaveBeenCalled();
   expect(appUserMocks.updateAppUserRole).not.toHaveBeenCalled();
   expect(appUserMocks.updateAppUserStatus).not.toHaveBeenCalled();
   expect(appUserMocks.updateAppUserTeam).not.toHaveBeenCalled();
   expect(queryMocks.replaceUserMarketAccess).not.toHaveBeenCalled();
+  expect(queryMocks.listUserMarketAccessForUsers).not.toHaveBeenCalled();
   expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
   expect(cacheMocks.revalidatePath).not.toHaveBeenCalled();
   expect(supabaseMocks.createSupabaseAdminClient).not.toHaveBeenCalled();
 }
 
 describe("platform-global user mutation guards", () => {
+  it("fails the platform-global user directory read closed", async () => {
+    await expect(listUsersAction()).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
+
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
+  });
+
+  it.each([
+    ["existing-looking targets", ["researcher-1", "researcher-2"]],
+    ["empty targets", []],
+    ["malformed targets", ["", "  "]],
+  ])("fails market-access reads closed for %s", async (_label, userIds) => {
+    await expect(listUserMarketAccessAction(userIds)).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
+
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
+  });
+
+  it.each([
+    ["valid input", { email: "new-user@example.com", displayName: "New User", role: "admin" as const }],
+    ["invalid input", { email: "not-an-email", role: "researcher" as const }],
+  ])("fails user creation closed for %s before invite or persistence", async (_label, input) => {
+    await expect(createUserAction(input)).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
+
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
+  });
+
+  it.each([
+    ["existing-looking target", "researcher-1"],
+    ["unknown target", "missing-user"],
+    ["malformed target", ""],
+  ])("fails password resets closed for an %s before provider access", async (_label, userId) => {
+    await expect(resetUserPasswordAction(userId)).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
+
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
+  });
+
   it.each([
     ["existing target", "researcher-1"],
     ["unknown target", "missing-user"],

@@ -1,14 +1,8 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { headers } from "next/headers";
-import { revalidatePath } from "next/cache";
-import { z } from "zod";
 
-import { buildPasswordRecoveryUrl, buildWelcomeInviteUrl, resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
-  createAppUserForAuthUser,
-  listAppUsers,
   type AppUser,
   type AppUserStatus,
   type TenantSessionSelector,
@@ -16,14 +10,11 @@ import {
 import { requirePermission } from "@/lib/auth";
 import { withTenantDbContext } from "@/lib/db";
 import {
-  createAuditLog,
   ensureDbReady,
   listLocationMarkets,
-  listUserMarketAccessForUsers,
   type UserMarketAccess,
 } from "@/lib/db/queries";
 import { type AppRole } from "@/lib/permissions";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
   assertTenantResourceOwnership,
   requireTenantPermission,
@@ -32,16 +23,11 @@ import {
 import { runWithTenantContext } from "@/lib/tenancy/context";
 import { createTenantQueryRepository } from "@/lib/tenancy/queries";
 
-const createUserSchema = z.object({
-  email: z.string().trim().email().max(320).transform((value) => value.toLowerCase()),
-  displayName: z.string().trim().max(120).optional(),
-  role: z.enum(["admin", "researcher"]).default("researcher"),
-});
-
 export async function listUsersAction() {
   await requirePermission("users:manage");
-  await ensureDbReady();
-  return listAppUsers();
+  // app_users is platform-global and cannot be projected safely into a tenant
+  // directory. The canonical membership page owns the supported read path.
+  return unavailableUserResult();
 }
 
 export async function listTerritoryMarketsAction() {
@@ -52,55 +38,20 @@ export async function listTerritoryMarketsAction() {
 
 export async function listUserMarketAccessAction(userIds: string[]) {
   await requirePermission("users:manage");
-  await ensureDbReady();
-  const uniqueUserIds = Array.from(new Set(userIds.map((id) => id.trim()).filter(Boolean)));
-  return listUserMarketAccessForUsers(uniqueUserIds);
+  void userIds;
+  // user_market_access has no tenant ownership key, so caller-provided user
+  // IDs must not authorize a platform-global lookup.
+  return unavailableUserResult();
 }
 
-export async function createUserAction(input: { email: string; displayName?: string; role?: AppRole }) {
-  const session = await requirePermission("users:manage");
-  await ensureDbReady();
-  const parsed = createUserSchema.safeParse(input);
-  if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Invalid user input." };
-  }
-
-  const headerStore = await headers();
-  const appUrl = resolveCanonicalAppUrl(headerStore.get("origin"));
-  const supabase = createSupabaseAdminClient();
-  const { data, error } = await supabase.auth.admin.inviteUserByEmail(parsed.data.email, {
-    redirectTo: buildWelcomeInviteUrl("/reset-password", appUrl),
-    data: {
-      display_name: parsed.data.displayName ?? "",
-    },
-  });
-
-  if (error || !data.user?.id) {
-    return { error: error?.message ?? "Unable to create Supabase Auth invite." };
-  }
-
-  const authEmail = data.user.email ?? parsed.data.email;
-  const appUser = await createAppUserForAuthUser({
-    userId: data.user.id,
-    email: authEmail,
-    displayName: parsed.data.displayName ?? null,
-    role: parsed.data.role,
-    status: "active",
-    createdBy: session.userId,
-  });
-
-  await createAuditLog("app_user_created", "app_user", appUser.user_id, {
-    email: parsed.data.email,
-    role: parsed.data.role,
-  });
-
-  await createAuditLog("app_user_welcome_email_sent", "app_user", appUser.user_id, {
-    email: authEmail,
-    redirectTo: buildWelcomeInviteUrl("/reset-password", appUrl),
-  });
-
-  revalidatePath("/users");
-  return { success: true, user: appUser, welcomeEmailSent: true };
+export async function createUserAction(
+  input: { email: string; displayName?: string; role?: AppRole },
+): Promise<{ error: string } | { success: true; user: AppUser; welcomeEmailSent: true }> {
+  await requirePermission("users:manage");
+  void input;
+  // A provider invite creates a platform identity before tenant membership is
+  // established. Keep this closed until one canonical adapter owns both steps.
+  return unavailableUserResult();
 }
 
 export async function updateUserRoleAction(userId: string, role: AppRole): Promise<{
@@ -209,34 +160,17 @@ export async function updateUserMarketAccessAction(
   return unavailableUserResult();
 }
 
-export async function resetUserPasswordAction(userId: string) {
+export async function resetUserPasswordAction(userId: string): Promise<{
+  error: string;
+} | {
+  success: true;
+  resetEmailSent: true;
+}> {
   await requirePermission("users:manage");
-  await ensureDbReady();
-  const supabase = createSupabaseAdminClient();
-  const { data, error } = await supabase.auth.admin.getUserById(userId);
-
-  if (error || !data.user?.email) {
-    return { error: error?.message ?? "Unable to load Supabase Auth user email." };
-  }
-
-  const resetResult = await sendPasswordResetEmail(data.user.email);
-  if (resetResult.error) {
-    return { error: resetResult.error };
-  }
-
-  await createAuditLog("app_user_password_reset_email_sent", "app_user", userId);
-  return { success: true, resetEmailSent: true };
-}
-
-async function sendPasswordResetEmail(email: string): Promise<{ error: string | null }> {
-  const headerStore = await headers();
-  const appUrl = resolveCanonicalAppUrl(headerStore.get("origin"));
-
-  const supabase = createSupabaseAdminClient();
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: buildPasswordRecoveryUrl("/reset-password", appUrl),
-  });
-  return { error: error?.message ?? null };
+  void userId;
+  // Password recovery is platform identity administration. A tenant-facing
+  // action must not look up or email an arbitrary platform user.
+  return unavailableUserResult();
 }
 
 function unavailableUserResult(): { error: string } {

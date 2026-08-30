@@ -13,23 +13,25 @@ function functionBody(name: string, nextName: string): string {
 }
 
 describe("user email flows", () => {
-  it("sends a Supabase welcome invite when an admin creates a user", () => {
+  it("keeps tenant-facing user creation closed before platform invite side effects", () => {
     const body = functionBody("createUserAction", "updateUserRoleAction");
 
-    expect(body).toContain("inviteUserByEmail");
-    expect(body).toContain("buildWelcomeInviteUrl");
-    expect(body).toContain("app_user_welcome_email_sent");
+    expect(body).toContain("unavailableUserResult");
+    expect(body).not.toContain("inviteUserByEmail");
+    expect(body).not.toContain("buildWelcomeInviteUrl");
+    expect(body).not.toContain("app_user_welcome_email_sent");
     expect(body).not.toContain("resetPasswordForEmail");
-    expect(body).not.toContain("createUser({");
-    expect(body).not.toContain("temporaryPassword");
+    expect(body).not.toContain("createAppUserForAuthUser");
   });
 
-  it("keeps reset links on the explicit reset-password action only", () => {
-    const body = source.slice(source.indexOf("async function sendPasswordResetEmail"));
+  it("keeps tenant-facing password reset closed before provider side effects", () => {
+    const body = source.slice(source.indexOf("export async function resetUserPasswordAction"));
 
-    expect(body).toContain("resetPasswordForEmail");
-    expect(body).toContain("buildPasswordRecoveryUrl");
+    expect(body).toContain("unavailableUserResult");
+    expect(body).not.toContain("resetPasswordForEmail");
+    expect(body).not.toContain("buildPasswordRecoveryUrl");
     expect(body).not.toContain("inviteUserByEmail");
+    expect(body).not.toContain("createSupabaseAdminClient");
   });
 
   it("does not delete platform-global identities from a tenant-scoped removal action", () => {
