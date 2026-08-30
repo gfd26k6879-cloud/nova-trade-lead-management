@@ -9416,43 +9416,81 @@ function adminRequestSelectSql(): string {
       owner.display_name as lead_owner_display_name,
       creator.email as creator_email,
       creator.display_name as creator_display_name,
-      COALESCE(creator.team_lead_user_id, CASE WHEN creator.is_team_lead = 1 THEN creator.user_id ELSE NULL END) as creator_team_lead_user_id,
+      team_lead.user_id as creator_team_lead_user_id,
       team_lead.email as creator_team_lead_email,
       team_lead.display_name as creator_team_lead_display_name,
       creator.team_label as creator_team_label
     FROM admin_requests ar
-    LEFT JOIN leads l ON l.id = ar.lead_id
-    LEFT JOIN app_users owner ON owner.user_id = l.assigned_to_user_id
-    LEFT JOIN app_users creator ON creator.user_id = ar.created_by_user_id
-    LEFT JOIN app_users team_lead ON team_lead.user_id = COALESCE(creator.team_lead_user_id, CASE WHEN creator.is_team_lead = 1 THEN creator.user_id ELSE NULL END)`;
+    LEFT JOIN leads l ON l.tenant_id = ar.tenant_id AND l.id = ar.lead_id
+    LEFT JOIN app_users owner
+      ON owner.user_id = l.assigned_to_user_id
+     AND EXISTS (
+       SELECT 1
+       FROM tenant_memberships owner_membership
+       WHERE owner_membership.tenant_id = ar.tenant_id
+         AND owner_membership.auth_identity_id = owner.user_id
+         AND owner_membership.status = 'active'
+     )
+    LEFT JOIN app_users creator
+      ON creator.user_id = ar.created_by_user_id
+     AND EXISTS (
+       SELECT 1
+       FROM tenant_memberships creator_membership
+       WHERE creator_membership.tenant_id = ar.tenant_id
+         AND creator_membership.auth_identity_id = creator.user_id
+         AND creator_membership.status = 'active'
+     )
+    LEFT JOIN app_users team_lead
+      ON team_lead.user_id = COALESCE(creator.team_lead_user_id, CASE WHEN creator.is_team_lead = 1 THEN creator.user_id ELSE NULL END)
+     AND EXISTS (
+       SELECT 1
+       FROM tenant_memberships team_lead_membership
+       WHERE team_lead_membership.tenant_id = ar.tenant_id
+         AND team_lead_membership.auth_identity_id = team_lead.user_id
+         AND team_lead_membership.status = 'active'
+     )`;
+}
+
+function requireTenantWideAdminRequestContext(): { tenantId: string } {
+  const { tenantId, workspaceId } = requireTenantContext();
+  if (workspaceId !== null) throw new Error("Tenant-wide context is required");
+  return { tenantId };
 }
 
 export async function getOpenAdminRequestForLead(leadId: string, requestType: AdminRequestType): Promise<AdminRequest | null> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
   const db = await getDb();
   const row = await db.prepare(
     `${adminRequestSelectSql()}
-     WHERE ar.lead_id = ? AND ar.request_type = ? AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+     WHERE ar.tenant_id = ? AND ar.lead_id = ? AND ar.request_type = ? AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
      ORDER BY ar.created_at DESC
      LIMIT 1`
-  ).get<Record<string, unknown>>(leadId, requestType);
+  ).get<Record<string, unknown>>(tenantId, leadId, requestType);
   return row ? parseAdminRequestRow(row) : null;
 }
 
 export async function createAdminRequest(input: AdminRequestInput): Promise<{ request: AdminRequest; alreadyExists: boolean }> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
+  const db = await getDb();
+  const lead = await db.prepare(
+    "SELECT id FROM leads WHERE tenant_id = ? AND id = ? LIMIT 1"
+  ).get<{ id: string }>(tenantId, input.leadId);
+  if (!lead) throw new Error("Unable to create admin request");
+
   const existing = await getOpenAdminRequestForLead(input.leadId, input.requestType);
   if (existing) return { request: existing, alreadyExists: true };
 
-  const db = await getDb();
   const id = generateId();
   const now = nowISO();
   await db.prepare(
     `INSERT INTO admin_requests (
-      id, lead_id, created_by_user_id, created_by_email, assigned_admin_user_id,
+      id, tenant_id, workspace_id, lead_id, created_by_user_id, created_by_email, assigned_admin_user_id,
       request_type, status, priority, summary, contact_person_name, budget_hint,
       due_at, next_step, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
+    tenantId,
     input.leadId,
     input.createdByUserId ?? null,
     input.createdByEmail ?? null,
@@ -9474,14 +9512,16 @@ export async function createAdminRequest(input: AdminRequestInput): Promise<{ re
 }
 
 export async function getAdminRequestById(id: string): Promise<AdminRequest | null> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
   const db = await getDb();
   const row = await db.prepare(
-    `${adminRequestSelectSql()} WHERE ar.id = ? LIMIT 1`
-  ).get<Record<string, unknown>>(id);
+    `${adminRequestSelectSql()} WHERE ar.tenant_id = ? AND ar.id = ? LIMIT 1`
+  ).get<Record<string, unknown>>(tenantId, id);
   return row ? parseAdminRequestRow(row) : null;
 }
 
 export async function updateAdminRequestStatus(id: string, status: AdminRequestStatus): Promise<AdminRequest | null> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
   const db = await getDb();
   const now = nowISO();
   await db.prepare(
@@ -9493,8 +9533,8 @@ export async function updateAdminRequestStatus(id: string, status: AdminRequestS
          END,
          completed_at = CASE WHEN ? IN ('done','cancelled') THEN ? ELSE NULL END,
          updated_at = ?
-     WHERE id = ?`
-  ).run(status, status, now, status, now, now, id);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(status, status, now, status, now, now, tenantId, id);
   return getAdminRequestById(id);
 }
 
@@ -9504,9 +9544,10 @@ export async function getAdminRequests(filters: {
   requestType?: AdminRequestType;
   limit?: number;
 } = {}): Promise<AdminRequest[]> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
   const db = await getDb();
-  const conditions: string[] = [];
-  const params: unknown[] = [];
+  const conditions: string[] = ["ar.tenant_id = ?"];
+  const params: unknown[] = [tenantId];
   if (filters.leadId) {
     conditions.push("ar.lead_id = ?");
     params.push(filters.leadId);
@@ -9536,6 +9577,7 @@ export async function getAdminRequests(filters: {
 }
 
 export async function getAdminFulfillmentSummary(): Promise<AdminFulfillmentSummary> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
   const db = await getDb();
   const now = nowISO();
   const row = await db.prepare(
@@ -9546,8 +9588,9 @@ export async function getAdminFulfillmentSummary(): Promise<AdminFulfillmentSumm
        COALESCE(SUM(CASE WHEN status = 'waiting_on_researcher' THEN 1 ELSE 0 END), 0) as waiting_on_researcher,
        COALESCE(SUM(CASE WHEN status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL}) AND due_at IS NOT NULL AND due_at <= ? THEN 1 ELSE 0 END), 0) as overdue,
        COALESCE(SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END), 0) as new_requests
-     FROM admin_requests`
-  ).get<Record<string, unknown>>(now);
+     FROM admin_requests
+     WHERE tenant_id = ?`
+  ).get<Record<string, unknown>>(now, tenantId);
   const latestRequests = await getAdminRequests({ status: "open", limit: 6 });
   return {
     openTotal: Number(row?.open_total ?? 0),

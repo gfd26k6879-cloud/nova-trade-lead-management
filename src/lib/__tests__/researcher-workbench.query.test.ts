@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { createTestDb } from "./test-helpers";
 
 let testDb: Database.Database;
+const TENANT_A = "10000000-0000-4000-8000-000000000001";
 
 vi.mock("@/lib/db/index", () => {
   return {
@@ -22,6 +23,11 @@ vi.mock("@/lib/db/index", () => {
     },
   };
 });
+
+vi.mock("@/lib/tenancy/context", () => ({
+  getTenantContext: () => null,
+  requireTenantContext: () => ({ tenantId: TENANT_A, workspaceId: null }),
+}));
 
 import {
   claimLeadForUser,
@@ -45,6 +51,16 @@ function insertUser(userId: string, email: string, displayName: string) {
   testDb.prepare(
     "INSERT OR IGNORE INTO user_market_access (user_id, market_id) VALUES (?, 'market-colorado')"
   ).run(userId);
+  testDb.pragma("ignore_check_constraints = ON");
+  testDb.prepare(
+    `INSERT INTO tenant_memberships (id, tenant_id, auth_identity_id, status)
+     VALUES (?, ?, ?, 'active')`
+  ).run(
+    userId === "user-1" ? "10000000-0000-4000-8000-000000000011" : "10000000-0000-4000-8000-000000000012",
+    TENANT_A,
+    userId,
+  );
+  testDb.pragma("ignore_check_constraints = OFF");
 }
 
 function insertLead(input: {
@@ -64,12 +80,13 @@ function insertLead(input: {
       id, place_id, name, address, phone, categories, website_status, score, status,
       business_type, qualification_status, quality_bucket, ai_verification_status,
       ai_website_viability_status, ai_queue_status, sales_priority_score, lead_quality_score,
-      assigned_to_user_id, reminder_date, market_id, country_code, location_cell_id, postal_code, discovered_at, created_at, updated_at
+      assigned_to_user_id, reminder_date, market_id, country_code, location_cell_id, postal_code,
+      tenant_id, discovered_at, created_at, updated_at
     ) VALUES (
       ?, ?, ?, '123 Main St, Denver, CO 80202', '303-555-0100', '["plumber"]', ?, 20, 'new',
       'plumbing', 'qualified', ?, ?,
       ?, ?, ?, ?,
-      ?, ?, 'market-colorado', 'US', 'cell-us-co-80202', '80202', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z'
+      ?, ?, 'market-colorado', 'US', 'cell-us-co-80202', '80202', ?, '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z'
     )`
   ).run(
     input.id,
@@ -84,11 +101,19 @@ function insertLead(input: {
     input.leadQuality ?? 80,
     input.assignedTo ?? null,
     input.reminder ?? null,
+    TENANT_A,
   );
 }
 
 beforeEach(() => {
   testDb = createTestDb();
+  testDb.exec(`
+    ALTER TABLE leads ADD COLUMN tenant_id TEXT;
+    ALTER TABLE admin_requests ADD COLUMN tenant_id TEXT;
+    ALTER TABLE admin_requests ADD COLUMN workspace_id TEXT;
+    INSERT INTO tenants (id, slug, name, status)
+    VALUES ('${TENANT_A}', 'researcher-workbench', 'Researcher Workbench', 'active');
+  `);
   insertUser("user-1", "one@example.com", "One");
   insertUser("user-2", "two@example.com", "Two");
 });
