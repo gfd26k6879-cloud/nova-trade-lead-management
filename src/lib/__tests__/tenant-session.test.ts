@@ -206,8 +206,58 @@ describe("tenant session scope", () => {
     }, db)).resolves.toMatchObject({ tenantId: TENANT_B, workspaceId: WORKSPACE_B, membershipId: MEMBER_B });
   });
 
+  it("defaults an empty selector only when one active membership scope is unambiguous", async () => {
+    const db = createDb();
+    seedFoundation(db);
+    await db.prepare("UPDATE tenant_memberships SET status = 'disabled' WHERE id = ?").run(MEMBER_B);
+
+    await expect(resolveAtTrustedNow({
+      authIdentityId: AUTH_SHARED,
+      selector: {},
+    }, db)).resolves.toEqual({
+      tenantId: TENANT_A,
+      workspaceId: null,
+      membershipId: MEMBER_A,
+      role: "owner",
+      roleBindingId: ROLE_A,
+    });
+  });
+
+  it("fails closed for zero or multiple default membership scopes", async () => {
+    const zero = createDb();
+    seedFoundation(zero);
+    await expect(resolveAtTrustedNow({ authIdentityId: AUTH_OTHER, selector: {} }, zero))
+      .rejects.toMatchObject({ code: "TENANT_SCOPE_UNAVAILABLE" });
+
+    const multiple = createDb();
+    seedFoundation(multiple);
+    await expect(resolveAtTrustedNow({ authIdentityId: AUTH_SHARED, selector: {} }, multiple))
+      .rejects.toMatchObject({ code: "TENANT_SCOPE_UNAVAILABLE" });
+  });
+
+  it.each(["pending", "suspended", "disabled"] as const)("does not default a %s membership", async (status) => {
+    const db = createDb();
+    seedFoundation(db);
+    await db.prepare("UPDATE tenant_memberships SET status = ?").run(status);
+
+    await expect(resolveAtTrustedNow({ authIdentityId: AUTH_SHARED, selector: {} }, db))
+      .rejects.toMatchObject({ code: "TENANT_SCOPE_UNAVAILABLE" });
+  });
+
+  it("fails closed when default membership rows are internally inconsistent", async () => {
+    const base = createDb();
+    seedFoundation(base);
+    await base.prepare("UPDATE tenant_memberships SET status = 'disabled' WHERE id = ?").run(MEMBER_B);
+    const inconsistent = withExtraRows(base, (query) => query.includes("JOIN tenant_memberships"), [{
+      membership_auth_identity_id: AUTH_OTHER,
+    }]);
+
+    await expect(resolveAtTrustedNow({ authIdentityId: AUTH_SHARED, selector: {} }, inconsistent))
+      .rejects.toMatchObject({ code: "TENANT_SCOPE_UNAVAILABLE" });
+  });
+
   it.each([
-    ["absent tenant selector", { tenantId: undefined }],
+    ["workspace selector without tenant", { tenantId: undefined, workspaceId: WORKSPACE_A }],
     ["malformed tenant selector", { tenantId: "not-a-uuid" }],
     ["wrong tenant", { tenantId: "00000000-0000-4000-8000-000000000099" }],
     ["cross-tenant workspace", { tenantId: TENANT_A, workspaceId: WORKSPACE_B }],

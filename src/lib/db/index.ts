@@ -21,7 +21,7 @@ export interface DbStatement {
 
 export interface TenantSessionBootstrapInput {
   readonly authIdentityId: string;
-  readonly tenantId: string;
+  readonly tenantId: string | null;
   readonly workspaceSelectorProvided: boolean;
   readonly workspaceId: string | null;
 }

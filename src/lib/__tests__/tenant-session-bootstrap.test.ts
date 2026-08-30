@@ -23,6 +23,9 @@ const AUTH_A = "50000000-0000-4000-8000-000000000001";
 const MIGRATION_PATH = resolve(
   "supabase/migrations/20260829200000_add_tenant_session_bootstrap_resolver.sql",
 );
+const DEFAULT_SELECTOR_MIGRATION_PATH = resolve(
+  "supabase/migrations/20260830010000_allow_unambiguous_tenant_session_default.sql",
+);
 
 function bootstrapClient(
   rows: readonly Record<string, unknown>[],
@@ -93,8 +96,38 @@ describe("PostgreSQL tenant-session bootstrap adapter", () => {
     }));
   });
 
+  it("passes an empty selector to storage and accepts exactly one returned scope", async () => {
+    const db = bootstrapClient([validRow]);
+
+    await expect(createTenantSessionResolver(db).resolve({
+      authIdentityId: AUTH_A,
+      selector: {},
+    })).resolves.toEqual({
+      tenantId: TENANT_A,
+      workspaceId: WORKSPACE_A,
+      membershipId: MEMBER_A,
+      role: "researcher",
+      roleBindingId: ROLE_A,
+    });
+    expect(db.resolveTenantSessionBootstrap).toHaveBeenCalledWith({
+      authIdentityId: AUTH_A,
+      tenantId: null,
+      workspaceSelectorProvided: false,
+      workspaceId: null,
+    });
+  });
+
   it.each([
-    ["missing tenant", { authIdentityId: AUTH_A, selector: {} }],
+    ["zero", []],
+    ["multiple", [validRow, { ...validRow, tenant_id: TENANT_B }]],
+  ])("fails closed for %s default scopes", async (_label, rows) => {
+    const db = bootstrapClient(rows);
+    await expect(createTenantSessionResolver(db).resolve({ authIdentityId: AUTH_A, selector: {} }))
+      .rejects.toMatchObject({ code: "TENANT_SCOPE_UNAVAILABLE" });
+  });
+
+  it.each([
+    ["workspace without tenant", { authIdentityId: AUTH_A, selector: { workspaceId: WORKSPACE_A } }],
     ["malformed tenant", { authIdentityId: AUTH_A, selector: { tenantId: "bad" } }],
     ["malformed identity", { authIdentityId: "bad", selector: { tenantId: TENANT_A } }],
     ["malformed workspace", { authIdentityId: AUTH_A, selector: { tenantId: TENANT_A, workspaceId: "bad" } }],
@@ -161,6 +194,25 @@ describe("tenant-session bootstrap migration contract", () => {
     expect(sql).toContain("REVOKE ALL ON FUNCTION public.novatrade_resolve_tenant_session(pg_catalog.text, pg_catalog.text, pg_catalog.bool, pg_catalog.text) FROM PUBLIC");
     expect(sql).toContain("FROM anon");
     expect(sql).toContain("FROM authenticated");
+    expect(sql).not.toMatch(/GRANT\s+EXECUTE/iu);
+  });
+});
+
+describe("tenant-session default selector migration contract", () => {
+  const sql = readFileSync(DEFAULT_SELECTOR_MIGRATION_PATH, "utf8");
+
+  it("keeps the trusted function narrow while allowing only a wholly omitted selector", () => {
+    expect(sql).toContain("CREATE OR REPLACE FUNCTION public.novatrade_resolve_tenant_session(");
+    expect(sql).toMatch(/SECURITY DEFINER\s+SET search_path = pg_catalog/u);
+    expect(sql).toContain("p_tenant_id IS NULL AND p_workspace_selector_provided");
+    expect(sql).toContain("tenant_uuid IS NULL OR tenant.id = tenant_uuid");
+    expect(sql).toContain("membership.status = 'active'");
+    expect(sql).toContain("tenant.status = 'active'");
+  });
+
+  it("retains non-public execution and the five-field result contract", () => {
+    expect(sql).toMatch(/RETURNS TABLE \(\s*tenant_id pg_catalog\.uuid,\s*workspace_id pg_catalog\.uuid,\s*membership_id pg_catalog\.uuid,\s*role pg_catalog\.text,\s*role_binding_id pg_catalog\.uuid\s*\)/u);
+    expect(sql).toContain("REVOKE ALL ON FUNCTION public.novatrade_resolve_tenant_session(pg_catalog.text, pg_catalog.text, pg_catalog.bool, pg_catalog.text) FROM PUBLIC");
     expect(sql).not.toMatch(/GRANT\s+EXECUTE/iu);
   });
 });

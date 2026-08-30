@@ -42,7 +42,7 @@ export interface AppUserSessionProfile {
 }
 
 export interface TenantSessionSelector {
-  /** A tenant selector is mandatory; undefined is rejected at runtime. */
+  /** Omitted only for the trusted, unambiguous single-membership default. */
   tenantId?: unknown;
   /** undefined means omitted; null explicitly requests tenant-wide scope. */
   workspaceId?: unknown;
@@ -119,19 +119,19 @@ async function resolveTenantSessionScopeAt(
 ): Promise<TenantSessionScope> {
   if (Number.isNaN(now.getTime())) throw new TenantScopeResolutionError();
 
-  const tenantId = requireUuidSelector(input.selector.tenantId, true);
   const workspaceSelector = parseWorkspaceSelector(input.selector.workspaceId);
+  const tenantSelector = parseTenantSelector(input.selector.tenantId, workspaceSelector.provided);
   const authIdentityId = requireUuidSelector(input.authIdentityId, false);
   const client = db ?? await getDb();
 
   if (client.resolveTenantSessionBootstrap) {
     const rows = await client.resolveTenantSessionBootstrap({
       authIdentityId,
-      tenantId,
+      tenantId: tenantSelector.value,
       workspaceSelectorProvided: workspaceSelector.provided,
       workspaceId: workspaceSelector.value,
     });
-    return parseBootstrapTenantSessionRows(rows, tenantId, workspaceSelector);
+    return parseBootstrapTenantSessionRows(rows, tenantSelector, workspaceSelector);
   }
 
   // Keep the authority decision in one database statement. Besides avoiding a
@@ -176,19 +176,25 @@ async function resolveTenantSessionScopeAt(
      LEFT JOIN tenant_role_bindings AS binding
        ON binding.tenant_id = membership.tenant_id
       AND binding.membership_id = membership.id
-     WHERE tenant.id = ?
+     WHERE (? = 0 OR tenant.id = ?)
+       AND (? = 1 OR membership.status = 'active')
      ORDER BY binding.valid_from ASC, binding.id ASC`,
   ).all<RawJoinedTenantSessionRow>(
     authIdentityId,
     workspaceSelector.provided ? 1 : 0,
     workspaceSelector.value,
-    tenantId,
+    tenantSelector.provided ? 1 : 0,
+    tenantSelector.value,
+    tenantSelector.provided ? 1 : 0,
   );
   if (rows.length === 0) throw new TenantScopeResolutionError();
 
   const parsedRows = rows.map(parseJoinedTenantSessionRow);
   const tenant = parsedRows[0].tenant;
-  if (tenant.id !== tenantId || tenant.status !== "active") throw new TenantScopeResolutionError();
+  const tenantId = tenant.id;
+  if ((tenantSelector.provided && tenantId !== tenantSelector.value) || tenant.status !== "active") {
+    throw new TenantScopeResolutionError();
+  }
   for (const row of parsedRows) {
     if (!sameTenantRow(row.tenant, tenant)) throw new TenantScopeResolutionError();
   }
@@ -239,7 +245,7 @@ const BOOTSTRAP_SCOPE_KEYS = [
 
 function parseBootstrapTenantSessionRows(
   rows: readonly Record<string, unknown>[],
-  selectedTenantId: string,
+  tenantSelector: { provided: boolean; value: string | null },
   workspaceSelector: { provided: boolean; value: string | null },
 ): TenantSessionScope {
   if (rows.length !== 1) throw new TenantScopeResolutionError();
@@ -255,7 +261,7 @@ function parseBootstrapTenantSessionRows(
   const membershipId = requiredUuid(row.membership_id);
   const role = requiredEnum<LaunchRole>(row.role, launchRoleSet);
   const roleBindingId = requiredUuid(row.role_binding_id);
-  if (tenantId !== selectedTenantId) throw new TenantScopeResolutionError();
+  if (tenantSelector.provided && tenantId !== tenantSelector.value) throw new TenantScopeResolutionError();
   if (workspaceSelector.provided && workspaceId !== workspaceSelector.value) {
     throw new TenantScopeResolutionError();
   }
@@ -378,6 +384,17 @@ function requireUuidSelector(value: unknown, required: boolean): string {
     throw new TenantScopeResolutionError(required ? "TENANT_SCOPE_REQUIRED" : "TENANT_SCOPE_UNAVAILABLE");
   }
   return value.toLowerCase();
+}
+
+function parseTenantSelector(
+  value: unknown,
+  workspaceSelectorProvided: boolean,
+): { provided: boolean; value: string | null } {
+  if (value === undefined) {
+    if (workspaceSelectorProvided) throw new TenantScopeResolutionError("TENANT_SCOPE_REQUIRED");
+    return { provided: false, value: null };
+  }
+  return { provided: true, value: requireUuidSelector(value, true) };
 }
 
 function parseWorkspaceSelector(value: unknown): { provided: boolean; value: string | null } {
