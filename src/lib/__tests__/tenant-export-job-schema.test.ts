@@ -460,6 +460,7 @@ describe("tenant export job schema", () => {
 
   it("keeps strict read schemas separate from authorization and preserves migration hardening", () => {
     const migration = readFileSync(join(process.cwd(), "supabase/migrations/202607270006_add_tenant_export_jobs.sql"), "utf8");
+    const rlsMigration = readFileSync(join(process.cwd(), "supabase/migrations/20260830020000_enforce_tenant_export_jobs_rls.sql"), "utf8");
     const db = database();
     try {
       tenant(db, TENANT_A, "schema-a"); membership(db, MEMBERSHIP_A, TENANT_A, REQUESTER_A);
@@ -492,5 +493,16 @@ describe("tenant export job schema", () => {
     expect(migration).toContain("REVOKE ALL ON FUNCTION");
     expect(migration).not.toMatch(/CREATE POLICY|ENABLE ROW LEVEL SECURITY|jsonb/i);
     expect(migration).not.toMatch(/artifact_bytes|raw_content|private_key/i);
+    expect(rlsMigration).toContain("ALTER TABLE public.tenant_export_jobs ENABLE ROW LEVEL SECURITY");
+    expect(rlsMigration).toContain("ALTER TABLE public.tenant_export_jobs FORCE ROW LEVEL SECURITY");
+    expect(rlsMigration).toContain("REVOKE ALL ON TABLE public.tenant_export_jobs FROM PUBLIC");
+    expect(rlsMigration).toContain("public.novatrade_rls_member_context()");
+    expect(rlsMigration).toContain("current_setting('app.role', true) IN ('owner', 'admin')");
+    expect(rlsMigration).toContain("tenant_id::text = pg_catalog.current_setting('app.tenant_id', true)");
+    expect(rlsMigration).toContain("coalesce(workspace_id::text, '')");
+    expect(rlsMigration).toContain("f01_export_jobs_deny_all_mutations");
+    expect(rlsMigration).toContain("USING (false)");
+    expect(rlsMigration).toContain("WITH CHECK (false)");
+    expect(rlsMigration).not.toMatch(/GRANT\s+(?:SELECT|INSERT|UPDATE|DELETE|ALL)/i);
   });
 });
