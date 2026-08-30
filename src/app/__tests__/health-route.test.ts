@@ -97,4 +97,26 @@ describe("/api/health", () => {
     expect(queryMocks.getSettings).toHaveBeenCalledTimes(1);
     expect(routeTimingMocks.logRouteTiming).toHaveBeenCalledWith(503, { healthStatus: "error" });
   });
+
+  it("redacts dependency errors and configured secrets from the public 503 response", async () => {
+    const databaseSecret = "postgres://health-user:database-secret@example.invalid/app";
+    const providerSecret = "sk-provider-secret";
+    queryMocks.ensureDbReady.mockRejectedValue(new Error(`Database rejected ${databaseSecret}`));
+    queryMocks.getSettings.mockRejectedValue(new Error(`Provider rejected ${providerSecret}`));
+
+    const response = await GET();
+    const json = await response.json();
+    const serialized = JSON.stringify(json);
+
+    expect(response.status).toBe(503);
+    expect(json.status).toBe("error");
+    expect(Object.keys(json).sort()).toEqual(["checkedAt", "status"]);
+    expect(serialized).not.toContain(databaseSecret);
+    expect(serialized).not.toContain(providerSecret);
+    expect(serialized).not.toContain(process.env.SUPABASE_SERVICE_ROLE_KEY);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store, max-age=0, must-revalidate, no-transform");
+    expect(response.headers.get("Pragma")).toBe("no-cache");
+    expect(response.headers.get("Expires")).toBe("0");
+    expect(routeTimingMocks.logRouteTiming).toHaveBeenCalledWith(503, { healthStatus: "error" });
+  });
 });
