@@ -22,6 +22,7 @@ import { requireTenantPermission } from "@/lib/tenancy/authorize";
 import { runWithTenantContext } from "@/lib/tenancy/context";
 import { createTenantQueryRepository } from "@/lib/tenancy/queries";
 import { tenantPolicySchema } from "@/lib/tenancy/schemas";
+import { TenantPolicySettingsUnavailableError } from "@/lib/settings/errors";
 import { z } from "zod";
 
 const openAiApiKeySchema = z.string().trim().min(20).max(500).refine((value) => !/\s/.test(value), {
@@ -35,15 +36,6 @@ const googlePlacesApiKeySchema = z.string().trim().min(20).max(500).refine((valu
 const googleMapsBrowserApiKeySchema = z.string().trim().min(20).max(500).refine((value) => !/\s/.test(value), {
   message: "API key cannot contain spaces.",
 });
-
-export class TenantPolicySettingsUnavailableError extends Error {
-  readonly code = "TENANT_POLICY_SETTINGS_UNAVAILABLE" as const;
-
-  constructor() {
-    super("Tenant policy settings are unavailable.");
-    this.name = "TenantPolicySettingsUnavailableError";
-  }
-}
 
 /**
  * Reads tenant-owned policy settings through the canonical tenant boundary.

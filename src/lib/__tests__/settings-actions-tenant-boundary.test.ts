@@ -47,9 +47,9 @@ vi.mock("@/lib/tenancy/queries", () => ({
 
 import {
   getTenantPolicySettingsAction,
-  TenantPolicySettingsUnavailableError,
   updateOpenAiApiKeyAction,
 } from "@/lib/settings/actions";
+import { TenantPolicySettingsUnavailableError } from "@/lib/settings/errors";
 
 const TENANT_SESSION = Object.freeze({
   userId: "20000000-0000-4000-8000-000000000001",
