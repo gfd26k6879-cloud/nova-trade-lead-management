@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
+import { normalizeAuthNextPath } from "@/lib/auth-redirect";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type CallbackState = "loading" | "success" | "error";
@@ -16,7 +17,7 @@ export function AuthCallbackClient() {
 
     async function completeCallback() {
       const url = new URL(window.location.href);
-      const next = normalizeNextPath(url.searchParams.get("next"));
+      const next = normalizeAuthNextPath(url.searchParams.get("next"));
       const error = url.searchParams.get("error_description") ?? url.searchParams.get("error");
 
       if (error) {
@@ -135,9 +136,4 @@ export function StatusMessage({ children, tone }: { children: React.ReactNode; t
       {children}
     </div>
   );
-}
-
-function normalizeNextPath(next: string | null): string {
-  if (!next?.startsWith("/") || next.startsWith("//")) return "/reset-password";
-  return next;
 }

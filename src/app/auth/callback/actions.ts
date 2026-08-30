@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { z } from "zod";
 
+import { normalizeAuthNextPath } from "@/lib/auth-redirect";
 import { recordOperationalEvent } from "@/lib/operational-logging";
 import { startRouteTiming } from "@/lib/route-timing";
 import { createSupabaseServerClient, isSupabaseAuthConfigured } from "@/lib/supabase/server";
@@ -65,7 +66,7 @@ export async function confirmRecoveryTokenAction(formData: FormData) {
     redirect("/forgot-password?error=expired_link");
   }
 
-  const next = normalizeNextPath(parsed.data.next ?? null);
+  const next = normalizeAuthNextPath(parsed.data.next);
   await recordOperationalEvent({
     action: "auth_link_verified",
     category: "auth",
@@ -75,9 +76,4 @@ export async function confirmRecoveryTokenAction(formData: FormData) {
   });
   logRouteTiming(307, { result: "auth_link_verified", type: parsed.data.type, next });
   redirect(next);
-}
-
-function normalizeNextPath(next: string | null): string {
-  if (!next?.startsWith("/") || next.startsWith("//")) return "/reset-password";
-  return next;
 }

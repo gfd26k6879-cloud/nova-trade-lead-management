@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { normalizeAuthNextPath } from "@/lib/auth-redirect";
+
 import { confirmRecoveryTokenAction } from "./actions";
 import { AuthCallbackClient, RecoveryShell, StatusMessage } from "./callback-client";
 
@@ -25,7 +27,7 @@ export default async function AuthCallbackPage({ searchParams }: AuthCallbackPag
 function TokenHashRecovery({ tokenHash, type, next }: { tokenHash: string; type: string; next: string }) {
   const isValidType = type === "recovery" || type === "invite";
   const isValidShape = Boolean(tokenHash) && isValidType;
-  const safeNext = normalizeNextPath(next);
+  const safeNext = normalizeAuthNextPath(next);
   const isInvite = type === "invite";
   return (
     <RecoveryShell>
@@ -53,9 +55,4 @@ function TokenHashRecovery({ tokenHash, type, next }: { tokenHash: string; type:
       )}
     </RecoveryShell>
   );
-}
-
-function normalizeNextPath(next: string | null | undefined): string {
-  if (!next?.startsWith("/") || next.startsWith("//")) return "/reset-password";
-  return next;
 }
