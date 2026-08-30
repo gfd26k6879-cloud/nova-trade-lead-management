@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { requirePermission } from "@/lib/auth";
+import { getTenantSession, requirePermission } from "@/lib/auth";
 import { ensureDbReady, getBusinessTypeCounts, getKanbanLeads, getLeads, getScoreBandThresholds, type LeadFilters } from "@/lib/db/queries";
 import { constrainLeadFiltersForSession, shouldRedirectResearcherLeadList } from "@/lib/lead-access";
 import { parseMinReviewsFilter } from "@/lib/lead-filter-parsing";
+import { getTenantPermissionDecision } from "@/lib/permissions";
 import { LeadsClient } from "./leads-client";
 import { KanbanClient } from "./kanban-client";
 
@@ -33,6 +34,12 @@ interface Props {
 
 export default async function LeadsPage({ searchParams }: Props) {
   const session = await requirePermission("view:workspace");
+  const tenantSession = await getTenantSession({});
+  const exportScope = tenantSession?.userId === session.userId
+    ? { tenantId: tenantSession.tenantId, workspaceId: tenantSession.workspaceId }
+    : null;
+  const canExport = tenantSession?.userId === session.userId &&
+    getTenantPermissionDecision(tenantSession.role, "data:export").allowed;
   await ensureDbReady();
   const params = await searchParams;
 
@@ -74,7 +81,8 @@ export default async function LeadsPage({ searchParams }: Props) {
         displayLimit={KANBAN_PAGE_SIZE}
         scoreThresholds={scoreThresholds}
         businessTypeCounts={businessTypeCounts}
-        canExport={session.role === "admin"}
+        canExport={canExport}
+        exportScope={exportScope}
         canClose={session.role === "admin"}
       />
     );
@@ -89,7 +97,8 @@ export default async function LeadsPage({ searchParams }: Props) {
       filters={filters}
       scoreThresholds={scoreThresholds}
       businessTypeCounts={businessTypeCounts}
-      canExport={session.role === "admin"}
+      canExport={canExport}
+      exportScope={exportScope}
       canClose={session.role === "admin"}
       canArchive={session.role === "admin"}
     />

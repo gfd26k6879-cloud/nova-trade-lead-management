@@ -60,6 +60,7 @@ describe("KanbanClient", () => {
         scoreThresholds={getDefaultScoreBandThresholds()}
         businessTypeCounts={[]}
         canExport={false}
+        exportScope={null}
         canClose
       />,
     );
