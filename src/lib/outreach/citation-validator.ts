@@ -16,8 +16,12 @@ const CITATION_FIELDS = [
 ] as const;
 const EVIDENCE_FIELDS = [
   "evidenceVersion", "evidenceId", "sourceKind", "tenantId", "workspaceId", "accountId",
-  "approvalState", "support", "freshness", "conflict", "revokedAt", "claimTextHash", "quoteHash",
-  "citationId",
+  "approvalState", "support", "freshness", "conflict", "revokedAt", "claimTextHash", "citationId",
+  "sourceReceipt",
+] as const;
+const SOURCE_RECEIPT_FIELDS = [
+  "receiptVersion", "evidenceId", "citationId", "sourceVersionId", "sourceContentHash", "sourceKind",
+  "tenantId", "workspaceId", "accountId", "locator", "quote", "quoteHash", "receiptHash",
 ] as const;
 
 const HASH = /^sha256:[0-9a-f]{64}$/u;
@@ -102,6 +106,21 @@ type ParsedCitation = Readonly<{
   accountId: string | null;
   state: string;
   quoteHash: string;
+  locator: string;
+}>;
+
+type ParsedSourceReceipt = Readonly<{
+  evidenceId: string;
+  citationId: string;
+  sourceVersionId: string;
+  sourceContentHash: string;
+  sourceKind: "knowledge" | "account";
+  tenantId: string;
+  workspaceId: string;
+  accountId: string | null;
+  locator: string;
+  quoteHash: string;
+  receiptHash: string;
 }>;
 
 type ParsedEvidence = Readonly<{
@@ -116,8 +135,8 @@ type ParsedEvidence = Readonly<{
   conflict: string;
   revokedAt: string | null;
   claimTextHash: string;
-  quoteHash: string;
   citationId: string;
+  sourceReceipt: ParsedSourceReceipt;
 }>;
 
 function failure(code: OutreachCitationFailureCode): OutreachCitationValidationResult {
@@ -233,6 +252,48 @@ function contentHash(subject: string, body: string): string {
   return hash(JSON.stringify({ subject, body }));
 }
 
+function parseSourceReceipt(value: unknown): ParsedSourceReceipt | null {
+  const item = exactRecord(value, SOURCE_RECEIPT_FIELDS);
+  if (!item || item.receiptVersion !== 1 || !safeId(item.evidenceId) || !safeId(item.citationId)
+    || !safeId(item.sourceVersionId) || typeof item.sourceContentHash !== "string"
+    || !HASH.test(item.sourceContentHash) || (item.sourceKind !== "knowledge" && item.sourceKind !== "account")
+    || !safeId(item.tenantId) || !safeId(item.workspaceId)
+    || (item.accountId !== null && !safeId(item.accountId)) || !safeText(item.locator, 2_048)
+    || !safeText(item.quote, 4_096) || Buffer.byteLength(item.quote, "utf8") > 4_096
+    || typeof item.quoteHash !== "string" || !HASH.test(item.quoteHash)
+    || typeof item.receiptHash !== "string" || !HASH.test(item.receiptHash)) return null;
+  const quoteHash = hash(item.quote);
+  if (item.quoteHash !== quoteHash) return null;
+  const payload = Object.freeze({
+    receiptVersion: 1,
+    evidenceId: item.evidenceId,
+    citationId: item.citationId,
+    sourceVersionId: item.sourceVersionId,
+    sourceContentHash: item.sourceContentHash,
+    sourceKind: item.sourceKind,
+    tenantId: item.tenantId,
+    workspaceId: item.workspaceId,
+    accountId: item.accountId,
+    locator: item.locator,
+    quote: item.quote,
+    quoteHash,
+  });
+  if (item.receiptHash !== hash(JSON.stringify(payload))) return null;
+  return Object.freeze({
+    evidenceId: item.evidenceId,
+    citationId: item.citationId,
+    sourceVersionId: item.sourceVersionId,
+    sourceContentHash: item.sourceContentHash,
+    sourceKind: item.sourceKind,
+    tenantId: item.tenantId,
+    workspaceId: item.workspaceId,
+    accountId: item.accountId,
+    locator: item.locator,
+    quoteHash,
+    receiptHash: item.receiptHash,
+  });
+}
+
 function isoTimestampOrNull(value: unknown): string | null | undefined {
   if (value === null) return null;
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)) return undefined;
@@ -317,7 +378,7 @@ function validate(value: unknown): OutreachCitationValidationResult {
     citations.set(item.citationId, Object.freeze({
       citationId: item.citationId, evidenceId: item.evidenceId, tenantId: item.tenantId,
       workspaceId: item.workspaceId, accountId: item.accountId, state: item.state,
-      quoteHash: item.quoteHash,
+      quoteHash: item.quoteHash, locator: item.locator,
     }));
   }
 
@@ -325,6 +386,7 @@ function validate(value: unknown): OutreachCitationValidationResult {
   for (const rawItem of rawEvidence) {
     const item = exactRecord(rawItem, EVIDENCE_FIELDS);
     const revokedAt = item && isoTimestampOrNull(item.revokedAt);
+    const sourceReceipt = item && parseSourceReceipt(item.sourceReceipt);
     if (!item || item.evidenceVersion !== 1 || !safeId(item.evidenceId)
       || (item.sourceKind !== "knowledge" && item.sourceKind !== "account")
       || !safeId(item.tenantId) || !safeId(item.workspaceId)
@@ -334,18 +396,24 @@ function validate(value: unknown): OutreachCitationValidationResult {
       || typeof item.freshness !== "string" || !FRESHNESS_STATES.has(item.freshness)
       || typeof item.conflict !== "string" || !CONFLICT_STATES.has(item.conflict)
       || revokedAt === undefined || typeof item.claimTextHash !== "string" || !HASH.test(item.claimTextHash)
-      || typeof item.quoteHash !== "string" || !HASH.test(item.quoteHash)
-      || !safeId(item.citationId)) return failure("MALFORMED_INPUT");
+      || !safeId(item.citationId) || !sourceReceipt) return failure("MALFORMED_INPUT");
     if (item.tenantId !== tenantId || item.workspaceId !== workspaceId
       || (item.sourceKind === "account" && item.accountId !== accountId)
       || (item.sourceKind === "knowledge" && item.accountId !== null)) return failure("SCOPE_MISMATCH");
+    if (sourceReceipt.tenantId !== tenantId || sourceReceipt.workspaceId !== workspaceId
+      || sourceReceipt.tenantId !== item.tenantId || sourceReceipt.workspaceId !== item.workspaceId
+      || sourceReceipt.accountId !== item.accountId || sourceReceipt.sourceKind !== item.sourceKind) {
+      return failure("SCOPE_MISMATCH");
+    }
+    if (sourceReceipt.evidenceId !== item.evidenceId || sourceReceipt.citationId !== item.citationId) {
+      return failure("CITATION_UNRESOLVABLE");
+    }
     if (evidence.has(item.evidenceId)) return failure("DUPLICATE_ID");
     evidence.set(item.evidenceId, Object.freeze({
       evidenceId: item.evidenceId, sourceKind: item.sourceKind, tenantId: item.tenantId,
       workspaceId: item.workspaceId, accountId: item.accountId, approvalState: item.approvalState,
       support: item.support, freshness: item.freshness, conflict: item.conflict,
-      revokedAt, claimTextHash: item.claimTextHash, quoteHash: item.quoteHash,
-      citationId: item.citationId,
+      revokedAt, claimTextHash: item.claimTextHash, citationId: item.citationId, sourceReceipt,
     }));
   }
 
@@ -403,7 +471,10 @@ function validate(value: unknown): OutreachCitationValidationResult {
       if (!linkedEvidence || linkedEvidence.citationId !== linkedCitation.citationId) {
         return failure("CITATION_UNRESOLVABLE");
       }
-      if (linkedEvidence.quoteHash !== linkedCitation.quoteHash) return failure("CITATION_UNRESOLVABLE");
+      if (linkedEvidence.sourceReceipt.quoteHash !== linkedCitation.quoteHash
+        || linkedEvidence.sourceReceipt.locator !== linkedCitation.locator) {
+        return failure("CITATION_UNRESOLVABLE");
+      }
       if (linkedCitation.tenantId !== tenantId || linkedCitation.workspaceId !== workspaceId
         || linkedEvidence.tenantId !== tenantId || linkedEvidence.workspaceId !== workspaceId
         || linkedCitation.accountId !== linkedEvidence.accountId) return failure("SCOPE_MISMATCH");
@@ -455,6 +526,11 @@ function validate(value: unknown): OutreachCitationValidationResult {
   });
 }
 
+/**
+ * Validates the receipt's canonical shape and internal bindings. The caller owns
+ * authorization and authentic resolution of sourceVersionId/sourceContentHash;
+ * this pure boundary cannot prove that an external repository object exists.
+ */
 export function validateOutreachDraftCitations(value: unknown): OutreachCitationValidationResult {
   try {
     return validate(value);

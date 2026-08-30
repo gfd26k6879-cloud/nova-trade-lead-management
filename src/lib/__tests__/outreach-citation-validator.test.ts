@@ -24,6 +24,26 @@ function draftContentHash(subject: string, body: string): string {
   return sha256(JSON.stringify({ subject, body }));
 }
 
+function sourceReceipt(overrides: Record<string, unknown> = {}) {
+  const quote = "Industrial flooring epoxy systems";
+  const payload = {
+    receiptVersion: 1,
+    evidenceId: "evidence:fixture-001",
+    citationId: "citation:fixture-001",
+    sourceVersionId: "account-source-version:fixture-001-v1",
+    sourceContentHash: sha256("fixture source version bytes"),
+    sourceKind: "account",
+    tenantId: TENANT_ID,
+    workspaceId: WORKSPACE_ID,
+    accountId: ACCOUNT_ID,
+    locator: "catalog.pdf#page=4",
+    quote,
+    quoteHash: sha256(quote),
+    ...overrides,
+  };
+  return { ...payload, receiptHash: sha256(JSON.stringify(payload)) };
+}
+
 function request(overrides: Record<string, unknown> = {}) {
   const claimHash = sha256(CLAIM_TEXT);
   return {
@@ -73,8 +93,8 @@ function request(overrides: Record<string, unknown> = {}) {
       conflict: "none",
       revokedAt: null,
       claimTextHash: claimHash,
-      quoteHash: sha256("Industrial flooring epoxy systems"),
       citationId: "citation:fixture-001",
+      sourceReceipt: sourceReceipt(),
     }],
     ...overrides,
   };
@@ -109,6 +129,11 @@ describe("F13 cited outreach validation", () => {
     const input = mutable(request());
     Object.assign(input.citations[0], { accountId: null });
     Object.assign(input.evidence[0], { sourceKind: "knowledge", accountId: null });
+    input.evidence[0].sourceReceipt = sourceReceipt({
+      sourceVersionId: "knowledge-source-version:fixture-001-v1",
+      sourceKind: "knowledge",
+      accountId: null,
+    });
     expect(validateOutreachDraftCitations(input).ok).toBe(true);
   });
 
@@ -136,6 +161,44 @@ describe("F13 cited outreach validation", () => {
     const input = mutable(request());
     input.citations[0].quoteHash = sha256("fabricated quote");
     expect(validateOutreachDraftCitations(input)).toEqual({ ok: false, code: "CITATION_UNRESOLVABLE" });
+  });
+
+  it("rejects matching fabricated citation and receipt hashes when the source quote does not hash to them", () => {
+    const input = mutable(request());
+    const fabricated = sha256("fabricated quote");
+    input.citations[0].quoteHash = fabricated;
+    input.evidence[0].sourceReceipt = sourceReceipt({ quoteHash: fabricated });
+    expect(validateOutreachDraftCitations(input).ok).toBe(false);
+  });
+
+  it("binds citation anchors and evidence identity to the canonical source receipt", () => {
+    const cases = [
+      (input: ReturnType<typeof request>) => { input.evidence[0].sourceReceipt.sourceVersionId = "account-source-version:other"; },
+      (input: ReturnType<typeof request>) => { input.evidence[0].sourceReceipt.sourceContentHash = sha256("other source"); },
+      (input: ReturnType<typeof request>) => { input.evidence[0].sourceReceipt.locator = "catalog.pdf#page=9"; },
+      (input: ReturnType<typeof request>) => { input.evidence[0].sourceReceipt.sourceKind = "knowledge"; },
+      (input: ReturnType<typeof request>) => { input.evidence[0].sourceReceipt.tenantId = "tenant:other"; },
+    ];
+    for (const mutate of cases) {
+      const input = mutable(request());
+      mutate(input);
+      expect(validateOutreachDraftCitations(input).ok).toBe(false);
+    }
+
+    const anchorMismatch = mutable(request());
+    anchorMismatch.evidence[0].sourceReceipt = sourceReceipt({ locator: "catalog.pdf#page=9" });
+    expect(validateOutreachDraftCitations(anchorMismatch)).toEqual({ ok: false, code: "CITATION_UNRESOLVABLE" });
+  });
+
+  it("accepts a canonical source receipt while leaving repository authenticity to the caller", () => {
+    const input = mutable(request());
+    expect(validateOutreachDraftCitations(input).ok).toBe(true);
+    expect(input.evidence[0].sourceReceipt).toMatchObject({
+      sourceVersionId: "account-source-version:fixture-001-v1",
+      sourceContentHash: sha256("fixture source version bytes"),
+      locator: "catalog.pdf#page=4",
+      quote: "Industrial flooring epoxy systems",
+    });
   });
 
   it.each([
@@ -312,6 +375,12 @@ describe("F13 cited outreach validation", () => {
     const nested = mutable(request());
     Object.assign(nested, { draft: new Proxy({}, { ownKeys() { traps += 1; throw new Error("nested trap"); } }) });
     expect(validateOutreachDraftCitations(nested)).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+
+    const nestedReceipt = mutable(request());
+    Object.assign(nestedReceipt.evidence[0], {
+      sourceReceipt: new Proxy({}, { ownKeys() { traps += 1; throw new Error("receipt trap"); } }),
+    });
+    expect(validateOutreachDraftCitations(nestedReceipt)).toEqual({ ok: false, code: "MALFORMED_INPUT" });
     expect(traps).toBe(0);
   });
 
