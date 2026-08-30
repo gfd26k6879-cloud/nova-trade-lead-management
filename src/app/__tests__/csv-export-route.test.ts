@@ -56,37 +56,29 @@ beforeEach(() => {
   queryMocks.createAuditLog.mockResolvedValue(undefined);
 });
 
-describe("CSV export minimum-review parsing", () => {
-  it("normalizes valid URL input without changing rating or score parsing", async () => {
-    const response = await GET(exportRequest("minReviews=%2B00050&minRating=4.5&minScore=70.5"));
+function expectNoExportSideEffects(): void {
+  expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+  expect(queryMocks.getLeadsForExport).not.toHaveBeenCalled();
+  expect(queryMocks.getCanonicalPlacesForExport).not.toHaveBeenCalled();
+  expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  expect(contextMocks.runWithTenantContext).not.toHaveBeenCalled();
+  expect(dbMocks.withTenantDbContext).not.toHaveBeenCalled();
+}
 
-    expect(response.status).toBe(200);
-    expect(queryMocks.getLeadsForExport).toHaveBeenCalledWith(expect.objectContaining({
-      minReviews: 50,
-      minRating: 4.5,
-      minScore: 70.5,
-    }), 50_000);
-  });
+describe("CSV export fail-closed gate", () => {
+  it.each([
+    ["lead inventory", ""],
+    ["canonical dataset", "dataset=canonical"],
+    ["unknown dataset", "dataset=unexpected"],
+  ])("denies a direct %s request before any export side effect", async (_label, query) => {
+    const response = await GET(exportRequest(query));
 
-  it("omits invalid fractional input instead of truncating it", async () => {
-    const response = await GET(exportRequest("minReviews=4.5"));
-
-    expect(response.status).toBe(200);
-    expect(queryMocks.getLeadsForExport).toHaveBeenCalledWith(expect.objectContaining({ minReviews: undefined }), 50_000);
-  });
-
-  it("preserves safe above-int4 input for parameter-free query rejection", async () => {
-    const response = await GET(exportRequest("minReviews=2147483648"));
-
-    expect(response.status).toBe(200);
-    expect(queryMocks.getLeadsForExport).toHaveBeenCalledWith(expect.objectContaining({ minReviews: 2_147_483_648 }), 50_000);
-  });
-
-  it("preserves URLSearchParams first-value behavior for repeated keys", async () => {
-    const response = await GET(exportRequest("minReviews=50&minReviews=60"));
-
-    expect(response.status).toBe(200);
-    expect(queryMocks.getLeadsForExport).toHaveBeenCalledWith(expect.objectContaining({ minReviews: 50 }), 50_000);
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "Permission denied" });
+    expect(response.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    expect(response.headers.get("vary")).toBe("Cookie");
+    expect(response.headers.get("content-disposition")).toBeNull();
+    expectNoExportSideEffects();
   });
 });
 
@@ -98,8 +90,7 @@ describe("CSV export error handling", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({ error: "Permission denied" });
-    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
-    expect(queryMocks.getLeadsForExport).not.toHaveBeenCalled();
+    expectNoExportSideEffects();
   });
 
   it("does not reveal whether a foreign tenant selector exists", async () => {
@@ -111,24 +102,7 @@ describe("CSV export error handling", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({ error: "Permission denied" });
-    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
-    expect(queryMocks.getLeadsForExport).not.toHaveBeenCalled();
-    expect(queryMocks.getCanonicalPlacesForExport).not.toHaveBeenCalled();
-  });
-
-  it("does not expose internal backend error details", async () => {
-    const secret = "secret-password";
-    queryMocks.ensureDbReady.mockRejectedValueOnce(
-      new Error(`DATABASE_URL=postgres://worker:${secret}@db.internal/app`),
-    );
-
-    const response = await GET(exportRequest());
-    const body: unknown = await response.json();
-
-    expect(response.status).toBe(500);
-    expect(body).toEqual({ error: "CSV export failed." });
-    expect(JSON.stringify(body)).not.toContain(secret);
-    expect(response.headers.get("cache-control")).toContain("no-store");
+    expectNoExportSideEffects();
   });
 });
 
@@ -138,24 +112,18 @@ describe("CSV export scope and response privacy", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({ error: "Permission denied" });
-    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
-    expect(queryMocks.getLeadsForExport).not.toHaveBeenCalled();
+    expectNoExportSideEffects();
   });
 
-  it("resolves the selector, installs tenant database scope, and prevents shared caching", async () => {
+  it("resolves the selector without installing a tenant database scope", async () => {
     const response = await GET(exportRequest("status=new"));
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(403);
     expect(authMocks.requireTenantSession).toHaveBeenCalledWith(
       { tenantId: TENANT_A, workspaceId: undefined },
       undefined,
     );
-    expect(contextMocks.runWithTenantContext).toHaveBeenCalledWith(
-      TENANT_SESSION,
-      expect.any(String),
-      expect.any(Function),
-    );
-    expect(dbMocks.withTenantDbContext).toHaveBeenCalledOnce();
+    expectNoExportSideEffects();
     expect(response.headers.get("cache-control")).toBe("private, no-store, max-age=0");
     expect(response.headers.get("vary")).toBe("Cookie");
   });
