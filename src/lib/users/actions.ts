@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
@@ -9,13 +10,14 @@ import {
   createAppUserForAuthUser,
   getAppUserByUserId,
   listAppUsers,
-  removeAppUser,
   updateAppUserRole,
   updateAppUserStatus,
   updateAppUserTeam,
   type AppUserStatus,
+  type TenantSessionSelector,
 } from "@/lib/app-users";
 import { requirePermission } from "@/lib/auth";
+import { withTenantDbContext } from "@/lib/db";
 import {
   createAuditLog,
   ensureDbReady,
@@ -25,6 +27,13 @@ import {
 } from "@/lib/db/queries";
 import { isAppRole, type AppRole } from "@/lib/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import {
+  assertTenantResourceOwnership,
+  requireTenantPermission,
+  TenantAuthorizationError,
+} from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
+import { createTenantQueryRepository } from "@/lib/tenancy/queries";
 
 const createUserSchema = z.object({
   email: z.string().trim().email().max(320).transform((value) => value.toLowerCase()),
@@ -149,35 +158,48 @@ export async function updateUserStatusAction(userId: string, status: AppUserStat
   return { success: true };
 }
 
-export async function removeUserAction(userId: string) {
-  const session = await requirePermission("users:manage");
-  await ensureDbReady();
-  const target = await getAppUserByUserId(userId);
-  if (!target) return { error: "User not found." };
-  if (target.user_id === session.userId) return { error: "You cannot remove your own account." };
-
-  const users = await listAppUsers();
-  if (target.role === "admin" && countOtherActiveAdmins(users, target.user_id) === 0) {
-    return { error: "Cannot remove the last active admin." };
-  }
-
-  const supabase = createSupabaseAdminClient();
-  const { error } = await supabase.auth.admin.deleteUser(userId);
-  if (error && !/not found/i.test(error.message)) {
-    return { error: error.message };
-  }
-
-  await removeAppUser(userId);
-  await createAuditLog("app_user_removed", "app_user", userId, {
-    email: target.email,
-    role: target.role,
+export async function removeUserAction(
+  userId: string,
+  selector: TenantSessionSelector = {},
+) {
+  const actor = await requirePermission("users:manage");
+  const tenantSession = await requireTenantPermission(selector, "membership:manage", {
+    action: "users.remove",
+    // Compatibility remains conditional on the independently resolved legacy
+    // administration boundary. The identities are correlated immediately
+    // below before any target lookup or side effect.
+    policyEvaluator: (context) => ({ allowed: actor.userId.length > 0, context }),
   });
-  revalidatePath("/users");
-  revalidatePath("/team");
-  revalidatePath("/leads");
-  revalidatePath("/explore");
-  revalidatePath("/queue");
-  return { success: true, user: target };
+  if (actor.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
+  }
+
+  return runWithTenantContext(tenantSession, `user-remove:${randomUUID()}`, () =>
+    withTenantDbContext(async (db) => {
+      await ensureDbReady();
+      const memberships = await createTenantQueryRepository(db).listMemberships(tenantSession.tenantId);
+      const targetMemberships = memberships.filter((membership) => (
+        membership.tenantId === tenantSession.tenantId && membership.authIdentityId === userId
+      ));
+      if (targetMemberships.length !== 1) return unavailableUserResult();
+
+      const targetMembership = targetMemberships[0];
+      try {
+        assertTenantResourceOwnership(tenantSession, {
+          tenantId: targetMembership.tenantId,
+          workspaceId: targetMembership.workspaceId,
+          resourceId: targetMembership.id,
+          resourceType: "tenant_membership",
+        }, "workspace-optional");
+      } catch {
+        return unavailableUserResult();
+      }
+
+      // app_users and Supabase identities are platform-global. Until this
+      // action is wired to the canonical tenant-membership removal adapter,
+      // deleting either record could revoke access in another tenant.
+      return unavailableUserResult();
+    }));
 }
 
 export async function updateUserTeamAction(userId: string, input: { isTeamLead?: boolean; teamLeadUserId?: string | null; teamLabel?: string | null }) {
@@ -254,4 +276,8 @@ function countOtherActiveAdmins(users: Awaited<ReturnType<typeof listAppUsers>>,
   return users.filter((user) => (
     user.user_id !== userId && user.role === "admin" && user.status === "active"
   )).length;
+}
+
+function unavailableUserResult(): { error: string } {
+  return { error: "User not found or unavailable." };
 }

@@ -32,13 +32,14 @@ describe("user email flows", () => {
     expect(body).not.toContain("inviteUserByEmail");
   });
 
-  it("removes users through Supabase Auth with local cleanup and lockout guards", () => {
+  it("does not delete platform-global identities from a tenant-scoped removal action", () => {
     const body = functionBody("removeUserAction", "updateUserTeamAction");
 
-    expect(body).toContain("You cannot remove your own account.");
-    expect(body).toContain("Cannot remove the last active admin.");
-    expect(body).toContain("deleteUser(userId)");
-    expect(body).toContain("removeAppUser(userId)");
-    expect(body).toContain("app_user_removed");
+    expect(body).toContain('requireTenantPermission(selector, "membership:manage"');
+    expect(body).toContain("assertTenantResourceOwnership");
+    expect(body).toContain("unavailableUserResult");
+    expect(body).not.toContain("deleteUser(userId)");
+    expect(body).not.toContain("removeAppUser(userId)");
+    expect(body).not.toContain("app_user_removed");
   });
 });
