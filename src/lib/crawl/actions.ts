@@ -863,29 +863,51 @@ export async function getSchedulerOperationsAction(
     }));
 }
 
-export async function getDashboardStatsAction(): Promise<DashboardStatsResult> {
-  await requirePermission("crawl:manage");
-  const logActionTiming = startRouteTiming("action:getDashboardStatsAction");
-  try {
-    const stats = await withReadOnlyActionDeadline(
-      "getDashboardStatsAction",
-      12_000,
-      withDbStatementTimeout(8_000, async () => {
-        await ensureDbReady();
-        return getDashboardStatsActionInternal();
-      }),
-    );
-    logActionTiming(200);
-    return stats;
-  } catch (error) {
-    if (error instanceof ReadOnlyActionDeadlineError) {
-      logActionTiming(503, { reason: "dashboard_action_deadline" });
-      return emptyDashboardStats("dashboard_stats_unavailable");
-    }
-    const reason = classifyDashboardActionFailure(error);
-    logActionTiming(503, { reason });
-    return emptyDashboardStats(reason);
+async function requireTenantWideDashboardRead(
+  selector: TenantSessionSelector,
+  action: "dashboard.stats.read" | "dashboard.analytics.read",
+): Promise<TenantSession> {
+  const tenantSession = await requireTenantPermission(selector, "report:read", { action });
+  const legacySession = await requirePermission("crawl:manage");
+  if (legacySession.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
   }
+  if (tenantSession.workspaceId !== null) {
+    throw new TenantAuthorizationError(403, "WORKSPACE_SCOPE_INVALID");
+  }
+  return tenantSession;
+}
+
+export async function getDashboardStatsAction(
+  selector: TenantSessionSelector = {},
+): Promise<DashboardStatsResult> {
+  const tenantSession = await requireTenantWideDashboardRead(selector, "dashboard.stats.read");
+  const logActionTiming = startRouteTiming("action:getDashboardStatsAction");
+  const correlationId = getTenantContext()?.correlationId ?? `dashboard-stats:${randomUUID()}`;
+  return runWithTenantContext(tenantSession, correlationId, () =>
+    withTenantDbContext(async () => {
+      try {
+        const stats = await withReadOnlyActionDeadline(
+          "getDashboardStatsAction",
+          12_000,
+          withDbStatementTimeout(8_000, async () => {
+            await ensureDbReady();
+            return getDashboardStatsActionInternal();
+          }),
+        );
+        logActionTiming(200);
+        return stats;
+      } catch (error) {
+        if (error instanceof ReadOnlyActionDeadlineError) {
+          logActionTiming(503, { reason: "dashboard_action_deadline" });
+          return emptyDashboardStats("dashboard_stats_unavailable");
+        }
+        const reason = classifyDashboardActionFailure(error);
+        logActionTiming(503, { reason });
+        return emptyDashboardStats(reason);
+      }
+    }),
+  );
 }
 
 async function getDashboardStatsActionInternal(): Promise<DashboardStatsResult> {
@@ -902,25 +924,32 @@ async function getDashboardStatsActionInternal(): Promise<DashboardStatsResult> 
   };
 }
 
-export async function getDashboardAnalyticsAction(): Promise<Partial<DashboardStatsResult> & { loadError?: "db_statement_timeout" | "transient_db_error" | "dashboard_stats_unavailable" }> {
-  await requirePermission("crawl:manage");
+export async function getDashboardAnalyticsAction(
+  selector: TenantSessionSelector = {},
+): Promise<Partial<DashboardStatsResult> & { loadError?: "db_statement_timeout" | "transient_db_error" | "dashboard_stats_unavailable" }> {
+  const tenantSession = await requireTenantWideDashboardRead(selector, "dashboard.analytics.read");
   const logActionTiming = startRouteTiming("action:getDashboardAnalyticsAction");
-  try {
-    const stats = await withReadOnlyActionDeadline(
-      "getDashboardAnalyticsAction",
-      12_000,
-      withDbStatementTimeout(8_000, async () => {
-        await ensureDbReady();
-        return getDashboardAnalyticsActionInternal();
-      }),
-    );
-    logActionTiming(200);
-    return stats;
-  } catch (error) {
-    const reason = error instanceof ReadOnlyActionDeadlineError ? "dashboard_stats_unavailable" : classifyDashboardActionFailure(error);
-    logActionTiming(503, { reason: error instanceof ReadOnlyActionDeadlineError ? "dashboard_action_deadline" : reason });
-    return { loadError: reason };
-  }
+  const correlationId = getTenantContext()?.correlationId ?? `dashboard-analytics:${randomUUID()}`;
+  return runWithTenantContext(tenantSession, correlationId, () =>
+    withTenantDbContext(async () => {
+      try {
+        const stats = await withReadOnlyActionDeadline(
+          "getDashboardAnalyticsAction",
+          12_000,
+          withDbStatementTimeout(8_000, async () => {
+            await ensureDbReady();
+            return getDashboardAnalyticsActionInternal();
+          }),
+        );
+        logActionTiming(200);
+        return stats;
+      } catch (error) {
+        const reason = error instanceof ReadOnlyActionDeadlineError ? "dashboard_stats_unavailable" : classifyDashboardActionFailure(error);
+        logActionTiming(503, { reason: error instanceof ReadOnlyActionDeadlineError ? "dashboard_action_deadline" : reason });
+        return { loadError: reason };
+      }
+    }),
+  );
 }
 
 async function getDashboardAnalyticsActionInternal(): Promise<Partial<DashboardStatsResult>> {

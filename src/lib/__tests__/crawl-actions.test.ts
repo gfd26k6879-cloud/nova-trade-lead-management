@@ -112,6 +112,10 @@ const TENANT_SESSION = Object.freeze({
   role: "owner" as const,
   roleBindingId: "40000000-0000-4000-8000-000000000001",
 });
+const TENANT_WIDE_SESSION = Object.freeze({
+  ...TENANT_SESSION,
+  workspaceId: null,
+});
 
 function sourcePolicy(overrides: Record<string, unknown> = {}) {
   return {
@@ -164,11 +168,6 @@ afterEach(() => {
 });
 
 describe("scheduler operations action", () => {
-  const TENANT_WIDE_SESSION = Object.freeze({
-    ...TENANT_SESSION,
-    workspaceId: null,
-  });
-
   it("requires tenant-wide queue read authority before entering tenant database context", async () => {
     tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
 
@@ -270,6 +269,106 @@ describe("scheduler operations action", () => {
     expect(authMocks.requirePermission).not.toHaveBeenCalled();
     expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
     expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
+});
+
+describe("dashboard read action tenant boundary", () => {
+  it("runs dashboard stats under exact tenant-wide report authority and database context", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+
+    const result = await getDashboardStatsAction({ tenantId: TENANT_ID, workspaceId: null });
+
+    expect(result).toBeDefined();
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_ID, workspaceId: null },
+      "report:read",
+      { action: "dashboard.stats.read" },
+    );
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("crawl:manage");
+    expect(tenantAuthorizationMocks.runWithTenantContext).toHaveBeenCalledWith(
+      TENANT_WIDE_SESSION,
+      expect.stringMatching(/^dashboard-stats:/),
+      expect.any(Function),
+    );
+    expect(dbIndexMocks.withTenantDbContext).toHaveBeenCalledOnce();
+    expect(tenantAuthorizationMocks.requireTenantPermission.mock.invocationCallOrder[0]).toBeLessThan(
+      tenantAuthorizationMocks.runWithTenantContext.mock.invocationCallOrder[0],
+    );
+    expect(tenantAuthorizationMocks.runWithTenantContext.mock.invocationCallOrder[0]).toBeLessThan(
+      dbIndexMocks.withTenantDbContext.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("runs dashboard analytics under its explicit tenant-wide report action", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+
+    await getDashboardAnalyticsAction({ tenantId: TENANT_ID, workspaceId: null });
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_ID, workspaceId: null },
+      "report:read",
+      { action: "dashboard.analytics.read" },
+    );
+    expect(tenantAuthorizationMocks.runWithTenantContext).toHaveBeenCalledWith(
+      TENANT_WIDE_SESSION,
+      expect.stringMatching(/^dashboard-analytics:/),
+      expect.any(Function),
+    );
+    expect(dbIndexMocks.withTenantDbContext).toHaveBeenCalledOnce();
+  });
+
+  it("rejects workspace and composed-identity scopes before dashboard database work", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_SESSION);
+
+    await expect(getDashboardStatsAction({
+      tenantId: TENANT_ID,
+      workspaceId: WORKSPACE_ID,
+    })).rejects.toMatchObject({
+      code: "WORKSPACE_SCOPE_INVALID",
+      status: 403,
+    });
+
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+    authMocks.requirePermission.mockResolvedValueOnce({
+      userId: "different-user",
+      email: "different@example.com",
+      displayName: "Different user",
+      role: "admin",
+    });
+
+    await expect(getDashboardAnalyticsAction()).rejects.toMatchObject({
+      code: "TENANT_SCOPE_MISMATCH",
+      status: 403,
+    });
+
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
+
+  it("propagates forged tenant selector failures before legacy auth or dashboard reads", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockRejectedValueOnce(
+      new TenantAuthorizationError(403, "TENANT_SCOPE_REQUIRED"),
+    );
+
+    await expect(getDashboardStatsAction({ tenantId: "forged-tenant" })).rejects.toMatchObject({
+      code: "TENANT_SCOPE_REQUIRED",
+      status: 403,
+    });
+
+    expect(authMocks.requirePermission).not.toHaveBeenCalled();
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
+
+  it("preserves the generic dashboard fallback for statement timeouts", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+    dbIndexMocks.withDbStatementTimeout.mockRejectedValueOnce(
+      Object.assign(new Error("statement timeout"), { code: "57014" }),
+    );
+
+    const result = await getDashboardStatsAction();
+
+    expect(result.lastError).toBe("db_statement_timeout");
   });
 });
 
@@ -778,6 +877,7 @@ describe("crawl discovery item actions", () => {
 
   it("logs dashboard stats subquery timings", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
 
     await getDashboardStatsAction();
 
@@ -797,6 +897,7 @@ describe("crawl discovery item actions", () => {
 
   it("logs dashboard analytics timings separately from core stats", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
 
     await getDashboardAnalyticsAction();
 
