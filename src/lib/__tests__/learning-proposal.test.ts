@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { buildOutcomeRecord, type OutcomeTaxonomy } from "@/lib/outcomes/outcome-record";
+import { buildOutcomeRecord, type OutcomeRecord, type OutcomeTaxonomy } from "@/lib/outcomes/outcome-record";
 import {
   buildLearningProposal,
   transitionLearningProposalReview,
@@ -67,6 +67,55 @@ function outcome(kind: OutcomeTaxonomy, index: number) {
 
 function outcomes() {
   return [outcome("replied", 1), outcome("replied", 2), outcome("meeting_set", 3), outcome("lost", 4), outcome("unknown", 5)];
+}
+
+function correctedOutcome(predecessor: OutcomeRecord): OutcomeRecord {
+  const sourcePayload = {
+    sourceVersion: 1,
+    tenantId: TENANT_A,
+    workspaceId: WORKSPACE_A,
+    accountId: ACCOUNT_A,
+    kind: "member_observation",
+    sourceId: "manual-observation:fixture-1-correction",
+    sourceVersionId: "manual-observation-version:fixture-1-correction",
+    sourceContentHash: sha256("corrected outcome 1"),
+    sourceReceiptHash: sha256("corrected receipt 1"),
+    observedAt: "2026-08-30T13:05:00.000Z",
+  } as const;
+  const result = buildOutcomeRecord({
+    version: 1,
+    tenantId: TENANT_A,
+    workspaceId: WORKSPACE_A,
+    accountId: ACCOUNT_A,
+    playVersionId: PLAY_VERSION,
+    stableKey: predecessor.stableKey,
+    revision: 2,
+    predecessor,
+    outcome: "meeting_set",
+    channel: "email",
+    bounceClassification: null,
+    occurredAt: predecessor.occurredAt,
+    recordedAt: "2026-08-30T13:10:00.000Z",
+    notes: "Human correction of the first synthetic outcome.",
+    source: { ...sourcePayload, sourceHash: sha256(sourcePayload) },
+    recordedBy: { kind: "human", actorId: REVIEWER },
+    outreachDraftVersionRef: null,
+    attribution: {
+      kind: "unknown",
+      confidenceBasisPoints: 0,
+      rationale: "No causal attribution is asserted for this corrected fixture.",
+      attributedAt: "2026-08-30T13:06:00.000Z",
+      evidenceRefs: [],
+    },
+    correction: {
+      kind: "human",
+      actorId: REVIEWER,
+      at: "2026-08-30T13:10:00.000Z",
+      reason: "Correct the observed outcome after human verification.",
+    },
+  });
+  if (!result.ok) throw new Error(result.code);
+  return result.record;
 }
 
 function input(overrides: Record<string, unknown> = {}) {
@@ -198,6 +247,12 @@ describe("controlled learning proposal lifecycle", () => {
     const records = outcomes();
     expect(buildLearningProposal(input({ outcomeRecords: [...records, records[0]], cohort: { ...input().cohort as object, denominator: 6 }, metric: { ...input().metric as object, denominator: 6 } })))
       .toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    const correction = correctedOutcome(records[0]);
+    expect(buildLearningProposal(input({
+      outcomeRecords: [records[0], correction, ...records.slice(1)],
+      cohort: { ...input().cohort as object, denominator: 6 },
+      metric: { ...input().metric as object, denominator: 6 },
+    }))).toEqual({ ok: false, code: "MALFORMED_INPUT" });
     expect(buildLearningProposal(input({
       outcomeRecords: [{ ...records[0], contentHash: sha256("fabricated") }, ...records.slice(1)],
     }))).toEqual({ ok: false, code: "MALFORMED_INPUT" });

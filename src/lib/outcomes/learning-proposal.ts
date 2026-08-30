@@ -8,6 +8,7 @@ export const LEARNING_PROPOSAL_SCHEMA_VERSION = 1 as const;
 type Scope = Readonly<{ tenantId: string; workspaceId: string; accountId: string; playVersionId: string }>;
 
 export type LearningOutcomeRef = Scope & Readonly<{
+  stableKey: string;
   versionId: string;
   versionHash: string;
   contentHash: string;
@@ -152,7 +153,7 @@ const OUTCOME_RECORD_FIELDS = [
   "source", "recordedBy", "outreachDraftVersionRef", "attribution", "audit", "contentHash",
 ] as const;
 const OUTCOME_REF_FIELDS = [
-  "tenantId", "workspaceId", "accountId", "playVersionId", "versionId", "versionHash", "contentHash", "outcome",
+  "tenantId", "workspaceId", "accountId", "playVersionId", "stableKey", "versionId", "versionHash", "contentHash", "outcome",
   "occurredAt", "recordedAt", "sourceHash", "attributionKind", "attributionConfidenceBasisPoints", "outcomeRefHash",
 ] as const;
 const OUTCOME_SOURCE_FIELDS = [
@@ -408,6 +409,7 @@ function parseOutcomeRecord(value: unknown, scope: Scope): ParseResult<LearningO
     || record.versionId !== `outcome-version:${versionHash.slice(7)}`) return { value: null, code: "MALFORMED_INPUT" };
   const payload = {
     ...outcomeScope,
+    stableKey: record.stableKey as string,
     versionId: record.versionId,
     versionHash,
     contentHash,
@@ -426,6 +428,7 @@ function parseOutcomeRef(value: unknown, scope: Scope): LearningOutcomeRef | nul
   if (!record) return null;
   const refScope = parseScope(record);
   if (!refScope || !sameScope(scope, refScope) || typeof record.versionId !== "string" || !OUTCOME_VERSION.test(record.versionId)
+    || !safeRef(record.stableKey)
     || typeof record.versionHash !== "string" || !HASH.test(record.versionHash) || typeof record.contentHash !== "string"
     || !HASH.test(record.contentHash) || typeof record.outcome !== "string" || !OUTCOMES.has(record.outcome as OutcomeTaxonomy)
     || !safeDate(record.occurredAt) || !safeDate(record.recordedAt) || typeof record.sourceHash !== "string" || !HASH.test(record.sourceHash)
@@ -433,6 +436,7 @@ function parseOutcomeRef(value: unknown, scope: Scope): LearningOutcomeRef | nul
     || !Number.isSafeInteger(record.attributionConfidenceBasisPoints) || typeof record.outcomeRefHash !== "string" || !HASH.test(record.outcomeRefHash)) return null;
   const payload = {
     ...refScope,
+    stableKey: record.stableKey as string,
     versionId: record.versionId,
     versionHash: record.versionHash,
     contentHash: record.contentHash,
@@ -624,7 +628,8 @@ function parseProposal(value: unknown): LearningProposal | null {
   const refs = rawRefs.map((item) => parseOutcomeRef(item, scope));
   if (refs.some((item) => item === null)) return null;
   const outcomeRefs = refs as LearningOutcomeRef[];
-  if (new Set(outcomeRefs.map((item) => item.versionId)).size !== outcomeRefs.length) return null;
+  if (new Set(outcomeRefs.map((item) => item.versionId)).size !== outcomeRefs.length
+    || new Set(outcomeRefs.map((item) => item.stableKey)).size !== outcomeRefs.length) return null;
   const cohort = parseCohort(record.cohort, outcomeRefs);
   const metricResult = parseMetric(record.metric, outcomeRefs);
   const target = parseTarget(record.target, scope);
@@ -684,7 +689,8 @@ export function buildLearningProposal(input: unknown): LearningProposalBuildResu
     if (!parsed.value) return failure(parsed.code ?? "MALFORMED_INPUT");
     outcomeRefs.push(parsed.value);
   }
-  if (new Set(outcomeRefs.map((item) => item.versionId)).size !== outcomeRefs.length) return failure("MALFORMED_INPUT");
+  if (new Set(outcomeRefs.map((item) => item.versionId)).size !== outcomeRefs.length
+    || new Set(outcomeRefs.map((item) => item.stableKey)).size !== outcomeRefs.length) return failure("MALFORMED_INPUT");
   if (outcomeRefs.some((item) => item.recordedAt >= createdAt)) return failure("INVALID_CHRONOLOGY");
   const cohort = parseCohort(record.cohort, outcomeRefs);
   if (!cohort || cohort.windowEnd > createdAt) return failure("INVALID_CHRONOLOGY");
