@@ -99,6 +99,35 @@ describe("mutating worker route methods", () => {
     expect(workerMocks.recomputeAllLeadQualityScores).toHaveBeenCalledWith(100, signal);
   });
 
+  it("keeps crawl and enrichment triggers bound to their exact worker", async () => {
+    const processRequest = new NextRequest(
+      "https://example.test/api/crawl/process-next?worker=enrichment&tenantId=forged",
+      { method: "POST", body: JSON.stringify({ worker: "enrichment", workspaceId: "forged" }) },
+    );
+    const enrichRequest = new NextRequest(
+      "https://example.test/api/crawl/enrich-next?worker=crawl&tenantId=forged",
+      { method: "POST", body: JSON.stringify({ worker: "crawl", workspaceId: "forged" }) },
+    );
+
+    await postProcessNext(processRequest);
+    await postEnrichNext(enrichRequest);
+
+    expect(internalWorkerRouteMocks.runInternalWorkerRoute).toHaveBeenNthCalledWith(
+      1,
+      processRequest,
+      "crawl",
+      "crawl:manage",
+      workerMocks.processNextUnit,
+    );
+    expect(internalWorkerRouteMocks.runInternalWorkerRoute).toHaveBeenNthCalledWith(
+      2,
+      enrichRequest,
+      "enrichment",
+      "crawl:manage",
+      workerMocks.enrichNextLead,
+    );
+  });
+
   it("does not include the deleted legacy batch tick route", () => {
     expect(workerRoutes.map(([path]) => path)).not.toContain("/api/workers/tick");
     expect(existsSync(join(process.cwd(), "src/app/api/workers/tick/route.ts"))).toBe(false);
