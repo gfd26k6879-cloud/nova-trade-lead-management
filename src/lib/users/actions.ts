@@ -8,11 +8,8 @@ import { z } from "zod";
 import { buildPasswordRecoveryUrl, buildWelcomeInviteUrl, resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
   createAppUserForAuthUser,
-  getAppUserByUserId,
   listAppUsers,
-  updateAppUserRole,
-  updateAppUserStatus,
-  updateAppUserTeam,
+  type AppUser,
   type AppUserStatus,
   type TenantSessionSelector,
 } from "@/lib/app-users";
@@ -25,7 +22,7 @@ import {
   listUserMarketAccessForUsers,
   replaceUserMarketAccess,
 } from "@/lib/db/queries";
-import { isAppRole, type AppRole } from "@/lib/permissions";
+import { type AppRole } from "@/lib/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
   assertTenantResourceOwnership,
@@ -39,12 +36,6 @@ const createUserSchema = z.object({
   email: z.string().trim().email().max(320).transform((value) => value.toLowerCase()),
   displayName: z.string().trim().max(120).optional(),
   role: z.enum(["admin", "researcher"]).default("researcher"),
-});
-
-const updateUserTeamSchema = z.object({
-  isTeamLead: z.boolean().default(false),
-  teamLeadUserId: z.string().trim().min(1).max(120).nullable().optional(),
-  teamLabel: z.string().trim().max(120).nullable().optional(),
 });
 
 const updateUserMarketsSchema = z.object({
@@ -116,46 +107,31 @@ export async function createUserAction(input: { email: string; displayName?: str
   return { success: true, user: appUser, welcomeEmailSent: true };
 }
 
-export async function updateUserRoleAction(userId: string, role: AppRole) {
-  const session = await requirePermission("users:manage");
-  await ensureDbReady();
-  if (!isAppRole(role)) return { error: "Invalid role." };
-  const target = await getAppUserByUserId(userId);
-  if (!target) return { error: "User not found." };
-  if (target.user_id === session.userId && target.role === "admin" && role !== "admin") {
-    return { error: "You cannot demote your own admin account." };
-  }
-  if (target.role === "admin" && target.status === "active" && role !== "admin") {
-    const users = await listAppUsers();
-    if (countOtherActiveAdmins(users, target.user_id) === 0) {
-      return { error: "Cannot demote the last active admin." };
-    }
-  }
-  await updateAppUserRole(userId, role);
-  await createAuditLog("app_user_role_updated", "app_user", userId, { role });
-  revalidatePath("/users");
-  return { success: true };
+export async function updateUserRoleAction(userId: string, role: AppRole): Promise<{
+  error: string;
+} | {
+  success: true;
+}> {
+  await requirePermission("users:manage");
+  void userId;
+  void role;
+  // Roles on app_users are platform-global. A tenant membership permission
+  // must never authorize this write, and no canonical membership-role mutation
+  // adapter exists yet, so this tenant-facing path remains fail closed.
+  return unavailableUserResult();
 }
 
-export async function updateUserStatusAction(userId: string, status: AppUserStatus) {
-  const session = await requirePermission("users:manage");
-  await ensureDbReady();
-  if (status !== "active" && status !== "disabled") return { error: "Invalid status." };
-  const target = await getAppUserByUserId(userId);
-  if (!target) return { error: "User not found." };
-  if (target.user_id === session.userId && status === "disabled") {
-    return { error: "You cannot disable your own account." };
-  }
-  if (target.role === "admin" && target.status === "active" && status === "disabled") {
-    const users = await listAppUsers();
-    if (countOtherActiveAdmins(users, target.user_id) === 0) {
-      return { error: "Cannot disable the last active admin." };
-    }
-  }
-  await updateAppUserStatus(userId, status);
-  await createAuditLog("app_user_status_updated", "app_user", userId, { status });
-  revalidatePath("/users");
-  return { success: true };
+export async function updateUserStatusAction(userId: string, status: AppUserStatus): Promise<{
+  error: string;
+} | {
+  success: true;
+}> {
+  await requirePermission("users:manage");
+  void userId;
+  void status;
+  // Disabling app_users revokes platform access across every tenant. Until a
+  // tenant-membership status adapter owns this operation, do not touch it.
+  return unavailableUserResult();
 }
 
 export async function removeUserAction(
@@ -202,23 +178,21 @@ export async function removeUserAction(
     }));
 }
 
-export async function updateUserTeamAction(userId: string, input: { isTeamLead?: boolean; teamLeadUserId?: string | null; teamLabel?: string | null }) {
+export async function updateUserTeamAction(
+  userId: string,
+  input: { isTeamLead?: boolean; teamLeadUserId?: string | null; teamLabel?: string | null },
+): Promise<{
+  error: string;
+} | {
+  success: true;
+  user: AppUser;
+}> {
   await requirePermission("users:manage");
-  await ensureDbReady();
-  const parsed = updateUserTeamSchema.safeParse(input);
-  if (!parsed.success) return { error: "Invalid team settings." };
-  const user = await updateAppUserTeam({
-    userId,
-    isTeamLead: parsed.data.isTeamLead,
-    teamLeadUserId: parsed.data.teamLeadUserId ?? null,
-    teamLabel: parsed.data.teamLabel ?? null,
-  });
-  if (!user) return { error: "User not found." };
-  await createAuditLog("app_user_team_updated", "app_user", userId, parsed.data);
-  revalidatePath("/users");
-  revalidatePath("/team");
-  revalidatePath("/dashboard");
-  return { success: true, user };
+  void userId;
+  void input;
+  // Team fields live on the platform-global app_users row. Fail closed until
+  // the canonical tenant/workspace membership model exposes this mutation.
+  return unavailableUserResult();
 }
 
 export async function updateUserMarketAccessAction(userId: string, input: { marketIds: string[] }) {
@@ -270,12 +244,6 @@ async function sendPasswordResetEmail(email: string): Promise<{ error: string | 
     redirectTo: buildPasswordRecoveryUrl("/reset-password", appUrl),
   });
   return { error: error?.message ?? null };
-}
-
-function countOtherActiveAdmins(users: Awaited<ReturnType<typeof listAppUsers>>, userId: string): number {
-  return users.filter((user) => (
-    user.user_id !== userId && user.role === "admin" && user.status === "active"
-  )).length;
 }
 
 function unavailableUserResult(): { error: string } {
