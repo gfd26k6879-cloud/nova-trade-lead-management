@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
 const internalWorkerRouteMocks = vi.hoisted(() => ({
   runInternalWorkerRoute: vi.fn(),
+  runTenantInternalWorkerRoute: vi.fn(),
 }));
 
 const workerMocks = vi.hoisted(() => ({
@@ -63,6 +64,16 @@ describe("mutating worker route methods", () => {
     await expect(response.json()).resolves.toEqual({ status: "error", error: "Method Not Allowed" });
   });
 
+  it.each([
+    ["/api/ai/verify-next", getVerifyNext],
+    ["/api/ai/artifacts/process-next", getArtifactProcessNext],
+  ] as const)("%s keeps method errors private and uncached", async (_path, getRoute) => {
+    const response = await getRoute();
+
+    expect(response.headers.get("cache-control")).toContain("private");
+    expect(response.headers.get("cache-control")).toContain("no-store");
+  });
+
   it("does not invoke the shared worker runner for GET requests", async () => {
     await getProcessNext();
     await getEnrichNext();
@@ -71,12 +82,16 @@ describe("mutating worker route methods", () => {
     await getRecomputeStale();
 
     expect(internalWorkerRouteMocks.runInternalWorkerRoute).not.toHaveBeenCalled();
+    expect(internalWorkerRouteMocks.runTenantInternalWorkerRoute).not.toHaveBeenCalled();
   });
 
   it("passes the shared worker signal through all five route task boundaries", async () => {
     const signal = new AbortController().signal;
     internalWorkerRouteMocks.runInternalWorkerRoute.mockImplementation(
       async (_request, _workerName, _permission, task) => task(signal),
+    );
+    internalWorkerRouteMocks.runTenantInternalWorkerRoute.mockImplementation(
+      async (_request, _workerName, _permission, task) => NextResponse.json(await task({}, signal)),
     );
     workerMocks.processNextUnit.mockResolvedValue({ status: "idle" });
     workerMocks.enrichNextLead.mockResolvedValue({ status: "idle" });
@@ -97,6 +112,48 @@ describe("mutating worker route methods", () => {
     expect(workerMocks.processNextLeadArtifactJob).toHaveBeenCalledWith(signal);
     expect(workerMocks.repairAiWebsiteFindingConsistency).toHaveBeenCalledWith(100, signal);
     expect(workerMocks.recomputeAllLeadQualityScores).toHaveBeenCalledWith(100, signal);
+  });
+
+  it("binds AI triggers to tenant worker authorization and ignores forged request scope", async () => {
+    internalWorkerRouteMocks.runTenantInternalWorkerRoute.mockResolvedValue(NextResponse.json({ status: "idle" }));
+    const verificationRequest = new NextRequest(
+      "https://example.test/api/ai/verify-next?worker=artifact&tenantId=forged",
+      { method: "POST", body: JSON.stringify({ workspaceId: "forged" }) },
+    );
+    const artifactRequest = new NextRequest(
+      "https://example.test/api/ai/artifacts/process-next?worker=ai_verification&tenantId=forged",
+      { method: "POST", body: JSON.stringify({ workspaceId: "forged" }) },
+    );
+
+    const verificationResponse = await postVerifyNext(verificationRequest);
+    const artifactResponse = await postArtifactProcessNext(artifactRequest);
+
+    expect(internalWorkerRouteMocks.runTenantInternalWorkerRoute).toHaveBeenNthCalledWith(
+      1,
+      verificationRequest,
+      "ai_verification",
+      "queue:operate",
+      expect.any(Function),
+      expect.objectContaining({
+        resolveLease: expect.any(Function),
+        sessionPermission: "queue:operate",
+        action: "ai_verification:process",
+      }),
+    );
+    expect(internalWorkerRouteMocks.runTenantInternalWorkerRoute).toHaveBeenNthCalledWith(
+      2,
+      artifactRequest,
+      "artifact",
+      "queue:operate",
+      expect.any(Function),
+      expect.objectContaining({
+        resolveLease: expect.any(Function),
+        sessionPermission: "queue:operate",
+        action: "artifact:process",
+      }),
+    );
+    expect(verificationResponse.headers.get("cache-control")).toContain("no-store");
+    expect(artifactResponse.headers.get("cache-control")).toContain("no-store");
   });
 
   it("keeps crawl and enrichment triggers bound to their exact worker", async () => {
