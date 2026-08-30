@@ -417,6 +417,7 @@ describe("adaptive question planning", () => {
     ["incoherent stale state", planInput({ uncertainties: [uncertainty({ kind: "stale", freshness: "current" })] })],
     ["invalid decision reference", planInput({ uncertainties: [uncertainty({ confirmedForDecision: "bad ref ?" })] })],
     ["invalid tenant reference", planInput({ tenantRef: "bad ref ?" })],
+    ["invalid understanding version", planInput({ understandingVersionId: "understanding-version:bad" })],
     ["unnormalizable question identity", planInput({ uncertainties: [uncertainty({ questionIdentity: " /// " })] })],
   ])("fails closed for %s", (_label, input) => {
     expect(planAdaptiveQuestionSession(input)).toEqual({ ok: false, code: "MALFORMED_INPUT" });
@@ -586,6 +587,8 @@ describe("question answer records", () => {
     ["invalid optional answer text", answer({ disposition: "unknown", answerText: " " })],
     ["invalid optional supersedes ref", answer({ disposition: "unknown", answerText: null, supersedesAnswerId: "bad ref ?" })],
     ["invalid tenant reference", answer({ tenantRef: "bad ref ?" })],
+    ["invalid session reference", answer({ sessionRef: "bad ref ?" })],
+    ["invalid understanding version", answer({ understandingVersionId: "understanding-version:bad" })],
     ["unnormalizable question identity", answer({ questionIdentity: " /// " })],
   ])("rejects a malformed %s answer exactly", (_label, input) => {
     expect(recordQuestionAnswer(input)).toEqual({ ok: false, code: "MALFORMED_ANSWER" });
