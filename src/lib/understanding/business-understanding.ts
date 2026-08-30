@@ -115,11 +115,18 @@ export type BusinessUnderstandingReviewSnapshot = Scope & Readonly<{
   versionId: string;
   contentHash: string;
   claimSetHash: string;
+  supersedesVersionId: string | null;
   createdAt: string;
   status: BusinessUnderstandingReviewStatus;
   events: readonly BusinessUnderstandingReviewEvent[];
   replacementVersionId: string | null;
   reviewHash: string;
+}>;
+
+export type BusinessUnderstandingReplacementDescriptor = Readonly<{
+  replacementVersion: 1;
+  supersedesVersionId: string;
+  review: BusinessUnderstandingReviewSnapshot;
 }>;
 
 export type BusinessUnderstandingProposal = Scope & Readonly<{
@@ -128,6 +135,7 @@ export type BusinessUnderstandingProposal = Scope & Readonly<{
   proposalRef: string;
   revision: number;
   supersedesProposalRef: string | null;
+  supersedesVersionId: string | null;
   status: "review_required";
   reviewState: "pending";
   claimSetHash: string;
@@ -184,7 +192,7 @@ type ParsedClaim = Scope & Readonly<{
 
 const INPUT_FIELDS = [
   "version", "tenantId", "workspaceId", "proposalRef", "revision", "supersedesProposalRef",
-  "createdAt", "producer", "evidence", "claims",
+  "supersedesVersionId", "createdAt", "producer", "evidence", "claims",
 ] as const;
 const PRODUCER_FIELDS = [
   "runRef", "runInputHash", "agentVersion", "modelRef", "promptRef", "promptHash", "policyRef", "policyHash",
@@ -197,14 +205,15 @@ const CLAIM_FIELDS = [
   "origin", "status", "confidenceBasisPoints", "material", "evidenceIds", "uncertaintyReason",
 ] as const;
 const REVIEW_FIELDS = [
-  "reviewVersion", "versionId", "tenantId", "workspaceId", "contentHash", "claimSetHash", "createdAt",
-  "status", "events", "replacementVersionId", "reviewHash",
+  "reviewVersion", "versionId", "tenantId", "workspaceId", "contentHash", "claimSetHash",
+  "supersedesVersionId", "createdAt", "status", "events", "replacementVersionId", "reviewHash",
 ] as const;
 const REVIEW_EVENT_FIELDS = ["from", "to", "actor", "at", "reason", "replacementVersionId"] as const;
 const REVIEW_ACTOR_FIELDS = ["kind", "actorId"] as const;
+const REPLACEMENT_FIELDS = ["replacementVersion", "supersedesVersionId", "review"] as const;
 const REVIEW_TRANSITION_FIELDS = [
   "version", "tenantId", "workspaceId", "current", "expectedVersionId", "expectedContentHash",
-  "expectedReviewHash", "to", "actor", "at", "reason", "replacementVersionId",
+  "expectedReviewHash", "to", "actor", "at", "reason", "replacement",
 ] as const;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -438,6 +447,7 @@ function reviewPayload(input: Readonly<{
   workspaceId: string | null;
   contentHash: string;
   claimSetHash: string;
+  supersedesVersionId: string | null;
   createdAt: string;
   status: BusinessUnderstandingReviewStatus;
   events: readonly BusinessUnderstandingReviewEvent[];
@@ -450,6 +460,7 @@ function reviewPayload(input: Readonly<{
     workspaceId: input.workspaceId,
     contentHash: input.contentHash,
     claimSetHash: input.claimSetHash,
+    supersedesVersionId: input.supersedesVersionId,
     createdAt: input.createdAt,
     status: input.status,
     events: input.events,
@@ -504,12 +515,16 @@ function parseReviewSnapshot(value: unknown): BusinessUnderstandingReviewSnapsho
     ? record.contentHash : null;
   const claimSetHash = record && typeof record.claimSetHash === "string" && HASH.test(record.claimSetHash)
     ? record.claimSetHash : null;
+  const supersedesVersionId = record && record.supersedesVersionId === null
+    ? null
+    : record && typeof record.supersedesVersionId === "string" && VERSION_ID.test(record.supersedesVersionId)
+      ? record.supersedesVersionId : undefined;
   const createdAt = record && canonicalTimestamp(record.createdAt);
   const events = record && exactArray(record.events, 100);
   const suppliedStatus = record && enumValue(record.status, REVIEW_STATUSES);
   if (!record || record.reviewVersion !== 1 || !tenantId || workspaceId === undefined || !versionId
     || !contentHash || versionId !== `understanding-version:${contentHash.slice("sha256:".length)}`
-    || !claimSetHash || !createdAt || !events || !suppliedStatus
+    || !claimSetHash || supersedesVersionId === undefined || !createdAt || !events || !suppliedStatus
     || typeof record.reviewHash !== "string" || !HASH.test(record.reviewHash)) return null;
 
   const parsedEvents: BusinessUnderstandingReviewEvent[] = [];
@@ -531,12 +546,23 @@ function parseReviewSnapshot(value: unknown): BusinessUnderstandingReviewSnapsho
     workspaceId,
     contentHash,
     claimSetHash,
+    supersedesVersionId,
     createdAt,
     status,
     events: Object.freeze(parsedEvents),
     replacementVersionId,
   });
   return canonical.reviewHash === record.reviewHash ? canonical : null;
+}
+
+function parseReplacementDescriptor(value: unknown): BusinessUnderstandingReplacementDescriptor | null {
+  const record = exactRecord(value, REPLACEMENT_FIELDS);
+  const review = record && parseReviewSnapshot(record.review);
+  const supersedesVersionId = record && typeof record.supersedesVersionId === "string"
+    && VERSION_ID.test(record.supersedesVersionId) ? record.supersedesVersionId : null;
+  if (!record || record.replacementVersion !== 1 || !review || !supersedesVersionId
+    || review.supersedesVersionId !== supersedesVersionId) return null;
+  return Object.freeze({ replacementVersion: 1, supersedesVersionId, review });
 }
 
 function rejectReview(
@@ -565,18 +591,23 @@ export function buildBusinessUnderstandingProposal(input: unknown): BusinessUnde
     const proposalRef = reference(record.proposalRef);
     const revision = integer(record.revision, 1, 1_000_000);
     const supersedesProposalRef = record.supersedesProposalRef === null ? null : reference(record.supersedesProposalRef);
+    const supersedesVersionId = record.supersedesVersionId === null
+      ? null
+      : typeof record.supersedesVersionId === "string" && VERSION_ID.test(record.supersedesVersionId)
+        ? record.supersedesVersionId : undefined;
     const createdAt = boundedText(record.createdAt, 40);
     const producer = parseProducer(record.producer);
     const rawEvidence = exactArray(record.evidence, 500);
     const rawClaims = exactArray(record.claims, 100);
     if (!tenantId || workspaceId === undefined || !proposalRef || revision === null || !createdAt || !producer
-      || !rawEvidence || !rawClaims?.length || (record.supersedesProposalRef !== null && !supersedesProposalRef)) {
+      || !rawEvidence || !rawClaims?.length || (record.supersedesProposalRef !== null && !supersedesProposalRef)
+      || supersedesVersionId === undefined) {
       return reject("MALFORMED_INPUT");
     }
     const epoch = Date.parse(createdAt);
     if (!Number.isFinite(epoch) || new Date(epoch).toISOString() !== createdAt) return reject("MALFORMED_INPUT");
-    if ((revision === 1 && supersedesProposalRef !== null)
-      || (revision > 1 && supersedesProposalRef === null)
+    if ((revision === 1 && (supersedesProposalRef !== null || supersedesVersionId !== null))
+      || (revision > 1 && (supersedesProposalRef === null || supersedesVersionId === null))
       || supersedesProposalRef === proposalRef) return reject("VERSION_CONFLICT");
 
     const scope = Object.freeze({ tenantId, workspaceId });
@@ -720,6 +751,7 @@ export function buildBusinessUnderstandingProposal(input: unknown): BusinessUnde
       workspaceId,
       revision,
       supersedesProposalRef,
+      supersedesVersionId,
       status: "review_required" as const,
       reviewState: "pending" as const,
       claimSetHash,
@@ -731,12 +763,14 @@ export function buildBusinessUnderstandingProposal(input: unknown): BusinessUnde
     };
     const contentHash = sha256(proposalContent);
     const versionId = `understanding-version:${contentHash.slice("sha256:".length)}`;
+    if (supersedesVersionId === versionId) return reject("VERSION_CONFLICT");
     const review = createReviewSnapshot({
       versionId,
       tenantId,
       workspaceId,
       contentHash,
       claimSetHash,
+      supersedesVersionId,
       createdAt,
       status: "draft",
       events: Object.freeze([]),
@@ -757,7 +791,8 @@ export function buildBusinessUnderstandingProposal(input: unknown): BusinessUnde
 /**
  * Pure review-state boundary. Authorization remains the caller service's job;
  * this function only accepts an exact human decision bound to one immutable
- * scope, content version, and prior review hash.
+ * scope, content version, and prior review hash. Repository existence and the
+ * single-current-version transaction remain the caller service's responsibility.
  */
 export function transitionBusinessUnderstandingReview(value: unknown): BusinessUnderstandingReviewResult {
   try {
@@ -771,12 +806,9 @@ export function transitionBusinessUnderstandingReview(value: unknown): BusinessU
     const to = enumValue(input.to, REVIEW_STATUSES);
     const at = canonicalTimestamp(input.at);
     const reason = boundedText(input.reason, 2_000);
-    const replacementVersionId = input.replacementVersionId === null
-      ? null
-      : typeof input.replacementVersionId === "string" && VERSION_ID.test(input.replacementVersionId)
-        ? input.replacementVersionId : undefined;
+    const replacement = input.replacement === null ? null : parseReplacementDescriptor(input.replacement);
     if (!current || !tenantId || workspaceId === undefined || !actor || !actorId || !to || to === "draft"
-      || !at || !reason || replacementVersionId === undefined
+      || !at || !reason || (input.replacement !== null && !replacement)
       || typeof input.expectedVersionId !== "string" || !VERSION_ID.test(input.expectedVersionId)
       || typeof input.expectedContentHash !== "string" || !HASH.test(input.expectedContentHash)
       || typeof input.expectedReviewHash !== "string" || !HASH.test(input.expectedReviewHash)) {
@@ -788,12 +820,25 @@ export function transitionBusinessUnderstandingReview(value: unknown): BusinessU
     if (input.expectedVersionId !== current.versionId || input.expectedContentHash !== current.contentHash
       || input.expectedReviewHash !== current.reviewHash) return rejectReview("STALE_VERSION");
     if (actor.kind !== "human") return rejectReview("HUMAN_REVIEW_REQUIRED");
+    if (replacement && (replacement.review.tenantId !== current.tenantId
+      || replacement.review.workspaceId !== current.workspaceId)) return rejectReview("SCOPE_MISMATCH");
+    const currentLastAt = current.events.at(-1)?.at ?? current.createdAt;
+    const replacementLastAt = replacement?.review.events.at(-1)?.at ?? null;
+    const validReplacement = replacement !== null
+      && replacement.review.status === "approved"
+      && replacement.review.versionId !== current.versionId
+      && replacement.supersedesVersionId === current.versionId
+      && Date.parse(replacement.review.createdAt) > Date.parse(current.createdAt)
+      && replacementLastAt !== null
+      && Date.parse(replacementLastAt) > Date.parse(currentLastAt)
+      && Date.parse(at) > Date.parse(replacementLastAt);
     if (!allowedReviewTransition(current.status, to)
-      || Date.parse(at) <= Date.parse(current.events.at(-1)?.at ?? current.createdAt)
-      || (to === "superseded" && (!replacementVersionId || replacementVersionId === current.versionId))
-      || (to !== "superseded" && replacementVersionId !== null)) {
+      || Date.parse(at) <= Date.parse(currentLastAt)
+      || (to === "superseded" ? !validReplacement : replacement !== null)) {
       return rejectReview("INVALID_TRANSITION");
     }
+
+    const replacementVersionId = replacement?.review.versionId ?? null;
 
     const event: BusinessUnderstandingReviewEvent = Object.freeze({
       from: current.status,
@@ -809,6 +854,7 @@ export function transitionBusinessUnderstandingReview(value: unknown): BusinessU
       workspaceId: current.workspaceId,
       contentHash: current.contentHash,
       claimSetHash: current.claimSetHash,
+      supersedesVersionId: current.supersedesVersionId,
       createdAt: current.createdAt,
       status: to,
       events: Object.freeze([...current.events, event]),

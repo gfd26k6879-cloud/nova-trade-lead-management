@@ -56,6 +56,7 @@ function input(overrides: Record<string, unknown> = {}) {
     proposalRef: "understanding:proposal-1",
     revision: 1,
     supersedesProposalRef: null,
+    supersedesVersionId: null,
     createdAt: "2026-08-29T19:00:00.000Z",
     producer: {
       runRef: "agent-run:understanding-1",
@@ -81,8 +82,8 @@ function reviewTransition(
 ) {
   return {
     version: 1,
-    tenantId: TENANT_A,
-    workspaceId: WORKSPACE_A,
+    tenantId: current.tenantId,
+    workspaceId: current.workspaceId,
     current,
     expectedVersionId: current.versionId,
     expectedContentHash: current.contentHash,
@@ -91,9 +92,31 @@ function reviewTransition(
     actor: { kind: "human", actorId: REVIEWER_A },
     at,
     reason: `Human decision to move the version to ${to}.`,
-    replacementVersionId: to === "superseded" ? `understanding-version:${"f".repeat(64)}` : null,
+    replacement: null,
     ...overrides,
   };
+}
+
+function approvedReview(
+  proposalOverrides: Record<string, unknown>,
+  inReviewAt: string,
+  approvedAt: string,
+): BusinessUnderstandingReviewSnapshot {
+  const created = buildBusinessUnderstandingProposal(input(proposalOverrides));
+  if (!created.ok) throw new Error(created.code);
+  const inReview = transitionBusinessUnderstandingReview(reviewTransition(
+    created.proposal.review,
+    "in_review",
+    inReviewAt,
+  ));
+  if (!inReview.ok) throw new Error(inReview.code);
+  const approved = transitionBusinessUnderstandingReview(reviewTransition(
+    inReview.review,
+    "approved",
+    approvedAt,
+  ));
+  if (!approved.ok) throw new Error(approved.code);
+  return approved.review;
 }
 
 describe("business-understanding proposal service", () => {
@@ -227,12 +250,21 @@ describe("business-understanding proposal service", () => {
       proposalRef: "understanding:proposal-2",
       revision: 2,
       supersedesProposalRef: "understanding:proposal-1",
-    }))).toMatchObject({ ok: true, proposal: { revision: 2, supersedesProposalRef: "understanding:proposal-1" } });
+      supersedesVersionId: `understanding-version:${"c".repeat(64)}`,
+    }))).toMatchObject({
+      ok: true,
+      proposal: {
+        revision: 2,
+        supersedesProposalRef: "understanding:proposal-1",
+        supersedesVersionId: `understanding-version:${"c".repeat(64)}`,
+      },
+    });
     expect(buildBusinessUnderstandingProposal(input({ revision: 2 }))).toEqual({ ok: false, code: "VERSION_CONFLICT" });
     expect(buildBusinessUnderstandingProposal(input({ supersedesProposalRef: "understanding:proposal-0" }))).toEqual({ ok: false, code: "VERSION_CONFLICT" });
     expect(buildBusinessUnderstandingProposal(input({
       revision: 2,
       supersedesProposalRef: "understanding:proposal-1",
+      supersedesVersionId: `understanding-version:${"c".repeat(64)}`,
       proposalRef: "understanding:proposal-1",
     }))).toEqual({ ok: false, code: "VERSION_CONFLICT" });
   });
@@ -405,19 +437,183 @@ describe("business-understanding proposal service", () => {
     });
     if (!approved.ok) return;
 
+    const replacementCreated = buildBusinessUnderstandingProposal(input({
+      proposalRef: "understanding:proposal-2",
+      revision: 2,
+      supersedesProposalRef: "understanding:proposal-1",
+      supersedesVersionId: approved.review.versionId,
+      createdAt: "2026-08-29T19:03:00.000Z",
+    }));
+    if (!replacementCreated.ok) throw new Error(replacementCreated.code);
+    const replacementInReview = transitionBusinessUnderstandingReview(reviewTransition(
+      replacementCreated.proposal.review,
+      "in_review",
+      "2026-08-29T19:04:00.000Z",
+    ));
+    if (!replacementInReview.ok) throw new Error(replacementInReview.code);
+    const replacementApproved = transitionBusinessUnderstandingReview(reviewTransition(
+      replacementInReview.review,
+      "approved",
+      "2026-08-29T19:05:00.000Z",
+    ));
+    if (!replacementApproved.ok) throw new Error(replacementApproved.code);
+
     const superseded = transitionBusinessUnderstandingReview(reviewTransition(
       approved.review,
       "superseded",
-      "2026-08-29T19:03:00.000Z",
+      "2026-08-29T19:06:00.000Z",
+      {
+        replacement: {
+          replacementVersion: 1,
+          supersedesVersionId: approved.review.versionId,
+          review: replacementApproved.review,
+        },
+      },
     ));
     expect(superseded).toMatchObject({
       ok: true,
-      review: { status: "superseded", replacementVersionId: `understanding-version:${"f".repeat(64)}` },
+      review: { status: "superseded", replacementVersionId: replacementApproved.review.versionId },
     });
+    if (!superseded.ok) return;
+    expect(superseded.review.events.at(-1)).toMatchObject({
+      to: "superseded",
+      replacementVersionId: replacementApproved.review.versionId,
+    });
+    expect(superseded.review.events.at(-1)).not.toHaveProperty("supersedesVersionId");
+    expect(superseded.review.events.at(-1)).not.toHaveProperty("review");
     expect(created.proposal.review.status).toBe("draft");
     expect(inReview.review.status).toBe("in_review");
     expect(approved.review.status).toBe("approved");
     expect(Object.isFrozen(superseded.ok && superseded.review)).toBe(true);
+  });
+
+  it("requires a canonical linked approved replacement before superseding", () => {
+    const current = approvedReview({}, "2026-08-29T19:01:00.000Z", "2026-08-29T19:02:00.000Z");
+    const replacement = approvedReview({
+      proposalRef: "understanding:proposal-2",
+      revision: 2,
+      supersedesProposalRef: "understanding:proposal-1",
+      supersedesVersionId: current.versionId,
+      createdAt: "2026-08-29T19:03:00.000Z",
+    }, "2026-08-29T19:04:00.000Z", "2026-08-29T19:05:00.000Z");
+    const descriptor = {
+      replacementVersion: 1,
+      supersedesVersionId: current.versionId,
+      review: replacement,
+    };
+    const attempt = (candidate: unknown, at = "2026-08-29T19:06:00.000Z") => (
+      transitionBusinessUnderstandingReview(reviewTransition(current, "superseded", at, {
+        replacement: candidate,
+      }))
+    );
+
+    expect(attempt(descriptor)).toMatchObject({
+      ok: true,
+      review: { replacementVersionId: replacement.versionId },
+    });
+    expect(transitionBusinessUnderstandingReview(reviewTransition(current, "superseded", "2026-08-29T19:06:00.000Z", {
+      replacementVersionId: `understanding-version:${"f".repeat(64)}`,
+    }))).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+
+    const fabricatedReview = {
+      ...structuredClone(replacement),
+      versionId: `understanding-version:${"f".repeat(64)}`,
+    };
+    expect(attempt({ ...descriptor, review: fabricatedReview }), "fabricated version")
+      .toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    expect(attempt({
+      ...descriptor,
+      review: { ...structuredClone(replacement), reviewHash: HASH_B },
+    }), "stale replacement review hash").toEqual({ ok: false, code: "MALFORMED_INPUT" });
+
+    const replacementDraft = buildBusinessUnderstandingProposal(input({
+      proposalRef: "understanding:proposal-draft",
+      revision: 2,
+      supersedesProposalRef: "understanding:proposal-1",
+      supersedesVersionId: current.versionId,
+      createdAt: "2026-08-29T19:03:00.000Z",
+    }));
+    if (!replacementDraft.ok) throw new Error(replacementDraft.code);
+    expect(attempt({ ...descriptor, review: replacementDraft.proposal.review }), "not approved")
+      .toEqual({ ok: false, code: "INVALID_TRANSITION" });
+    expect(attempt({
+      ...descriptor,
+      supersedesVersionId: `understanding-version:${"c".repeat(64)}`,
+    }), "descriptor lineage drift").toEqual({ ok: false, code: "MALFORMED_INPUT" });
+
+    const otherPredecessor = `understanding-version:${"c".repeat(64)}`;
+    const nonLinkingReplacement = approvedReview({
+      proposalRef: "understanding:non-linking-proposal",
+      revision: 2,
+      supersedesProposalRef: "understanding:different-prior",
+      supersedesVersionId: otherPredecessor,
+      createdAt: "2026-08-29T19:03:00.000Z",
+    }, "2026-08-29T19:04:00.000Z", "2026-08-29T19:05:00.000Z");
+    expect(attempt({
+      replacementVersion: 1,
+      supersedesVersionId: otherPredecessor,
+      review: nonLinkingReplacement,
+    }), "hash-bound non-linking replacement").toEqual({ ok: false, code: "INVALID_TRANSITION" });
+
+    const olderReplacement = approvedReview({
+      proposalRef: "understanding:older-proposal",
+      revision: 2,
+      supersedesProposalRef: "understanding:proposal-1",
+      supersedesVersionId: current.versionId,
+      createdAt: "2026-08-29T18:00:00.000Z",
+    }, "2026-08-29T18:01:00.000Z", "2026-08-29T18:02:00.000Z");
+    expect(attempt({ ...descriptor, review: olderReplacement }), "older replacement")
+      .toEqual({ ok: false, code: "INVALID_TRANSITION" });
+    expect(attempt(descriptor, "2026-08-29T19:05:00.000Z"), "replacement approval not yet committed")
+      .toEqual({ ok: false, code: "INVALID_TRANSITION" });
+
+    const crossScopeReplacement = approvedReview({
+      tenantId: TENANT_B,
+      workspaceId: WORKSPACE_B,
+      proposalRef: "understanding:other-scope-proposal",
+      revision: 2,
+      supersedesProposalRef: "understanding:other-scope-prior",
+      supersedesVersionId: current.versionId,
+      createdAt: "2026-08-29T19:03:00.000Z",
+      evidence: [evidence({ tenantId: TENANT_B, workspaceId: WORKSPACE_B })],
+      claims: [claim({ tenantId: TENANT_B, workspaceId: WORKSPACE_B })],
+    }, "2026-08-29T19:04:00.000Z", "2026-08-29T19:05:00.000Z");
+    expect(attempt({ ...descriptor, review: crossScopeReplacement }), "cross-scope replacement")
+      .toEqual({ ok: false, code: "SCOPE_MISMATCH" });
+  });
+
+  it("rejects replacement proxies and accessors without executing them", () => {
+    const current = approvedReview({}, "2026-08-29T19:01:00.000Z", "2026-08-29T19:02:00.000Z");
+    const replacement = approvedReview({
+      proposalRef: "understanding:proposal-2",
+      revision: 2,
+      supersedesProposalRef: "understanding:proposal-1",
+      supersedesVersionId: current.versionId,
+      createdAt: "2026-08-29T19:03:00.000Z",
+    }, "2026-08-29T19:04:00.000Z", "2026-08-29T19:05:00.000Z");
+    const descriptor = {
+      replacementVersion: 1,
+      supersedesVersionId: current.versionId,
+      review: replacement,
+    };
+    let executions = 0;
+    const trap = (): never => {
+      executions += 1;
+      throw new Error("must not execute");
+    };
+    const proxy = new Proxy(descriptor, { getPrototypeOf: trap });
+    const accessor = structuredClone(descriptor) as unknown as Record<string, unknown>;
+    Object.defineProperty(accessor, "review", { enumerable: true, get: trap });
+
+    for (const hostile of [proxy, accessor]) {
+      expect(transitionBusinessUnderstandingReview(reviewTransition(
+        current,
+        "superseded",
+        "2026-08-29T19:06:00.000Z",
+        { replacement: hostile },
+      ))).toEqual({ ok: false, code: "MALFORMED_INPUT" });
+    }
+    expect(executions).toBe(0);
   });
 
   it("rejects automatic, illegal, stale, cross-scope, proxy, and accessor review decisions", () => {
