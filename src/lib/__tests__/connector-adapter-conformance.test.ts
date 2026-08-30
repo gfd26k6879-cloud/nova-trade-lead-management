@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("server-only", () => ({}));
 
 import {
   CUSTOMER_LIST_FIXTURE_ADAPTER,
@@ -8,6 +10,17 @@ import {
   type ConnectorAdapterDescriptor,
 } from "@/lib/connectors/adapter-contract";
 import type { ConnectorPolicyRequest } from "@/lib/connectors/policy";
+import {
+  createCustomerListFixtureAdapter,
+  type ApprovedCustomerListTableSnapshot,
+  type CustomerListPageRequest,
+} from "@/lib/connectors/customer-list-adapter";
+import {
+  GOOGLE_PLACES_APPROVED_FIELD_MASKS,
+  createGooglePlacesOnePageAdapter,
+  type GooglePlacesAdapterRequest,
+  type GooglePlacesInjectedClient,
+} from "@/lib/connectors/google-places-adapter";
 
 const googleObservation = {
   sourceCardId: "google_places_legacy",
@@ -311,5 +324,210 @@ describe("connector adapter fixture conformance", () => {
       decision: "block",
       code: "D015_MALFORMED",
     });
+  });
+});
+
+const SHARED_TENANT_ID = "tenant-a";
+const SHARED_WORKSPACE_ID = "workspace-a";
+const RAW_PROVIDER_SENTINEL = "raw-provider-body-must-not-escape";
+const RAW_REVIEW_SENTINEL = "raw-review-body-must-not-escape";
+const SHARED_NOW = "2026-08-29T18:00:00.000Z";
+
+type ConcreteAdapterEvidence = Readonly<{
+  raw: object;
+  tenantIds: readonly string[];
+  canonicalMutationFlags: readonly boolean[];
+  observationCount: number;
+  maximumObservationCount: number;
+  operationCalls: number;
+  immutable: boolean;
+  fixtureOnly: boolean;
+  transportNone: boolean;
+}>;
+
+type ConcreteAdapterHarness = Readonly<{
+  run(): Promise<ConcreteAdapterEvidence>;
+  malformed(): Promise<object>;
+  crossTenant(): Promise<object>;
+  resetExternalCalls(): void;
+  externalCalls(): number;
+}>;
+
+const CUSTOMER_DOCUMENT_ID = "00000000-0000-4000-8000-000000000201";
+const CUSTOMER_VERSION_ID = "00000000-0000-4000-8000-000000000202";
+
+function customerListHarness(): ConcreteAdapterHarness {
+  const snapshot: ApprovedCustomerListTableSnapshot = {
+    schemaVersion: 1,
+    approvalState: "approved",
+    tenantId: SHARED_TENANT_ID,
+    workspaceId: SHARED_WORKSPACE_ID,
+    documentId: CUSTOMER_DOCUMENT_ID,
+    documentVersionId: CUSTOMER_VERSION_ID,
+    snapshotVersion: "approved-table-v3",
+    sheet: "Customers",
+    headerRow: 1,
+    columns: ["Company", "Website", "Private provider/review body"],
+    rows: [["Example Industrial", "https://example.test", `${RAW_PROVIDER_SENTINEL} ${RAW_REVIEW_SENTINEL}`]],
+    permittedPurposes: ["account_identity"],
+  };
+  const creation = createCustomerListFixtureAdapter(snapshot, {
+    schemaVersion: 1,
+    columns: { accountName: "Company", website: "Website", industry: null, tag: null },
+    maxPageSize: 1,
+  });
+  expect(creation).toMatchObject({ ok: true, code: "D015_PASS" });
+  if (!creation.ok) throw new Error("expected customer-list fixture adapter");
+  const adapter = creation.adapter;
+  const request: CustomerListPageRequest = {
+    version: 1,
+    runId: "run-shared-customer-list",
+    authorizedTenantId: SHARED_TENANT_ID,
+    authorizedWorkspaceId: SHARED_WORKSPACE_ID,
+    tenantId: SHARED_TENANT_ID,
+    workspaceId: SHARED_WORKSPACE_ID,
+    documentId: CUSTOMER_DOCUMENT_ID,
+    documentVersionId: CUSTOMER_VERSION_ID,
+    snapshotVersion: "approved-table-v3",
+    permittedPurpose: "account_identity",
+    operation: "normalize",
+    cursor: null,
+    pageSize: 1,
+    observedAt: SHARED_NOW,
+  };
+
+  return {
+    async run() {
+      const result = await adapter.readPage(request);
+      if (!result.ok) throw new Error("expected customer-list conformance success");
+      return {
+        raw: result,
+        tenantIds: result.observations.map((item) => item.observation.tenantId),
+        canonicalMutationFlags: result.observations.map((item) => item.canonicalAccount),
+        observationCount: result.observations.length,
+        maximumObservationCount: adapter.capability.maxPageSize,
+        operationCalls: result.usage.providerRequests,
+        immutable: Object.isFrozen(result)
+          && Object.isFrozen(result.observations)
+          && result.observations.every((item) => Object.isFrozen(item)
+            && Object.isFrozen(item.observation)
+            && Object.isFrozen(item.observation.fields)),
+        fixtureOnly: adapter.capability.executionMode === "fixture",
+        transportNone: adapter.capability.transport === "none"
+          && adapter.capability.providerAccess === "none",
+      };
+    },
+    malformed: () => adapter.readPage({}),
+    crossTenant: () => adapter.readPage({ ...request, authorizedTenantId: "tenant-b" }),
+    resetExternalCalls: () => undefined,
+    externalCalls: () => 0,
+  };
+}
+
+function googlePlacesHarness(): ConcreteAdapterHarness {
+  const textSearch = vi.fn(async () => ({
+    places: [{
+      id: "places/example-industrial",
+      displayName: { text: "Example Industrial" },
+      websiteUri: "https://example.test",
+      regularOpeningHours: { openNow: true, periods: [{ body: RAW_REVIEW_SENTINEL }] },
+      photos: [{ name: RAW_PROVIDER_SENTINEL }],
+    }],
+    nextPageToken: null,
+  }));
+  const getPlaceDetails = vi.fn(async () => ({ place: null }));
+  const client: GooglePlacesInjectedClient = { textSearch, getPlaceDetails };
+  const adapter = createGooglePlacesOnePageAdapter(client, {
+    activation: "fixture_only",
+    approvedPolicyVersion: "launch-v1",
+    maxDeadlineMs: 30_000,
+    clock: () => Date.parse(SHARED_NOW),
+  });
+  const request: GooglePlacesAdapterRequest = {
+    version: 1,
+    executionMode: "fixture",
+    tenantId: SHARED_TENANT_ID,
+    authorizedTenantId: SHARED_TENANT_ID,
+    workspaceId: SHARED_WORKSPACE_ID,
+    runId: "run-shared-google-places",
+    observedAt: SHARED_NOW,
+    deadlineAt: "2026-08-29T18:00:10.000Z",
+    policyVersion: "launch-v1",
+    operation: "search_text",
+    fields: ["place_id", "business_name", "website", "operating_hours_metadata"],
+    fieldMask: GOOGLE_PLACES_APPROVED_FIELD_MASKS.search_text,
+    query: "industrial coatings near Denver Colorado",
+    pageToken: null,
+    locationBias: null,
+  };
+
+  return {
+    async run() {
+      const result = await adapter.execute(request);
+      if (!result.ok) throw new Error("expected Google Places conformance success");
+      return {
+        raw: result,
+        tenantIds: result.observations.map((item) => item.observation.tenantId),
+        canonicalMutationFlags: result.observations.map((item) => item.canonicalMutation),
+        observationCount: result.observations.length,
+        maximumObservationCount: adapter.capability.maximumResultsPerPage,
+        operationCalls: result.usage.clientCalls,
+        immutable: Object.isFrozen(result)
+          && Object.isFrozen(result.observations)
+          && result.observations.every((item) => Object.isFrozen(item)
+            && Object.isFrozen(item.observation)
+            && Object.isFrozen(item.observation.fields)),
+        fixtureOnly: adapter.descriptor.executionMode === "fixture"
+          && adapter.capability.activation === "fixture_only",
+        transportNone: adapter.descriptor.transport === "none",
+      };
+    },
+    malformed: () => adapter.execute({}),
+    crossTenant: () => adapter.execute({ ...request, authorizedTenantId: "tenant-b" }),
+    resetExternalCalls() {
+      textSearch.mockClear();
+      getPlaceDetails.mockClear();
+    },
+    externalCalls: () => textSearch.mock.calls.length + getPlaceDetails.mock.calls.length,
+  };
+}
+
+describe("shared concrete launch adapter conformance", () => {
+  it.each([
+    ["customer list", customerListHarness],
+    ["Google Places", googlePlacesHarness],
+  ] as const)("enforces the material launch invariants for %s", async (_label, createHarness) => {
+    const network = vi.fn();
+    vi.stubGlobal("fetch", network);
+    try {
+      const harness = createHarness();
+      const first = await harness.run();
+      const replay = await harness.run();
+
+      expect(replay.raw).toEqual(first.raw);
+      expect(first.fixtureOnly).toBe(true);
+      expect(first.transportNone).toBe(true);
+      expect(first.tenantIds).toEqual([SHARED_TENANT_ID]);
+      expect(first.canonicalMutationFlags).toEqual([false]);
+      expect(first.observationCount).toBeGreaterThan(0);
+      expect(first.observationCount).toBeLessThanOrEqual(first.maximumObservationCount);
+      expect(first.operationCalls).toBeLessThanOrEqual(1);
+      expect(first.immutable).toBe(true);
+      expect(first.raw).not.toHaveProperty("accounts");
+      expect(first.raw).not.toHaveProperty("leads");
+      expect(JSON.stringify(first.raw)).not.toContain(RAW_PROVIDER_SENTINEL);
+      expect(JSON.stringify(first.raw)).not.toContain(RAW_REVIEW_SENTINEL);
+      expect(network).not.toHaveBeenCalled();
+
+      harness.resetExternalCalls();
+      await expect(harness.malformed()).resolves.toMatchObject({ ok: false, status: "blocked" });
+      expect(harness.externalCalls()).toBe(0);
+      harness.resetExternalCalls();
+      await expect(harness.crossTenant()).resolves.toMatchObject({ ok: false, status: "blocked" });
+      expect(harness.externalCalls()).toBe(0);
+      expect(network).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
