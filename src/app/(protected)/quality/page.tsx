@@ -15,6 +15,7 @@ import {
 } from "@/lib/db/queries";
 import { PageShell } from "@/components/page-shell";
 import { startRouteTiming } from "@/lib/route-timing";
+import { assertTenantPermission } from "@/lib/tenancy/authorize";
 import { runWithTenantContext } from "@/lib/tenancy/context";
 import { QualityClient } from "./quality-client";
 
@@ -42,12 +43,25 @@ interface Props {
 export default async function QualityPage({ searchParams }: Props) {
   const logRouteTiming = startRouteTiming("/quality");
   const legacySession = await requirePermission("crawl:manage");
-  const tenantSession = await getTenantSession({});
+  let tenantSession: Awaited<ReturnType<typeof getTenantSession>>;
+  try {
+    tenantSession = await getTenantSession({});
+  } catch {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <QualityUnavailable reason="tenant_scope_unavailable" />;
+  }
   if (
     !tenantSession
     || tenantSession.userId !== legacySession.userId
     || tenantSession.workspaceId !== null
   ) {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <QualityUnavailable reason="tenant_scope_unavailable" />;
+  }
+
+  try {
+    await assertTenantPermission(tenantSession, "account:read", { action: "quality.page.read" });
+  } catch {
     logRouteTiming(403, { reason: "tenant_scope_unavailable" });
     return <QualityUnavailable reason="tenant_scope_unavailable" />;
   }

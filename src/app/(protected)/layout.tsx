@@ -1,9 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 
 import { logoutAction } from "@/app/login/actions";
 import { getSession, getTenantSession } from "@/lib/auth";
 import { NavHeader } from "@/components/nav-header";
+import { withTenantDbContext } from "@/lib/db";
 import { getAdminFulfillmentSummary } from "@/lib/db/queries";
+import { assertTenantPermission } from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
 
 export const dynamic = "force-dynamic";
 
@@ -71,9 +75,18 @@ export default async function ProtectedLayout({
     : LEGACY_PREVIEW_SHELL_SCOPE;
 
   let fulfillmentCount = 0;
-  if (session.role === "admin") {
+  if (
+    session.role === "admin"
+    && tenantSession?.userId === session.userId
+    && tenantSession.workspaceId === null
+  ) {
     try {
-      fulfillmentCount = (await getAdminFulfillmentSummary()).openTotal;
+      await assertTenantPermission(tenantSession, "account:read", { action: "layout.fulfillment.badge" });
+      fulfillmentCount = await runWithTenantContext(
+        tenantSession,
+        `protected-layout:${randomUUID()}`,
+        () => withTenantDbContext(async () => (await getAdminFulfillmentSummary()).openTotal),
+      );
     } catch {
       fulfillmentCount = 0;
     }

@@ -8,7 +8,9 @@ describe("protected layout fulfillment badge", () => {
 
     expect(source).toContain('session.role === "admin"');
     expect(source).toContain("getAdminFulfillmentSummary");
-    expect(source).toContain("fulfillmentCount = (await getAdminFulfillmentSummary()).openTotal");
+    expect(source).toContain("layout.fulfillment.badge");
+    expect(source).toContain("runWithTenantContext");
+    expect(source).toContain("withTenantDbContext");
     expect(source).toContain("catch");
     expect(source).toContain("fulfillmentCount = 0");
     expect(source).toContain("fulfillmentCount={fulfillmentCount}");

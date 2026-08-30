@@ -10,8 +10,17 @@ const queryMocks = vi.hoisted(() => ({
   getAdminFulfillmentSummary: vi.fn(),
 }));
 
+const tenantMocks = vi.hoisted(() => ({
+  assertTenantPermission: vi.fn(),
+  runWithTenantContext: vi.fn((_session: unknown, _correlationId: unknown, callback: () => unknown) => callback()),
+  withTenantDbContext: vi.fn((callback: () => unknown) => callback()),
+}));
+
 vi.mock("@/lib/auth", () => authMocks);
+vi.mock("@/lib/db", () => ({ withTenantDbContext: tenantMocks.withTenantDbContext }));
 vi.mock("@/lib/db/queries", () => queryMocks);
+vi.mock("@/lib/tenancy/authorize", () => ({ assertTenantPermission: tenantMocks.assertTenantPermission }));
+vi.mock("@/lib/tenancy/context", () => ({ runWithTenantContext: tenantMocks.runWithTenantContext }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 vi.mock("@/app/login/actions", () => ({ logoutAction: vi.fn() }));
 vi.mock("@/components/nav-header", () => ({ NavHeader: vi.fn(() => null) }));
@@ -35,6 +44,9 @@ beforeEach(() => {
     role: "admin",
   });
   authMocks.getTenantSession.mockResolvedValue(null);
+  tenantMocks.assertTenantPermission.mockResolvedValue(undefined);
+  tenantMocks.runWithTenantContext.mockImplementation((_session: unknown, _correlationId: unknown, callback: () => unknown) => callback());
+  tenantMocks.withTenantDbContext.mockImplementation((callback: () => unknown) => callback());
   queryMocks.getAdminFulfillmentSummary.mockResolvedValue({ openTotal: 0 });
 });
 
@@ -100,5 +112,38 @@ describe("protected layout tenant scope", () => {
       roleLabel: "Tenant role unavailable",
       preview: true,
     });
+  });
+
+  it("loads the admin fulfillment badge only inside the exact tenant-wide context", async () => {
+    const tenantSession = {
+      userId: "50000000-0000-4000-8000-000000000005",
+      email: "admin@example.com",
+      displayName: "Admin",
+      tenantId: "10000000-0000-4000-8000-000000000001",
+      workspaceId: null,
+      membershipId: "30000000-0000-4000-8000-000000000003",
+      roleBindingId: "40000000-0000-4000-8000-000000000004",
+      role: "owner",
+    } as const;
+    authMocks.getTenantSession.mockResolvedValue(tenantSession);
+    queryMocks.getAdminFulfillmentSummary.mockResolvedValue({ openTotal: 7 });
+
+    const layout = await ProtectedLayout({ children: "content" });
+    const nav = Children.toArray(layout.props.children).find(
+      (child) => isValidElement(child) && child.type === NavHeader,
+    ) as ReactElement<{ fulfillmentCount: number }>;
+
+    expect(nav.props.fulfillmentCount).toBe(7);
+    expect(tenantMocks.assertTenantPermission).toHaveBeenCalledWith(
+      tenantSession,
+      "account:read",
+      { action: "layout.fulfillment.badge" },
+    );
+    expect(tenantMocks.runWithTenantContext).toHaveBeenCalledWith(
+      tenantSession,
+      expect.stringMatching(/^protected-layout:/),
+      expect.any(Function),
+    );
+    expect(tenantMocks.withTenantDbContext).toHaveBeenCalledOnce();
   });
 });

@@ -8,6 +8,7 @@ const authMocks = vi.hoisted(() => ({
 }));
 
 const tenantContextMocks = vi.hoisted(() => ({
+  assertTenantPermission: vi.fn(),
   runWithTenantContext: vi.fn(async (_session, _correlationId, callback) => callback()),
   withTenantDbContext: vi.fn(async (callback) => callback({})),
 }));
@@ -31,6 +32,7 @@ const queryMocks = vi.hoisted(() => ({
 vi.mock("@/lib/auth", () => authMocks);
 vi.mock("@/lib/db/index", () => dbIndexMocks);
 vi.mock("@/lib/db/queries", () => queryMocks);
+vi.mock("@/lib/tenancy/authorize", () => ({ assertTenantPermission: tenantContextMocks.assertTenantPermission }));
 vi.mock("@/lib/tenancy/context", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/tenancy/context")>();
   return { ...original, runWithTenantContext: tenantContextMocks.runWithTenantContext };
@@ -57,6 +59,7 @@ describe("QualityPage", () => {
     vi.clearAllMocks();
     authMocks.requirePermission.mockResolvedValue({ userId: "user-1", email: "admin@example.com", role: "admin" });
     authMocks.getTenantSession.mockResolvedValue(TENANT_SESSION);
+    tenantContextMocks.assertTenantPermission.mockResolvedValue(TENANT_SESSION);
     tenantContextMocks.runWithTenantContext.mockImplementation(async (_session, _correlationId, callback) => callback());
     tenantContextMocks.withTenantDbContext.mockImplementation(async (callback) => callback({}));
     dbIndexMocks.withDbStatementTimeout.mockImplementation((_timeoutMs: number, fn: () => Promise<unknown>) => fn());
@@ -107,6 +110,11 @@ describe("QualityPage", () => {
     expect(queryMocks.getLocationCells).toHaveBeenCalledWith("market-london-ca");
     expect(dbIndexMocks.withDbStatementTimeout).toHaveBeenCalledWith(10_000, expect.any(Function));
     expect(authMocks.getTenantSession).toHaveBeenCalledWith({});
+    expect(tenantContextMocks.assertTenantPermission).toHaveBeenCalledWith(
+      TENANT_SESSION,
+      "account:read",
+      { action: "quality.page.read" },
+    );
     expect(tenantContextMocks.runWithTenantContext).toHaveBeenCalledWith(
       TENANT_SESSION,
       expect.stringMatching(/^quality-page:/),
@@ -138,5 +146,23 @@ describe("QualityPage", () => {
 
     expect(text).toContain("tenant_scope_unavailable");
     expect(queryMocks.getBusinessTypeCounts).not.toHaveBeenCalled();
+  });
+
+  it("normalizes tenant resolver and canonical permission failures before database access", async () => {
+    authMocks.getTenantSession.mockRejectedValueOnce(new Error("sensitive resolver detail"));
+
+    let node = await QualityPage({ searchParams: Promise.resolve({}) });
+    let text = renderToStaticMarkup(node as React.ReactElement);
+    expect(text).toContain("tenant_scope_unavailable");
+    expect(text).not.toContain("sensitive resolver detail");
+
+    authMocks.getTenantSession.mockResolvedValueOnce(TENANT_SESSION);
+    tenantContextMocks.assertTenantPermission.mockRejectedValueOnce(new Error("sensitive policy detail"));
+    node = await QualityPage({ searchParams: Promise.resolve({}) });
+    text = renderToStaticMarkup(node as React.ReactElement);
+    expect(text).toContain("tenant_scope_unavailable");
+    expect(text).not.toContain("sensitive policy detail");
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(tenantContextMocks.withTenantDbContext).not.toHaveBeenCalled();
   });
 });
