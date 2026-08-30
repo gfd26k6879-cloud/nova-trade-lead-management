@@ -4,6 +4,18 @@ const authMocks = vi.hoisted(() => ({
   requirePermission: vi.fn(),
 }));
 
+const tenantAuthorizationMocks = vi.hoisted(() => ({
+  requireTenantPermission: vi.fn(),
+}));
+
+const tenantContextMocks = vi.hoisted(() => ({
+  runWithTenantContext: vi.fn((_session: unknown, _correlationId: unknown, callback: () => unknown) => callback()),
+}));
+
+const tenantDbMocks = vi.hoisted(() => ({
+  withTenantDbContext: vi.fn((callback: () => unknown) => callback()),
+}));
+
 const queryMocks = vi.hoisted(() => ({
   ensureDbReady: vi.fn(),
   getLeads: vi.fn(),
@@ -55,6 +67,13 @@ const queryMocks = vi.hoisted(() => ({
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requirePermission: authMocks.requirePermission }));
+vi.mock("@/lib/tenancy/authorize", () => ({
+  requireTenantPermission: tenantAuthorizationMocks.requireTenantPermission,
+}));
+vi.mock("@/lib/tenancy/context", () => ({
+  runWithTenantContext: tenantContextMocks.runWithTenantContext,
+}));
+vi.mock("@/lib/db", () => ({ withTenantDbContext: tenantDbMocks.withTenantDbContext }));
 vi.mock("@/lib/db/queries", () => queryMocks);
 
 import {
@@ -69,8 +88,16 @@ import {
   updateLeadStatusAction,
 } from "@/lib/leads/actions";
 
+const TENANT_A = "00000000-0000-4000-8000-000000000001";
+const TENANT_B = "00000000-0000-4000-8000-000000000002";
+const USER_A = "10000000-0000-4000-8000-000000000001";
+const MEMBERSHIP_A = "20000000-0000-4000-8000-000000000001";
+const ROLE_BINDING_A = "30000000-0000-4000-8000-000000000001";
+const TENANT_SELECTOR = { tenantId: TENANT_A };
+
 const baseLead = {
   id: "lead-1",
+  tenant_id: TENANT_A,
   archived_at: null,
   assigned_to_user_id: null,
   assigned_user_email: null,
@@ -84,6 +111,16 @@ beforeEach(() => {
   queryMocks.ensureDbReady.mockResolvedValue(undefined);
   queryMocks.createAuditLog.mockResolvedValue(undefined);
   queryMocks.userCanAccessMarket.mockResolvedValue(true);
+  tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue({
+    userId: USER_A,
+    email: "owner@example.com",
+    displayName: "Owner",
+    tenantId: TENANT_A,
+    workspaceId: null,
+    membershipId: MEMBERSHIP_A,
+    role: "owner",
+    roleBindingId: ROLE_BINDING_A,
+  });
 });
 
 describe("lead ownership server actions", () => {
@@ -129,12 +166,38 @@ describe("lead ownership server actions", () => {
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false);
 
-    await expect(getLeadByIdAction("lead-1")).resolves.toMatchObject({ id: "lead-1" });
-    await expect(getLeadByIdAction("lead-1")).resolves.toBeNull();
-    await expect(getLeadByIdAction("lead-1")).resolves.toBeNull();
-    await expect(getLeadByIdAction("lead-1")).resolves.toBeNull();
-    await expect(getLeadByIdAction("lead-1")).resolves.toBeNull();
+    await expect(getLeadByIdAction("lead-1", TENANT_SELECTOR)).resolves.toMatchObject({ id: "lead-1" });
+    await expect(getLeadByIdAction("lead-1", TENANT_SELECTOR)).resolves.toBeNull();
+    await expect(getLeadByIdAction("lead-1", TENANT_SELECTOR)).resolves.toBeNull();
+    await expect(getLeadByIdAction("lead-1", TENANT_SELECTOR)).resolves.toBeNull();
+    await expect(getLeadByIdAction("lead-1", TENANT_SELECTOR)).resolves.toBeNull();
     expect(queryMocks.userCanAccessMarket).toHaveBeenCalledTimes(2);
+    expect(tenantContextMocks.runWithTenantContext).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: TENANT_A }),
+      expect.stringMatching(/^lead-read:[0-9a-f-]+$/),
+      expect.any(Function),
+    );
+    expect(tenantDbMocks.withTenantDbContext).toHaveBeenCalledWith(expect.any(Function));
+  });
+
+  it("fails closed without querying when tenant scope cannot be resolved", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockRejectedValue(new Error("A valid tenant scope is required"));
+
+    await expect(getLeadByIdAction("lead-1", {})).rejects.toThrow("A valid tenant scope is required");
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith({}, "account:read", {
+      action: "lead.read",
+    });
+    expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+  });
+
+  it("does not disclose a lead returned from another tenant", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    queryMocks.getLeadById.mockResolvedValue({ ...baseLead, tenant_id: TENANT_B });
+
+    await expect(getLeadByIdAction("lead-1", TENANT_SELECTOR)).resolves.toBeNull();
+
+    expect(queryMocks.userCanAccessMarket).not.toHaveBeenCalled();
   });
 
   it("records the claiming user on claim audit events", async () => {

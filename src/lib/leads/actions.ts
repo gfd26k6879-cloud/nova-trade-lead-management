@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import {
@@ -59,6 +60,7 @@ import {
   type QualityFilters,
 } from "@/lib/db/queries";
 import { requirePermission, type AppSession } from "@/lib/auth";
+import type { TenantSessionSelector } from "@/lib/app-users";
 import { canClaimLeadForSession, canReadLeadForSession, constrainLeadFiltersForSession } from "@/lib/lead-access";
 import { parseMinReviewsFilter } from "@/lib/lead-filter-parsing";
 import type { PhoneVerificationStatus, QualityBucket } from "@/lib/lead-quality";
@@ -75,6 +77,9 @@ import {
 } from "@/lib/ai/verification-worker";
 import { processLeadArtifactJobById, queueLeadAiArtifact, queueLeadPitchPack } from "@/lib/ai/artifact-worker";
 import type { LeadAiArtifactType } from "@/lib/db/queries";
+import { requireTenantPermission } from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
+import { withTenantDbContext } from "@/lib/db";
 
 const statusSchema = z.enum(["new", "verified", "contacted", "preview_sent", "meeting_set", "closed_won", "closed_lost"]);
 const channelSchema = z.enum(["call", "text", "email", "walkin", "other"]);
@@ -313,10 +318,18 @@ export async function getLeadsAction(filters: LeadFilters = {}) {
   }));
 }
 
-export async function getLeadByIdAction(id: string) {
+export async function getLeadByIdAction(id: string, selector: TenantSessionSelector) {
+  const tenantSession = await requireTenantPermission(selector, "account:read", {
+    action: "lead.read",
+  });
   const session = await requirePermission("view:workspace");
   await ensureDbReady();
-  const lead = await queryLeadById(id);
+  const lead = await runWithTenantContext(
+    tenantSession,
+    `lead-read:${randomUUID()}`,
+    () => withTenantDbContext(() => queryLeadById(id)),
+  );
+  if (!lead || (lead as { tenant_id?: unknown }).tenant_id !== tenantSession.tenantId) return null;
   return lead && await canReadLeadForSession(session, lead) ? lead : null;
 }
 
