@@ -229,7 +229,7 @@ describe.skipIf(!RUN)("F-05 document extraction job PostgreSQL foundation", () =
       WHERE n.nspname='public' AND k.contype='c'
         AND c.relname IN ('document_extraction_jobs','document_extraction_lease_history')
       ORDER BY c.relname,k.conname`);
-    expect(canonicalChecks.map(({ definition: _definition, ...check }) => check))
+    expect(canonicalChecks.map(({ table_name, conname, convalidated }) => ({ table_name, conname, convalidated })))
       .toEqual(REQUIRED_CHECKS.map(([table_name, conname]) => ({
         table_name, conname, convalidated: true,
       })));
