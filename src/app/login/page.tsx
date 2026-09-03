@@ -66,7 +66,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 Password
               </label>
               <Link href="/forgot-password" className="text-xs font-medium" style={{ color: "var(--accent)" }}>
-                Forgot?
+                Forgot password?
               </Link>
             </div>
             <input
@@ -81,6 +81,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
           {hasError && (
             <div
+              role="alert"
+              aria-live="assertive"
               className="rounded-xl px-3.5 py-2.5 text-sm"
               style={{
                 background: "rgba(239, 68, 68, 0.08)",
@@ -94,6 +96,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
           {missingConfig && (
             <div
+              role="alert"
+              aria-live="assertive"
               className="rounded-xl px-3.5 py-2.5 text-sm"
               style={{
                 background: "rgba(245, 158, 11, 0.08)",
@@ -107,6 +111,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
           {invalidRecoveryLink && (
             <div
+              role="alert"
+              aria-live="assertive"
               className="rounded-xl px-3.5 py-2.5 text-sm"
               style={{
                 background: "rgba(239, 68, 68, 0.08)",
@@ -120,6 +126,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
           {expiredLink && (
             <div
+              role="alert"
+              aria-live="assertive"
               className="rounded-xl px-3.5 py-2.5 text-sm"
               style={{
                 background: "rgba(239, 68, 68, 0.08)",
@@ -133,6 +141,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
           {resetSuccess && (
             <div
+              role="status"
+              aria-live="polite"
               className="rounded-xl px-3.5 py-2.5 text-sm"
               style={{
                 background: "rgba(22, 163, 74, 0.08)",
