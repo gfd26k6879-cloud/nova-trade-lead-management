@@ -105,4 +105,16 @@ describe("Postgres DbClient stability behavior", () => {
 
     expect(postgresState.calls[0].options.max).toBe(1);
   });
+
+  it("types bare IS NULL workspace parameters so Postgres can bind them", async () => {
+    const db = await loadDb();
+    await db.prepare(
+      "SELECT * FROM crawl_runs WHERE tenant_id = ? AND ((? IS NULL AND workspace_id IS NULL) OR workspace_id = ?)",
+    ).get("tenant-a", null, null);
+
+    expect(postgresState.clients[0].unsafeCalls).toHaveLength(1);
+    const { query, params } = postgresState.clients[0].unsafeCalls[0];
+    expect(query).toBe("SELECT * FROM crawl_runs WHERE tenant_id = $1 AND (($2::uuid IS NULL AND workspace_id IS NULL) OR workspace_id = $3)");
+    expect(params).toEqual(["tenant-a", null, null]);
+  });
 });

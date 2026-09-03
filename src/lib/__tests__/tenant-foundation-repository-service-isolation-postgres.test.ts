@@ -82,7 +82,7 @@ describe.runIf(enabled)("Q-006A foundation repository/service isolation on Postg
     owner = postgres(parsedAdminUrl.toString(), { max: 1, prepare: false, onnotice: () => undefined });
 
     const migrationReceipt = await installTrackedMigrationSchema(owner);
-    expect(migrationReceipt).toEqual({ discovered: 62, applied: 60, skipped: 2 });
+    expect(migrationReceipt).toEqual({ discovered: 65, applied: 63, skipped: 2 });
     await seedFixtureAuthUsers(owner);
     await provisionRestrictedRuntime(owner);
 

@@ -45,6 +45,46 @@ For any non-loopback target, `E2E_ALLOW_REMOTE_MUTATIONS=1` is also required. Us
 
 The public project is release evidence for public rendering only. It does not prove authenticated workflows, production data, migrations, workers, paid APIs, or deployment state.
 
+## L-01 local worker route rehearsal
+
+The five tenant worker routes are proven end to end by the env-gated lane
+`src/lib/__tests__/l01-local-worker-routes-postgres.test.ts`. It replays the 63
+portable migrations on a disposable PostgreSQL 16 database, seeds a tenant
+foundation, provisions restricted `l01_lease_issuer`/`l01_lease_resolver` roles
+from the URL credentials (creating and dropping them itself), and drives every
+worker route through a real issuer-issued lease while asserting fail-closed
+denials. Safe command shape:
+
+```bash
+# PostgreSQL 16 on loopback with a disposable database named exactly
+# l01_worker_routes_rehearsal, plus the two login roles named in the URLs.
+L01_WORKER_ROUTES_RUN_DISPOSABLE_TESTS=1 \
+L01_WORKER_ROUTES_ADMIN_DATABASE_URL=postgresql://postgres:pass@127.0.0.1:5432/l01_worker_routes_rehearsal \
+TENANT_WORKER_LEASE_ISSUER_DATABASE_URL=postgresql://l01_lease_issuer:pass@127.0.0.1:5432/l01_worker_routes_rehearsal \
+TENANT_WORKER_LEASE_RESOLVER_DATABASE_URL=postgresql://l01_lease_resolver:pass@127.0.0.1:5432/l01_worker_routes_rehearsal \
+DATABASE_SSL=disable \
+npx vitest run src/lib/__tests__/l01-local-worker-routes-postgres.test.ts
+```
+
+The lane performs the same migration replay as the F-01/Q-006A lanes and
+updates the tracked migration count with them when migrations are added.
+
+## Local runtime tooling (L-01)
+
+`npm run local:seed` (script `scripts/seed-local-tenant.mjs`) provisions the
+restricted worker lease issuer/resolver roles and seeds an admin/researcher
+tenant foundation on loopback PostgreSQL — including a local Supabase stack at
+`127.0.0.1:54322`. Passwords are generated and printed once when unset; the
+script verifies each role's exact runtime capability and prints ready
+`.env.local` values. It refuses non-loopback targets unless
+`LOCAL_SEED_ALLOW_REMOTE=1`.
+
+`npm run local:dispatch` (script `scripts/run-local-workers.mjs`) acquires a
+durable lease per worker through the issuer role and calls each of the five
+worker routes with the lease selector. Run it against a seeded database and a
+running app (`npm run dev` or `next start`) with the same issuer/resolver URLs
+in `.env.local`.
+
 ## Linux and Windows SQLite lanes
 
 On Linux, `src/lib/__tests__/sqlite-schema-coordinator.test.ts` runs the 12

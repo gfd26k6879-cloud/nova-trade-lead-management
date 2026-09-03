@@ -740,6 +740,7 @@ function normalizePostgresQuery(query: string): string {
     .replace(/datetime\('now', '-' \|\| \? \|\| ' days'\)/g, "(now() - (?::int * interval '1 day'))")
     .replace(/datetime\('now'\)/g, "now()")
     .replace(/datetime\(\?\)/g, "(?::timestamptz)")
+    .replace(/\(\? IS NULL/gi, "(?::uuid IS NULL")
     .replace(/INSERT OR REPLACE INTO/gi, "INSERT INTO")
     .replace(/julianday\('now'\) - julianday\(([^)]+)\)/g, "EXTRACT(EPOCH FROM (now() - $1::timestamptz)) / 86400")
     .replace(/julianday\(([^)]+)\)\s*-\s*julianday\(([^)]+)\)/g, "EXTRACT(EPOCH FROM (($1)::timestamptz - ($2)::timestamptz)) / 86400")

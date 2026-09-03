@@ -6,6 +6,7 @@ import { basename, dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { HAS_G006B_WINDOWS_DURABILITY_CAPABILITY } from "./sqlite-windows-durability-capability";
 import {
   SQLITE_SCHEMA_V1_PHYSICAL_MANIFEST_DIGEST,
   classifySqliteSchemaV1,
@@ -374,6 +375,12 @@ async function provision(databasePath: string): Promise<SqliteCompatibilityBindi
 }
 
 describe("G006C1 fresh SQLite compatibility foundation", () => {
+  // Path-replacement detection assumes the OS will not hand a recreated file
+  // the deleted file's identity (accepted Windows/NTFS boundary; Linux ext4 or
+  // overlay filesystems may reuse the inode), so it is capability-gated like
+  // the other native file-identity cases.
+  const windowsFileIdentityIt = HAS_G006B_WINDOWS_DURABILITY_CAPABILITY ? it : it.skip;
+
   it.skipIf(process.env.G006C1_CREATOR_DATABASE_PATH === undefined)("G006C1 subprocess creator worker", async () => {
     const databasePath = process.env.G006C1_CREATOR_DATABASE_PATH;
     const outputPath = process.env.G006C1_CREATOR_OUTPUT_PATH;
@@ -615,7 +622,7 @@ describe("G006C1 fresh SQLite compatibility foundation", () => {
     expect(state(path).kind).toBe("fresh");
   });
 
-  it("rejects path replacement against the caller-pinned FileId before mutation", async () => {
+  windowsFileIdentityIt("rejects path replacement against the caller-pinned FileId before mutation", async () => {
     const path = emptyDatabasePath();
     const input = makeInput(path);
     rmSync(path);

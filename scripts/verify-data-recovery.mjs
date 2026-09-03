@@ -18,10 +18,54 @@ import {
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
+// The SQLite tenant membership mutation journal is deliberately outside the
+// recovery export contract: it is local admin state (never tenant data), it is
+// excluded from the manifest-locked SQLITE_SCHEMA_V1 by its own schema tests,
+// and it must never appear in the shared PostgreSQL migrations.
+const SQLITE_LOCAL_AUXILIARY_TABLES = Object.freeze(["tenant_membership_mutation_journal"]);
+
+// Postgres-only foundation tables (agent runtime, connector runtime, source
+// policy lifecycle, document intake/extraction, worker dispatch) that the
+// F-04–F-09 migrations create ahead of their recovery contracts. They hold no
+// recovery-manifest contract yet; adding one must remove it from this list.
+const POSTGRES_FOUNDATION_TABLES = Object.freeze([
+  "agent_prompt_versions",
+  "agent_policy_versions",
+  "agent_runs",
+  "agent_run_lease_history",
+  "agent_run_steps",
+  "agent_tool_calls",
+  "agent_usage_reservations",
+  "agent_usage_settlements",
+  "connector_versions",
+  "connector_accounts",
+  "source_policy_versions",
+  "source_runs",
+  "source_run_units",
+  "source_run_lease_history",
+  "source_observations",
+  "source_usage_reservations",
+  "source_usage_settlements",
+  "current_source_policy_activations",
+  "documents",
+  "document_versions",
+  "document_upload_reservations",
+  "document_version_finalizations",
+  "document_scan_jobs",
+  "document_scan_outbox",
+  "document_scan_lease_history",
+  "document_extraction_jobs",
+  "document_extraction_lease_history",
+  "tenant_worker_dispatch_leases",
+]);
+
 function verifyTrackedTableCoverage() {
   const sqliteSchema = fs.readFileSync(path.join(repoRoot, "src/lib/db/schema.ts"), "utf8");
   const sqliteTables = extractCreatedTables(sqliteSchema);
-  assertExactTableSet(sqliteTables, "src/lib/db/schema.ts", new Set(DYNAMIC_SOURCE_TABLES));
+  assertExactTableSet(sqliteTables, "src/lib/db/schema.ts", {
+    allowedMissing: new Set(DYNAMIC_SOURCE_TABLES),
+    allowedExtra: new Set(SQLITE_LOCAL_AUXILIARY_TABLES),
+  });
 
   const migrationsDir = path.join(repoRoot, "supabase/migrations");
   const migrationSql = fs.readdirSync(migrationsDir)
@@ -30,7 +74,14 @@ function verifyTrackedTableCoverage() {
     .map((file) => fs.readFileSync(path.join(migrationsDir, file), "utf8"))
     .join("\n");
   const migrationTables = extractCreatedTables(migrationSql);
-  assertExactTableSet(migrationTables, "supabase/migrations");
+  assertExactTableSet(migrationTables, "supabase/migrations", {
+    allowedExtra: new Set(POSTGRES_FOUNDATION_TABLES),
+  });
+  for (const table of SQLITE_LOCAL_AUXILIARY_TABLES) {
+    if (migrationTables.has(table)) {
+      throw new Error(`supabase/migrations: SQLite-local auxiliary table ${table} must never be created on PostgreSQL`);
+    }
+  }
 }
 
 export function verifySqliteDatabase(inputPath, tableContracts, selectedSchemaVersion) {
@@ -73,13 +124,16 @@ export function verifySqliteDatabase(inputPath, tableContracts, selectedSchemaVe
 function extractCreatedTables(sql) {
   const tables = new Set();
   const pattern = /CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?:public\.)?([a-z_][a-z0-9_]*)/gi;
-  for (const match of sql.matchAll(pattern)) tables.add(match[1]);
+  const commentFree = sql.split("\n")
+    .filter((line) => !/^\s*--/.test(line))
+    .join("\n");
+  for (const match of commentFree.matchAll(pattern)) tables.add(match[1]);
   return tables;
 }
 
-function assertExactTableSet(actual, label, allowedMissing = new Set()) {
+function assertExactTableSet(actual, label, { allowedMissing = new Set(), allowedExtra = new Set() } = {}) {
   const missing = TABLE_NAMES.filter((table) => !actual.has(table) && !allowedMissing.has(table));
-  const unexpected = [...actual].filter((table) => !TABLE_NAMES.includes(table));
+  const unexpected = [...actual].filter((table) => !TABLE_NAMES.includes(table) && !allowedExtra.has(table));
   if (missing.length > 0 || unexpected.length > 0) {
     throw new Error(`${label}: recovery table set mismatch; missing [${missing.join(", ")}], unexpected [${unexpected.join(", ")}]`);
   }

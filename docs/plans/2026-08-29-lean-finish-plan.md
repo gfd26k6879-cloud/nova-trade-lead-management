@@ -25,8 +25,8 @@ Automatic sending, mailbox/LinkedIn automation, self-serve signup or billing, br
 ## Current position
 
 - The existing lead-management code is substantially tenant-hardened. TypeScript, lint, 3,990 tests, and the production build pass locally on Node 24.
-- Local SQLite membership administration and PostgreSQL worker lease foundations exist.
-- Full authenticated local use is not proven because local Supabase Auth/PostgreSQL, tenant seeding, restricted worker roles, and a dispatcher are not configured end to end.
+- L-01 implementation is complete: `npm run local:seed` provisions the restricted worker lease roles and seeds an admin/researcher tenant foundation; `npm run local:dispatch` drives all five worker routes through durable leases; the env-gated `l01-local-worker-routes-postgres` rehearsal lane proves the full worker path on disposable PostgreSQL 16, and the F-01/Q-002/Q-006A/T-027 lanes replay the 63 portable migrations green.
+- Remaining for the L-01 completion gate: the authenticated admin/researcher browser smoke against a local Supabase Auth stack (Supabase CLI on a machine with Docker); the tooling above is ready for that run.
 - Document, agent, connector, and lifecycle foundations exist, but most expanded-product workflows are not complete through the real UI.
 - No deployment, remote migration, staging, commit, or push is authorized by this plan.
 
