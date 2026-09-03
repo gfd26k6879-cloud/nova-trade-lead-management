@@ -332,7 +332,7 @@ export function MembershipAdminPanel(props: MembershipAdminPanelProps) {
               })}
             </dl>
             <p className="mt-3 text-xs leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
-              Controls request a human administrative change. They do not mutate membership state in this panel.
+              Available controls submit canonical tenant membership changes. Local invitations create only pending records; they do not create accounts or send email.
             </p>
           </section>
 

@@ -22,6 +22,10 @@ const tenantPolicyMocks = vi.hoisted(() => ({
   getCurrentTenantPolicy: vi.fn(),
 }));
 
+const outreachPackageMocks = vi.hoisted(() => ({
+  generateOutreachPackage: vi.fn(),
+}));
+
 const queryMocks = vi.hoisted(() => ({
   ensureDbReady: vi.fn(),
   getLeads: vi.fn(),
@@ -29,6 +33,7 @@ const queryMocks = vi.hoisted(() => ({
   updateLeadStatus: vi.fn(),
   updateLeadNotes: vi.fn(),
   updateLeadFacts: vi.fn(),
+  lockTenantLeadForMutation: vi.fn(),
   updateLeadReminder: vi.fn(),
   createLeadNote: vi.fn(),
   getLeadNotes: vi.fn(),
@@ -41,11 +46,15 @@ const queryMocks = vi.hoisted(() => ({
   bulkArchiveLeads: vi.fn(),
   bulkRestoreArchivedLeads: vi.fn(),
   createManualLead: vi.fn(),
-  updateLeadTimestamp: vi.fn(),
+  markLeadRepliedIfUnset: vi.fn(),
+  markLeadMeetingBookedIfUnset: vi.fn(),
   createOutreachEvent: vi.fn(),
   getOutreachEvents: vi.fn(),
   createDemoForLead: vi.fn(),
   getDemoByLeadId: vi.fn(),
+  publishDemoForLead: vi.fn(),
+  unpublishDemoForLead: vi.fn(),
+  revokeDemoForLead: vi.fn(),
   getAllLeadsForRecompute: vi.fn(),
   batchUpdateScores: vi.fn(),
   bulkUpdateLeadStatus: vi.fn(),
@@ -66,6 +75,7 @@ const queryMocks = vi.hoisted(() => ({
   markLeadAiVerified: vi.fn(),
   createAuditLog: vi.fn(),
   getSettings: vi.fn(),
+  getTenantScoreRecomputeSettings: vi.fn(),
   refreshStaleUnits: vi.fn(),
   updateCrawlRunStatus: vi.fn(),
   userCanAccessMarket: vi.fn(),
@@ -87,6 +97,7 @@ vi.mock("@/lib/tenancy/queries", () => ({
   })),
 }));
 vi.mock("@/lib/db/queries", () => queryMocks);
+vi.mock("@/lib/outreach-package", () => ({ generateOutreachPackage: outreachPackageMocks.generateOutreachPackage }));
 
 import {
   addLeadNoteAction,
@@ -96,17 +107,35 @@ import {
   bulkRestoreArchivedLeadsAction,
   bulkUpdateLeadStatusAction,
   claimLeadAction,
+  createDemoForLeadAction,
   createManualLeadAction,
   excludeLeadAction,
+  generateOutreachPackageAction,
+  getDemoByLeadIdAction,
   getLeadByIdAction,
   getLeadNotesAction,
   getLeadsAction,
+  getOutreachEventsAction,
+  getScoreBreakdownAction,
   logOutreachEventAction,
+  manualWebsiteCorrectionAction,
+  markLeadQualityBucketAction,
+  markLeadRepliedAction,
+  markMeetingBookedAction,
+  publishDemoForLeadAction,
+  recomputeAllScoresAction,
+  recomputeLeadQualityScoresAction,
+  revokeDemoForLeadAction,
   restoreArchivedLeadAction,
   restoreExcludedLeadAction,
   refreshStaleUnitsAction,
+  saveLeadWorkUpdateAction,
   unclaimLeadAction,
+  unpublishDemoForLeadAction,
   updateLeadNotesAction,
+  updateLeadAiFeedbackAction,
+  updateLeadFactsAction,
+  updateLeadPhoneVerificationStatusAction,
   updateLeadReminderAction,
   updateLeadStatusAction,
 } from "@/lib/leads/actions";
@@ -151,7 +180,13 @@ beforeEach(() => {
     prepare: tenantDbMocks.prepare,
   }));
   queryMocks.ensureDbReady.mockResolvedValue(undefined);
+  queryMocks.lockTenantLeadForMutation.mockResolvedValue(baseLead);
   queryMocks.createAuditLog.mockResolvedValue(undefined);
+  queryMocks.getSettings.mockResolvedValue({ niche_weights: {} });
+  queryMocks.getTenantScoreRecomputeSettings.mockResolvedValue({
+    niche_weights: {},
+    scheduler_score_recompute_enabled: true,
+  });
   queryMocks.userCanAccessMarket.mockResolvedValue(true);
   tenantPolicyMocks.getCurrentTenantPolicy.mockResolvedValue({
     ...TENANT_POLICY_DEFAULTS,
@@ -167,6 +202,80 @@ beforeEach(() => {
 });
 
 describe("lead ownership server actions", () => {
+  it("tenant-binds global score recompute and reports only affected tenant rows", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "owner@example.com", role: "admin" });
+    queryMocks.getAllLeadsForRecompute.mockResolvedValue([{
+      id: "lead-1",
+      review_count: 10,
+      rating: 4.5,
+      categories: "[]",
+      website_status: "none",
+      photo_count: 0,
+      has_opening_hours: 0,
+      business_status: "OPERATIONAL",
+      website_health: null,
+      address: null,
+      contactability_score: 0,
+      estimated_deal_value: 0,
+    }]);
+    queryMocks.batchUpdateScores.mockResolvedValue(0);
+
+    await expect(recomputeAllScoresAction(TENANT_SELECTOR)).resolves.toEqual({ count: 0 });
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      TENANT_SELECTOR,
+      "account:read",
+      { action: "lead.scores.recompute" },
+    );
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("scores:recompute");
+    expect(tenantDbMocks.withTenantDbContext).toHaveBeenCalledWith(expect.any(Function));
+    expect(queryMocks.getTenantScoreRecomputeSettings).toHaveBeenCalledTimes(1);
+    expect(queryMocks.createAuditLog).toHaveBeenCalledWith(
+      "scores_recomputed",
+      "leads",
+      undefined,
+      { count: 0 },
+    );
+  });
+
+  it("tenant-binds stale quality recompute and returns its affected-row count", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "owner@example.com", role: "admin" });
+    queryMocks.recomputeAllLeadQualityScores.mockResolvedValue(2);
+
+    await expect(recomputeLeadQualityScoresAction(TENANT_SELECTOR)).resolves.toEqual({ count: 2 });
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      TENANT_SELECTOR,
+      "account:read",
+      { action: "lead.quality_scores.recompute" },
+    );
+    expect(queryMocks.createAuditLog).toHaveBeenCalledWith(
+      "lead_quality_scores_recomputed",
+      "leads",
+      undefined,
+      { count: 2 },
+    );
+  });
+
+  it("rejects malformed tenant selectors and non-manager canonical roles before score queries", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockRejectedValueOnce(new Error("A valid tenant scope is required"));
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "owner@example.com", role: "admin" });
+
+    await expect(recomputeAllScoresAction({ tenantId: "malformed" })).rejects.toThrow("A valid tenant scope is required");
+
+    mockTenantRole("researcher");
+    await expect(recomputeLeadQualityScoresAction(TENANT_SELECTOR)).rejects.toMatchObject({
+      code: "PERMISSION_DENIED",
+      status: 403,
+    });
+
+    expect(queryMocks.getTenantScoreRecomputeSettings).not.toHaveBeenCalled();
+    expect(queryMocks.getAllLeadsForRecompute).not.toHaveBeenCalled();
+    expect(queryMocks.batchUpdateScores).not.toHaveBeenCalled();
+    expect(queryMocks.recomputeAllLeadQualityScores).not.toHaveBeenCalled();
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  });
+
   it("tenant-binds stale-unit refresh and checks source policy before writes", async () => {
     const workspaceSession = {
       userId: USER_A,
@@ -520,6 +629,7 @@ describe("lead ownership server actions", () => {
   });
 
   it("prevents researchers from logging outreach on another owner lead", async () => {
+    mockTenantRole("researcher");
     authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "one@example.com", role: "researcher" });
     queryMocks.getLeadById.mockResolvedValue({
       ...baseLead,
@@ -739,7 +849,7 @@ describe("lead ownership server actions", () => {
   });
 
   it("creates manual leads through the admin action", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "admin-1", email: "admin@example.com", role: "admin" });
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
     queryMocks.createManualLead.mockResolvedValue({ id: "lead-manual", name: "Manual Candidate" });
 
     const result = await createManualLeadAction({
@@ -754,6 +864,7 @@ describe("lead ownership server actions", () => {
 
     expect(result).toMatchObject({ success: true, lead: { id: "lead-manual" } });
     expect(queryMocks.createManualLead).toHaveBeenCalledWith({
+      tenantId: TENANT_A,
       name: "Manual Candidate",
       businessType: "local_services",
       phone: "303-555-0100",
@@ -769,7 +880,176 @@ describe("lead ownership server actions", () => {
       websiteStatus: "none",
       source: "Google Maps",
       contactPersonName: "Jamie Owner",
-      actorUserId: "admin-1",
+      actorUserId: USER_A,
     });
+  });
+
+  it("rejects malformed manual and outreach input before tenant or database work", async () => {
+    await expect(createManualLeadAction({ name: "x", businessType: "y" })).resolves.toHaveProperty("error");
+    await expect(logOutreachEventAction("lead-1", { channel: "carrier_pigeon" })).resolves.toEqual({
+      error: "Please complete the contact outcome fields.",
+    });
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).not.toHaveBeenCalled();
+    expect(authMocks.requirePermission).not.toHaveBeenCalled();
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.createManualLead).not.toHaveBeenCalled();
+    expect(queryMocks.createOutreachEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps foreign-tenant outreach, demo, and score resources non-enumerating", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
+    queryMocks.getLeadById.mockResolvedValue({ ...baseLead, tenant_id: TENANT_B });
+
+    await expect(logOutreachEventAction("lead-1", { channel: "call", outcome: "contacted" })).resolves.toEqual({ error: "Lead not found" });
+    await expect(getOutreachEventsAction("lead-1")).resolves.toEqual([]);
+    await expect(markLeadRepliedAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(markMeetingBookedAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(generateOutreachPackageAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(createDemoForLeadAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(publishDemoForLeadAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(unpublishDemoForLeadAction("lead-1")).resolves.toEqual({ error: "Lead not found" });
+    await expect(revokeDemoForLeadAction("lead-1", "customer request")).resolves.toEqual({ error: "Lead not found" });
+    await expect(getDemoByLeadIdAction("lead-1")).resolves.toBeNull();
+    await expect(getScoreBreakdownAction("lead-1")).resolves.toBeNull();
+
+    expect(queryMocks.createOutreachEvent).not.toHaveBeenCalled();
+    expect(queryMocks.getOutreachEvents).not.toHaveBeenCalled();
+    expect(queryMocks.markLeadRepliedIfUnset).not.toHaveBeenCalled();
+    expect(queryMocks.markLeadMeetingBookedIfUnset).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadStatus).not.toHaveBeenCalled();
+    expect(outreachPackageMocks.generateOutreachPackage).not.toHaveBeenCalled();
+    expect(queryMocks.createDemoForLead).not.toHaveBeenCalled();
+    expect(queryMocks.publishDemoForLead).not.toHaveBeenCalled();
+    expect(queryMocks.unpublishDemoForLead).not.toHaveBeenCalled();
+    expect(queryMocks.revokeDemoForLead).not.toHaveBeenCalled();
+    expect(queryMocks.getDemoByLeadId).not.toHaveBeenCalled();
+    expect(queryMocks.getSettings).not.toHaveBeenCalled();
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("does not replay stale reply or meeting transitions", async () => {
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "researcher@example.com", role: "researcher" });
+    queryMocks.getLeadById
+      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: USER_A, first_reply_at: "2026-08-30T12:00:00.000Z" })
+      .mockResolvedValueOnce({ ...baseLead, assigned_to_user_id: USER_A, meeting_booked_at: "2026-08-30T13:00:00.000Z" });
+    queryMocks.markLeadRepliedIfUnset.mockResolvedValue(0);
+    queryMocks.markLeadMeetingBookedIfUnset.mockResolvedValue(0);
+
+    await expect(markLeadRepliedAction("lead-1")).resolves.toEqual({ error: "Already marked as replied" });
+    await expect(markMeetingBookedAction("lead-1")).resolves.toEqual({ error: "Already marked as meeting booked" });
+
+    expect(queryMocks.markLeadRepliedIfUnset).toHaveBeenCalledWith("lead-1");
+    expect(queryMocks.markLeadMeetingBookedIfUnset).toHaveBeenCalledWith("lead-1");
+    expect(queryMocks.updateLeadStatus).not.toHaveBeenCalled();
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("denies demo mutations to a canonical researcher despite legacy admin authority", async () => {
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
+
+    await expect(createDemoForLeadAction("lead-1")).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+    expect(queryMocks.createDemoForLead).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed quality/detail mutations before tenant or database work", async () => {
+    await expect(updateLeadPhoneVerificationStatusAction("lead-1", "verified-ish")).resolves.toHaveProperty("error");
+    await expect(markLeadQualityBucketAction("lead-1", "great_lead")).resolves.toHaveProperty("error");
+    await expect(manualWebsiteCorrectionAction("lead-1", { resolution: "invented" })).resolves.toHaveProperty("error");
+    await expect(updateLeadFactsAction("lead-1", { name: "x" })).resolves.toHaveProperty("error");
+    await expect(updateLeadFactsAction("lead-1", {})).resolves.toHaveProperty("error");
+    await expect(saveLeadWorkUpdateAction("lead-1", { action: "invented" })).resolves.toHaveProperty("error");
+    await expect(updateLeadAiFeedbackAction("lead-1", { status: "maybe" })).resolves.toHaveProperty("error");
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).not.toHaveBeenCalled();
+    expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+    expect(queryMocks.lockTenantLeadForMutation).not.toHaveBeenCalled();
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("keeps foreign quality/detail resources non-enumerating with zero side effects", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
+    queryMocks.lockTenantLeadForMutation.mockResolvedValue(null);
+
+    await expect(updateLeadPhoneVerificationStatusAction("lead-1", "works")).resolves.toEqual({ error: "Lead not found" });
+    await expect(markLeadQualityBucketAction("lead-1", "ready_to_call")).resolves.toEqual({ error: "Lead not found" });
+    await expect(manualWebsiteCorrectionAction("lead-1", {
+      websiteUrl: "https://foreign.example",
+      resolution: "official_website_found",
+    })).resolves.toEqual({ error: "Lead not found" });
+    await expect(updateLeadFactsAction("lead-1", { name: "Foreign Lead" })).resolves.toEqual({ error: "Lead not found" });
+    await expect(saveLeadWorkUpdateAction("lead-1", { action: "research_note", note: "foreign" }))
+      .resolves.toEqual({ error: "Lead not found" });
+    await expect(updateLeadAiFeedbackAction("lead-1", { status: "correct" })).resolves.toEqual({ error: "Lead not found" });
+
+    expect(queryMocks.lockTenantLeadForMutation).toHaveBeenCalledTimes(6);
+    expect(queryMocks.updateLeadPhoneVerificationStatus).not.toHaveBeenCalled();
+    expect(queryMocks.setLeadQualityBucket).not.toHaveBeenCalled();
+    expect(queryMocks.applyManualWebsiteCorrection).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadFacts).not.toHaveBeenCalled();
+    expect(queryMocks.createLeadNote).not.toHaveBeenCalled();
+    expect(queryMocks.createOutreachEvent).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadAiFeedback).not.toHaveBeenCalled();
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("reports stale quality/detail writes instead of misleading success", async () => {
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
+    queryMocks.updateLeadPhoneVerificationStatus.mockResolvedValue(0);
+    queryMocks.setLeadQualityBucket.mockResolvedValue(0);
+    queryMocks.lockTenantLeadForMutation
+      .mockResolvedValueOnce(baseLead)
+      .mockResolvedValueOnce(baseLead)
+      .mockResolvedValue(null);
+
+    await expect(updateLeadPhoneVerificationStatusAction("lead-1", "works")).resolves.toHaveProperty("error");
+    await expect(markLeadQualityBucketAction("lead-1", "ready_to_call")).resolves.toHaveProperty("error");
+    await expect(manualWebsiteCorrectionAction("lead-1", {
+      websiteUrl: "https://stale.example",
+      resolution: "official_website_found",
+    })).resolves.toEqual({ error: "Lead not found" });
+    await expect(updateLeadFactsAction("lead-1", { name: "Stale Lead" })).resolves.toEqual({ error: "Lead not found" });
+    await expect(saveLeadWorkUpdateAction("lead-1", { action: "research_note", note: "stale" }))
+      .resolves.toEqual({ error: "Lead not found" });
+    await expect(updateLeadAiFeedbackAction("lead-1", { status: "correct" })).resolves.toEqual({ error: "Lead not found" });
+
+    expect(queryMocks.applyManualWebsiteCorrection).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadFacts).not.toHaveBeenCalled();
+    expect(queryMocks.createLeadNote).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadAiFeedback).not.toHaveBeenCalled();
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("denies manager-only AI feedback to a canonical researcher", async () => {
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "admin@example.com", role: "admin" });
+
+    await expect(updateLeadAiFeedbackAction("lead-1", { status: "correct" }))
+      .rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadAiFeedback).not.toHaveBeenCalled();
+  });
+
+  it("authorizes quality mutations from the locked assignee snapshot, not a stale pre-lock read", async () => {
+    mockTenantRole("researcher");
+    authMocks.requirePermission.mockResolvedValue({ userId: USER_A, email: "researcher@example.com", role: "researcher" });
+    queryMocks.getLeadById.mockResolvedValue({ ...baseLead, assigned_to_user_id: USER_A });
+    queryMocks.lockTenantLeadForMutation.mockResolvedValue({
+      ...baseLead,
+      assigned_to_user_id: "user-2",
+      assigned_user_email: "new-owner@example.com",
+    });
+
+    await expect(updateLeadPhoneVerificationStatusAction("lead-1", "works"))
+      .resolves.toEqual({ error: "Lead not found" });
+
+    expect(queryMocks.getLeadById).not.toHaveBeenCalled();
+    expect(queryMocks.updateLeadPhoneVerificationStatus).not.toHaveBeenCalled();
+    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
   });
 });

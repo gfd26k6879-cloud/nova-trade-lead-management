@@ -79,6 +79,31 @@ describe("AuthCallbackClient redirect sinks", () => {
     await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(browser.locationReplace).toHaveBeenCalledWith("/queue?view=mine"));
   });
+
+  it.each([
+    [
+      "access-token",
+      "https://app.example/auth/callback?next=%2Fsearch%3Fq%3DC%3A%5Ctemp%23result#access_token=access&refresh_token=refresh",
+      "#access_token=access&refresh_token=refresh",
+      supabaseMocks.setSession,
+      "/search?q=C:\\temp#result",
+    ],
+    [
+      "PKCE code",
+      "https://app.example/auth/callback?code=code-1&next=%2Fnotes%23folder%5Citem",
+      "",
+      supabaseMocks.exchangeCodeForSession,
+      "/notes#folder\\item",
+    ],
+  ])("preserves safe backslash data after a successful %s exchange", async (_label, href, hash, exchange, expected) => {
+    const browser = installWindow(href, hash);
+
+    AuthCallbackClient();
+
+    await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(browser.locationReplace).toHaveBeenCalledOnce());
+    expect(browser.locationReplace).toHaveBeenCalledWith(expected);
+  });
 });
 
 function installWindow(href: string, hash: string) {

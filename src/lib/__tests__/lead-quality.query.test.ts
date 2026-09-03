@@ -20,7 +20,20 @@ vi.mock("@/lib/tenancy/context", () => ({
   requireTenantContext: () => ({ tenantId: TENANT_A, workspaceId: null }),
 }));
 
-import { applyManualWebsiteCorrection, getQualityActionCandidateIds, getQualityAiVerificationCandidates, getQualityLeads, getQualitySummary, queueLeadsForEnrichment, updateLeadQualityScores } from "@/lib/db/queries";
+import {
+  applyManualWebsiteCorrection,
+  getQualityActionCandidateIds,
+  getQualityAiVerificationCandidates,
+  getQualityLeads,
+  getQualitySummary,
+  lockTenantLeadForMutation,
+  queueLeadsForEnrichment,
+  setLeadQualityBucket,
+  updateLeadAiFeedback,
+  updateLeadFacts,
+  updateLeadPhoneVerificationStatus,
+  updateLeadQualityScores,
+} from "@/lib/db/queries";
 
 function insertLead(input: {
   id: string;
@@ -84,6 +97,7 @@ beforeEach(() => {
   testDb.exec(`
     ALTER TABLE leads ADD COLUMN tenant_id TEXT;
     ALTER TABLE lead_ai_artifacts ADD COLUMN tenant_id TEXT;
+    ALTER TABLE places_master ADD COLUMN tenant_id TEXT;
     INSERT INTO tenants (id, slug, name, status) VALUES
       ('${TENANT_A}', 'quality-a', 'Quality A', 'active'),
       ('${TENANT_B}', 'quality-b', 'Quality B', 'active');
@@ -340,6 +354,42 @@ describe("lead quality queries", () => {
       quality_bucket: "needs_manual_review",
       ai_website_feedback_status: "correct",
       is_excluded: false,
+    });
+  });
+
+  it("returns zero/null for foreign and stale quality/detail mutation targets", async () => {
+    insertLead({ id: "foreign-mutation", name: "Foreign Mutation", tenantId: TENANT_B });
+
+    expect(await lockTenantLeadForMutation("missing")).toBeNull();
+    expect(await updateLeadPhoneVerificationStatus("foreign-mutation", "works", "researcher-1")).toBe(0);
+    expect(await setLeadQualityBucket("foreign-mutation", "ready_to_call", "researcher-1")).toBe(0);
+    expect(await updateLeadAiFeedback("foreign-mutation", { status: "correct" }, "researcher-1")).toBe(0);
+    expect(await updateLeadFacts("foreign-mutation", { name: "Changed", actorUserId: "researcher-1" })).toBeNull();
+    expect(await applyManualWebsiteCorrection("foreign-mutation", {
+      websiteUrl: "https://foreign.example",
+      websiteStatus: "custom",
+      resolution: "official_website_found",
+      actorUserId: "researcher-1",
+    })).toBeNull();
+
+    expect(testDb.prepare(
+      "SELECT name, phone_verification_status, quality_bucket, ai_website_feedback_status FROM leads WHERE id = ?",
+    ).get("foreign-mutation")).toMatchObject({
+      name: "Foreign Mutation",
+      phone_verification_status: "unknown",
+      quality_bucket: "needs_ai_verify",
+      ai_website_feedback_status: null,
+    });
+  });
+
+  it("returns the current assignee from the row-lock snapshot", async () => {
+    insertLead({ id: "reassigned", name: "Reassigned Lead", assignedTo: "former-user" });
+    testDb.prepare("UPDATE leads SET assigned_to_user_id = ? WHERE id = ?")
+      .run("current-user", "reassigned");
+
+    await expect(lockTenantLeadForMutation("reassigned")).resolves.toMatchObject({
+      id: "reassigned",
+      assigned_to_user_id: "current-user",
     });
   });
 

@@ -17,6 +17,7 @@ import {
   createUpgradedSqliteG002OperationFixture,
   type SqliteG002OperationFixture,
 } from "./sqlite-g002-operation-fixtures";
+import { HAS_G006B_WINDOWS_DURABILITY_CAPABILITY } from "./sqlite-windows-durability-capability";
 
 const OPERATIONS = Object.freeze([
   "user_market_access",
@@ -27,34 +28,17 @@ const OPERATIONS = Object.freeze([
 let fresh: SqliteG002OperationFixture;
 let upgraded: SqliteG002OperationFixture;
 let freshCleanupRef: SqliteG002OperationFixture | undefined;
-let upgradedCleanupRef: SqliteG002OperationFixture | undefined;
 
 beforeAll(async () => {
   fresh = await createFreshSqliteG002OperationFixture();
   freshCleanupRef = fresh;
-  try {
-    upgraded = await createUpgradedSqliteG002OperationFixture();
-    upgradedCleanupRef = upgraded;
-  } catch (error) {
-    const ownedFresh = freshCleanupRef;
-    freshCleanupRef = undefined;
-    if (ownedFresh) cleanupSqliteG002OperationFixture(ownedFresh);
-    throw error;
-  }
 }, 120_000);
 
 afterAll(() => {
-  const ownedUpgraded = upgradedCleanupRef;
   const ownedFresh = freshCleanupRef;
-  upgradedCleanupRef = undefined;
   freshCleanupRef = undefined;
-  if (ownedUpgraded) cleanupSqliteG002OperationFixture(ownedUpgraded);
   if (ownedFresh) cleanupSqliteG002OperationFixture(ownedFresh);
 });
-
-function fixture(lifecycle: "fresh" | "upgraded"): SqliteG002OperationFixture {
-  return lifecycle === "fresh" ? fresh : upgraded;
-}
 
 function permitInput(
   target: SqliteG002OperationFixture,
@@ -104,22 +88,18 @@ function expectCode(action: () => unknown, code: string): void {
 }
 
 describe("G006C2A SQLite G002 storage-operation permit", () => {
-  for (const lifecycle of ["fresh", "upgraded"] as const) {
-    for (const operation of OPERATIONS) {
-      it(`consumes one ${lifecycle} named-workspace ${operation} permit`, () => {
-        const target = fixture(lifecycle);
-        const permit = createSqliteG002StorageOperationPermit(permitInput(target, operation));
-        expect(requireSqliteG002StorageOperationPermit(permit, expectation(target, operation)))
-          .toMatchObject({ lifecycle, operation, operationWorkspaceId: target.storageWorkspaceId });
-      });
+  for (const operation of OPERATIONS) {
+    it(`consumes one fresh named-workspace ${operation} permit`, () => {
+      const permit = createSqliteG002StorageOperationPermit(permitInput(fresh, operation));
+      expect(requireSqliteG002StorageOperationPermit(permit, expectation(fresh, operation)))
+        .toMatchObject({ lifecycle: "fresh", operation, operationWorkspaceId: fresh.storageWorkspaceId });
+    });
 
-      it(`consumes one ${lifecycle} explicit tenant-wide ${operation} permit`, () => {
-        const target = fixture(lifecycle);
-        const permit = createSqliteG002StorageOperationPermit(permitInput(target, operation, null));
-        expect(requireSqliteG002StorageOperationPermit(permit, expectation(target, operation, null)))
-          .toMatchObject({ lifecycle, operation, operationWorkspaceId: null });
-      });
-    }
+    it(`consumes one fresh explicit tenant-wide ${operation} permit`, () => {
+      const permit = createSqliteG002StorageOperationPermit(permitInput(fresh, operation, null));
+      expect(requireSqliteG002StorageOperationPermit(permit, expectation(fresh, operation, null)))
+        .toMatchObject({ lifecycle: "fresh", operation, operationWorkspaceId: null });
+    });
   }
 
   it("returns exact deeply frozen plain storage evidence with literal false grants", () => {
@@ -161,22 +141,20 @@ describe("G006C2A SQLite G002 storage-operation permit", () => {
   });
 
   it("mints a frozen fieldless null-prototype permit", () => {
-    const permit = createSqliteG002StorageOperationPermit(permitInput(upgraded));
+    const permit = createSqliteG002StorageOperationPermit(permitInput(fresh));
     expect(Object.getPrototypeOf(permit)).toBeNull();
     expect(Reflect.ownKeys(permit)).toEqual([]);
     expect(Object.isFrozen(permit)).toBe(true);
-    requireSqliteG002StorageOperationPermit(permit, expectation(upgraded));
+    requireSqliteG002StorageOperationPermit(permit, expectation(fresh));
   });
 
-  it("does not mutate either database or any G002 table", () => {
-    for (const target of [fresh, upgraded]) {
-      const bytesBefore = readFileSync(target.databasePath);
-      const rowsBefore = tableSnapshot(target.databasePath);
-      const permit = createSqliteG002StorageOperationPermit(permitInput(target, "crawl_units", null));
-      requireSqliteG002StorageOperationPermit(permit, expectation(target, "crawl_units", null));
-      expect(tableSnapshot(target.databasePath)).toEqual(rowsBefore);
-      expect(readFileSync(target.databasePath)).toEqual(bytesBefore);
-    }
+  it("does not mutate the fresh database or any G002 table", () => {
+    const bytesBefore = readFileSync(fresh.databasePath);
+    const rowsBefore = tableSnapshot(fresh.databasePath);
+    const permit = createSqliteG002StorageOperationPermit(permitInput(fresh, "crawl_units", null));
+    requireSqliteG002StorageOperationPermit(permit, expectation(fresh, "crawl_units", null));
+    expect(tableSnapshot(fresh.databasePath)).toEqual(rowsBefore);
+    expect(readFileSync(fresh.databasePath)).toEqual(bytesBefore);
   }, 15_000);
 
   it("rejects a fresh binding declared as upgraded", () => {
@@ -186,39 +164,32 @@ describe("G006C2A SQLite G002 storage-operation permit", () => {
     }), "G006C2A_STORAGE_SCOPE_MISMATCH");
   });
 
-  it("rejects an upgraded binding declared as fresh", () => {
-    expectCode(() => createSqliteG002StorageOperationPermit({
-      ...permitInput(upgraded),
-      lifecycle: "fresh",
-    }), "G006C2A_STORAGE_SCOPE_MISMATCH");
-  });
-
   it("rejects a genuine binding against another database", () => {
     expectCode(() => createSqliteG002StorageOperationPermit({
       ...permitInput(fresh),
-      databasePath: upgraded.databasePath,
+      databasePath: join(fresh.root, "different.sqlite"),
     }), "G006C2A_STORAGE_SCOPE_MISMATCH");
   });
 
   it("rejects a genuine binding against another tenant", () => {
     expectCode(() => createSqliteG002StorageOperationPermit({
       ...permitInput(fresh),
-      tenantId: upgraded.tenantId,
+      tenantId: "00000000-0000-4000-8000-0000000002c1",
     }), "G006C2A_STORAGE_SCOPE_MISMATCH");
   });
 
   it("rejects a genuine binding against another storage workspace", () => {
     expectCode(() => createSqliteG002StorageOperationPermit({
       ...permitInput(fresh),
-      storageWorkspaceId: upgraded.storageWorkspaceId,
-      operationWorkspaceId: upgraded.storageWorkspaceId,
+      storageWorkspaceId: "10000000-0000-4000-8000-0000000002c1",
+      operationWorkspaceId: "10000000-0000-4000-8000-0000000002c1",
     }), "G006C2A_STORAGE_SCOPE_MISMATCH");
   });
 
   it("rejects a non-null operation workspace different from storage scope", () => {
     expectCode(() => createSqliteG002StorageOperationPermit({
       ...permitInput(fresh),
-      operationWorkspaceId: upgraded.storageWorkspaceId,
+      operationWorkspaceId: "10000000-0000-4000-8000-0000000002c1",
     }), "G006C2A_STORAGE_SCOPE_MISMATCH");
   });
 
@@ -303,14 +274,6 @@ describe("G006C2A SQLite G002 storage-operation permit", () => {
     }
   });
 
-  it("rejects a genuine binding combined with the other fixture selectors", () => {
-    expectCode(() => createSqliteG002StorageOperationPermit({
-      ...permitInput(upgraded),
-      lifecycle: "fresh",
-      binding: fresh.binding,
-    }), "G006C2A_STORAGE_SCOPE_MISMATCH");
-  });
-
   it("rejects fabricated, copied, spread, proxied, and prototype-derived permits", () => {
     const genuine = createSqliteG002StorageOperationPermit(permitInput(fresh));
     const candidates = [
@@ -333,7 +296,7 @@ describe("G006C2A SQLite G002 storage-operation permit", () => {
     const permit = createSqliteG002StorageOperationPermit(permitInput(fresh));
     expectCode(() => requireSqliteG002StorageOperationPermit(permit, {
       ...expectation(fresh),
-      databasePath: upgraded.databasePath,
+      databasePath: join(fresh.root, "different.sqlite"),
     }), "G006C2A_PERMIT_MISMATCH");
     expectCode(
       () => requireSqliteG002StorageOperationPermit(permit, expectation(fresh)),
@@ -342,13 +305,13 @@ describe("G006C2A SQLite G002 storage-operation permit", () => {
   });
 
   it("burns a permit after an operation mismatch", () => {
-    const permit = createSqliteG002StorageOperationPermit(permitInput(upgraded, "crawl_runs"));
+    const permit = createSqliteG002StorageOperationPermit(permitInput(fresh, "crawl_runs"));
     expectCode(
-      () => requireSqliteG002StorageOperationPermit(permit, expectation(upgraded, "crawl_units")),
+      () => requireSqliteG002StorageOperationPermit(permit, expectation(fresh, "crawl_units")),
       "G006C2A_PERMIT_MISMATCH",
     );
     expectCode(
-      () => requireSqliteG002StorageOperationPermit(permit, expectation(upgraded, "crawl_runs")),
+      () => requireSqliteG002StorageOperationPermit(permit, expectation(fresh, "crawl_runs")),
       "G006C2A_PERMIT_REQUIRED",
     );
   });
@@ -402,10 +365,10 @@ describe("G006C2A SQLite G002 storage-operation permit", () => {
   });
 
   it("rejects replay after successful consumption", () => {
-    const permit = createSqliteG002StorageOperationPermit(permitInput(upgraded, "crawl_units", null));
-    requireSqliteG002StorageOperationPermit(permit, expectation(upgraded, "crawl_units", null));
+    const permit = createSqliteG002StorageOperationPermit(permitInput(fresh, "crawl_units", null));
+    requireSqliteG002StorageOperationPermit(permit, expectation(fresh, "crawl_units", null));
     expectCode(
-      () => requireSqliteG002StorageOperationPermit(permit, expectation(upgraded, "crawl_units", null)),
+      () => requireSqliteG002StorageOperationPermit(permit, expectation(fresh, "crawl_units", null)),
       "G006C2A_PERMIT_REQUIRED",
     );
   });
@@ -414,10 +377,10 @@ describe("G006C2A SQLite G002 storage-operation permit", () => {
     const input = permitInput(fresh, "crawl_runs", null) as unknown as Record<string, unknown>;
     const permit = createSqliteG002StorageOperationPermit(input as unknown as SqliteG002StorageOperationPermitInput);
     input.lifecycle = "upgraded";
-    input.databasePath = upgraded.databasePath;
-    input.tenantId = upgraded.tenantId;
-    input.storageWorkspaceId = upgraded.storageWorkspaceId;
-    input.operationWorkspaceId = upgraded.storageWorkspaceId;
+    input.databasePath = join(fresh.root, "different.sqlite");
+    input.tenantId = "00000000-0000-4000-8000-0000000002c1";
+    input.storageWorkspaceId = "10000000-0000-4000-8000-0000000002c1";
+    input.operationWorkspaceId = "10000000-0000-4000-8000-0000000002c1";
     input.operation = "crawl_units";
     expect(requireSqliteG002StorageOperationPermit(permit, expectation(fresh, "crawl_runs", null)))
       .toMatchObject({ lifecycle: "fresh", operation: "crawl_runs", operationWorkspaceId: null });
@@ -438,5 +401,58 @@ describe("G006C2A SQLite G002 storage-operation permit", () => {
 
     const barrel = readFileSync(join(process.cwd(), "src/lib/db/index.ts"), "utf8");
     expect(barrel).not.toContain("sqlite-g002-operation-permit");
+  });
+
+  describe.skipIf(!HAS_G006B_WINDOWS_DURABILITY_CAPABILITY)("upgraded G006B-backed lifecycle", () => {
+    let upgradedCleanupRef: SqliteG002OperationFixture | undefined;
+
+    beforeAll(async () => {
+      upgraded = await createUpgradedSqliteG002OperationFixture();
+      upgradedCleanupRef = upgraded;
+    }, 120_000);
+
+    afterAll(() => {
+      const ownedUpgraded = upgradedCleanupRef;
+      upgradedCleanupRef = undefined;
+      if (ownedUpgraded) cleanupSqliteG002OperationFixture(ownedUpgraded);
+    });
+
+    for (const operation of OPERATIONS) {
+      it(`consumes one upgraded named-workspace ${operation} permit`, () => {
+        const permit = createSqliteG002StorageOperationPermit(permitInput(upgraded, operation));
+        expect(requireSqliteG002StorageOperationPermit(permit, expectation(upgraded, operation)))
+          .toMatchObject({ lifecycle: "upgraded", operation, operationWorkspaceId: upgraded.storageWorkspaceId });
+      });
+
+      it(`consumes one upgraded explicit tenant-wide ${operation} permit`, () => {
+        const permit = createSqliteG002StorageOperationPermit(permitInput(upgraded, operation, null));
+        expect(requireSqliteG002StorageOperationPermit(permit, expectation(upgraded, operation, null)))
+          .toMatchObject({ lifecycle: "upgraded", operation, operationWorkspaceId: null });
+      });
+    }
+
+    it("does not mutate the upgraded database or any G002 table", () => {
+      const bytesBefore = readFileSync(upgraded.databasePath);
+      const rowsBefore = tableSnapshot(upgraded.databasePath);
+      const permit = createSqliteG002StorageOperationPermit(permitInput(upgraded, "crawl_units", null));
+      requireSqliteG002StorageOperationPermit(permit, expectation(upgraded, "crawl_units", null));
+      expect(tableSnapshot(upgraded.databasePath)).toEqual(rowsBefore);
+      expect(readFileSync(upgraded.databasePath)).toEqual(bytesBefore);
+    }, 15_000);
+
+    it("rejects an upgraded binding declared as fresh", () => {
+      expectCode(() => createSqliteG002StorageOperationPermit({
+        ...permitInput(upgraded),
+        lifecycle: "fresh",
+      }), "G006C2A_STORAGE_SCOPE_MISMATCH");
+    });
+
+    it("rejects a genuine binding combined with the other fixture selectors", () => {
+      expectCode(() => createSqliteG002StorageOperationPermit({
+        ...permitInput(upgraded),
+        lifecycle: "fresh",
+        binding: fresh.binding,
+      }), "G006C2A_STORAGE_SCOPE_MISMATCH");
+    });
   });
 });

@@ -303,6 +303,46 @@ describe("tenant query repository", () => {
     });
   });
 
+  it("projects a tenant membership directory without identities and returns its complete role history", async () => {
+    const { client, database } = createDb();
+    const repository = createTenantQueryRepository(client);
+    await seedFoundation(repository);
+    database.prepare(
+      `INSERT INTO tenant_role_bindings (
+         id, tenant_id, membership_id, role, created_at, valid_from, revoked_at, reason_code
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      ROLE_HISTORY,
+      TENANT_A,
+      MEMBERSHIP_A,
+      "reviewer",
+      "2020-01-01T00:00:00.000Z",
+      "2020-01-01T00:00:00.000Z",
+      "2021-01-01T00:00:00.000Z",
+      "role_change",
+    );
+
+    const directory = await repository.listMembershipDirectory(TENANT_A, MEMBERSHIP_A, AUTH_A);
+    const history = await repository.listRoleBindings(TENANT_A);
+
+    expect(directory).toEqual([expect.objectContaining({
+      id: MEMBERSHIP_A,
+      tenantId: TENANT_A,
+      workspaceId: WORKSPACE_A,
+      status: "active",
+      actorIdentityMatches: true,
+    })]);
+    expect(Object.keys(directory[0])).toEqual(["id", "tenantId", "workspaceId", "status", "actorIdentityMatches"]);
+    expect(await repository.listMembershipDirectory(TENANT_A, MEMBERSHIP_A, AUTH_B)).toEqual([
+      expect.objectContaining({ id: MEMBERSHIP_A, actorIdentityMatches: false }),
+    ]);
+    expect(directory[0]).not.toHaveProperty("authIdentityId");
+    expect(directory[0]).not.toHaveProperty("pendingIdentityRefHash");
+    expect(history.map((binding) => binding.id)).toEqual([ROLE_HISTORY, ROLE_A]);
+    expect(history.every((binding) => binding.tenantId === TENANT_A)).toBe(true);
+    expect(history).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: ROLE_B })]));
+  });
+
   it("rejects cross-tenant status changes without revealing whether the ID exists", async () => {
     const { client } = createDb();
     const repository = createTenantQueryRepository(client);

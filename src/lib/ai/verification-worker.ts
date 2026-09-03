@@ -5,7 +5,7 @@ import {
   getAiQueueStats,
   getConfiguredOpenAiApiKey,
   getLatestAiVerification,
-  getLeadById,
+  getLeadForAiQueue,
   leaseNextAiVerificationJob,
   getSettings,
   logAiUsageEvent,
@@ -62,7 +62,7 @@ export interface AiVerificationRunOptions {
 export async function enqueueAiVerificationForLead(
   leadId: string,
   reason: string,
-  options: { force?: boolean; settings?: Settings; tenantId?: string } = {},
+  options: { force?: boolean; settings?: Settings; tenantId?: string; queueOnly?: boolean } = {},
 ): Promise<{ status: "queued" | "skipped" | "cached" | "disabled"; leadId: string; reason: string }> {
   const settings = options.settings ?? await getSettings();
   if (!settings.ai_enabled) return { status: "disabled", leadId, reason: "AI verification is disabled." };
@@ -70,7 +70,7 @@ export async function enqueueAiVerificationForLead(
     return { status: "disabled", leadId, reason: "Automatic AI verification is disabled." };
   }
 
-  const lead = await getLeadById(leadId);
+  const lead = await getLeadForAiQueue(leadId);
   if (!lead) return { status: "skipped", leadId, reason: "Lead not found." };
   if (options.tenantId && (lead as Lead & { tenant_id?: string | null }).tenant_id !== options.tenantId) {
     return { status: "skipped", leadId, reason: "Lead not found." };
@@ -80,7 +80,7 @@ export async function enqueueAiVerificationForLead(
   }
 
   const inputHash = createLeadVerificationInputHash(lead);
-  const latest = await getLatestAiVerification(lead.id);
+  const latest = options.queueOnly ? null : await getLatestAiVerification(lead.id);
   const hasFreshSameInput = Boolean(
     !options.force &&
     latest &&

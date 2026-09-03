@@ -19,6 +19,8 @@ const dbIndexMocks = vi.hoisted(() => ({
 const tenantAuthorizationMocks = vi.hoisted(() => ({
   requireTenantPermission: vi.fn(),
   runWithTenantContext: vi.fn((_session: unknown, _correlationId: unknown, fn: () => unknown) => fn()),
+  actualRunWithTenantContext: null as null | ((session: unknown, correlationId: unknown, fn: () => unknown) => unknown),
+  actualGetTenantContext: null as null | (() => unknown),
   getTenantContext: vi.fn(),
   getCurrentTenantPolicy: vi.fn(),
 }));
@@ -37,7 +39,12 @@ vi.mock("@/lib/tenancy/authorize", async (importOriginal) => ({
 }));
 
 vi.mock("@/lib/tenancy/context", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@/lib/tenancy/context")>(),
+  ...await (async () => {
+    const actual = await importOriginal<typeof import("@/lib/tenancy/context")>();
+    tenantAuthorizationMocks.actualRunWithTenantContext = actual.runWithTenantContext as typeof tenantAuthorizationMocks.actualRunWithTenantContext;
+    tenantAuthorizationMocks.actualGetTenantContext = actual.getTenantContext;
+    return actual;
+  })(),
   runWithTenantContext: tenantAuthorizationMocks.runWithTenantContext,
   getTenantContext: tenantAuthorizationMocks.getTenantContext,
 }));
@@ -104,14 +111,16 @@ import {
   updateSchedulerWorkerEnabledAction,
 } from "@/lib/crawl/actions";
 import { PlacesApiError } from "@/lib/google-places";
+import { API_ENDPOINT_TEXT_SEARCH } from "@/lib/db/queries";
 import { TenantAuthorizationError } from "@/lib/tenancy/authorize";
 import { TENANT_POLICY_DEFAULTS } from "@/lib/tenancy/schemas";
 
 const originalGooglePlacesApiKey = process.env.GOOGLE_PLACES_API_KEY;
+const USER_ID = "00000000-0000-4000-8000-000000000001";
 const TENANT_ID = "10000000-0000-4000-8000-000000000001";
 const WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
 const TENANT_SESSION = Object.freeze({
-  userId: "admin-1",
+  userId: USER_ID,
   email: "admin@example.com",
   displayName: "Admin",
   tenantId: TENANT_ID,
@@ -147,6 +156,18 @@ beforeEach(() => {
   testDb.exec("ALTER TABLE crawl_runs ADD COLUMN workspace_id TEXT");
   testDb.exec(`ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_ID}'`);
   testDb.exec("ALTER TABLE leads ADD COLUMN workspace_id TEXT");
+  testDb.exec(`ALTER TABLE api_usage_events ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_ID}'`);
+  testDb.exec("ALTER TABLE api_usage_events ADD COLUMN source_card_id TEXT NOT NULL DEFAULT 'google_places_legacy'");
+  testDb.prepare("INSERT INTO tenants (id, slug, name, status) VALUES (?, 'crawl-actions', 'Crawl Actions', 'active')")
+    .run(TENANT_ID);
+  testDb.prepare("INSERT INTO workspaces (id, tenant_id, slug, name, status) VALUES (?, ?, 'default', 'Default', 'active')")
+    .run(WORKSPACE_ID, TENANT_ID);
+  testDb.prepare(
+    "INSERT INTO tenant_memberships (id, tenant_id, auth_identity_id, workspace_id, status) VALUES (?, ?, ?, ?, 'active')",
+  ).run(TENANT_SESSION.membershipId, TENANT_ID, USER_ID, WORKSPACE_ID);
+  testDb.prepare(
+    "INSERT INTO tenant_role_bindings (id, tenant_id, membership_id, role, reason_code) VALUES (?, ?, ?, 'owner', 'initial_provisioning')",
+  ).run(TENANT_SESSION.roleBindingId, TENANT_ID, TENANT_SESSION.membershipId);
   seedTestZip(testDb, "80202", "Denver", 39.75, -104.99, "Denver");
   process.env.GOOGLE_PLACES_API_KEY = "test-google-key";
   googlePlacesMocks.textSearch.mockReset();
@@ -166,14 +187,26 @@ beforeEach(() => {
   );
   authMocks.requirePermission.mockReset();
   authMocks.requirePermission.mockResolvedValue({
-    userId: "admin-1",
+    userId: USER_ID,
     email: "admin@example.com",
     displayName: "Admin",
     role: "admin",
   });
   tenantAuthorizationMocks.runWithTenantContext.mockClear();
+  tenantAuthorizationMocks.runWithTenantContext.mockImplementation(
+    (session: unknown, correlationId: unknown, fn: () => unknown) => {
+      const active = tenantAuthorizationMocks.actualGetTenantContext!() as { correlationId?: string } | null;
+      return tenantAuthorizationMocks.actualRunWithTenantContext!(
+        session,
+        active?.correlationId ?? correlationId,
+        fn,
+      );
+    },
+  );
   tenantAuthorizationMocks.getTenantContext.mockReset();
-  tenantAuthorizationMocks.getTenantContext.mockReturnValue(null);
+  tenantAuthorizationMocks.getTenantContext.mockImplementation(
+    () => tenantAuthorizationMocks.actualGetTenantContext!(),
+  );
   tenantAuthorizationMocks.getCurrentTenantPolicy.mockReset();
   tenantAuthorizationMocks.getCurrentTenantPolicy.mockResolvedValue(sourcePolicy());
 });
@@ -364,6 +397,30 @@ describe("dashboard read action tenant boundary", () => {
       expect.any(Function),
     );
     expect(dbIndexMocks.withTenantDbContext).toHaveBeenCalledOnce();
+  });
+
+  it("keeps dashboard run, usage, and error reads inside the active tenant", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+    const runA = seedTestRun(testDb, { id: "dashboard-run-a" });
+    const runB = seedTestRun(testDb, { id: "dashboard-run-b" });
+    testDb.prepare("UPDATE crawl_runs SET tenant_id = ?, created_at = ?, last_error = ? WHERE id = ?")
+      .run(TENANT_ID, "2026-08-30T10:00:00.000Z", "tenant-a failure", runA);
+    testDb.prepare("UPDATE crawl_runs SET tenant_id = ?, created_at = ?, last_error = ? WHERE id = ?")
+      .run("90000000-0000-4000-8000-000000000009", "2026-08-30T11:00:00.000Z", "tenant-b failure", runB);
+    const insertUsage = testDb.prepare(
+      `INSERT INTO api_usage_events (
+        tenant_id, id, crawl_run_id, endpoint, sku, success, was_cached,
+        billable_units, estimated_cost, created_at
+      ) VALUES (?, ?, ?, ?, 'places_text_search_enterprise', 1, 0, ?, 0, ?)`,
+    );
+    insertUsage.run(TENANT_ID, "usage-a", runA, API_ENDPOINT_TEXT_SEARCH, 2, new Date().toISOString());
+    insertUsage.run("90000000-0000-4000-8000-000000000009", "usage-b", runB, API_ENDPOINT_TEXT_SEARCH, 9, new Date().toISOString());
+
+    const result = await getDashboardAnalyticsAction({ tenantId: TENANT_ID, workspaceId: null });
+
+    expect(result.apiCallsUsed).toBe(2);
+    expect(result.monthlyApiCalls).toBe(2);
+    expect(result.lastError).toBe("tenant-a failure");
   });
 
   it("rejects workspace and composed-identity scopes before dashboard database work", async () => {

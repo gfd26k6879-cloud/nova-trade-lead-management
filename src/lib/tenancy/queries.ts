@@ -53,6 +53,14 @@ export interface Membership {
   updatedAt: string;
 }
 
+export interface MembershipDirectoryEntry {
+  id: MembershipId;
+  tenantId: TenantId;
+  workspaceId: WorkspaceId | null;
+  status: MembershipStatus;
+  actorIdentityMatches: boolean;
+}
+
 export interface RoleBinding {
   id: string;
   tenantId: TenantId;
@@ -156,6 +164,14 @@ interface MembershipRow extends Record<string, unknown> {
   updated_at: unknown;
 }
 
+interface MembershipDirectoryRow extends Record<string, unknown> {
+  id: unknown;
+  tenant_id: unknown;
+  workspace_id: unknown;
+  status: unknown;
+  actor_identity_matches: unknown;
+}
+
 interface RoleBindingRow extends Record<string, unknown> {
   id: unknown;
   tenant_id: unknown;
@@ -235,9 +251,15 @@ export interface TenantQueryRepository {
   createMembership(tenantId: TenantId, input: CreateMembershipInput): Promise<Membership>;
   getMembership(tenantId: TenantId, membershipId: MembershipId): Promise<Membership | null>;
   listMemberships(tenantId: TenantId): Promise<Membership[]>;
+  listMembershipDirectory(
+    tenantId: TenantId,
+    actorMembershipId: MembershipId,
+    expectedAuthIdentityId: AuthIdentityId,
+  ): Promise<MembershipDirectoryEntry[]>;
   updateMembershipStatus(tenantId: TenantId, membershipId: MembershipId, status: MembershipStatus): Promise<Membership>;
 
   createRoleBinding(tenantId: TenantId, input: CreateRoleBindingInput): Promise<RoleBinding>;
+  listRoleBindings(tenantId: TenantId): Promise<RoleBinding[]>;
   getCurrentRoleBinding(tenantId: TenantId, membershipId: MembershipId): Promise<RoleBinding | null>;
   revokeCurrentRoleBinding(tenantId: TenantId, membershipId: MembershipId, revokedAt?: string): Promise<RoleBinding>;
 
@@ -396,6 +418,25 @@ export function createTenantQueryRepository(db?: DbClient): TenantQueryRepositor
     return rows.map(mapMembership);
   };
 
+  const listMembershipDirectory = async (
+    tenantId: TenantId,
+    actorMembershipId: MembershipId,
+    expectedAuthIdentityId: AuthIdentityId,
+  ): Promise<MembershipDirectoryEntry[]> => {
+    const client = await resolveDb();
+    const rows = await client.prepare(
+      `SELECT id, tenant_id, workspace_id, status,
+              CASE
+                WHEN tenant_id = ? AND id = ? AND auth_identity_id = ? THEN TRUE
+                ELSE FALSE
+              END AS actor_identity_matches
+       FROM tenant_memberships
+       WHERE tenant_id = ?
+       ORDER BY id ASC`,
+    ).all<MembershipDirectoryRow>(tenantId, actorMembershipId, expectedAuthIdentityId, tenantId);
+    return rows.map(mapMembershipDirectoryEntry);
+  };
+
   const updateMembershipStatus = async (
     tenantId: TenantId,
     membershipId: MembershipId,
@@ -445,6 +486,18 @@ export function createTenantQueryRepository(db?: DbClient): TenantQueryRepositor
        WHERE tenant_id = ? AND id = ?`,
     ).get<RoleBindingRow>(tenantId, roleBindingId);
     return row ? mapRoleBinding(row) : null;
+  };
+
+  const listRoleBindings = async (tenantId: TenantId): Promise<RoleBinding[]> => {
+    const client = await resolveDb();
+    const rows = await client.prepare(
+      `SELECT id, tenant_id, membership_id, role, created_at, valid_from, revoked_at,
+              assigned_by_membership_id, reason_code
+       FROM tenant_role_bindings
+       WHERE tenant_id = ?
+       ORDER BY membership_id ASC, valid_from ASC, id ASC`,
+    ).all<RoleBindingRow>(tenantId);
+    return rows.map(mapRoleBinding);
   };
 
   const getCurrentRoleBinding = async (
@@ -586,8 +639,10 @@ export function createTenantQueryRepository(db?: DbClient): TenantQueryRepositor
     createMembership,
     getMembership,
     listMemberships,
+    listMembershipDirectory,
     updateMembershipStatus,
     createRoleBinding,
+    listRoleBindings,
     getCurrentRoleBinding,
     revokeCurrentRoleBinding,
     createTenantPolicy,
@@ -702,6 +757,16 @@ function mapMembership(row: MembershipRow): Membership {
     invitedByMembershipId: nullableString(row, "invited_by_membership_id"),
     createdAt: requiredTimestamp(row, "created_at"),
     updatedAt: requiredTimestamp(row, "updated_at"),
+  };
+}
+
+function mapMembershipDirectoryEntry(row: MembershipDirectoryRow): MembershipDirectoryEntry {
+  return {
+    id: requiredString(row, "id"),
+    tenantId: requiredString(row, "tenant_id"),
+    workspaceId: nullableString(row, "workspace_id"),
+    status: enumValue<MembershipStatus>(row, "status", membershipStatusSet),
+    actorIdentityMatches: booleanValue(row, "actor_identity_matches"),
   };
 }
 

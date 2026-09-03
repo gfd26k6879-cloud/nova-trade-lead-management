@@ -173,7 +173,9 @@ class World {
       },
       complete: async (input) => {
         this.assertOpen();
-        this.journal.set(input.idempotencyKeyHash, clone({ ...input, result: clone(input.result) }));
+        const { effectiveAt, ...entry } = input;
+        void effectiveAt;
+        this.journal.set(input.idempotencyKeyHash, clone({ ...entry, result: clone(input.result) }));
       },
     };
   }

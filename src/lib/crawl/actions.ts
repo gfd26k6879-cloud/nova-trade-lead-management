@@ -1081,7 +1081,10 @@ export async function getDashboardAnalyticsAction(
           12_000,
           withDbStatementTimeout(8_000, async () => {
             await ensureDbReady();
-            return getDashboardAnalyticsActionInternal();
+            return getDashboardAnalyticsActionInternal({
+              tenantId: tenantSession.tenantId,
+              workspaceId: tenantSession.workspaceId,
+            });
           }),
         );
         logActionTiming(200);
@@ -1095,8 +1098,17 @@ export async function getDashboardAnalyticsAction(
   );
 }
 
-async function getDashboardAnalyticsActionInternal(): Promise<Partial<DashboardStatsResult>> {
-  const visibleRun = await timedDashboardAnalyticsStep("visible_run", () => getSelectedOrDefaultVisibleCrawlRun());
+async function getDashboardAnalyticsActionInternal(scope: { tenantId: string; workspaceId: string | null }): Promise<Partial<DashboardStatsResult>> {
+  const visibleRun = await timedDashboardAnalyticsStep("visible_run", () => getSelectedOrDefaultVisibleCrawlRun(undefined, scope));
+  if (visibleRun) {
+    const scopedRun = visibleRun as CrawlRun & { tenant_id?: string | null; workspace_id?: string | null };
+    if (
+      scopedRun.tenant_id !== scope.tenantId ||
+      (scopedRun.workspace_id ?? null) !== scope.workspaceId
+    ) {
+      throw new Error("Selected dashboard run does not match the active tenant context.");
+    }
+  }
   let apiCallsUsed = 0;
   let discoveryApiCalls = 0;
   let enrichmentApiCalls = 0;
@@ -1106,19 +1118,19 @@ async function getDashboardAnalyticsActionInternal(): Promise<Partial<DashboardS
   const todayFocus = await timedDashboardAnalyticsStep("today_focus", getTodayFocusCount);
   const needsFollowUp = await timedDashboardAnalyticsStep("needs_follow_up", getNeedsFollowUpCount);
   const conversionMetrics = await timedDashboardAnalyticsStep("conversion_metrics", getConversionMetrics);
-  const monthlyUsage = await timedDashboardAnalyticsStep("monthly_api_usage", getMonthlyApiUsageSummary);
+  const monthlyUsage = await timedDashboardAnalyticsStep("monthly_api_usage", () => getMonthlyApiUsageSummary(scope));
   const qualifiedLeadCount = await timedDashboardAnalyticsStep("qualified_lead_count", () => getQualifiedLeadCount(5.0));
   const schedulerHealth = await timedDashboardAnalyticsStep("scheduler_health", getSchedulerHealth);
   const launchReadiness = await timedDashboardAnalyticsStep("launch_readiness", getLaunchReadinessSummary);
   const monthlyApiCalls = monthlyUsage.totalCalls;
 
   if (visibleRun?.id) {
-    const runUsage = await timedDashboardAnalyticsStep("run_api_usage", () => getRunApiUsageSummary(visibleRun.id));
+    const runUsage = await timedDashboardAnalyticsStep("run_api_usage", () => getRunApiUsageSummary(visibleRun.id, scope));
     apiCallsUsed = runUsage.totalCalls;
     discoveryApiCalls = runUsage.discoveryCalls;
     enrichmentApiCalls = runUsage.enrichmentCalls;
     atmosphereEnrichmentCalls = runUsage.atmosphereCalls;
-    lastError = await timedDashboardAnalyticsStep("run_last_error", () => getRunLastError(visibleRun.id));
+    lastError = await timedDashboardAnalyticsStep("run_last_error", () => getRunLastError(visibleRun.id, scope));
   }
 
   return {

@@ -22,6 +22,8 @@ describe("normalizeAuthNextPath", () => {
     "/queue?view=mine",
     "/leads/lead-1#notes",
     "/search?q=https%3A%2F%2Fexample.test",
+    "/search?q=C:\\temp#result",
+    "/notes#folder\\item",
   ])("preserves the legitimate application-local path %s", (next) => {
     expect(normalizeAuthNextPath(next)).toBe(next);
   });

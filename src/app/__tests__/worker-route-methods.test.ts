@@ -10,6 +10,10 @@ const internalWorkerRouteMocks = vi.hoisted(() => ({
   runTenantInternalWorkerRoute: vi.fn(),
 }));
 
+const workerLeaseRuntimeMocks = vi.hoisted(() => ({
+  createFailClosedWorkerLeaseResolverRuntime: vi.fn(() => vi.fn()),
+}));
+
 const workerMocks = vi.hoisted(() => ({
   processNextUnit: vi.fn(),
   enrichNextLead: vi.fn(),
@@ -17,11 +21,13 @@ const workerMocks = vi.hoisted(() => ({
   processNextLeadArtifactJob: vi.fn(),
   authorizeInternalWorkerRequest: vi.fn(),
   ensureDbReady: vi.fn(),
+  getTenantScoreRecomputeSettings: vi.fn(),
   recomputeAllLeadQualityScores: vi.fn(),
   repairAiWebsiteFindingConsistency: vi.fn(),
 }));
 
 vi.mock("@/lib/internal-worker-route", () => internalWorkerRouteMocks);
+vi.mock("@/lib/tenancy/worker-lease-runtime", () => workerLeaseRuntimeMocks);
 vi.mock("@/lib/crawl/worker", () => ({ processNextUnit: workerMocks.processNextUnit }));
 vi.mock("@/lib/crawl/enrichment", () => ({ enrichNextLead: workerMocks.enrichNextLead }));
 vi.mock("@/lib/ai/verification-worker", () => ({
@@ -33,8 +39,12 @@ vi.mock("@/lib/internal-worker-auth", () => ({
 }));
 vi.mock("@/lib/db/queries", () => ({
   ensureDbReady: workerMocks.ensureDbReady,
+  getTenantScoreRecomputeSettings: workerMocks.getTenantScoreRecomputeSettings,
   recomputeAllLeadQualityScores: workerMocks.recomputeAllLeadQualityScores,
   repairAiWebsiteFindingConsistency: workerMocks.repairAiWebsiteFindingConsistency,
+}));
+vi.mock("@/lib/db", () => ({
+  withTenantDbContext: vi.fn((callback: () => unknown) => callback()),
 }));
 
 import { GET as getProcessNext, POST as postProcessNext } from "@/app/api/crawl/process-next/route";
@@ -101,6 +111,7 @@ describe("mutating worker route methods", () => {
     workerMocks.processNextLeadArtifactJob.mockResolvedValue({ status: "idle" });
     workerMocks.repairAiWebsiteFindingConsistency.mockResolvedValue(0);
     workerMocks.recomputeAllLeadQualityScores.mockResolvedValue(0);
+    workerMocks.getTenantScoreRecomputeSettings.mockResolvedValue({ scheduler_score_recompute_enabled: true });
 
     await postProcessNext(new NextRequest("https://example.test/api/crawl/process-next", { method: "POST" }));
     await postEnrichNext(new NextRequest("https://example.test/api/crawl/enrich-next", { method: "POST" }));
@@ -114,6 +125,7 @@ describe("mutating worker route methods", () => {
     expect(workerMocks.processNextLeadArtifactJob).toHaveBeenCalledWith(signal);
     expect(workerMocks.repairAiWebsiteFindingConsistency).toHaveBeenCalledWith(100, signal);
     expect(workerMocks.recomputeAllLeadQualityScores).toHaveBeenCalledWith(100, signal);
+    expect(workerMocks.getTenantScoreRecomputeSettings).toHaveBeenCalledTimes(1);
   });
 
   it("binds AI triggers to tenant worker authorization and ignores forged request scope", async () => {

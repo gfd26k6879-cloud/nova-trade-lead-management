@@ -18,7 +18,7 @@ import {
 import { requirePermission } from "@/lib/auth";
 import type { TenantSessionSelector } from "@/lib/app-users";
 import { withTenantDbContext } from "@/lib/db";
-import { requireTenantPermission } from "@/lib/tenancy/authorize";
+import { requireTenantPermission, TenantAuthorizationError } from "@/lib/tenancy/authorize";
 import { runWithTenantContext } from "@/lib/tenancy/context";
 import { createTenantQueryRepository } from "@/lib/tenancy/queries";
 import { tenantPolicySchema } from "@/lib/tenancy/schemas";
@@ -133,11 +133,27 @@ export async function clearGoogleMapsBrowserApiKeyAction() {
   return { success: true, settings: await querySettings() };
 }
 
-export async function backfillCanonicalPlacesAction(limit = 10000) {
-  await requirePermission("settings:manage");
-  await ensureDbReady();
-  const safeLimit = Math.max(1, Math.min(limit, 50000));
-  const count = await backfillPlacesMasterFromLeads(safeLimit);
-  await createAuditLog("canonical_backfill_completed", "places_master", undefined, { count, limit: safeLimit });
-  return { success: true, count };
+export async function backfillCanonicalPlacesAction(
+  limit = 10000,
+  selector: TenantSessionSelector = {},
+) {
+  const tenantSession = await requireTenantPermission(selector, "tenant:manage", {
+    action: "settings.canonical_places.backfill",
+  });
+  const legacySession = await requirePermission("settings:manage");
+  if (legacySession.userId !== tenantSession.userId) {
+    throw new TenantAuthorizationError(403, "TENANT_SCOPE_MISMATCH");
+  }
+  if (tenantSession.workspaceId !== null) {
+    throw new TenantAuthorizationError(403, "WORKSPACE_SCOPE_INVALID");
+  }
+
+  return runWithTenantContext(tenantSession, `canonical-places-backfill:${randomUUID()}`, () =>
+    withTenantDbContext(async () => {
+      await ensureDbReady();
+      const safeLimit = Math.max(1, Math.min(limit, 50000));
+      const count = await backfillPlacesMasterFromLeads(safeLimit);
+      await createAuditLog("canonical_backfill_completed", "places_master", undefined, { count, limit: safeLimit });
+      return { success: true, count };
+    }));
 }

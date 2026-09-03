@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { processNextAiVerificationJob } from "@/lib/ai/verification-worker";
 import { applyNoStoreHeaders } from "@/lib/http-cache";
 import { runTenantInternalWorkerRoute } from "@/lib/internal-worker-route";
-
-const denyUnconfiguredWorkerLease = () => Promise.resolve(null);
+import { createFailClosedWorkerLeaseResolverRuntime } from "@/lib/tenancy/worker-lease-runtime";
 
 export async function POST(request: NextRequest) {
   return applyNoStoreHeaders(await runAiVerificationWorker(request));
@@ -23,7 +22,10 @@ async function runAiVerificationWorker(request: NextRequest) {
     "queue:operate",
     (_context, signal) => processNextAiVerificationJob(signal),
     {
-      resolveLease: denyUnconfiguredWorkerLease,
+      resolveLease: createFailClosedWorkerLeaseResolverRuntime({
+        workerName: "ai_verification",
+        action: "ai_verification:process",
+      }),
       sessionPermission: "queue:operate",
       action: "ai_verification:process",
     },

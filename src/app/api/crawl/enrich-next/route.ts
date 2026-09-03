@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { enrichNextLead } from "@/lib/crawl/enrichment";
 import { applyNoStoreHeaders } from "@/lib/http-cache";
 import { runTenantInternalWorkerRoute } from "@/lib/internal-worker-route";
+import { createFailClosedWorkerLeaseResolverRuntime } from "@/lib/tenancy/worker-lease-runtime";
 
-const denyUnconfiguredWorkerLease = () => Promise.resolve(null);
+const resolveLease = createFailClosedWorkerLeaseResolverRuntime({
+  workerName: "enrichment",
+  action: "enrichment:process",
+});
 
 export async function POST(request: NextRequest) {
   return runTenantInternalWorkerRoute(
@@ -12,7 +16,7 @@ export async function POST(request: NextRequest) {
     "queue:operate",
     (_context, signal) => enrichNextLead(signal),
     {
-      resolveLease: denyUnconfiguredWorkerLease,
+      resolveLease,
       sessionPermission: "queue:operate",
       action: "enrichment:process",
     },

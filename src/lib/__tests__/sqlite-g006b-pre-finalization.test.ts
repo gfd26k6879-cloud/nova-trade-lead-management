@@ -38,7 +38,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import { SCHEMA_SQL } from "@/lib/db/schema";
+import { SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_SQL } from "@/lib/db/sqlite-schema-v1";
 import {
   SQLITE_G006B_BINDING_DOMAIN,
   SQLITE_G006B_COMMITTED_DOMAIN,
@@ -70,6 +70,10 @@ import {
 import { createLegacyWebsiteLeadPlaySeed } from "@/lib/tenancy/compatibility-play";
 import { exportSqliteData } from "../../../scripts/export-sqlite-data.mjs";
 import { LEGACY_DATA_EXPORT_SCHEMA_VERSION } from "../../../scripts/data-transfer-contract.mjs";
+import {
+  G006B_WINDOWS_POWERSHELL as POWERSHELL,
+  HAS_G006B_WINDOWS_DURABILITY_CAPABILITY,
+} from "./sqlite-windows-durability-capability";
 
 const TENANT_ID = "00000000-0000-4000-8000-000000000101";
 const WORKSPACE_ID = "10000000-0000-4000-8000-000000000101";
@@ -178,7 +182,7 @@ function createAcceptedFixture(): { root: string; databasePath: string; manifest
   const db = new Database(databasePath);
   try {
     db.pragma("foreign_keys = ON");
-    db.exec(SCHEMA_SQL);
+    db.exec(SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_SQL);
     seedLegacyRows(db);
     prepareSqliteCompatibilityBackfill(adapter(db));
     const manifest = manifestFor(db);
@@ -254,7 +258,6 @@ function replayInput(base: SqliteG006bExecuteInput): SqliteG006bReplayInput {
 }
 
 const PUBLISHER = join(process.cwd(), "scripts", "g006b-windows-durable-publish.ps1");
-const POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 
 function temporaryResidue(root: string): string[] {
   const result: string[] = [];
@@ -390,7 +393,22 @@ function independentArchiveTreeHash(directory: string): string {
   return independentDomainSha256("NOVATRADE\0G006B\0B1\0ARCHIVE\0V1\0", archiveEvidence(directory));
 }
 
-describe("G-006B B1 SQLite pre-finalization", () => {
+describe("G-006B platform-neutral canonical JSON", () => {
+  it("uses strict recursive canonical JSON with UTF-16 key order and integer-only outer numbers", () => {
+    expect(canonicalizeSqliteG006bRecord({ z: 1, A: [true, null], text: "ok" })).toBe('{"A":[true,null],"text":"ok","z":1}');
+    expect(() => canonicalizeSqliteG006bRecord({ unsafe: 0.55 })).toThrow(/safe integer/);
+    expect(() => canonicalizeSqliteG006bRecord({ negativeZero: -0 })).toThrow(/safe integer/);
+    expect(() => canonicalizeSqliteG006bRecord({ lone: "\ud800" })).toThrow(/lone surrogate/);
+    let getterCalls = 0;
+    const accessor = Object.defineProperty({}, "value", { enumerable: true, get: () => { getterCalls += 1; return 1; } });
+    expect(() => canonicalizeSqliteG006bRecord(accessor)).toThrow(/data property/);
+    expect(getterCalls).toBe(0);
+    expect(() => canonicalizeSqliteG006bRecord(new Proxy({ value: 1 }, {}))).toThrow(/canonical JSON/);
+    expect(() => canonicalizeSqliteG006bRecord({ missing: undefined })).toThrow(/canonical JSON/);
+  });
+});
+
+describe.skipIf(!HAS_G006B_WINDOWS_DURABILITY_CAPABILITY)("G-006B B1 SQLite pre-finalization", () => {
   it("B2 executes and replays with exactly one post-coordinator settle per run", async () => {
     const fixture = createAcceptedFixture();
     const base = await operationInput(fixture);
@@ -554,19 +572,6 @@ describe("G-006B B1 SQLite pre-finalization", () => {
     });
     expect(leaseProcesses.commands.filter((command) => command.trim() === "settle")).toHaveLength(1);
   }, 180_000);
-
-  it("uses strict recursive canonical JSON with UTF-16 key order and integer-only outer numbers", () => {
-    expect(canonicalizeSqliteG006bRecord({ z: 1, A: [true, null], text: "ok" })).toBe('{"A":[true,null],"text":"ok","z":1}');
-    expect(() => canonicalizeSqliteG006bRecord({ unsafe: 0.55 })).toThrow(/safe integer/);
-    expect(() => canonicalizeSqliteG006bRecord({ negativeZero: -0 })).toThrow(/safe integer/);
-    expect(() => canonicalizeSqliteG006bRecord({ lone: "\ud800" })).toThrow(/lone surrogate/);
-    let getterCalls = 0;
-    const accessor = Object.defineProperty({}, "value", { enumerable: true, get: () => { getterCalls += 1; return 1; } });
-    expect(() => canonicalizeSqliteG006bRecord(accessor)).toThrow(/data property/);
-    expect(getterCalls).toBe(0);
-    expect(() => canonicalizeSqliteG006bRecord(new Proxy({ value: 1 }, {}))).toThrow(/canonical JSON/);
-    expect(() => canonicalizeSqliteG006bRecord({ missing: undefined })).toThrow(/canonical JSON/);
-  });
 
   it("B1-03/B1-05 snapshots input and leaves exact accepted state after a real PREPARED-before-DDL failure", async () => {
     const fixture = createAcceptedFixture();

@@ -28,7 +28,7 @@ vi.mock("@/lib/db/sqlite-g006b-pre-finalization", async (importOriginal) => {
   };
 });
 
-import { SCHEMA_SQL } from "@/lib/db/schema";
+import { SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_SQL } from "@/lib/db/sqlite-schema-v1";
 import {
   SQLITE_G006B_SOURCE_CARD_ID,
   computeSqliteG006bArchiveTreeHash,
@@ -60,6 +60,7 @@ import {
 import { createLegacyWebsiteLeadPlaySeed } from "@/lib/tenancy/compatibility-play";
 import { exportSqliteData } from "../../../scripts/export-sqlite-data.mjs";
 import { LEGACY_DATA_EXPORT_SCHEMA_VERSION } from "../../../scripts/data-transfer-contract.mjs";
+import { HAS_G006B_WINDOWS_DURABILITY_CAPABILITY } from "./sqlite-windows-durability-capability";
 
 const TENANT_ID = "00000000-0000-4000-8000-000000000101";
 const WORKSPACE_ID = "10000000-0000-4000-8000-000000000101";
@@ -210,7 +211,7 @@ function createAcceptedFixture(journalMode: "delete" | "wal" = "delete"): Accept
   let manifest: CompatibilityBackfillManifest;
   try {
     db.pragma("foreign_keys = ON");
-    db.exec(SCHEMA_SQL);
+    db.exec(SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_SQL);
     seedLegacyRows(db);
     prepareSqliteCompatibilityBackfill(adapter(db));
     manifest = manifestFor(db);
@@ -378,6 +379,8 @@ async function expectC0InputRejected(value: unknown): Promise<void> {
 }
 
 describe("G006C0 SQLite compatibility storage scope", () => {
+  const windowsDurabilityIt = HAS_G006B_WINDOWS_DURABILITY_CAPABILITY ? it : it.skip;
+
   it("keeps explicit PostgreSQL pass-through frozen and does not call G006B or inspect environment state", async () => {
     process.env.DATABASE_URL = "sqlite-must-not-be-inferred";
     const before = replayObserver.calls;
@@ -389,7 +392,7 @@ describe("G006C0 SQLite compatibility storage scope", () => {
     delete process.env.DATABASE_URL;
   });
 
-  it.each(["delete", "wal"] as const)(
+  windowsDurabilityIt.each(["delete", "wal"] as const)(
     "mints exact fieldless upgraded scope from real %s replay and reconstructs it without changing evidence",
     async (journalMode) => {
       const { base, replay } = await createCommittedFixture(journalMode);
@@ -441,7 +444,7 @@ describe("G006C0 SQLite compatibility storage scope", () => {
     120_000,
   );
 
-  it("rejects malformed outer inputs, accessors, proxies, unknown discriminants, and non-replay lifecycle evidence", async () => {
+  windowsDurabilityIt("rejects malformed outer inputs, accessors, proxies, unknown discriminants, and non-replay lifecycle evidence", async () => {
     const { base } = await createCommittedFixture();
     const getter = vi.fn(() => { throw new Error("must not execute"); });
     const accessor = Object.defineProperty({}, "backend", { enumerable: true, get: getter });
@@ -468,7 +471,7 @@ describe("G006C0 SQLite compatibility storage scope", () => {
     expect(replayObserver.calls).toBe(1); // fixture execute only
   }, 120_000);
 
-  it("rejects replay and manifest accessors without executing them or invoking G006B", async () => {
+  windowsDurabilityIt("rejects replay and manifest accessors without executing them or invoking G006B", async () => {
     const { replay } = await createCommittedFixture();
     replayObserver.calls = 0;
     const getter = vi.fn(() => { throw new Error("must not execute"); });
@@ -482,7 +485,7 @@ describe("G006C0 SQLite compatibility storage scope", () => {
     expect(replayObserver.calls).toBe(0);
   }, 120_000);
 
-  it("preserves G006B handoff, path, native, catalog, receipt, G023, configuration, preservation, and journal errors", async () => {
+  windowsDurabilityIt("preserves G006B handoff, path, native, catalog, receipt, G023, configuration, preservation, and journal errors", async () => {
     const { base, replay } = await createCommittedFixture();
     const cases: Array<{ label: string; replay: SqliteG006bReplayInput; code: string }> = [
       {
@@ -548,7 +551,7 @@ describe("G006C0 SQLite compatibility storage scope", () => {
     }
   }, 180_000);
 
-  it("preserves a tampered committed record and the original G006B recovery error", async () => {
+  windowsDurabilityIt("preserves a tampered committed record and the original G006B recovery error", async () => {
     const { base, replay } = await createCommittedFixture();
     const original = readFileSync(base.committedPath);
     writeFileSync(base.committedPath, Buffer.concat([original, Buffer.from("\n", "utf8")]));
@@ -559,7 +562,7 @@ describe("G006C0 SQLite compatibility storage scope", () => {
     expectEvidenceUnchanged(tampered, base);
   }, 120_000);
 
-  it("snapshots retained primitives before async replay so caller mutation cannot change minted scope", async () => {
+  windowsDurabilityIt("snapshots retained primitives before async replay so caller mutation cannot change minted scope", async () => {
     const { replay } = await createCommittedFixture();
     const input = upgradedInput(replay);
     const originalExpected = expectedScope(replay);
@@ -598,7 +601,7 @@ describe("G006C0 SQLite compatibility storage scope", () => {
     } as never)).rejects.toMatchObject({ code: "G006C0_INPUT_REJECTED" });
   });
 
-  it("rejects forged, spread, copied, prototype-derived, proxied, and cross-selector capabilities", async () => {
+  windowsDurabilityIt("rejects forged, spread, copied, prototype-derived, proxied, and cross-selector capabilities", async () => {
     const { replay } = await createCommittedFixture();
     const binding = await verifyCompatibilityScope(upgradedInput(replay)) as SqliteCompatibilityBinding;
     const expectation = expectedScope(replay);
@@ -628,7 +631,7 @@ describe("G006C0 SQLite compatibility storage scope", () => {
     expect(Reflect.ownKeys(binding)).toEqual([]);
   }, 120_000);
 
-  it("validates exact descriptor-safe expectations and exposes only frozen non-authorizing scope evidence", async () => {
+  windowsDurabilityIt("validates exact descriptor-safe expectations and exposes only frozen non-authorizing scope evidence", async () => {
     const { replay } = await createCommittedFixture();
     const binding = await verifyCompatibilityScope(upgradedInput(replay)) as SqliteCompatibilityBinding;
     const getter = vi.fn(() => { throw new Error("must not execute"); });

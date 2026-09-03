@@ -7,6 +7,14 @@ const workerMocks = vi.hoisted(() => ({
   processNextAiVerificationJob: vi.fn(),
   processNextLeadArtifactJob: vi.fn(),
 }));
+const runtimeMocks = vi.hoisted(() => ({
+  resolveLease: vi.fn(async () => null),
+  createFailClosedWorkerLeaseResolverRuntime: vi.fn(),
+}));
+
+runtimeMocks.createFailClosedWorkerLeaseResolverRuntime.mockImplementation(
+  () => runtimeMocks.resolveLease,
+);
 
 vi.mock("@/lib/ai/verification-worker", () => ({
   processNextAiVerificationJob: workerMocks.processNextAiVerificationJob,
@@ -14,13 +22,25 @@ vi.mock("@/lib/ai/verification-worker", () => ({
 vi.mock("@/lib/ai/artifact-worker", () => ({
   processNextLeadArtifactJob: workerMocks.processNextLeadArtifactJob,
 }));
+vi.mock("@/lib/tenancy/worker-lease-runtime", () => ({
+  createFailClosedWorkerLeaseResolverRuntime:
+    runtimeMocks.createFailClosedWorkerLeaseResolverRuntime,
+}));
 
 import { POST as postVerifyNext } from "@/app/api/ai/verify-next/route";
 import { POST as postArtifactProcessNext } from "@/app/api/ai/artifacts/process-next/route";
 
 const routes = [
-  ["/api/ai/verify-next", postVerifyNext],
-  ["/api/ai/artifacts/process-next", postArtifactProcessNext],
+  [
+    "/api/ai/verify-next",
+    postVerifyNext,
+    { workerName: "ai_verification", action: "ai_verification:process" },
+  ],
+  [
+    "/api/ai/artifacts/process-next",
+    postArtifactProcessNext,
+    { workerName: "artifact", action: "artifact:process" },
+  ],
 ] as const;
 
 describe("AI worker tenant route boundary", () => {
@@ -33,7 +53,7 @@ describe("AI worker tenant route boundary", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(routes)("%s fails closed before durable tenant leases are wired", async (path, postRoute) => {
+  it.each(routes)("%s executes its bound fail-closed lease resolver", async (path, postRoute, binding) => {
     const request = new NextRequest(`https://example.test${path}?tenantId=forged`, {
       method: "POST",
       headers: {
@@ -52,6 +72,10 @@ describe("AI worker tenant route boundary", () => {
     });
     expect(response.headers.get("cache-control")).toContain("private");
     expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(runtimeMocks.createFailClosedWorkerLeaseResolverRuntime).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.createFailClosedWorkerLeaseResolverRuntime).toHaveBeenCalledWith(binding);
+    expect(runtimeMocks.resolveLease).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.resolveLease).toHaveBeenCalledWith("opaque-ai-worker-lease");
     expect(workerMocks.processNextAiVerificationJob).not.toHaveBeenCalled();
     expect(workerMocks.processNextLeadArtifactJob).not.toHaveBeenCalled();
   });

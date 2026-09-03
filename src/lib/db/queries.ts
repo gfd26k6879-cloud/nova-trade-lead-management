@@ -25,6 +25,7 @@ import {
   requireTenantContext,
   type TenantContext,
 } from "@/lib/tenancy/context";
+import { getWorkerTenantContext } from "@/lib/tenancy/worker-context";
 import { resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
   SCHEDULER_WORKER_METADATA,
@@ -812,6 +813,7 @@ export interface ApiUsageSummary {
 }
 
 export interface ApiUsageEventInput {
+  tenantId?: string;
   crawl_run_id?: string | null;
   crawl_unit_id?: string | null;
   lead_id?: string | null;
@@ -825,6 +827,7 @@ export interface ApiUsageEventInput {
 }
 
 export interface PlaceObservationInput {
+  tenantId?: string;
   place_id: string;
   endpoint: string;
   sku: GooglePlacesSku;
@@ -837,6 +840,7 @@ export interface PlaceObservationInput {
 }
 
 interface PlaceMasterUpsertInput {
+  tenantId?: string;
   place_id: string;
   name?: string | null;
   address?: string | null;
@@ -1706,13 +1710,15 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
 
 export async function repairAiWebsiteFindingConsistency(limit = 500, signal?: AbortSignal): Promise<number> {
   throwIfWorkerAborted(signal);
+  const { tenantId } = requireTenantWideScoreContext();
   const db = await getDb();
   throwIfWorkerAborted(signal);
-  const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
+  const normalizedLimit = Number.isFinite(limit) ? Math.floor(limit) : 500;
+  const safeLimit = Math.max(1, Math.min(1000, normalizedLimit));
   const rows = await db.prepare(
     `SELECT id
      FROM leads
-     WHERE (
+     WHERE tenant_id = ? AND ((
        ai_verification_status = 'site_found'
        AND ai_website_viability_status = 'usable'
        AND COALESCE(ai_found_website_url, '') != ''
@@ -1737,10 +1743,10 @@ export async function repairAiWebsiteFindingConsistency(limit = 500, signal?: Ab
          OR COALESCE(website_uri, '') != ai_found_website_url
          OR quality_bucket = 'needs_ai_verify'
        )
-     )
+     ))
      ORDER BY updated_at ASC
      LIMIT ?`
-  ).all(safeLimit) as Array<{ id: string }>;
+  ).all(tenantId, safeLimit) as Array<{ id: string }>;
   throwIfWorkerAborted(signal);
 
   if (rows.length === 0) return 0;
@@ -1778,25 +1784,26 @@ export async function repairAiWebsiteFindingConsistency(limit = 500, signal?: Ab
          ELSE win_probability_score
        END,
        updated_at = ?
-     WHERE id = ?`
+     WHERE tenant_id = ? AND id = ?`
   );
 
+  let repaired = 0;
   for (const row of rows) {
     throwIfWorkerAborted(signal);
-    await update.run(timestamp, row.id);
+    const result = await update.run(timestamp, tenantId, row.id);
+    if (result.changes === 0) continue;
     throwIfWorkerAborted(signal);
     await updateLeadQualityScores(row.id);
+    repaired += 1;
     throwIfWorkerAborted(signal);
   }
 
-  return rows.length;
+  return repaired;
 }
 
 // ─── Settings ───
 
-export async function getSettings(): Promise<Settings>{
-  const db = await getDb();
-  const row = await db.prepare("SELECT * FROM settings WHERE id = 1").get() as Record<string, unknown>;
+function parseSettingsRow(row: Record<string, unknown>): Settings {
   assertAllowedOpenAIModel(row.ai_model as string | null | undefined);
   const configuredModel = assertAllowedOpenAIModel(process.env.OPENAI_MODEL || OPENAI_LEAD_VERIFICATION_MODEL);
   return {
@@ -1856,6 +1863,32 @@ export async function getSettings(): Promise<Settings>{
           ? "manual_extra_pages"
           : "auto_yield_based",
   };
+}
+
+export async function getTenantScoreRecomputeSettings(): Promise<Settings> {
+  const { tenantId } = requireTenantWideScoreContext();
+  const db = await getDb();
+  const row = await db.prepare("SELECT * FROM settings WHERE tenant_id = ?").get(tenantId) as Record<string, unknown> | undefined;
+  if (!row) throw new Error("Tenant score settings are unavailable");
+  return parseSettingsRow(row);
+}
+
+export async function getSettings(): Promise<Settings>{
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) throw new Error("Conflicting settings tenant contexts.");
+  const isExactScoreRecomputeWorker = workerContext?.workerName === "score_recompute" &&
+    workerContext.action === "score_recompute:recompute";
+  if (isExactScoreRecomputeWorker) {
+    return getTenantScoreRecomputeSettings();
+  }
+  if (workerContext?.workerName === "score_recompute" || workerContext?.action === "score_recompute:recompute") {
+    throw new Error("Exact score recompute worker context is required.");
+  }
+  const db = await getDb();
+  const row = await db.prepare("SELECT * FROM settings WHERE id = 1").get() as Record<string, unknown> | undefined;
+  if (!row) throw new Error("Settings are unavailable");
+  return parseSettingsRow(row);
 }
 
 export async function updateSettings(settings: Partial<Settings>): Promise<void>{
@@ -2445,11 +2478,11 @@ async function getSchedulerOperationsSummaryInternal(): Promise<SchedulerOperati
     getDashboardStats(),
   ]);
   const activeRun = await getActiveCrawlRun();
-  const activeRunUsage = activeRun ? await getRunApiUsageSummary(activeRun.id) : emptyApiUsageSummary();
-  const activeRunLastError = activeRun ? await getRunLastError(activeRun.id) : null;
+  const activeRunUsage = activeRun ? await getPlatformRunApiUsageSummary(activeRun.id) : emptyApiUsageSummary();
+  const activeRunLastError = activeRun ? await getPlatformRunLastError(activeRun.id) : null;
   const [todayUsage, monthUsage, leadBacklog, enrichmentBacklog, artifactBacklog, scoreBacklog] = await Promise.all([
     getApiUsageSummarySince(startOfToday()),
-    getMonthlyApiUsageSummary(),
+    getPlatformMonthlyApiUsageSummary(),
     getSchedulerLeadBacklogSummary(),
     getSchedulerEnrichmentBacklogSummary(),
     getSchedulerArtifactBacklogSummary(),
@@ -3601,7 +3634,7 @@ export async function getProcessingCrawlRun(scope?: CrawlRunScope): Promise<Craw
     ? await db.prepare(
       `SELECT * FROM crawl_runs
        WHERE tenant_id = ?
-         AND (? IS NULL OR workspace_id = ?)
+         AND ((? IS NULL AND workspace_id IS NULL) OR workspace_id = ?)
          AND status IN ('running', 'queued')
        ORDER BY created_at DESC
        LIMIT 1`,
@@ -3611,8 +3644,8 @@ export async function getProcessingCrawlRun(scope?: CrawlRunScope): Promise<Craw
   return parseCrawlRunRow(row);
 }
 
-export async function getActiveCrawlRun(): Promise<CrawlRun | null>{
-  return getDefaultVisibleCrawlRun();
+export async function getActiveCrawlRun(scope?: CrawlRunScope): Promise<CrawlRun | null>{
+  return getDefaultVisibleCrawlRun(scope);
 }
 
 export async function getDefaultVisibleCrawlRun(scope?: CrawlRunScope): Promise<CrawlRun | null>{
@@ -4630,7 +4663,65 @@ export interface UpsertLeadResult {
   created: boolean;
 }
 
+function requireLeadWriteTenantId(explicitTenantId?: string): string {
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) {
+    throw new Error("Conflicting lead tenant contexts.");
+  }
+  if (workerContext && (
+    workerContext.workerName !== "crawl" ||
+    workerContext.action !== "crawl:process" ||
+    workerContext.workspaceId !== null
+  )) {
+    throw new Error("Exact crawl worker context is required.");
+  }
+  const tenantId = memberContext?.tenantId ?? workerContext?.tenantId ?? requireTenantContext().tenantId;
+  if (explicitTenantId !== undefined && explicitTenantId !== tenantId) {
+    throw new Error("Lead tenant does not match the active tenant context.");
+  }
+  return tenantId;
+}
+
+function requireGooglePlacesCacheTenantId(): string {
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) {
+    throw new Error("Conflicting place cache tenant contexts.");
+  }
+  if (workerContext) {
+    const hasExactWorkerAuthority = workerContext.workspaceId === null && (
+      (workerContext.workerName === "crawl" && workerContext.action === "crawl:process") ||
+      (workerContext.workerName === "enrichment" && workerContext.action === "enrichment:process")
+    );
+    if (!hasExactWorkerAuthority) {
+      throw new Error("Exact crawl or enrichment worker context is required.");
+    }
+  }
+  return memberContext?.tenantId ?? workerContext?.tenantId ?? requireTenantContext().tenantId;
+}
+
+function requireExactEnrichmentWorkerTenantId(leasedTenantId?: string): string {
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) throw new Error("Conflicting enrichment tenant contexts.");
+  if (
+    memberContext ||
+    !workerContext ||
+    workerContext.workerName !== "enrichment" ||
+    workerContext.action !== "enrichment:process" ||
+    workerContext.workspaceId !== null
+  ) {
+    throw new Error("Exact enrichment worker context is required.");
+  }
+  if (leasedTenantId !== undefined && leasedTenantId !== workerContext.tenantId) {
+    throw new Error("Enrichment tenant does not match the active worker context.");
+  }
+  return workerContext.tenantId;
+}
+
 export async function upsertLead(data: {
+  tenantId?: string;
   place_id: string;
   name?: string | null;
   address?: string | null;
@@ -4666,6 +4757,7 @@ export async function upsertLead(data: {
   is_excluded?: boolean;
   exclusion_reason?: string | null;
 }): Promise<UpsertLeadResult>{
+  const tenantId = requireLeadWriteTenantId(data.tenantId);
   return withDbTransaction(async () => {
     const db = await getDb();
     const categories = data.categories ?? [];
@@ -4693,17 +4785,17 @@ export async function upsertLead(data: {
     const estimatedDealValue = data.estimated_deal_value ?? qualification.estimatedDealValue;
 
     const inserted = await db.prepare(
-    `INSERT INTO leads (id, place_id, name, address, phone, categories, rating, review_count,
+    `INSERT INTO leads (tenant_id, id, place_id, name, address, phone, categories, rating, review_count,
       website_uri, website_status, maps_uri, business_status, price_level,
       photo_count, has_opening_hours, primary_type, lat, lng,
       market_id, location_cell_id, country_code, admin_area1, admin_area2, locality, postal_code,
       score, selling_niche, business_type, qualification_status, disqualification_reason, website_verified_at,
       contactability_score, estimated_deal_value, is_excluded, exclusion_reason, excluded_at,
       discovered_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      + " ON CONFLICT(place_id) DO NOTHING RETURNING id"
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      + " ON CONFLICT(tenant_id, place_id) DO NOTHING RETURNING id"
   ).get<{ id: string }>(
-    id, data.place_id, data.name ?? null, data.address ?? null, data.phone ?? null,
+    tenantId, id, data.place_id, data.name ?? null, data.address ?? null, data.phone ?? null,
     categoriesJson, data.rating ?? null, data.review_count ?? null,
     data.website_uri ?? null, websiteStatus,
     data.maps_uri ?? null, data.business_status ?? null,
@@ -4732,7 +4824,7 @@ export async function upsertLead(data: {
   );
 
   if (inserted?.id) {
-    await updateLeadQualityScores(inserted.id);
+    await updateLeadQualityScoresForTenant(tenantId, inserted.id);
     return { id: inserted.id, created: true };
   }
 
@@ -4764,7 +4856,7 @@ export async function upsertLead(data: {
       exclusion_reason = COALESCE(exclusion_reason, ?),
       excluded_at = CASE WHEN ? = 1 AND excluded_at IS NULL THEN ? ELSE excluded_at END,
       updated_at = ?
-     WHERE place_id = ?
+     WHERE tenant_id = ? AND place_id = ?
      RETURNING id`
   ).get<{ id: string }>(
     data.name ?? null, data.address ?? null, data.phone ?? null,
@@ -4795,15 +4887,17 @@ export async function upsertLead(data: {
     shouldExclude ? 1 : 0,
     now,
     now,
+    tenantId,
     data.place_id,
   );
   if (!updated) throw new Error(`Failed to upsert lead for place_id ${data.place_id}.`);
-  await updateLeadQualityScores(updated.id);
+  await updateLeadQualityScoresForTenant(tenantId, updated.id);
   return { id: updated.id, created: false };
   });
 }
 
 export interface ManualLeadInput {
+  tenantId: string;
   name: string;
   businessType: BusinessType | string;
   phone?: string | null;
@@ -4819,6 +4913,7 @@ export async function createManualLead(input: ManualLeadInput): Promise<Lead> {
   const websiteStatus = normalizeWebsiteStatus(input.websiteStatus);
   const notes = composeManualLeadNotes(input);
   const { id } = await upsertLead({
+    tenantId: input.tenantId,
     place_id: `manual:${generateId()}`,
     name: input.name,
     address: input.address ?? null,
@@ -4844,8 +4939,8 @@ export async function createManualLead(input: ManualLeadInput): Promise<Lead> {
          archived_by_user_id = NULL,
          archive_reason = NULL,
          updated_at = ?
-     WHERE id = ?`
-  ).run(notes, nowISO(), id);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(notes, nowISO(), input.tenantId, id);
   const lead = await getLeadById(id);
   if (!lead) throw new Error("Manual lead was created but could not be loaded.");
   return lead;
@@ -5062,6 +5157,62 @@ function requireTenantWideLeadReadContext(): { tenantId: string } {
   const { tenantId, workspaceId } = requireTenantContext();
   if (workspaceId !== null) throw new Error("Tenant-wide context is required");
   return { tenantId };
+}
+
+function requireTenantWideScoreContext(): { tenantId: string } {
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) throw new Error("Conflicting score tenant contexts.");
+  if (
+    workerContext &&
+    (workerContext.workerName !== "score_recompute" || workerContext.action !== "score_recompute:recompute")
+  ) {
+    throw new Error("Exact score recompute worker context is required.");
+  }
+  const context = memberContext ?? workerContext ?? requireTenantContext();
+  if (context.workspaceId !== null) throw new Error("Tenant-wide context is required");
+  return { tenantId: context.tenantId };
+}
+
+type AiTenantWorkerName = "ai_verification" | "artifact" | "crawl" | "enrichment";
+
+const EXACT_AI_TENANT_WORKER_ACTIONS: Record<AiTenantWorkerName, string> = {
+  ai_verification: "ai_verification:process",
+  artifact: "artifact:process",
+  crawl: "crawl:process",
+  enrichment: "enrichment:process",
+};
+
+function requireAiTenantId(
+  explicitTenantId?: string,
+  allowedWorkers: readonly AiTenantWorkerName[] = ["ai_verification"],
+): string {
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) throw new Error("Conflicting AI tenant contexts.");
+
+  if (memberContext) {
+    if (memberContext.workspaceId !== null) throw new Error("Tenant-wide AI context is required.");
+    if (explicitTenantId !== undefined && explicitTenantId !== memberContext.tenantId) {
+      throw new Error("AI tenant does not match the active tenant context.");
+    }
+    return memberContext.tenantId;
+  }
+
+  const workerName = workerContext?.workerName as AiTenantWorkerName | undefined;
+  if (
+    !workerContext ||
+    workerContext.workspaceId !== null ||
+    !workerName ||
+    !allowedWorkers.includes(workerName) ||
+    EXACT_AI_TENANT_WORKER_ACTIONS[workerName] !== workerContext.action
+  ) {
+    throw new Error("Exact AI worker context is required.");
+  }
+  if (explicitTenantId !== undefined && explicitTenantId !== workerContext.tenantId) {
+    throw new Error("AI tenant does not match the active worker context.");
+  }
+  return workerContext.tenantId;
 }
 
 function bindLeadTenantScope(
@@ -5459,7 +5610,18 @@ export async function updateLeadNotes(id: string, notes: string): Promise<void>{
   await db.prepare("UPDATE leads SET notes = ?, updated_at = ? WHERE id = ?").run(notes, nowISO(), id);
 }
 
+export async function lockTenantLeadForMutation(id: string): Promise<Lead | null> {
+  const { tenantId } = requireTenantWideLeadReadContext();
+  const db = await getDb();
+  const result = await db.prepare(
+    "UPDATE leads SET updated_at = updated_at WHERE tenant_id = ? AND id = ?",
+  ).run(tenantId, id);
+  if (result.changes === 0) return null;
+  return getLeadById(id);
+}
+
 export async function updateLeadFacts(id: string, input: LeadFactsInput): Promise<Lead | null> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const current = await getLeadById(id);
   if (!current) {
     return null;
@@ -5520,15 +5682,17 @@ export async function updateLeadFacts(id: string, input: LeadFactsInput): Promis
   }
 
   setLead("updated_at", now);
-  leadValues.push(id);
 
-  await db.prepare(`UPDATE leads SET ${leadUpdates.join(", ")} WHERE id = ?`).run(...leadValues);
+  const updated = await db.prepare(
+    `UPDATE leads SET ${leadUpdates.join(", ")} WHERE tenant_id = ? AND id = ?`,
+  ).run(...leadValues, tenantId, id);
+  if (updated.changes === 0) return null;
 
   if (current.place_id && placeUpdates.length > 0) {
     placeUpdates.push("updated_at = ?");
-    placeValues.push(now, current.place_id);
+    placeValues.push(now, tenantId, current.place_id);
     await db
-      .prepare(`UPDATE places_master SET ${placeUpdates.join(", ")} WHERE place_id = ?`)
+      .prepare(`UPDATE places_master SET ${placeUpdates.join(", ")} WHERE tenant_id = ? AND place_id = ?`)
       .run(...placeValues);
   }
 
@@ -5712,32 +5876,40 @@ function uniqueIds(ids: string[]): string[] {
 // ─── AI Verification ───
 
 export async function getLatestAiVerification(leadId: string): Promise<AiLeadVerification | null>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const row = await db.prepare(
-    "SELECT * FROM ai_lead_verifications WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1"
-  ).get(leadId) as Record<string, unknown> | undefined;
+    "SELECT * FROM ai_lead_verifications WHERE tenant_id = ? AND lead_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).get(tenantId, leadId) as Record<string, unknown> | undefined;
   return row ? parseAiLeadVerificationRow(row) : null;
 }
 
 export async function getAiVerificationById(id: string): Promise<AiLeadVerification | null>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM ai_lead_verifications WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  const row = await db.prepare("SELECT * FROM ai_lead_verifications WHERE tenant_id = ? AND id = ?")
+    .get(tenantId, id) as Record<string, unknown> | undefined;
   return row ? parseAiLeadVerificationRow(row) : null;
 }
 
 export async function createAiLeadVerification(input: AiLeadVerificationInput): Promise<AiLeadVerification>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
+  const lead = await db.prepare("SELECT 1 FROM leads WHERE tenant_id = ? AND id = ?")
+    .get(tenantId, input.lead_id);
+  if (!lead) throw new Error("Lead is unavailable.");
   const id = generateId();
   const now = nowISO();
   await db.prepare(
     `INSERT INTO ai_lead_verifications (
-      id, lead_id, model, status, confidence, found_website_url, found_email, found_phone,
+      tenant_id, id, lead_id, model, status, confidence, found_website_url, found_email, found_phone,
       social_profiles, sources, recommendation, reason, summary, raw_json, input_hash,
       website_viability_status, website_health_json, website_viability_reason,
       usage_input_tokens, usage_output_tokens, estimated_cost, error,
       requested_by_user_id, request_source, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
+    tenantId,
     id,
     input.lead_id,
     assertAllowedOpenAIModel(input.model),
@@ -5775,7 +5947,12 @@ export async function updateLeadAiVerificationSummary(
   verification: AiLeadVerification,
   winProbabilityScore: number,
 ): Promise<void>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
+  const ownedVerification = await db.prepare(
+    "SELECT 1 FROM ai_lead_verifications WHERE tenant_id = ? AND id = ? AND lead_id = ?",
+  ).get(tenantId, verification.id, leadId);
+  if (!ownedVerification) throw new Error("AI verification is unavailable.");
   const foundWebsiteUrl = verification.found_website_url?.trim() || null;
   const hasUsableWebsite = verification.status === "site_found" && verification.website_viability_status === "usable" && Boolean(foundWebsiteUrl);
   const hasWeakWebsiteOpportunity = verification.status === "weak_site_found" && isWeakWebsiteViability(verification.website_viability_status) && Boolean(foundWebsiteUrl);
@@ -5812,7 +5989,7 @@ export async function updateLeadAiVerificationSummary(
       END,
       win_probability_score = ?,
       updated_at = ?
-     WHERE id = ?`
+     WHERE tenant_id = ? AND id = ?`
   ).run(
     verification.status,
     clamp01(verification.confidence),
@@ -5832,14 +6009,28 @@ export async function updateLeadAiVerificationSummary(
     hasUsableWebsite ? 1 : 0,
     clampPercentage(winProbabilityScore),
     nowISO(),
+    tenantId,
     leadId,
   );
-  await updateLeadQualityScores(leadId);
+  await updateLeadQualityScoresForTenant(tenantId, leadId);
+}
+
+export async function getLeadForAiQueue(leadId: string): Promise<Lead | null> {
+  const tenantId = requireAiTenantId(undefined, ["ai_verification", "crawl", "enrichment"]);
+  const db = await getDb();
+  const row = await db.prepare(
+    `SELECT l.*, au.email as assigned_user_email, au.display_name as assigned_user_display_name
+     FROM leads l
+     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     WHERE l.tenant_id = ? AND l.id = ?`,
+  ).get(tenantId, leadId) as Record<string, unknown> | undefined;
+  return row ? parseLeadRow(row) : null;
 }
 
 export async function markLeadAiError(leadId: string, message: string): Promise<void>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
-  await db.prepare(
+  const result = await db.prepare(
     `UPDATE leads SET
       ai_verification_status = 'error',
       ai_summary = ?,
@@ -5847,22 +6038,35 @@ export async function markLeadAiError(leadId: string, message: string): Promise<
       ai_website_viability_status = NULL,
       ai_website_health = NULL,
       updated_at = ?
-     WHERE id = ?`
-  ).run(message, nowISO(), nowISO(), leadId);
-  await updateLeadQualityScores(leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(message, nowISO(), nowISO(), tenantId, leadId);
+  if (result.changes > 0) await updateLeadQualityScoresForTenant(tenantId, leadId);
 }
 
 export async function logAiUsageEvent(input: AiUsageEventInput): Promise<void>{
+  const tenantId = requireAiTenantId(undefined, ["ai_verification", "artifact"]);
   const db = await getDb();
+  if (input.lead_id) {
+    const lead = await db.prepare("SELECT 1 FROM leads WHERE tenant_id = ? AND id = ?")
+      .get(tenantId, input.lead_id);
+    if (!lead) throw new Error("Lead is unavailable.");
+  }
+  if (input.verification_id) {
+    const verification = await db.prepare(
+      "SELECT 1 FROM ai_lead_verifications WHERE tenant_id = ? AND id = ?",
+    ).get(tenantId, input.verification_id);
+    if (!verification) throw new Error("AI verification is unavailable.");
+  }
   const inputTokens = Math.max(0, Math.floor(input.input_tokens ?? 0));
   const outputTokens = Math.max(0, Math.floor(input.output_tokens ?? 0));
   await db.prepare(
     `INSERT INTO ai_usage_events (
-      id, lead_id, verification_id, model, endpoint, success, was_cached,
+      tenant_id, id, lead_id, verification_id, model, endpoint, success, was_cached,
       input_tokens, output_tokens, total_tokens, estimated_cost, metadata,
       actor_user_id, request_source, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
+    tenantId,
     generateId(),
     input.lead_id ?? null,
     input.verification_id ?? null,
@@ -5886,15 +6090,17 @@ export async function getAiUsageForActor(
   sinceIso: string,
   requestSources: string[] = ["researcher_ai_check", "researcher_pitch_pack"],
 ): Promise<ActorAiUsageSummary> {
+  const tenantId = requireAiTenantId(undefined, ["ai_verification", "artifact"]);
   const db = await getDb();
   const sources = requestSources.map((source) => source.trim()).filter(Boolean);
   if (!actorUserId || sources.length === 0) return { calls: 0, cost: 0 };
   const placeholders = sources.map(() => "?").join(",");
-  const params = [actorUserId, ...sources, sinceIso];
+  const params = [tenantId, actorUserId, ...sources, sinceIso];
   const events = await db.prepare(
     `SELECT id, verification_id, estimated_cost, was_cached, metadata
      FROM ai_usage_events
-     WHERE actor_user_id = ?
+     WHERE tenant_id = ?
+       AND actor_user_id = ?
        AND request_source IN (${placeholders})
        AND created_at >= ?`
   ).all(...params) as Array<{
@@ -5907,7 +6113,8 @@ export async function getAiUsageForActor(
   const verifications = await db.prepare(
     `SELECT id, estimated_cost
      FROM ai_lead_verifications
-     WHERE requested_by_user_id = ?
+     WHERE tenant_id = ?
+       AND requested_by_user_id = ?
        AND request_source IN (${placeholders})
        AND created_at >= ?
        AND estimated_cost > 0`
@@ -5915,7 +6122,8 @@ export async function getAiUsageForActor(
   const artifacts = await db.prepare(
     `SELECT id, estimated_cost, attempt_count
      FROM lead_ai_artifacts
-     WHERE requested_by_user_id = ?
+     WHERE tenant_id = ?
+       AND requested_by_user_id = ?
        AND request_source IN (${placeholders})
        AND updated_at >= ?
        AND estimated_cost > 0`
@@ -6346,6 +6554,7 @@ export async function markLeadAiArtifactRetry(
 }
 
 export async function markLeadAiQueued(leadId: string, inputHash: string, resetAttempts = false): Promise<number> {
+  const tenantId = requireAiTenantId(undefined, ["ai_verification", "crawl", "enrichment"]);
   const db = await getDb();
   const result = await db.prepare(
     `UPDATE leads SET
@@ -6355,12 +6564,13 @@ export async function markLeadAiQueued(leadId: string, inputHash: string, resetA
       ai_next_retry_at = NULL,
       ai_input_hash = ?,
       updated_at = ?
-     WHERE id = ?`
-  ).run(resetAttempts ? 1 : 0, inputHash, nowISO(), leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(resetAttempts ? 1 : 0, inputHash, nowISO(), tenantId, leadId);
   return result.changes;
 }
 
 export async function markLeadAiRunning(leadId: string, inputHash: string): Promise<number> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const result = await db.prepare(
     `UPDATE leads SET
@@ -6369,13 +6579,14 @@ export async function markLeadAiRunning(leadId: string, inputHash: string): Prom
       ai_last_error = NULL,
       ai_input_hash = ?,
       updated_at = ?
-     WHERE id = ?
+     WHERE tenant_id = ? AND id = ?
        AND ai_queue_status = 'queued'`
-  ).run(inputHash, nowISO(), leadId);
+  ).run(inputHash, nowISO(), tenantId, leadId);
   return result.changes;
 }
 
 export async function markLeadAiVerified(leadId: string, inputHash: string): Promise<number> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const result = await db.prepare(
     `UPDATE leads SET
@@ -6384,14 +6595,17 @@ export async function markLeadAiVerified(leadId: string, inputHash: string): Pro
       ai_next_retry_at = NULL,
       ai_input_hash = ?,
       updated_at = ?
-     WHERE id = ?`
-  ).run(inputHash, nowISO(), leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(inputHash, nowISO(), tenantId, leadId);
   return result.changes;
 }
 
 export async function markLeadAiQueueError(leadId: string, message: string, maxAttempts: number): Promise<void> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
-  const row = await db.prepare("SELECT ai_attempt_count FROM leads WHERE id = ?").get(leadId) as { ai_attempt_count: number } | undefined;
+  const row = await db.prepare("SELECT ai_attempt_count FROM leads WHERE tenant_id = ? AND id = ?")
+    .get(tenantId, leadId) as { ai_attempt_count: number } | undefined;
+  if (!row) return;
   const attempts = Math.max(0, Number(row?.ai_attempt_count ?? 0));
   const safeMaxAttempts = Math.max(1, Math.floor(maxAttempts));
   const retryable = attempts < safeMaxAttempts;
@@ -6406,26 +6620,29 @@ export async function markLeadAiQueueError(leadId: string, message: string, maxA
       ai_last_error = ?,
       ai_next_retry_at = ?,
       updated_at = ?
-     WHERE id = ?`
-  ).run(retryable ? "queued" : "error", message.slice(0, 1000), nextRetry, nowISO(), leadId);
-  await updateLeadQualityScores(leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(retryable ? "queued" : "error", message.slice(0, 1000), nextRetry, nowISO(), tenantId, leadId);
+  await updateLeadQualityScoresForTenant(tenantId, leadId);
 }
 
 export async function getNextAiVerificationJob(maxAttempts = 3): Promise<Lead | null> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   await db.prepare(
     `UPDATE leads SET
       ai_queue_status = 'queued',
       ai_next_retry_at = NULL,
       updated_at = ?
-     WHERE ai_queue_status = 'running'
+     WHERE tenant_id = ?
+       AND ai_queue_status = 'running'
        AND updated_at < datetime('now', '-5 minutes')`
-  ).run(nowISO());
+  ).run(nowISO(), tenantId);
 
   const row = await db.prepare(
     `SELECT *
      FROM leads
-     WHERE ai_queue_status = 'queued'
+     WHERE tenant_id = ?
+       AND ai_queue_status = 'queued'
        AND (ai_next_retry_at IS NULL OR ai_next_retry_at <= ?)
        AND ai_attempt_count < ?
        AND COALESCE(is_excluded, 0) = 0
@@ -6438,21 +6655,23 @@ export async function getNextAiVerificationJob(maxAttempts = 3): Promise<Lead | 
        score DESC,
        updated_at ASC
      LIMIT 1`
-  ).get(nowISO(), Math.max(1, Math.floor(maxAttempts))) as Record<string, unknown> | undefined;
+  ).get(tenantId, nowISO(), Math.max(1, Math.floor(maxAttempts))) as Record<string, unknown> | undefined;
 
   return row ? parseLeadRow(row) : null;
 }
 
 export async function leaseNextAiVerificationJob(maxAttempts = 3): Promise<Lead | null> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   await db.prepare(
     `UPDATE leads SET
       ai_queue_status = 'queued',
       ai_next_retry_at = NULL,
       updated_at = ?
-     WHERE ai_queue_status = 'running'
+     WHERE tenant_id = ?
+       AND ai_queue_status = 'running'
        AND updated_at < datetime('now', '-5 minutes')`
-  ).run(nowISO());
+  ).run(nowISO(), tenantId);
 
   const safeMaxAttempts = Math.max(1, Math.floor(maxAttempts));
   const now = nowISO();
@@ -6463,10 +6682,12 @@ export async function leaseNextAiVerificationJob(maxAttempts = 3): Promise<Lead 
       ai_last_error = NULL,
       ai_next_retry_at = NULL,
       updated_at = ?
-     WHERE id = (
+     WHERE tenant_id = ?
+       AND id = (
        SELECT id
        FROM leads
-       WHERE ai_queue_status = 'queued'
+       WHERE tenant_id = ?
+         AND ai_queue_status = 'queued'
          AND (ai_next_retry_at IS NULL OR ai_next_retry_at <= ?)
          AND ai_attempt_count < ?
          AND COALESCE(is_excluded, 0) = 0
@@ -6482,12 +6703,15 @@ export async function leaseNextAiVerificationJob(maxAttempts = 3): Promise<Lead 
      )
        AND ai_queue_status = 'queued'
      RETURNING *`
-  ).get(now, now, safeMaxAttempts) as Record<string, unknown> | undefined;
+  ).get(now, tenantId, tenantId, now, safeMaxAttempts) as Record<string, unknown> | undefined;
 
-  return row ? parseLeadRow(row) : null;
+  if (!row) return null;
+  if (row.tenant_id !== tenantId) throw new Error("Leased AI tenant does not match the active worker context.");
+  return parseLeadRow(row);
 }
 
 export async function getAiVerificationBackfillCandidates(limit: number, tenantId: string): Promise<Lead[]> {
+  tenantId = requireAiTenantId(tenantId, ["ai_verification"]);
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT *
@@ -6505,13 +6729,14 @@ export async function getAiVerificationBackfillCandidates(limit: number, tenantI
 }
 
 export async function getAiQueueStats(): Promise<AiQueueStats> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT COALESCE(ai_queue_status, 'not_checked') as status, COUNT(*) as count
      FROM leads
-     WHERE archived_at IS NULL
+     WHERE tenant_id = ? AND archived_at IS NULL
      GROUP BY COALESCE(ai_queue_status, 'not_checked')`
-  ).all() as Array<{ status: string; count: number }>;
+  ).all(tenantId) as Array<{ status: string; count: number }>;
   const stats: AiQueueStats = { notChecked: 0, queued: 0, running: 0, verified: 0, error: 0, total: 0 };
   for (const row of rows) {
     const count = Number(row.count) || 0;
@@ -6531,6 +6756,7 @@ export async function getAiVerificationCandidates(
   tenantId: string,
   businessType?: BusinessType | string | null,
 ): Promise<Lead[]>{
+  tenantId = requireAiTenantId(tenantId);
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
   const conditions = [
@@ -6564,6 +6790,7 @@ export async function getAiVerificationCandidates(
 }
 
 export async function applyAiFoundWebsite(leadId: string, websiteUrl: string): Promise<number>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const now = nowISO();
   const result = await db.prepare(
@@ -6576,9 +6803,9 @@ export async function applyAiFoundWebsite(leadId: string, websiteUrl: string): P
       score = 0,
       win_probability_score = 0,
       updated_at = ?
-     WHERE id = ?`
-  ).run(websiteUrl, now, now, leadId);
-  await updateLeadQualityScores(leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(websiteUrl, now, now, tenantId, leadId);
+  if (result.changes > 0) await updateLeadQualityScoresForTenant(tenantId, leadId);
   return result.changes;
 }
 
@@ -6586,6 +6813,7 @@ export async function applyManualWebsiteCorrection(
   leadId: string,
   input: ManualWebsiteCorrectionInput,
 ): Promise<Lead | null> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const current = await getLeadById(leadId);
   if (!current) {
     return null;
@@ -6605,9 +6833,10 @@ export async function applyManualWebsiteCorrection(
     notes,
     now,
   ];
+  let changes = 0;
 
   if (input.resolution === "official_website_found") {
-    await db.prepare(
+    const result = await db.prepare(
       `UPDATE leads SET
         website_uri = ?,
         website_status = ?,
@@ -6627,10 +6856,11 @@ export async function applyManualWebsiteCorrection(
         score = 0,
         win_probability_score = 0,
         updated_at = ?
-       WHERE id = ?`
-    ).run(...baseValues, now, now, leadId);
+       WHERE tenant_id = ? AND id = ?`
+    ).run(...baseValues, now, now, tenantId, leadId);
+    changes = result.changes;
   } else if (input.resolution === "weak_or_basic_site") {
-    await db.prepare(
+    const result = await db.prepare(
       `UPDATE leads SET
         website_uri = ?,
         website_status = 'basic',
@@ -6648,10 +6878,11 @@ export async function applyManualWebsiteCorrection(
         quality_bucket = 'broken_site_opportunity',
         ai_recommendation = 'prioritize',
         updated_at = ?
-       WHERE id = ?`
-    ).run(websiteUrl, now, websiteUrl, correctionReason, notes, now, now, leadId);
+       WHERE tenant_id = ? AND id = ?`
+    ).run(websiteUrl, now, websiteUrl, correctionReason, notes, now, now, tenantId, leadId);
+    changes = result.changes;
   } else if (input.resolution === "candidate_website_needs_review") {
-    await db.prepare(
+    const result = await db.prepare(
       `UPDATE leads SET
         website_uri = ?,
         website_status = ?,
@@ -6669,10 +6900,11 @@ export async function applyManualWebsiteCorrection(
         quality_bucket = 'needs_manual_review',
         ai_recommendation = 'manual_review',
         updated_at = ?
-       WHERE id = ?`
-    ).run(...baseValues, now, leadId);
+       WHERE tenant_id = ? AND id = ?`
+    ).run(...baseValues, now, tenantId, leadId);
+    changes = result.changes;
   } else if (input.resolution === "social_or_directory_only") {
-    await db.prepare(
+    const result = await db.prepare(
       `UPDATE leads SET
         website_uri = ?,
         website_status = ?,
@@ -6690,10 +6922,11 @@ export async function applyManualWebsiteCorrection(
         quality_bucket = 'needs_manual_review',
         ai_recommendation = 'manual_review',
         updated_at = ?
-       WHERE id = ?`
-    ).run(...baseValues, now, leadId);
+       WHERE tenant_id = ? AND id = ?`
+    ).run(...baseValues, now, tenantId, leadId);
+    changes = result.changes;
   } else {
-    await db.prepare(
+    const result = await db.prepare(
       `UPDATE leads SET
         website_uri = NULL,
         website_status = 'none',
@@ -6711,24 +6944,36 @@ export async function applyManualWebsiteCorrection(
         quality_bucket = 'needs_ai_verify',
         ai_recommendation = 'manual_review',
         updated_at = ?
-       WHERE id = ?`
-    ).run(correctionReason, notes, now, now, leadId);
+       WHERE tenant_id = ? AND id = ?`
+    ).run(correctionReason, notes, now, now, tenantId, leadId);
+    changes = result.changes;
   }
+
+  if (changes === 0) return null;
 
   if (current.place_id) {
     await db
-      .prepare("UPDATE places_master SET website_uri = ?, updated_at = ? WHERE place_id = ?")
-      .run(websiteUrl, now, current.place_id);
+      .prepare("UPDATE places_master SET website_uri = ?, updated_at = ? WHERE tenant_id = ? AND place_id = ?")
+      .run(websiteUrl, now, tenantId, current.place_id);
   }
 
   await updateLeadQualityScores(leadId, input.actorUserId ?? null);
   return getLeadById(leadId);
 }
 
-export async function updateLeadQualityScores(leadId: string, actorUserId?: string | null): Promise<void>{
+export async function updateLeadQualityScores(leadId: string, actorUserId?: string | null): Promise<number>{
+  const { tenantId } = requireTenantWideScoreContext();
+  return updateLeadQualityScoresForTenant(tenantId, leadId, actorUserId);
+}
+
+async function updateLeadQualityScoresForTenant(
+  tenantId: string,
+  leadId: string,
+  actorUserId?: string | null,
+): Promise<number> {
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM leads WHERE id = ?").get(leadId) as Record<string, unknown> | undefined;
-  if (!row) return;
+  const row = await db.prepare("SELECT * FROM leads WHERE tenant_id = ? AND id = ?").get(tenantId, leadId) as Record<string, unknown> | undefined;
+  if (!row) return 0;
   const lead = parseLeadRow(row);
   const normalizedPhoneStatus: PhoneVerificationStatus = lead.phone?.trim()
     ? lead.phone_verification_status === "no_phone" ? "unknown" : lead.phone_verification_status
@@ -6768,7 +7013,7 @@ export async function updateLeadQualityScores(leadId: string, actorUserId?: stri
     verificationScore,
     phoneVerificationStatus: normalizedPhoneStatus,
   });
-  await db.prepare(
+  const result = await db.prepare(
     `UPDATE leads SET
       win_probability_score = ?,
       lead_quality_score = ?,
@@ -6786,7 +7031,7 @@ export async function updateLeadQualityScores(leadId: string, actorUserId?: stri
       last_quality_scored_at = ?,
       quality_checked_by_user_id = COALESCE(?, quality_checked_by_user_id),
       updated_at = ?
-     WHERE id = ?`
+     WHERE tenant_id = ? AND id = ?`
   ).run(
     winProbabilityScore,
     quality.leadQualityScore,
@@ -6804,8 +7049,10 @@ export async function updateLeadQualityScores(leadId: string, actorUserId?: stri
     nowISO(),
     actorUserId ?? null,
     nowISO(),
+    tenantId,
     leadId,
   );
+  return result.changes;
 }
 
 function computeLeadWinProbability(lead: Lead): number {
@@ -6927,25 +7174,29 @@ function isWeakWebsiteViability(status: WebsiteViabilityStatus | null): boolean 
 
 export async function recomputeAllLeadQualityScores(limit = 100000, signal?: AbortSignal): Promise<number>{
   throwIfWorkerAborted(signal);
+  const { tenantId } = requireTenantWideScoreContext();
   const db = await getDb();
   throwIfWorkerAborted(signal);
-  const safeLimit = Math.max(1, Math.min(100000, Math.floor(limit)));
+  const normalizedLimit = Number.isFinite(limit) ? Math.floor(limit) : 100000;
+  const safeLimit = Math.max(1, Math.min(100000, normalizedLimit));
   const rows = await db.prepare(
     `SELECT id
      FROM leads
-     WHERE archived_at IS NULL
+     WHERE tenant_id = ?
+       AND archived_at IS NULL
        AND (last_quality_scored_at IS NULL
         OR julianday(updated_at) > julianday(last_quality_scored_at))
      ORDER BY updated_at DESC
      LIMIT ?`
-  ).all(safeLimit) as Array<{ id: string }>;
+  ).all(tenantId, safeLimit) as Array<{ id: string }>;
   throwIfWorkerAborted(signal);
+  let recomputed = 0;
   for (const row of rows) {
     throwIfWorkerAborted(signal);
-    await updateLeadQualityScores(row.id);
+    if (await updateLeadQualityScores(row.id) > 0) recomputed += 1;
     throwIfWorkerAborted(signal);
   }
-  return rows.length;
+  return recomputed;
 }
 
 export async function updateLeadPhoneVerificationStatus(
@@ -6953,11 +7204,12 @@ export async function updateLeadPhoneVerificationStatus(
   status: PhoneVerificationStatus,
   actorUserId?: string | null,
 ): Promise<number>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const result = await db.prepare(
-    "UPDATE leads SET phone_verification_status = ?, quality_checked_by_user_id = COALESCE(?, quality_checked_by_user_id), updated_at = ? WHERE id = ?"
-  ).run(status, actorUserId ?? null, nowISO(), leadId);
-  await updateLeadQualityScores(leadId, actorUserId);
+    "UPDATE leads SET phone_verification_status = ?, quality_checked_by_user_id = COALESCE(?, quality_checked_by_user_id), updated_at = ? WHERE tenant_id = ? AND id = ?"
+  ).run(status, actorUserId ?? null, nowISO(), tenantId, leadId);
+  if (result.changes > 0) await updateLeadQualityScores(leadId, actorUserId);
   return result.changes;
 }
 
@@ -6966,6 +7218,7 @@ export async function setLeadQualityBucket(
   bucket: QualityBucket,
   actorUserId?: string | null,
 ): Promise<number>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const nextAction = bucket === "ready_to_call"
     ? "Call and confirm the owner or decision maker."
@@ -6980,8 +7233,8 @@ export async function setLeadQualityBucket(
       next_best_action = COALESCE(?, next_best_action),
       quality_checked_by_user_id = COALESCE(?, quality_checked_by_user_id),
       updated_at = ?
-     WHERE id = ?`
-  ).run(bucket, nextAction, actorUserId ?? null, nowISO(), leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(bucket, nextAction, actorUserId ?? null, nowISO(), tenantId, leadId);
   return result.changes;
 }
 
@@ -7005,6 +7258,7 @@ export async function updateLeadAiFeedback(
   input: LeadAiFeedbackInput,
   actorUserId?: string | null,
 ): Promise<number> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const status = input.status === "correct" || input.status === "incorrect" || input.status === "uncertain"
     ? input.status
@@ -7030,7 +7284,7 @@ export async function updateLeadAiFeedback(
         ELSE ai_recommendation
       END,
       updated_at = ?
-     WHERE id = ?`
+     WHERE tenant_id = ? AND id = ?`
   ).run(
     status,
     correctedWebsiteUrl,
@@ -7041,9 +7295,10 @@ export async function updateLeadAiFeedback(
     status,
     status,
     now,
+    tenantId,
     leadId,
   );
-  await updateLeadQualityScores(leadId, actorUserId);
+  if (result.changes > 0) await updateLeadQualityScores(leadId, actorUserId);
   return result.changes;
 }
 
@@ -7067,18 +7322,20 @@ export async function markLeadBrokenSiteOpportunity(leadId: string, reason: stri
 }
 
 export async function getAiWebsiteViabilityRepairLeads(limit = 50): Promise<Lead[]>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
   const rows = await db.prepare(
     `SELECT *
      FROM leads
-     WHERE ai_verification_status = 'site_found'
+     WHERE tenant_id = ?
+       AND ai_verification_status = 'site_found'
        AND ai_found_website_url IS NOT NULL
        AND ai_found_website_url != ''
        AND COALESCE(ai_website_viability_status, '') != 'usable'
      ORDER BY ai_checked_at DESC
      LIMIT ?`
-  ).all(safeLimit) as Array<Record<string, unknown>>;
+  ).all(tenantId, safeLimit) as Array<Record<string, unknown>>;
   return rows.map(parseLeadRow);
 }
 
@@ -7952,6 +8209,8 @@ export async function getLaunchReadinessSummary(): Promise<LaunchReadinessSummar
 
 // ─── Budget Queries ───
 
+const GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID = "google_places_legacy";
+
 export async function getTodayApiCalls(): Promise<number>{
   const db = await getDb();
   const today = startOfToday();
@@ -7989,9 +8248,35 @@ export async function getRunApiCalls(runId: string): Promise<number>{
   return Number(row?.api_calls_used) || 0;
 }
 
-export async function getRunApiUsageSummary(runId: string): Promise<ApiUsageSummary>{
+export async function getRunApiUsageSummary(runId: string, scope: CrawlRunScope): Promise<ApiUsageSummary>{
+  return getRunApiUsageSummaryInternal(runId, scope);
+}
+
+export async function getPlatformRunApiUsageSummary(runId: string): Promise<ApiUsageSummary> {
+  return getRunApiUsageSummaryInternal(runId, null);
+}
+
+async function getRunApiUsageSummaryInternal(runId: string, scope: CrawlRunScope | null): Promise<ApiUsageSummary>{
   const db = await getDb();
-  const rows = await db.prepare(
+  const rows = scope ? await db.prepare(
+    `SELECT endpoint,
+            COALESCE(SUM(billable_units), 0) as calls,
+            COALESCE(SUM(estimated_cost), 0) as cost,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN billable_units ELSE 0 END), 0) as atmosphere_calls,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN estimated_cost ELSE 0 END), 0) as atmosphere_cost
+     FROM api_usage_events
+     WHERE tenant_id = ?
+       AND crawl_run_id = ?
+       AND success = 1
+       AND COALESCE(was_cached, 0) = 0
+     GROUP BY endpoint`
+  ).all(scope.tenantId, runId) as Array<{
+    endpoint: string;
+    calls: number;
+    cost: number;
+    atmosphere_calls: number;
+    atmosphere_cost: number;
+  }> : await db.prepare(
     `SELECT endpoint,
             COALESCE(SUM(billable_units), 0) as calls,
             COALESCE(SUM(estimated_cost), 0) as cost,
@@ -8001,7 +8286,7 @@ export async function getRunApiUsageSummary(runId: string): Promise<ApiUsageSumm
      WHERE crawl_run_id = ?
        AND success = 1
        AND COALESCE(was_cached, 0) = 0
-     GROUP BY endpoint`
+     GROUP BY endpoint`,
   ).all(runId) as Array<{
     endpoint: string;
     calls: number;
@@ -8046,10 +8331,36 @@ export async function getRunApiUsageSummary(runId: string): Promise<ApiUsageSumm
   };
 }
 
-export async function getMonthlyApiUsageSummary(): Promise<ApiUsageSummary>{
+export async function getMonthlyApiUsageSummary(scope: CrawlRunScope): Promise<ApiUsageSummary>{
+  return getMonthlyApiUsageSummaryInternal(scope);
+}
+
+export async function getPlatformMonthlyApiUsageSummary(): Promise<ApiUsageSummary> {
+  return getMonthlyApiUsageSummaryInternal(null);
+}
+
+async function getMonthlyApiUsageSummaryInternal(scope: CrawlRunScope | null): Promise<ApiUsageSummary>{
   const db = await getDb();
   const monthStart = startOfCurrentMonth();
-  const rows = await db.prepare(
+  const rows = scope ? await db.prepare(
+    `SELECT endpoint,
+            COALESCE(SUM(billable_units), 0) as calls,
+            COALESCE(SUM(estimated_cost), 0) as cost,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN billable_units ELSE 0 END), 0) as atmosphere_calls,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN estimated_cost ELSE 0 END), 0) as atmosphere_cost
+     FROM api_usage_events
+     WHERE tenant_id = ?
+       AND success = 1
+       AND COALESCE(was_cached, 0) = 0
+       AND created_at >= ?
+     GROUP BY endpoint`
+  ).all(scope.tenantId, monthStart) as Array<{
+    endpoint: string;
+    calls: number;
+    cost: number;
+    atmosphere_calls: number;
+    atmosphere_cost: number;
+  }> : await db.prepare(
     `SELECT endpoint,
             COALESCE(SUM(billable_units), 0) as calls,
             COALESCE(SUM(estimated_cost), 0) as cost,
@@ -8059,7 +8370,7 @@ export async function getMonthlyApiUsageSummary(): Promise<ApiUsageSummary>{
      WHERE success = 1
        AND COALESCE(was_cached, 0) = 0
        AND created_at >= ?
-     GROUP BY endpoint`
+     GROUP BY endpoint`,
   ).all(monthStart) as Array<{
     endpoint: string;
     calls: number;
@@ -8104,16 +8415,18 @@ export async function getMonthlyApiUsageSummary(): Promise<ApiUsageSummary>{
   };
 }
 
-export async function getMonthlyBillableEventsForSku(sku: GooglePlacesSku): Promise<number> {
+export async function getMonthlyBillableEventsForSku(sku: GooglePlacesSku, tenantId = requireTenantContext().tenantId): Promise<number> {
   const db = await getDb();
   const monthStart = startOfCurrentMonth();
   const row = await db.prepare(
     `SELECT COALESCE(SUM(billable_units), 0) as total
      FROM api_usage_events
-     WHERE sku = ?
+     WHERE tenant_id = ?
+       AND source_card_id = ?
+       AND sku = ?
        AND COALESCE(was_cached, 0) = 0
        AND created_at >= ?`
-  ).get(sku, monthStart) as { total: number };
+  ).get(tenantId, GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID, sku, monthStart) as { total: number };
   return Number(row.total) || 0;
 }
 
@@ -8123,6 +8436,7 @@ export async function logApiUsageEvent(input: ApiUsageEventInput): Promise<{
   estimatedUnitPrice: number;
   billableUnits: number;
 }> {
+  const tenantId = input.tenantId ?? requireTenantContext().tenantId;
   const db = await getDb();
   const id = generateId();
   const success = input.success ?? true;
@@ -8133,7 +8447,7 @@ export async function logApiUsageEvent(input: ApiUsageEventInput): Promise<{
   let estimatedUnitPrice = 0;
 
   if (success && !wasCached && billableUnits > 0) {
-    const priorEvents = await getMonthlyBillableEventsForSku(input.sku);
+    const priorEvents = await getMonthlyBillableEventsForSku(input.sku, tenantId);
     const marginal = estimateMarginalSkuCost(input.sku, priorEvents, billableUnits);
     estimatedCost = marginal.estimatedCost;
     estimatedUnitPrice = marginal.estimatedUnitPrice;
@@ -8141,10 +8455,12 @@ export async function logApiUsageEvent(input: ApiUsageEventInput): Promise<{
 
   await db.prepare(
     `INSERT INTO api_usage_events (
-      id, crawl_run_id, crawl_unit_id, lead_id, endpoint, sku, field_mask,
+      tenant_id, source_card_id, id, crawl_run_id, crawl_unit_id, lead_id, endpoint, sku, field_mask,
       success, was_cached, billable_units, estimated_unit_price, estimated_cost, metadata, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
+    tenantId,
+    GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID,
     id,
     input.crawl_run_id ?? null,
     input.crawl_unit_id ?? null,
@@ -8164,11 +8480,20 @@ export async function logApiUsageEvent(input: ApiUsageEventInput): Promise<{
   return { id, estimatedCost, estimatedUnitPrice, billableUnits };
 }
 
-export async function getRunLastError(runId: string): Promise<string | null>{
+export async function getRunLastError(runId: string, scope: CrawlRunScope): Promise<string | null>{
   const db = await getDb();
   const row = await db.prepare(
-    "SELECT last_error FROM crawl_runs WHERE id = ?"
-  ).get(runId) as { last_error: string | null } | undefined;
+    `SELECT last_error FROM crawl_runs
+     WHERE id = ? AND tenant_id = ?
+       AND ((? IS NULL AND workspace_id IS NULL) OR workspace_id = ?)`,
+  ).get(runId, scope.tenantId, scope.workspaceId, scope.workspaceId) as { last_error: string | null } | undefined;
+  return row?.last_error ?? null;
+}
+
+export async function getPlatformRunLastError(runId: string): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.prepare("SELECT last_error FROM crawl_runs WHERE id = ?")
+    .get(runId) as { last_error: string | null } | undefined;
   return row?.last_error ?? null;
 }
 
@@ -8443,13 +8768,14 @@ export async function getAllLeadsForRecompute(): Promise<Array<{
   website_health: string | null; address: string | null;
   contactability_score: number; estimated_deal_value: number;
 }>>{
+  const { tenantId } = requireTenantWideScoreContext();
   const db = await getDb();
   return await db.prepare(
     `SELECT id, review_count, rating, categories, website_status, photo_count, has_opening_hours, business_status,
       website_health, address, contactability_score, estimated_deal_value
      FROM leads
-     WHERE ${SCORE_ELIGIBLE_CONDITION}`
-  ).all() as Array<{
+     WHERE tenant_id = ? AND ${SCORE_ELIGIBLE_CONDITION}`
+  ).all(tenantId) as Array<{
     id: string; review_count: number | null; rating: number | null;
     categories: string; website_status: string; photo_count: number;
     has_opening_hours: number; business_status: string | null;
@@ -8554,32 +8880,54 @@ function normalizeAiFeedbackVerdict(value: unknown): AiFeedbackVerdict {
   return "uncertain";
 }
 
-export async function batchUpdateScores(updates: Array<{ id: string; score: number }>): Promise<void>{
+export async function batchUpdateScores(updates: Array<{ id: string; score: number }>): Promise<number>{
+  const { tenantId } = requireTenantWideScoreContext();
   const db = await getDb();
   const now = nowISO();
-  const stmt = await db.prepare("UPDATE leads SET score = ?, updated_at = ? WHERE id = ?");
+  const stmt = await db.prepare("UPDATE leads SET score = ?, updated_at = ? WHERE tenant_id = ? AND id = ?");
+  let count = 0;
   for (const { id, score } of updates) {
-    await stmt.run(score, now, id);
+    const result = await stmt.run(score, now, tenantId, id);
+    if (result.changes === 0) continue;
     await updateLeadQualityScores(id);
+    count += 1;
   }
+  return count;
 }
 
 // ─── Enrichment ───
 
+export interface EnrichmentLeaseToken {
+  tenantId: string;
+  leadId: string;
+  startedAt: string;
+  attemptCount: number;
+}
+
+export type EnrichmentLeasedLead = Lead & {
+  tenant_id: string;
+  enrichment_lease: EnrichmentLeaseToken;
+};
+
 export async function getUnenrichedLeads(limit: number): Promise<Lead[]>{
+  const tenantId = requireExactEnrichmentWorkerTenantId();
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT * FROM leads
-     WHERE enrichment_status = 'pending'
+     WHERE tenant_id = ?
+       AND enrichment_status = 'pending'
        AND score > 0
        AND enrichment_attempt_count < enrichment_max_attempts
        AND ${SCORE_ELIGIBLE_CONDITION}
      ORDER BY score DESC LIMIT ?`
-  ).all(limit) as Array<Record<string, unknown>>;
+  ).all(tenantId, limit) as Array<Record<string, unknown>>;
   return rows.map(parseLeadRow);
 }
 
-export async function leaseNextLeadForEnrichment(staleAfterMinutes = 10): Promise<Lead | null>{
+export async function leaseNextLeadForEnrichment(
+  staleAfterMinutes = 10,
+): Promise<EnrichmentLeasedLead | null>{
+  const tenantId = requireExactEnrichmentWorkerTenantId();
   const db = await getDb();
   const now = nowISO();
   const staleBefore = new Date(Date.now() - Math.max(1, staleAfterMinutes) * 60_000).toISOString();
@@ -8590,10 +8938,11 @@ export async function leaseNextLeadForEnrichment(staleAfterMinutes = 10): Promis
          enrichment_started_at = NULL,
          enrichment_finished_at = ?,
          updated_at = ?
-     WHERE enrichment_status = 'running'
+     WHERE tenant_id = ?
+       AND enrichment_status = 'running'
        AND (enrichment_started_at IS NULL OR enrichment_started_at <= ?)
        AND enrichment_attempt_count < enrichment_max_attempts`
-  ).run(now, now, staleBefore);
+  ).run(now, now, tenantId, staleBefore);
 
   await db.prepare(
     `UPDATE leads
@@ -8603,19 +8952,21 @@ export async function leaseNextLeadForEnrichment(staleAfterMinutes = 10): Promis
          enrichment_last_error = COALESCE(enrichment_last_error, 'Max enrichment attempts exhausted.'),
          enrichment_last_error_code = COALESCE(enrichment_last_error_code, 'max_attempts_exhausted'),
          updated_at = ?
-     WHERE enrichment_status IN ('pending','running','retry_wait')
+     WHERE tenant_id = ?
+       AND enrichment_status IN ('pending','running','retry_wait')
        AND enrichment_attempt_count >= enrichment_max_attempts`
-  ).run(now, now);
+  ).run(now, now, tenantId);
 
   await db.prepare(
     `UPDATE leads
      SET enrichment_status = 'pending',
          enrichment_next_retry_at = NULL,
          updated_at = ?
-     WHERE enrichment_status = 'retry_wait'
+     WHERE tenant_id = ?
+       AND enrichment_status = 'retry_wait'
        AND enrichment_attempt_count < enrichment_max_attempts
        AND (enrichment_next_retry_at IS NULL OR enrichment_next_retry_at <= ?)`
-  ).run(now, now);
+  ).run(now, tenantId, now);
 
   const row = await db.prepare(
     `UPDATE leads
@@ -8627,10 +8978,12 @@ export async function leaseNextLeadForEnrichment(staleAfterMinutes = 10): Promis
          enrichment_last_error = NULL,
          enrichment_last_error_code = NULL,
          updated_at = ?
-     WHERE id = (
+     WHERE tenant_id = ?
+       AND id = (
        SELECT id
        FROM leads
-       WHERE enrichment_status = 'pending'
+       WHERE tenant_id = ?
+         AND enrichment_status = 'pending'
          AND enrichment_attempt_count < enrichment_max_attempts
          AND score > 0
          AND ${SCORE_ELIGIBLE_CONDITION}
@@ -8639,26 +8992,46 @@ export async function leaseNextLeadForEnrichment(staleAfterMinutes = 10): Promis
      )
        AND enrichment_status = 'pending'
      RETURNING *`
-  ).get(now, now) as Record<string, unknown> | undefined;
+  ).get(now, now, tenantId, tenantId) as Record<string, unknown> | undefined;
 
-  return row ? parseLeadRow(row) : null;
+  if (!row) return null;
+  if (row.tenant_id !== tenantId) throw new Error("Leased enrichment tenant does not match the active worker context.");
+  const lead = parseLeadRow(row);
+  if (!lead.enrichment_started_at) throw new Error("Enrichment lease is missing its start fence.");
+  return {
+    ...lead,
+    tenant_id: tenantId,
+    enrichment_lease: {
+      tenantId,
+      leadId: lead.id,
+      startedAt: lead.enrichment_started_at,
+      attemptCount: lead.enrichment_attempt_count,
+    },
+  };
 }
 
 export async function markLeadEnrichmentFailed(
-  id: string,
+  lease: EnrichmentLeaseToken,
   error: string,
   errorCode: string,
   options: { nextRetryAt?: string | null; terminal?: boolean } = {},
-): Promise<void>{
+): Promise<boolean>{
+  const tenantId = requireExactEnrichmentWorkerTenantId(lease.tenantId);
   const db = await getDb();
   const row = await db.prepare(
-    "SELECT enrichment_attempt_count, enrichment_max_attempts FROM leads WHERE id = ?"
-  ).get(id) as { enrichment_attempt_count: number; enrichment_max_attempts: number } | undefined;
+    `SELECT enrichment_attempt_count, enrichment_max_attempts
+     FROM leads
+     WHERE tenant_id = ? AND id = ?
+       AND enrichment_status = 'running'
+       AND enrichment_started_at = ?
+       AND enrichment_attempt_count = ?`
+  ).get(tenantId, lease.leadId, lease.startedAt, lease.attemptCount) as { enrichment_attempt_count: number; enrichment_max_attempts: number } | undefined;
+  if (!row) return false;
   const attempts = Number(row?.enrichment_attempt_count ?? 0);
   const maxAttempts = Math.max(1, Number(row?.enrichment_max_attempts ?? 3) || 3);
   const terminal = options.terminal || attempts >= maxAttempts;
   const now = nowISO();
-  await db.prepare(
+  const result = await db.prepare(
     `UPDATE leads
      SET enrichment_status = ?,
          enrichment_started_at = NULL,
@@ -8667,7 +9040,10 @@ export async function markLeadEnrichmentFailed(
          enrichment_last_error = ?,
          enrichment_last_error_code = ?,
          updated_at = ?
-     WHERE id = ?`
+     WHERE tenant_id = ? AND id = ?
+       AND enrichment_status = 'running'
+       AND enrichment_started_at = ?
+       AND enrichment_attempt_count = ?`
   ).run(
     terminal ? "error" : "retry_wait",
     now,
@@ -8675,11 +9051,15 @@ export async function markLeadEnrichmentFailed(
     error.slice(0, 1000),
     errorCode,
     now,
-    id,
+    tenantId,
+    lease.leadId,
+    lease.startedAt,
+    lease.attemptCount,
   );
+  return result.changes > 0;
 }
 
-export async function updateLeadEnrichment(id: string, data: {
+export async function updateLeadEnrichment(lease: EnrichmentLeaseToken, data: {
   name?: string | null;
   address?: string | null;
   phone?: string | null;
@@ -8701,9 +9081,17 @@ export async function updateLeadEnrichment(id: string, data: {
   website_health?: Record<string, unknown> | null;
   website_checked_at?: string | null;
   score?: number;
-}): Promise<void>{
+}): Promise<boolean>{
+  const tenantId = requireExactEnrichmentWorkerTenantId(lease.tenantId);
   const db = await getDb();
-  const current = await db.prepare("SELECT * FROM leads WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  const current = await db.prepare(
+    `SELECT * FROM leads
+     WHERE tenant_id = ? AND id = ?
+       AND enrichment_status = 'running'
+       AND enrichment_started_at = ?
+       AND enrichment_attempt_count = ?`,
+  ).get(tenantId, lease.leadId, lease.startedAt, lease.attemptCount) as Record<string, unknown> | undefined;
+  if (!current) return false;
   const categories = data.categories ?? (current ? safeParseJson<string[]>((current.categories as string | null) ?? "[]", []) : []);
   const websiteStatus = data.website_status ?? ((current?.website_status as WebsiteStatus | undefined) ?? "none");
   const primaryType = data.primary_type ?? (current?.primary_type as string | null | undefined);
@@ -8719,7 +9107,7 @@ export async function updateLeadEnrichment(id: string, data: {
   });
   const shouldExclude = qualification.qualificationStatus === "disqualified";
 
-  await db.prepare(
+  const result = await db.prepare(
     `UPDATE leads SET
       enrichment_status = 'enriched',
       enriched_at = ?,
@@ -8759,7 +9147,10 @@ export async function updateLeadEnrichment(id: string, data: {
       website_checked_at = COALESCE(?, website_checked_at),
       score = COALESCE(?, score),
       updated_at = ?
-    WHERE id = ?`
+    WHERE tenant_id = ? AND id = ?
+      AND enrichment_status = 'running'
+      AND enrichment_started_at = ?
+      AND enrichment_attempt_count = ?`
   ).run(
     nowISO(),
     nowISO(),
@@ -8794,9 +9185,11 @@ export async function updateLeadEnrichment(id: string, data: {
     data.website_health ? JSON.stringify(data.website_health) : null,
     data.website_checked_at ?? null,
     data.score ?? null,
-    nowISO(), id,
+    nowISO(), tenantId, lease.leadId, lease.startedAt, lease.attemptCount,
   );
-  await updateLeadQualityScores(id);
+  if (result.changes === 0) return false;
+  await updateLeadQualityScoresForTenant(tenantId, lease.leadId);
+  return true;
 }
 
 export async function getEnrichmentStats(): Promise<{ pending: number; enriched: number; total: number }> {
@@ -8888,13 +9281,16 @@ export async function getCachedPlaceResponse(
   requireAtmosphere = false,
 ): Promise<Record<string, unknown> | null>{
   if (!Number.isFinite(maxAgeDays) || maxAgeDays <= 0) return null;
+  const tenantId = requireGooglePlacesCacheTenantId();
   const db = await getDb();
   const row = await db.prepare(
     `SELECT raw_json, fetched_at
      FROM place_cache
-     WHERE place_id = ?
+     WHERE tenant_id = ?
+       AND source_card_id = ?
+       AND place_id = ?
        AND fetched_at >= datetime('now', '-' || ? || ' days')`
-  ).get(placeId, Math.floor(maxAgeDays)) as { raw_json: string; fetched_at: string } | undefined;
+  ).get(tenantId, GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID, placeId, Math.floor(maxAgeDays)) as { raw_json: string; fetched_at: string } | undefined;
   if (!row) return null;
 
   const parsed = safeParseJson<Record<string, unknown>>(row.raw_json, {});
@@ -8911,22 +9307,27 @@ export async function getCachedPlaceResponse(
 }
 
 export async function cachePlaceResponse(placeId: string, rawJson: string): Promise<void>{
+  const tenantId = requireGooglePlacesCacheTenantId();
   const db = await getDb();
   await db.prepare(
-    `INSERT INTO place_cache (place_id, raw_json, fetched_at)
-     VALUES (?, ?, ?)
-     ON CONFLICT(place_id) DO UPDATE SET raw_json = excluded.raw_json, fetched_at = excluded.fetched_at`
-  ).run(placeId, rawJson, nowISO());
+    `INSERT INTO place_cache (tenant_id, source_card_id, place_id, raw_json, fetched_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(tenant_id, source_card_id, place_id) DO UPDATE
+       SET raw_json = excluded.raw_json, fetched_at = excluded.fetched_at`
+  ).run(tenantId, GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID, placeId, rawJson, nowISO());
 }
 
 export async function recordPlaceObservation(input: PlaceObservationInput): Promise<void>{
+  const tenantId = input.tenantId ?? requireTenantContext().tenantId;
   const db = await getDb();
   await db.prepare(
     `INSERT INTO place_observations (
-      id, place_id, crawl_run_id, crawl_unit_id, lead_id,
+      tenant_id, source_card_id, id, place_id, crawl_run_id, crawl_unit_id, lead_id,
       endpoint, sku, field_mask, raw_json, observed_at, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
+    tenantId,
+    GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID,
     generateId(),
     input.place_id,
     input.crawl_run_id ?? null,
@@ -8941,13 +9342,20 @@ export async function recordPlaceObservation(input: PlaceObservationInput): Prom
   );
 }
 
-export async function placeMasterExists(placeId: string): Promise<boolean>{
+export async function placeMasterExists(placeId: string, explicitTenantId?: string): Promise<boolean>{
+  const tenantId = requireLeadWriteTenantId(explicitTenantId);
   const db = await getDb();
-  const row = await db.prepare("SELECT 1 as exists_flag FROM places_master WHERE place_id = ? LIMIT 1").get(placeId) as { exists_flag: number } | undefined;
+  const row = await db.prepare(
+    `SELECT 1 as exists_flag
+     FROM places_master
+     WHERE tenant_id = ? AND source_card_id = ? AND place_id = ?
+     LIMIT 1`,
+  ).get(tenantId, GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID, placeId) as { exists_flag: number } | undefined;
   return !!row;
 }
 
 export async function upsertPlaceMaster(input: PlaceMasterUpsertInput): Promise<void>{
+  const tenantId = input.tenantId ?? requireTenantContext().tenantId;
   const db = await getDb();
   const now = nowISO();
   const completeness = computeCompletenessScore(input);
@@ -8956,15 +9364,15 @@ export async function upsertPlaceMaster(input: PlaceMasterUpsertInput): Promise<
 
   await db.prepare(
     `INSERT INTO places_master (
-      place_id, name, address, phone, website_uri, maps_uri, categories,
+      tenant_id, source_card_id, place_id, name, address, phone, website_uri, maps_uri, categories,
       rating, user_rating_count, business_status, price_level,
       photo_count, has_opening_hours, primary_type, lat, lng,
       editorial_summary, review_highlights, website_health,
       first_seen_at, last_seen_at, last_details_at, last_enriched_at,
       completeness_score, freshness_score, verification_coverage,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(place_id) DO UPDATE SET
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(tenant_id, source_card_id, place_id) DO UPDATE SET
       name = COALESCE(excluded.name, places_master.name),
       address = COALESCE(excluded.address, places_master.address),
       phone = COALESCE(excluded.phone, places_master.phone),
@@ -8995,6 +9403,8 @@ export async function upsertPlaceMaster(input: PlaceMasterUpsertInput): Promise<
       END,
       updated_at = excluded.updated_at`
   ).run(
+    tenantId,
+    GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID,
     input.place_id,
     input.name ?? null,
     input.address ?? null,
@@ -9065,9 +9475,11 @@ export async function getCanonicalPlacesForExport(limit = 10000): Promise<Array<
 }
 
 export async function backfillPlacesMasterFromLeads(limit = 10000): Promise<number>{
+  const { tenantId } = requireTenantContext();
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT
+      tenant_id,
       place_id,
       name,
       address,
@@ -9090,9 +9502,10 @@ export async function backfillPlacesMasterFromLeads(limit = 10000): Promise<numb
       discovered_at,
       verification
      FROM leads
+     WHERE tenant_id = ?
      ORDER BY discovered_at DESC
      LIMIT ?`
-  ).all(limit) as Array<Record<string, unknown>>;
+  ).all(tenantId, limit) as Array<Record<string, unknown>>;
 
   for (const row of rows) {
     const verification = safeParseJson<Record<string, boolean>>((row.verification as string | null) ?? "{}", {});
@@ -9101,7 +9514,8 @@ export async function backfillPlacesMasterFromLeads(limit = 10000): Promise<numb
       ? (verifiedCount / Object.keys(verification).length) * 100
       : 0;
 
-    upsertPlaceMaster({
+    await upsertPlaceMaster({
+      tenantId: row.tenant_id as string,
       place_id: row.place_id as string,
       name: (row.name as string | null) ?? null,
       address: (row.address as string | null) ?? null,
@@ -9242,99 +9656,140 @@ function parseDemoRow(row: Record<string, unknown>): Demo {
 }
 
 export async function getDemoByLeadId(leadId: string): Promise<Demo | null> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const row = (await db.prepare("SELECT * FROM demos WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1").get(leadId)) as
+  const row = (await db.prepare(
+    "SELECT * FROM demos WHERE tenant_id = ? AND lead_id = ? ORDER BY created_at DESC LIMIT 1",
+  ).get(tenantId, leadId)) as
     | Record<string, unknown>
     | undefined;
   return row ? parseDemoRow(row) : null;
 }
 
-export async function createDemoForLead(leadId: string): Promise<Demo | null>{
+async function getCurrentDemoByLeadId(tenantId: string, leadId: string): Promise<Demo | null> {
   const db = await getDb();
-  const existing = await getDemoByLeadId(leadId);
+  const row = await db.prepare(
+    `SELECT * FROM demos
+     WHERE tenant_id = ? AND lead_id = ? AND revoked_at IS NULL
+     ORDER BY created_at DESC LIMIT 1`,
+  ).get<Record<string, unknown>>(tenantId, leadId);
+  return row ? parseDemoRow(row) : null;
+}
 
-  const lead = await getLeadById(leadId);
-  if (!lead) return null;
-  const config = await buildDemoConfigForLead(lead);
-  const now = nowISO();
+async function lockLeadForDemoTransition(db: DbClient, tenantId: string, leadId: string): Promise<boolean> {
+  const result = await db.prepare(
+    "UPDATE leads SET updated_at = updated_at WHERE tenant_id = ? AND id = ?",
+  ).run(tenantId, leadId);
+  return result.changes > 0;
+}
 
-  if (existing && !existing.is_published && !existing.revoked_at) {
+export async function createDemoForLead(leadId: string): Promise<Demo | null>{
+  const { tenantId } = requireTenantWideLeadReadContext();
+  return withDbTransaction(async () => {
+    const db = await getDb();
+    if (!await lockLeadForDemoTransition(db, tenantId, leadId)) return null;
+    const existing = await getCurrentDemoByLeadId(tenantId, leadId);
+    const lead = await getLeadById(leadId);
+    if (!lead) return null;
+    if (existing?.is_published) return existing;
+
+    const config = await buildDemoConfigForLead(lead);
+    const now = nowISO();
+    if (existing) {
+      const refreshed = await db.prepare(
+        `UPDATE demos
+         SET config_json = ?, updated_at = ?
+         WHERE tenant_id = ? AND id = ? AND revoked_at IS NULL AND is_published = 0`,
+      ).run(JSON.stringify(config), now, tenantId, existing.id);
+      if (refreshed.changes === 0) return getCurrentDemoByLeadId(tenantId, leadId);
+      await createAuditLog("demo_refreshed", "demo", existing.id, { leadId });
+      return getCurrentDemoByLeadId(tenantId, leadId);
+    }
+
+    const slug = `${slugify(lead.name ?? "business")}-${generateId().slice(0, 8)}`;
     await db.prepare(
-      `UPDATE demos
-       SET config_json = ?,
-           updated_at = ?
-       WHERE id = ?`
-    ).run(JSON.stringify(config), now, existing.id);
-    await createAuditLog("demo_refreshed", "demo", existing.id, { leadId });
-    return getDemoByLeadId(leadId);
-  }
-
-  if (existing && existing.is_published && !existing.revoked_at) return existing;
-
-  const slug = `${slugify(lead.name ?? "business")}-${generateId().slice(0, 8)}`;
-
-  await db.prepare(
-    `INSERT INTO demos (id, lead_id, slug, template_id, config_json, is_published, created_at, updated_at)
-     VALUES (?, ?, ?, 'local-service-v1', ?, 0, ?, ?)`
-  ).run(generateId(), leadId, slug, JSON.stringify(config), now, now);
-  const demo = await getDemoByLeadId(leadId);
-  if (demo) await createAuditLog("demo_created", "demo", demo.id, { leadId, slug: demo.slug, published: false });
-  return demo;
+      `INSERT INTO demos (tenant_id, id, lead_id, slug, template_id, config_json, is_published, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'local-service-v1', ?, 0, ?, ?)`,
+    ).run(tenantId, generateId(), leadId, slug, JSON.stringify(config), now, now);
+    const demo = await getCurrentDemoByLeadId(tenantId, leadId);
+    if (demo) await createAuditLog("demo_created", "demo", demo.id, { leadId, slug: demo.slug, published: false });
+    return demo;
+  });
 }
 
 export async function publishDemoForLead(leadId: string, actorUserId: string | null = null): Promise<Demo | null>{
-  const demo = (await getDemoByLeadId(leadId)) ?? (await createDemoForLead(leadId));
-  if (!demo || demo.revoked_at) return null;
-  const db = await getDb();
-  const now = nowISO();
-  await db.prepare(
-    `UPDATE demos
-     SET is_published = 1,
-         published_at = COALESCE(published_at, ?),
-         published_by_user_id = COALESCE(published_by_user_id, ?),
-         unpublished_at = NULL,
-         unpublished_by_user_id = NULL,
-         updated_at = ?
-     WHERE id = ?`
-  ).run(now, actorUserId, now, demo.id);
-  await db.prepare("UPDATE leads SET demo_sent_at = COALESCE(demo_sent_at, ?), updated_at = ? WHERE id = ?").run(now, now, leadId);
-  await createAuditLog("demo_published", "demo", demo.id, { leadId, actorUserId });
-  return getDemoByLeadId(leadId);
+  const { tenantId } = requireTenantWideLeadReadContext();
+  if (!await getCurrentDemoByLeadId(tenantId, leadId) && !await createDemoForLead(leadId)) return null;
+  return withDbTransaction(async () => {
+    const db = await getDb();
+    if (!await lockLeadForDemoTransition(db, tenantId, leadId)) return null;
+    const demo = await getCurrentDemoByLeadId(tenantId, leadId);
+    if (!demo) return null;
+    if (demo.is_published) return demo;
+    const now = nowISO();
+    const published = await db.prepare(
+      `UPDATE demos
+       SET is_published = 1,
+           published_at = COALESCE(published_at, ?),
+           published_by_user_id = COALESCE(published_by_user_id, ?),
+           unpublished_at = NULL,
+           unpublished_by_user_id = NULL,
+           updated_at = ?
+       WHERE tenant_id = ? AND id = ? AND revoked_at IS NULL AND is_published = 0`,
+    ).run(now, actorUserId, now, tenantId, demo.id);
+    if (published.changes === 0) return getCurrentDemoByLeadId(tenantId, leadId);
+    await db.prepare(
+      "UPDATE leads SET demo_sent_at = COALESCE(demo_sent_at, ?), updated_at = ? WHERE tenant_id = ? AND id = ?",
+    ).run(now, now, tenantId, leadId);
+    await createAuditLog("demo_published", "demo", demo.id, { leadId, actorUserId });
+    return getCurrentDemoByLeadId(tenantId, leadId);
+  });
 }
 
 export async function unpublishDemoForLead(leadId: string, actorUserId: string | null = null): Promise<Demo | null>{
-  const demo = await getDemoByLeadId(leadId);
-  if (!demo) return null;
-  const db = await getDb();
-  const now = nowISO();
-  await db.prepare(
-    `UPDATE demos
-     SET is_published = 0,
-         unpublished_at = ?,
-         unpublished_by_user_id = ?,
-         updated_at = ?
-     WHERE id = ?`
-  ).run(now, actorUserId, now, demo.id);
-  await createAuditLog("demo_unpublished", "demo", demo.id, { leadId, actorUserId });
-  return getDemoByLeadId(leadId);
+  const { tenantId } = requireTenantWideLeadReadContext();
+  return withDbTransaction(async () => {
+    const db = await getDb();
+    if (!await lockLeadForDemoTransition(db, tenantId, leadId)) return null;
+    const demo = await getCurrentDemoByLeadId(tenantId, leadId);
+    if (!demo) return null;
+    if (!demo.is_published) return demo;
+    const now = nowISO();
+    const unpublished = await db.prepare(
+      `UPDATE demos
+       SET is_published = 0,
+           unpublished_at = ?,
+           unpublished_by_user_id = ?,
+           updated_at = ?
+       WHERE tenant_id = ? AND id = ? AND revoked_at IS NULL AND is_published = 1`,
+    ).run(now, actorUserId, now, tenantId, demo.id);
+    if (unpublished.changes === 0) return getCurrentDemoByLeadId(tenantId, leadId);
+    await createAuditLog("demo_unpublished", "demo", demo.id, { leadId, actorUserId });
+    return getCurrentDemoByLeadId(tenantId, leadId);
+  });
 }
 
 export async function revokeDemoForLead(leadId: string, actorUserId: string | null = null, reason: string | null = null): Promise<Demo | null>{
-  const demo = await getDemoByLeadId(leadId);
-  if (!demo) return null;
-  const db = await getDb();
-  const now = nowISO();
-  await db.prepare(
-    `UPDATE demos
-     SET is_published = 0,
-         revoked_at = COALESCE(revoked_at, ?),
-         revoked_by_user_id = COALESCE(revoked_by_user_id, ?),
-         revoke_reason = COALESCE(revoke_reason, ?),
-         updated_at = ?
-     WHERE id = ?`
-  ).run(now, actorUserId, reason, now, demo.id);
-  await createAuditLog("demo_revoked", "demo", demo.id, { leadId, actorUserId, reason });
-  return getDemoByLeadId(leadId);
+  const { tenantId } = requireTenantWideLeadReadContext();
+  return withDbTransaction(async () => {
+    const db = await getDb();
+    if (!await lockLeadForDemoTransition(db, tenantId, leadId)) return null;
+    const demo = await getCurrentDemoByLeadId(tenantId, leadId);
+    if (!demo) return getDemoByLeadId(leadId);
+    const now = nowISO();
+    const revoked = await db.prepare(
+      `UPDATE demos
+       SET is_published = 0,
+           revoked_at = ?,
+           revoked_by_user_id = COALESCE(revoked_by_user_id, ?),
+           revoke_reason = COALESCE(revoke_reason, ?),
+           updated_at = ?
+       WHERE tenant_id = ? AND id = ? AND revoked_at IS NULL`,
+    ).run(now, actorUserId, reason, now, tenantId, demo.id);
+    if (revoked.changes === 0) return getDemoByLeadId(leadId);
+    await createAuditLog("demo_revoked", "demo", demo.id, { leadId, actorUserId, reason });
+    return getDemoByLeadId(leadId);
+  });
 }
 
 export async function recordDemoView(demoId: string): Promise<void>{
@@ -9731,6 +10186,34 @@ export async function updateLeadTimestamp(id: string, field: string, value: stri
   await db.prepare(`UPDATE leads SET ${field} = ?, updated_at = ? WHERE id = ?`)
     .run(value ?? nowISO(), nowISO(), id);
   await updateLeadQualityScores(id);
+}
+
+export async function markLeadRepliedIfUnset(id: string): Promise<number> {
+  const { tenantId } = requireTenantWideLeadReadContext();
+  const db = await getDb();
+  const now = nowISO();
+  const result = await db.prepare(
+    `UPDATE leads
+     SET first_reply_at = ?, updated_at = ?
+     WHERE tenant_id = ? AND id = ? AND first_reply_at IS NULL`,
+  ).run(now, now, tenantId, id);
+  if (result.changes > 0) await updateLeadQualityScores(id);
+  return result.changes;
+}
+
+export async function markLeadMeetingBookedIfUnset(id: string): Promise<number> {
+  const { tenantId } = requireTenantWideLeadReadContext();
+  const db = await getDb();
+  const now = nowISO();
+  const result = await db.prepare(
+    `UPDATE leads
+     SET meeting_booked_at = ?,
+         status = CASE WHEN status IN ('closed_won', 'closed_lost') THEN status ELSE 'meeting_set' END,
+         updated_at = ?
+     WHERE tenant_id = ? AND id = ? AND meeting_booked_at IS NULL`,
+  ).run(now, now, tenantId, id);
+  if (result.changes > 0) await updateLeadQualityScores(id);
+  return result.changes;
 }
 
 // ─── Now Queue ───

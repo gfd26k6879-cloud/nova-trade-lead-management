@@ -38,6 +38,8 @@ import {
   getNowQueue,
   getQualifiedLeadCount,
   getScoreBandThresholds,
+  markLeadMeetingBookedIfUnset,
+  markLeadRepliedIfUnset,
   recomputeAllLeadQualityScores,
   setLeadExclusion,
   updateLeadQualityScores,
@@ -60,6 +62,7 @@ beforeEach(() => {
   testDb = createTestDb();
   testDb.exec(`
     ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    CREATE UNIQUE INDEX leads_tenant_place_id_unique ON leads (tenant_id, place_id);
     ALTER TABLE lead_ai_artifacts ADD COLUMN tenant_id TEXT;
     ALTER TABLE demos ADD COLUMN tenant_id TEXT;
     ALTER TABLE admin_requests ADD COLUMN tenant_id TEXT;
@@ -356,6 +359,7 @@ describe("lead exclusion query behavior", () => {
 
   it("creates manual leads with safe defaults", async () => {
     const lead = await createManualLead({
+      tenantId: TENANT_A,
       name: "Manual Candidate",
       businessType: "local_services",
       phone: "303-555-0100",
@@ -380,6 +384,38 @@ describe("lead exclusion query behavior", () => {
     expect(row.enrichment_status).toBe("pending");
     expect(row.ai_queue_status).toBe("queued");
     expect(row.notes).toBe("Source: Google Maps\n\nContact person: Jamie Owner\n\nAdded from user flow");
+  });
+
+  it("rejects a manual lead tenant that differs from the active context before insert", async () => {
+    await expect(createManualLead({
+      tenantId: TENANT_B,
+      name: "Foreign Candidate",
+      businessType: "local_services",
+      phone: "303-555-0199",
+    })).rejects.toThrow("Lead tenant does not match the active tenant context.");
+
+    expect(testDb.prepare("SELECT COUNT(*) AS count FROM leads WHERE name = ?").get("Foreign Candidate"))
+      .toEqual({ count: 0 });
+  });
+
+  it("fences reply and meeting timestamps and preserves terminal closed status", async () => {
+    const repliedId = insertLead(testDb, 930, { score: 10, status: "contacted" });
+    expect(await markLeadRepliedIfUnset(repliedId)).toBe(1);
+    const firstReply = testDb.prepare("SELECT first_reply_at FROM leads WHERE id = ?").get(repliedId) as { first_reply_at: string };
+    expect(firstReply.first_reply_at).toBeTruthy();
+    expect(await markLeadRepliedIfUnset(repliedId)).toBe(0);
+    expect(testDb.prepare("SELECT first_reply_at FROM leads WHERE id = ?").get(repliedId)).toEqual(firstReply);
+
+    const meetingId = insertLead(testDb, 931, { score: 10, status: "closed_lost" });
+    expect(await markLeadMeetingBookedIfUnset(meetingId)).toBe(1);
+    const firstMeeting = testDb.prepare(
+      "SELECT meeting_booked_at, status FROM leads WHERE id = ?",
+    ).get(meetingId) as { meeting_booked_at: string; status: string };
+    expect(firstMeeting.meeting_booked_at).toBeTruthy();
+    expect(firstMeeting.status).toBe("closed_lost");
+    expect(await markLeadMeetingBookedIfUnset(meetingId)).toBe(0);
+    expect(testDb.prepare("SELECT meeting_booked_at, status FROM leads WHERE id = ?").get(meetingId))
+      .toEqual(firstMeeting);
   });
 
   it("filters leads by assigned researcher markets", async () => {

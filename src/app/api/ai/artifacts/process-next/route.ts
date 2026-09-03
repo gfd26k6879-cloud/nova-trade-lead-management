@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { processNextLeadArtifactJob } from "@/lib/ai/artifact-worker";
 import { applyNoStoreHeaders } from "@/lib/http-cache";
 import { runTenantInternalWorkerRoute } from "@/lib/internal-worker-route";
-
-const denyUnconfiguredWorkerLease = () => Promise.resolve(null);
+import { createFailClosedWorkerLeaseResolverRuntime } from "@/lib/tenancy/worker-lease-runtime";
 
 export async function POST(request: NextRequest) {
   const response = await runTenantInternalWorkerRoute(
@@ -12,7 +11,10 @@ export async function POST(request: NextRequest) {
     "queue:operate",
     (_context, signal) => processNextLeadArtifactJob(signal),
     {
-      resolveLease: denyUnconfiguredWorkerLease,
+      resolveLease: createFailClosedWorkerLeaseResolverRuntime({
+        workerName: "artifact",
+        action: "artifact:process",
+      }),
       sessionPermission: "queue:operate",
       action: "artifact:process",
     },

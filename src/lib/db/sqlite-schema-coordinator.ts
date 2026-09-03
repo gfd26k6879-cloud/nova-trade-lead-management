@@ -15,6 +15,8 @@ import { isProxy } from "node:util/types";
 
 import Database from "better-sqlite3";
 
+import { TENANT_MEMBERSHIP_MUTATION_JOURNAL_SQL } from "./schema";
+
 import {
   consumeSqliteG006bPreparedFinalizationHandoffForCoordinator,
   hashSqliteG006bDomain,
@@ -40,6 +42,11 @@ import {
 export const ACCEPTED_LEGACY_SQLITE_CATALOG_DIGEST = "07091889ff9806c20356f092d3812ff325f22537c63a56149eea7dab0a529ade" as const;
 export const SQLITE_SCHEMA_V1_PREPARED_LEGACY_PHYSICAL_MANIFEST_DIGEST = "90117968b064e6bded92dbf82c18fffa31951c0998c727f662eee56e78721ba6" as const;
 export const SQLITE_SCHEMA_V1_PHYSICAL_MANIFEST_DIGEST = "07e10bb5c43d98d6f561d3c0b0f9f39a9ad2d579ed1a73b9e2a7a455367fdf79" as const;
+export const SQLITE_MEMBERSHIP_JOURNAL_USER_VERSION = 6003 as const;
+export const SQLITE_MEMBERSHIP_JOURNAL_APPLICATION_TABLE_COUNT = 38 as const;
+export const SQLITE_MEMBERSHIP_JOURNAL_CATALOG_DIGEST = "020fe433fd121e83a9cf1ac49513d5fbb0ffb229181f1fc7213b635223335ab9" as const;
+export const SQLITE_MEMBERSHIP_JOURNAL_INTERNAL_CATALOG_DIGEST = "c437e27420a300b65290331081d19b4cb69d5b2dbb70131f7b2088510cd38982" as const;
+export const SQLITE_MEMBERSHIP_JOURNAL_PHYSICAL_MANIFEST_DIGEST = "3742cdeae82908c71e4f611aa6f628db1d03ea8f31731ce780b35abb9bf23ba9" as const;
 const G006B_PRESERVATION_DOMAIN = "NOVATRADE\0G006B\0B1\0PRESERVATION\0V1\0" as const;
 const G006B_B1_POST_ONLY_SOURCE_CARD_TABLES = new Set<string>([
   "place_cache",
@@ -71,6 +78,23 @@ export interface SqliteSchemaV1State {
   readonly targetColumnCount: number;
   readonly expectedTargetColumnCount: number;
   readonly reason: string;
+}
+
+export type SqliteMembershipJournalSchemaState =
+  | Readonly<{ kind: "upgrade-required"; source: SqliteSchemaV1State }>
+  | Readonly<{
+    kind: "ready";
+    userVersion: typeof SQLITE_MEMBERSHIP_JOURNAL_USER_VERSION;
+    applicationTableCount: typeof SQLITE_MEMBERSHIP_JOURNAL_APPLICATION_TABLE_COUNT;
+    catalogDigest: typeof SQLITE_MEMBERSHIP_JOURNAL_CATALOG_DIGEST;
+    internalCatalogDigest: typeof SQLITE_MEMBERSHIP_JOURNAL_INTERNAL_CATALOG_DIGEST;
+    physicalManifestDigest: typeof SQLITE_MEMBERSHIP_JOURNAL_PHYSICAL_MANIFEST_DIGEST;
+  }>
+  | Readonly<{ kind: "rejected"; source: SqliteSchemaV1State; reason: string }>;
+
+export interface SqliteMembershipJournalUpgradeResult {
+  readonly status: "upgraded" | "replayed";
+  readonly state: Extract<SqliteMembershipJournalSchemaState, { kind: "ready" }>;
 }
 
 export interface SqliteSchemaV1PreservationTable {
@@ -563,6 +587,86 @@ export function classifySqliteSchemaV1(db: Database.Database): SqliteSchemaV1Sta
     return { kind: "drift", ...base, reason: "known table/version shape has a noncanonical catalog" };
   }
   return { kind: "unknown", ...base, reason: "catalog is neither empty nor a recognized complete schema" };
+}
+
+export function classifySqliteMembershipJournalSchema(
+  db: Database.Database,
+): SqliteMembershipJournalSchemaState {
+  const source = classifySqliteSchemaV1(db);
+  if (source.kind === "final"
+      && source.userVersion === SQLITE_SCHEMA_V1_FINAL_USER_VERSION
+      && source.catalogDigest === SQLITE_SCHEMA_V1_CATALOG_DIGEST
+      && source.applicationTableCount === SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT) {
+    return Object.freeze({ kind: "upgrade-required", source });
+  }
+
+  const userVersion = readUserVersion(db);
+  const applicationTableCount = readApplicationTableCount(db);
+  const catalogDigest = sqliteCatalogDigest(db);
+  const internalCatalogDigest = sqliteInternalCatalogDigest(db);
+  const physicalManifestDigest = sqliteSchemaV1PhysicalManifestDigest(db);
+  if (userVersion === SQLITE_MEMBERSHIP_JOURNAL_USER_VERSION
+      && applicationTableCount === SQLITE_MEMBERSHIP_JOURNAL_APPLICATION_TABLE_COUNT
+      && catalogDigest === SQLITE_MEMBERSHIP_JOURNAL_CATALOG_DIGEST
+      && internalCatalogDigest === SQLITE_MEMBERSHIP_JOURNAL_INTERNAL_CATALOG_DIGEST
+      && physicalManifestDigest === SQLITE_MEMBERSHIP_JOURNAL_PHYSICAL_MANIFEST_DIGEST) {
+    return Object.freeze({
+      kind: "ready",
+      userVersion,
+      applicationTableCount,
+      catalogDigest,
+      internalCatalogDigest,
+      physicalManifestDigest,
+    });
+  }
+  return Object.freeze({
+    kind: "rejected",
+    source,
+    reason: `journal schema mismatch at user_version ${userVersion}; catalog=${catalogDigest}; internal=${internalCatalogDigest}; physical=${physicalManifestDigest}`,
+  });
+}
+
+export function coordinateSqliteMembershipJournalUpgrade(
+  db: Database.Database,
+): SqliteMembershipJournalUpgradeResult {
+  const before = classifySqliteMembershipJournalSchema(db);
+  if (before.kind === "ready") return Object.freeze({ status: "replayed", state: before });
+  if (before.kind !== "upgrade-required") {
+    throw new SqliteSchemaV1CoordinatorError("G006A_STATE_REJECTED", before.reason);
+  }
+
+  return db.transaction((): SqliteMembershipJournalUpgradeResult => {
+    const locked = classifySqliteMembershipJournalSchema(db);
+    if (locked.kind !== "upgrade-required") {
+      throw new SqliteSchemaV1CoordinatorError(
+        "G006A_STATE_REJECTED",
+        locked.kind === "rejected" ? locked.reason : `journal schema became ${locked.kind}`,
+      );
+    }
+    const preservation = captureSqliteSchemaV1PreservationSnapshot(db);
+    const sqliteOwnedState = captureSqliteOwnedState(db);
+    db.exec(TENANT_MEMBERSHIP_MUTATION_JOURNAL_SQL);
+    db.pragma(`user_version = ${SQLITE_MEMBERSHIP_JOURNAL_USER_VERSION}`);
+    const after = classifySqliteMembershipJournalSchema(db);
+    if (after.kind !== "ready") {
+      throw new SqliteSchemaV1CoordinatorError(
+        "G006A_FINALIZER_POSTCONDITION_FAILED",
+        after.kind === "rejected" ? after.reason : `journal schema became ${after.kind}`,
+      );
+    }
+    const expectedTables = [...preservation.tableNames, "tenant_membership_mutation_journal"]
+      .sort(compareCodeUnits);
+    if (!sameStrings(readApplicationTableNames(db), expectedTables)) {
+      throw new SqliteSchemaV1CoordinatorError("G006A_ROW_COUNT_DRIFT", "journal additive table set");
+    }
+    assertSqliteSchemaV1Preservation(
+      preservation,
+      capturePreservationTables(db, [...preservation.tableNames], preservation),
+    );
+    assertSqliteOwnedState(sqliteOwnedState, captureSqliteOwnedState(db));
+    assertSqliteDatabaseHealth(db, SQLITE_MEMBERSHIP_JOURNAL_APPLICATION_TABLE_COUNT);
+    return Object.freeze({ status: "upgraded", state: after });
+  }).immediate();
 }
 
 export function createFreshSqliteSchemaV1(db: Database.Database): SqliteSchemaV1State {
@@ -1144,6 +1248,14 @@ export function captureSqliteSchemaV1PreservationSnapshot(
   if (baseline && !sameStrings(currentTableNames, tableNames)) {
     throw new SqliteSchemaV1CoordinatorError("G006A_ROW_COUNT_DRIFT", "application table set");
   }
+  return capturePreservationTables(db, tableNames, baseline);
+}
+
+function capturePreservationTables(
+  db: Database.Database,
+  tableNames: readonly string[],
+  baseline?: SqliteSchemaV1PreservationSnapshot,
+): SqliteSchemaV1PreservationSnapshot {
   const tables: Record<string, SqliteSchemaV1PreservationTable> = {};
   for (const table of tableNames) {
     const availableColumns = readTableColumns(db, table);
@@ -1189,11 +1301,15 @@ export function assertSqliteSchemaV1Preservation(
 }
 
 export function assertSqliteSchemaV1DatabaseHealth(db: Database.Database): void {
+  assertSqliteDatabaseHealth(db, SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT);
+}
+
+function assertSqliteDatabaseHealth(db: Database.Database, expectedTableCount: number): void {
   const tableCount = readApplicationTableCount(db);
-  if (tableCount !== SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT) {
+  if (tableCount !== expectedTableCount) {
     throw new SqliteSchemaV1CoordinatorError(
       "G006A_APPLICATION_TABLE_COUNT_DRIFT",
-      `${tableCount}/${SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT}`,
+      `${tableCount}/${expectedTableCount}`,
     );
   }
   const foreignKeyFailures = db.pragma("foreign_key_check") as Array<Record<string, unknown>>;

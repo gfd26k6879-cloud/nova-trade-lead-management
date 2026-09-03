@@ -187,6 +187,7 @@ export interface MembershipIdempotencyPort {
     readonly operation: MembershipMutationOperation;
     readonly targetMembershipId: MembershipId | null;
     readonly replacementMembershipId: MembershipId | null;
+    readonly effectiveAt: string;
     readonly result: MembershipMutationResult;
   }): Promise<void>;
 }
@@ -402,7 +403,7 @@ export function createTenantMembershipAdministrationService(
         if (after.membership.id !== membershipId || after.membership.tenantId !== session.tenantId || after.membership.status !== "pending" || after.membership.authIdentityId !== null || after.membership.pendingIdentityRefHash !== input.identitySelectorHash || after.membership.workspaceId !== input.workspaceId || after.membership.invitedByMembershipId !== session.membershipId || after.membership.createdAt !== effectiveAt || after.membership.updatedAt !== effectiveAt || after.currentRoleBinding === null || after.currentRoleBinding.role !== input.role || after.currentRoleBinding.assignedByMembershipId !== session.membershipId || after.currentRoleBinding.reasonCode !== "invitation" || after.roleBindings.length !== 1 || !sameRoleBinding(after.roleBindings[0], after.currentRoleBinding) || after.currentRoleBinding.revokedAt !== null || after.currentRoleBinding.createdAt !== effectiveAt || after.currentRoleBinding.validFrom !== effectiveAt) throw new MembershipAdministrationError("MALFORMED_REPOSITORY_RESULT");
         const result = mutationResult("invite", after, null);
         await appendAudit(scope, session, result, null, hashes, input.reasonCode, input.correlationId);
-        await complete(scope, hashes, "invite", result, session);
+        await complete(scope, hashes, "invite", result, session, effectiveAt);
         return result;
       });
     },
@@ -569,7 +570,7 @@ async function runTargetMutation(
     validateMutationEffects(operation, actor, before, after, replacement, replacementBefore, mutation, targetMembershipId, replacementId, effectiveAt);
     const result = mutationResult(operation, after, replacement);
     await appendAudit(scope, session, result, auditState(before), hashes, mutation.reasonCode, (input as { correlationId: CorrelationId }).correlationId, replacementBefore ? auditState(replacementBefore) : null);
-    await complete(scope, hashes, operation, result, session);
+    await complete(scope, hashes, operation, result, session, effectiveAt);
     return result;
   });
 }
@@ -633,8 +634,8 @@ async function runMutation<T extends MembershipMutationResult>(
   }
 }
 
-async function complete(scope: MembershipAdministrationTransactionScope, hashes: { idempotencyKeyHash: string; inputHash: string }, operation: MembershipMutationOperation, result: MembershipMutationResult, session: TenantSession): Promise<void> {
-  await scope.idempotency.complete({ ...hashes, tenantId: session.tenantId, actorMembershipId: session.membershipId, actorRoleBindingId: session.roleBindingId, operation, targetMembershipId: result.membership.membershipId, replacementMembershipId: result.replacementMembership?.membershipId ?? null, result });
+async function complete(scope: MembershipAdministrationTransactionScope, hashes: { idempotencyKeyHash: string; inputHash: string }, operation: MembershipMutationOperation, result: MembershipMutationResult, session: TenantSession, effectiveAt: string): Promise<void> {
+  await scope.idempotency.complete({ ...hashes, tenantId: session.tenantId, actorMembershipId: session.membershipId, actorRoleBindingId: session.roleBindingId, operation, targetMembershipId: result.membership.membershipId, replacementMembershipId: result.replacementMembership?.membershipId ?? null, effectiveAt, result });
 }
 
 type NormalizedMutationCommand = Readonly<Record<string, unknown>>;

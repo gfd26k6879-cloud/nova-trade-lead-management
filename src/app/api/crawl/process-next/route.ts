@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { processNextUnit } from "@/lib/crawl/worker";
 import { applyNoStoreHeaders } from "@/lib/http-cache";
 import { runTenantInternalWorkerRoute } from "@/lib/internal-worker-route";
+import { createFailClosedWorkerLeaseResolverRuntime } from "@/lib/tenancy/worker-lease-runtime";
 
-const denyUnconfiguredWorkerLease = () => Promise.resolve(null);
+const resolveLease = createFailClosedWorkerLeaseResolverRuntime({
+  workerName: "crawl",
+  action: "crawl:process",
+});
 
 export async function POST(request: NextRequest) {
   return runTenantInternalWorkerRoute(
@@ -12,7 +16,7 @@ export async function POST(request: NextRequest) {
     "queue:operate",
     (_context, signal) => processNextUnit(signal),
     {
-      resolveLease: denyUnconfiguredWorkerLease,
+      resolveLease,
       sessionPermission: "queue:operate",
       action: "crawl:process",
     },

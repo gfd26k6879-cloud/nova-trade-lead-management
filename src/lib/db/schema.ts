@@ -191,6 +191,77 @@ export const MIGRATION_COLUMNS: Array<{ table: string; column: string; type: str
   { table: "demos", column: "last_viewed_at", type: "TEXT" },
 ];
 
+export const TENANT_MEMBERSHIP_MUTATION_JOURNAL_SQL = `CREATE TABLE IF NOT EXISTS tenant_membership_mutation_journal (
+  idempotency_key_hash TEXT PRIMARY KEY NOT NULL
+    CHECK (length(idempotency_key_hash) = 64 AND idempotency_key_hash NOT GLOB '*[^0-9a-f]*'),
+  input_hash TEXT NOT NULL
+    CHECK (length(input_hash) = 64 AND input_hash NOT GLOB '*[^0-9a-f]*'),
+  tenant_id TEXT NOT NULL,
+  actor_membership_id TEXT NOT NULL,
+  actor_role_binding_id TEXT NOT NULL,
+  operation TEXT NOT NULL
+    CHECK (operation IN ('invite', 'assign_role', 'assign_workspace', 'disable', 'reactivate', 'revoke', 'remove')),
+  target_membership_id TEXT,
+  replacement_membership_id TEXT,
+  status TEXT NOT NULL DEFAULT 'reserved' CHECK (status IN ('reserved', 'completed')),
+  result_json TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  completed_at TEXT,
+  CONSTRAINT tenant_membership_mutation_journal_actor_membership_fkey
+    FOREIGN KEY (tenant_id, actor_membership_id)
+    REFERENCES tenant_memberships (tenant_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CONSTRAINT tenant_membership_mutation_journal_actor_binding_fkey
+    FOREIGN KEY (tenant_id, actor_role_binding_id)
+    REFERENCES tenant_role_bindings (tenant_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CONSTRAINT tenant_membership_mutation_journal_state_chk CHECK (
+    (status = 'reserved' AND result_json IS NULL AND completed_at IS NULL)
+    OR
+    (status = 'completed' AND target_membership_id IS NOT NULL AND result_json IS NOT NULL
+      AND json_valid(result_json) AND completed_at IS NOT NULL)
+  ),
+  CONSTRAINT tenant_membership_mutation_journal_timestamps_chk CHECK (
+    length(created_at) = 24 AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) = created_at
+    AND (completed_at IS NULL OR (
+      length(completed_at) = 24 AND strftime('%Y-%m-%dT%H:%M:%fZ', completed_at) = completed_at
+      AND completed_at >= created_at
+    ))
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_membership_mutation_journal_tenant_created
+  ON tenant_membership_mutation_journal (tenant_id, created_at DESC, idempotency_key_hash);
+
+CREATE TRIGGER IF NOT EXISTS trg_novatrade_membership_mutation_journal_update_guard
+BEFORE UPDATE ON tenant_membership_mutation_journal
+FOR EACH ROW
+BEGIN
+  SELECT CASE WHEN OLD.status <> 'reserved' OR NEW.status <> 'completed'
+    OR NEW.idempotency_key_hash IS NOT OLD.idempotency_key_hash
+    OR NEW.input_hash IS NOT OLD.input_hash
+    OR NEW.tenant_id IS NOT OLD.tenant_id
+    OR NEW.actor_membership_id IS NOT OLD.actor_membership_id
+    OR NEW.actor_role_binding_id IS NOT OLD.actor_role_binding_id
+    OR NEW.operation IS NOT OLD.operation
+    OR NEW.replacement_membership_id IS NOT OLD.replacement_membership_id
+    OR (OLD.target_membership_id IS NOT NULL AND NEW.target_membership_id IS NOT OLD.target_membership_id)
+    OR NEW.target_membership_id IS NULL OR NEW.result_json IS NULL OR NEW.completed_at IS NULL
+    THEN RAISE(ABORT, 'membership mutation journal permits only reserved-to-completed transition') END;
+  SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tenant_memberships AS membership
+    WHERE membership.tenant_id = NEW.tenant_id AND membership.id = NEW.target_membership_id
+  ) THEN RAISE(ABORT, 'membership mutation journal target is not tenant-owned') END;
+  SELECT CASE WHEN NEW.replacement_membership_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM tenant_memberships AS membership
+    WHERE membership.tenant_id = NEW.tenant_id AND membership.id = NEW.replacement_membership_id
+  ) THEN RAISE(ABORT, 'membership mutation journal replacement is not tenant-owned') END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_novatrade_membership_mutation_journal_delete_guard
+BEFORE DELETE ON tenant_membership_mutation_journal
+FOR EACH ROW BEGIN
+  SELECT RAISE(ABORT, 'membership mutation journal is durable');
+END;`;
+
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS tenants (
   id TEXT PRIMARY KEY NOT NULL CONSTRAINT tenants_id_format_chk CHECK (
@@ -567,6 +638,8 @@ BEGIN
   SELECT CASE WHEN NEW.reason_code IS NOT OLD.reason_code THEN RAISE(ABORT, 'tenant role binding reason_code is immutable') END;
   SELECT CASE WHEN OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS NOT OLD.revoked_at THEN RAISE(ABORT, 'tenant role binding revoked_at cannot be rewritten or cleared') END;
 END;
+
+${TENANT_MEMBERSHIP_MUTATION_JOURNAL_SQL}
 
 CREATE TABLE IF NOT EXISTS tenant_policies (
   id TEXT PRIMARY KEY NOT NULL CONSTRAINT tenant_policies_id_format_chk CHECK (

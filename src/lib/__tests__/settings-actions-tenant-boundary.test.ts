@@ -46,6 +46,7 @@ vi.mock("@/lib/tenancy/queries", () => ({
 }));
 
 import {
+  backfillCanonicalPlacesAction,
   getTenantPolicySettingsAction,
   updateOpenAiApiKeyAction,
 } from "@/lib/settings/actions";
@@ -146,5 +147,28 @@ describe("tenant policy settings action boundary", () => {
     expect(authorizationMocks.requirePermission).toHaveBeenCalledWith("settings:manage");
     expect(authorizationMocks.requireTenantPermission).not.toHaveBeenCalled();
     expect(queryMocks.setStoredOpenAiApiKey).toHaveBeenCalledWith("sk-test-platform-key-1234567890");
+  });
+
+  it("runs canonical place backfill only inside the active tenant member boundary", async () => {
+    const selector = { tenantId: TENANT_A };
+    const tenantWideSession = { ...TENANT_SESSION, workspaceId: null };
+    authorizationMocks.requireTenantPermission.mockResolvedValueOnce(tenantWideSession);
+    queryMocks.backfillPlacesMasterFromLeads.mockResolvedValueOnce(3);
+
+    const result = await backfillCanonicalPlacesAction(100, selector);
+
+    expect(authorizationMocks.requireTenantPermission).toHaveBeenCalledWith(selector, "tenant:manage", {
+      action: "settings.canonical_places.backfill",
+    });
+    expect(authorizationMocks.requirePermission).toHaveBeenCalledWith("settings:manage");
+    expect(contextMocks.runWithTenantContext).toHaveBeenCalledWith(
+      tenantWideSession,
+      expect.stringMatching(/^canonical-places-backfill:[0-9a-f-]+$/),
+      expect.any(Function),
+    );
+    expect(contextMocks.withTenantDbContext).toHaveBeenCalledOnce();
+    expect(queryMocks.ensureDbReady).toHaveBeenCalledOnce();
+    expect(queryMocks.backfillPlacesMasterFromLeads).toHaveBeenCalledWith(100);
+    expect(result).toEqual({ success: true, count: 3 });
   });
 });

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { SCHEMA_SQL } from "./schema";
+import { SCHEMA_SQL, TENANT_MEMBERSHIP_MUTATION_JOURNAL_SQL } from "./schema";
 
 export const SQLITE_SCHEMA_V1_CATALOG_VERSION = 1 as const;
 export const SQLITE_SCHEMA_V1_PREPARED_LEGACY_USER_VERSION = 6000 as const;
@@ -429,6 +429,7 @@ BEFORE INSERT ON compatibility_backfill_receipts BEGIN
 END;
 `;
 
+export const SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_SQL = frozenSqliteSchemaV1Source(SCHEMA_SQL);
 export const SQLITE_SCHEMA_V1_SQL = buildSqliteSchemaV1Sql();
 assertSqliteSchemaV1DefinitionDigest(SQLITE_SCHEMA_V1_SQL);
 
@@ -439,24 +440,25 @@ export function assertSqliteSchemaV1DefinitionDigest(schemaSql: string): void {
 }
 
 export function assertAcceptedSqliteSchemaV1Source(sourceSql: string): void {
-  if (sha256(sourceSql) !== SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_DIGEST) {
+  const frozenSourceSql = frozenSqliteSchemaV1Source(sourceSql);
+  if (sha256(frozenSourceSql) !== SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_DIGEST) {
     throw new Error("G006A frozen SCHEMA_SQL digest drift");
   }
   const unscopedSettingsSeed = "INSERT OR IGNORE INTO settings (id) VALUES (1);";
-  assertCardinality(sourceSql, unscopedSettingsSeed, 1, "unscoped settings seed");
+  assertCardinality(frozenSourceSql, unscopedSettingsSeed, 1, "unscoped settings seed");
   for (const table of SQLITE_SCHEMA_V1_TRANSFORM_TABLES) {
     const marker = `CREATE TABLE IF NOT EXISTS ${table} (`;
-    assertCardinality(sourceSql, marker, 1, `${table} table anchor`);
-    const start = sourceSql.indexOf(marker);
-    const end = sourceSql.indexOf("\n);", start);
+    assertCardinality(frozenSourceSql, marker, 1, `${table} table anchor`);
+    const start = frozenSourceSql.indexOf(marker);
+    const end = frozenSourceSql.indexOf("\n);", start);
     if (end < 0) throw new Error(`G006A source schema has an unterminated ${table} definition`);
-    const definition = sourceSql.slice(start, end);
+    const definition = frozenSourceSql.slice(start, end);
     for (const [anchor] of TABLE_PATCHES[table].replacements ?? []) {
       assertCardinality(definition, anchor, 1, `${table} replacement anchor ${anchor}`);
     }
   }
   for (const indexName of REPLACED_LEGACY_INDEXES) {
-    const matches = sourceSql.match(new RegExp(`CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ${indexName}\\b`, "gu"));
+    const matches = frozenSourceSql.match(new RegExp(`CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ${indexName}\\b`, "gu"));
     if (matches?.length !== 1) {
       throw new Error(`G006A source schema expected one ${indexName} index anchor; found ${matches?.length ?? 0}`);
     }
@@ -465,9 +467,10 @@ export function assertAcceptedSqliteSchemaV1Source(sourceSql: string): void {
 
 function buildSqliteSchemaV1Sql(): string {
   assertAcceptedSqliteSchemaV1Source(SCHEMA_SQL);
+  const sourceSql = SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_SQL;
   const unscopedSettingsSeed = "INSERT OR IGNORE INTO settings (id) VALUES (1);";
-  assertCardinality(SCHEMA_SQL, unscopedSettingsSeed, 1, "unscoped settings seed");
-  let result = SCHEMA_SQL.replace(unscopedSettingsSeed, "");
+  assertCardinality(sourceSql, unscopedSettingsSeed, 1, "unscoped settings seed");
+  let result = sourceSql.replace(unscopedSettingsSeed, "");
   for (const table of SQLITE_SCHEMA_V1_TRANSFORM_TABLES) {
     result = replaceTable(result, table, TABLE_PATCHES[table]);
   }
@@ -475,6 +478,16 @@ function buildSqliteSchemaV1Sql(): string {
   const finalSql = `${result.trimEnd()}\n${SQLITE_SCHEMA_V1_RECEIPT_SQL.trim()}\n${SQLITE_SCHEMA_V1_INDEX_SQL.trim()}\n${SQLITE_SCHEMA_V1_DELETE_ACTION_SQL.trim()}\n`;
   assertFinalSchemaBuild(finalSql, unscopedSettingsSeed);
   return finalSql;
+}
+
+function frozenSqliteSchemaV1Source(sourceSql: string): string {
+  const additiveFragment = `${TENANT_MEMBERSHIP_MUTATION_JOURNAL_SQL}\n\n`;
+  const count = sourceSql.split(TENANT_MEMBERSHIP_MUTATION_JOURNAL_SQL).length - 1;
+  if (count === 0) return sourceSql;
+  if (count !== 1 || !sourceSql.includes(additiveFragment)) {
+    throw new Error("G006A membership journal additive schema fragment drift");
+  }
+  return sourceSql.replace(additiveFragment, "");
 }
 
 function replaceTable(sql: string, table: string, patch: TablePatch): string {

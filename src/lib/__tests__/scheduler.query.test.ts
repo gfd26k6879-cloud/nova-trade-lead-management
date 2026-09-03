@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { createTestDb, seedTestRun, seedTestZip } from "./test-helpers";
 
 let testDb: Database.Database;
+const TENANT_A = "10000000-0000-4000-8000-000000000001";
 
 vi.mock("@/lib/db/index", () => {
   return {
@@ -13,6 +14,27 @@ vi.mock("@/lib/db/index", () => {
   };
 });
 
+vi.mock("@/lib/tenancy/context", () => ({
+  getTenantContext: vi.fn(() => ({
+    tenantId: TENANT_A,
+    workspaceId: null,
+    membershipId: "20000000-0000-4000-8000-000000000001",
+    role: "owner",
+    roleBindingId: "30000000-0000-4000-8000-000000000001",
+    actorAuthIdentityId: "40000000-0000-4000-8000-000000000001",
+    correlationId: "scheduler-query-test",
+  })),
+  requireTenantContext: vi.fn(() => ({
+    tenantId: TENANT_A,
+    workspaceId: null,
+    membershipId: "20000000-0000-4000-8000-000000000001",
+    role: "owner",
+    roleBindingId: "30000000-0000-4000-8000-000000000001",
+    actorAuthIdentityId: "40000000-0000-4000-8000-000000000001",
+    correlationId: "scheduler-query-test",
+  })),
+}));
+
 import {
   completeWorkerRun,
   getCoverageByZip,
@@ -20,7 +42,10 @@ import {
   getSchedulerHealth,
   markStaleWorkerRunsInterrupted,
   getSettings,
+  getAllLeadsForRecompute,
   isSchedulerWorkerEnabled,
+  batchUpdateScores,
+  repairAiWebsiteFindingConsistency,
   recomputeAllLeadQualityScores,
   startWorkerRun,
   updateLeadAiFeedback,
@@ -28,24 +53,25 @@ import {
 } from "@/lib/db/queries";
 import { SCHEDULER_WORKER_METADATA, SCHEDULER_WORKER_NAMES } from "@/lib/scheduler/worker-metadata";
 
-function insertLead(id = "lead-feedback") {
+function insertLead(id = "lead-feedback", tenantId = TENANT_A) {
   testDb.prepare(
     `INSERT INTO leads (
-      id, place_id, name, phone, categories, website_status, score, status,
+      id, place_id, tenant_id, name, phone, categories, website_status, score, status,
       qualification_status, contactability_score, estimated_deal_value,
       ai_verification_status, ai_confidence, ai_website_viability_status, ai_found_website_url,
       quality_bucket, discovered_at, created_at, updated_at
     ) VALUES (
-      ?, ?, 'Feedback Plumbing', '303-555-0100', '["plumber"]', 'none', 30, 'new',
+      ?, ?, ?, 'Feedback Plumbing', '303-555-0100', '["plumber"]', 'none', 30, 'new',
       'qualified', 1, 3500,
       'site_found', 0.92, 'usable', 'https://wrong.example',
       'not_a_fit', '2026-05-01T10:00:00.000Z', '2026-05-01T10:00:00.000Z', '2026-05-01T10:00:00.000Z'
     )`
-  ).run(id, `place-${id}`);
+  ).run(id, `place-${id}`, tenantId);
 }
 
 beforeEach(() => {
   testDb = createTestDb();
+  testDb.exec(`ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}'`);
 });
 
 afterEach(() => {
@@ -181,6 +207,46 @@ describe("scheduler v2 query behavior", () => {
     ).run("2026-05-01T10:00:00.000Z", "2026-05-02T10:00:00.000Z", "fresh-score");
 
     expect(await recomputeAllLeadQualityScores(100)).toBe(1);
+  });
+
+  it("keeps all score candidate reads and writes inside the current tenant", async () => {
+    const tenantB = "10000000-0000-4000-8000-000000000002";
+    insertLead("tenant-a-score", TENANT_A);
+    insertLead("tenant-b-score", tenantB);
+    testDb.prepare(
+      "UPDATE leads SET updated_at = '2026-05-03T10:00:00.000Z', last_quality_scored_at = NULL WHERE id IN (?, ?)",
+    ).run("tenant-a-score", "tenant-b-score");
+
+    await expect(recomputeAllLeadQualityScores(100)).resolves.toBe(1);
+    expect(testDb.prepare("SELECT last_quality_scored_at FROM leads WHERE id = ?").get("tenant-a-score"))
+      .toMatchObject({ last_quality_scored_at: expect.any(String) });
+    expect(testDb.prepare("SELECT last_quality_scored_at FROM leads WHERE id = ?").get("tenant-b-score"))
+      .toEqual({ last_quality_scored_at: null });
+
+    await expect(getAllLeadsForRecompute()).resolves.toEqual([
+      expect.objectContaining({ id: "tenant-a-score" }),
+    ]);
+    await expect(batchUpdateScores([
+      { id: "tenant-a-score", score: 77 },
+      { id: "tenant-b-score", score: 99 },
+      { id: "missing-score", score: 88 },
+    ])).resolves.toBe(1);
+
+    expect(testDb.prepare("SELECT score FROM leads WHERE id = ?").get("tenant-a-score")).toEqual({ score: 77 });
+    expect(testDb.prepare("SELECT score FROM leads WHERE id = ?").get("tenant-b-score")).toEqual({ score: 30 });
+  });
+
+  it("repairs AI website score candidates only for the current tenant", async () => {
+    const tenantB = "10000000-0000-4000-8000-000000000002";
+    insertLead("tenant-a-repair", TENANT_A);
+    insertLead("tenant-b-repair", tenantB);
+
+    await expect(repairAiWebsiteFindingConsistency(Number.NaN)).resolves.toBe(1);
+
+    expect(testDb.prepare("SELECT website_status FROM leads WHERE id = ?").get("tenant-a-repair"))
+      .toEqual({ website_status: "custom" });
+    expect(testDb.prepare("SELECT website_status FROM leads WHERE id = ?").get("tenant-b-repair"))
+      .toEqual({ website_status: "none" });
   });
 
   it("builds scheduler operations summary with zero-data cost and backlog defaults", async () => {

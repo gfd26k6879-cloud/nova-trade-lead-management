@@ -1,28 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
-import { recomputeAllLeadQualityScores, repairAiWebsiteFindingConsistency } from "@/lib/db/queries";
+import {
+  getTenantScoreRecomputeSettings,
+  recomputeAllLeadQualityScores,
+  repairAiWebsiteFindingConsistency,
+} from "@/lib/db/queries";
 import { applyNoStoreHeaders } from "@/lib/http-cache";
 import { runTenantInternalWorkerRoute } from "@/lib/internal-worker-route";
 import { throwIfWorkerAborted } from "@/lib/worker-abort";
+import { withTenantDbContext } from "@/lib/db";
+import { createFailClosedWorkerLeaseResolverRuntime } from "@/lib/tenancy/worker-lease-runtime";
 
 const DEFAULT_SCORE_RECOMPUTE_BATCH_SIZE = 100;
-const denyUnconfiguredWorkerLease = () => Promise.resolve(null);
+const resolveLease = createFailClosedWorkerLeaseResolverRuntime({
+  workerName: "score_recompute",
+  action: "score_recompute:recompute",
+});
 
 export async function POST(request: NextRequest) {
   const response = await runTenantInternalWorkerRoute(
     request,
     "score_recompute",
     "score:recompute",
-    async (_context, signal) => {
+    async (_context, signal) => withTenantDbContext(async () => {
       throwIfWorkerAborted(signal);
+      const settings = await getTenantScoreRecomputeSettings();
+      if (!settings.scheduler_score_recompute_enabled) {
+        return { status: "disabled", reason: "Scheduler toggle is paused." };
+      }
       const batchSize = getScoreRecomputeBatchSize();
       const repaired = await repairAiWebsiteFindingConsistency(batchSize, signal);
       throwIfWorkerAborted(signal);
       const count = await recomputeAllLeadQualityScores(batchSize, signal);
       throwIfWorkerAborted(signal);
       return { status: repaired + count > 0 ? "processed" : "idle", count, repaired };
-    },
+    }),
     {
-      resolveLease: denyUnconfiguredWorkerLease,
+      resolveLease,
       sessionPermission: "score:recompute",
       action: "score_recompute:recompute",
     },

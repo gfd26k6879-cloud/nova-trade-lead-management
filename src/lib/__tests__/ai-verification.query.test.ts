@@ -3,15 +3,48 @@ import Database from "better-sqlite3";
 import { createTestDb } from "./test-helpers";
 
 let testDb: Database.Database;
+const TENANT_A = "10000000-0000-4000-8000-000000000001";
+const TENANT_B = "20000000-0000-4000-8000-000000000001";
+let dbReads = 0;
+let memberContext: {
+  tenantId: string;
+  workspaceId: string | null;
+  membershipId: string;
+  role: "owner";
+  roleBindingId: string;
+  actorAuthIdentityId: string;
+  correlationId: string;
+} | null;
+let workerContext: {
+  tenantId: string;
+  workspaceId: string | null;
+  workerName: string;
+  action: string;
+} | null;
 
 vi.mock("@/lib/db/index", () => {
   return {
-    getDb: () => testDb,
+    getDb: () => {
+      dbReads += 1;
+      return testDb;
+    },
     generateId: () => crypto.randomUUID(),
     nowISO: () => new Date().toISOString(),
     withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
   };
 });
+
+vi.mock("@/lib/tenancy/context", () => ({
+  getTenantContext: () => memberContext,
+  requireTenantContext: () => {
+    if (!memberContext) throw new Error("Tenant context is required");
+    return memberContext;
+  },
+}));
+
+vi.mock("@/lib/tenancy/worker-context", () => ({
+  getWorkerTenantContext: () => workerContext,
+}));
 
 import {
   applyAiFoundWebsite,
@@ -40,18 +73,22 @@ import {
   updateLeadAiVerificationSummary,
 } from "@/lib/db/queries";
 
-function insertLead() {
+function insertLead(id = "lead-1", tenantId = TENANT_A) {
   testDb.prepare(
     `INSERT INTO leads (
       id, place_id, name, categories, website_status, score, status,
       qualification_status, contactability_score, estimated_deal_value,
-      discovered_at, created_at, updated_at
+      tenant_id, discovered_at, created_at, updated_at
     ) VALUES (
       'lead-1', 'place-1', 'Gateway Park Dental', '["dentist"]', 'none', 12, 'new',
-      'needs_verification', 1, 4500,
+      'needs_verification', 1, 4500, ?,
       '2026-05-01T10:00:00.000Z', '2026-05-01T10:00:00.000Z', '2026-05-01T10:00:00.000Z'
     )`
-  ).run();
+  ).run(tenantId);
+  if (id !== "lead-1") {
+    testDb.prepare("UPDATE leads SET id = ?, place_id = ? WHERE tenant_id = ? AND id = 'lead-1'")
+      .run(id, `place-${id}`, tenantId);
+  }
 }
 
 beforeEach(() => {
@@ -59,7 +96,24 @@ beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "");
   vi.stubEnv("GOOGLE_PLACES_API_KEY", "");
   vi.stubEnv("NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY", "");
+  dbReads = 0;
+  memberContext = {
+    tenantId: TENANT_A,
+    workspaceId: null,
+    membershipId: "10000000-0000-4000-8000-000000000002",
+    role: "owner",
+    roleBindingId: "10000000-0000-4000-8000-000000000003",
+    actorAuthIdentityId: "10000000-0000-4000-8000-000000000004",
+    correlationId: "ai-verification-test",
+  };
+  workerContext = null;
   testDb = createTestDb();
+  testDb.exec(`
+    ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    ALTER TABLE ai_lead_verifications ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    ALTER TABLE ai_usage_events ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    ALTER TABLE lead_ai_artifacts ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+  `);
   insertLead();
 });
 
@@ -392,6 +446,55 @@ describe("AI verification queries", () => {
     expect(events[0]?.actor_user_id).toBe("researcher-1");
     expect(lead.ai_website_feedback_status).toBeNull();
     expect(lead.ai_corrected_website_url).toBeNull();
+  });
+
+  it("does not read or mutate another tenant's AI history or lead", async () => {
+    testDb.prepare(
+      `INSERT INTO leads (
+        id, place_id, name, categories, website_status, score, status,
+        qualification_status, contactability_score, estimated_deal_value, tenant_id,
+        discovered_at, created_at, updated_at
+      ) VALUES ('lead-foreign', 'place-foreign', 'Foreign', '[]', 'none', 9, 'new',
+        'needs_verification', 1, 1000, ?, ?, ?, ?)`,
+    ).run(TENANT_B, new Date().toISOString(), new Date().toISOString(), new Date().toISOString());
+
+    expect(await applyAiFoundWebsite("lead-foreign", "https://foreign.example")).toBe(0);
+    expect(await getLatestAiVerification("lead-foreign")).toBeNull();
+    await expect(createAiLeadVerification({
+      lead_id: "lead-foreign",
+      model: "gpt-5.4-mini",
+      status: "no_site_found",
+      recommendation: "keep",
+    })).rejects.toThrow("Lead is unavailable.");
+    expect(testDb.prepare("SELECT website_uri FROM leads WHERE id = 'lead-foreign'").get())
+      .toEqual({ website_uri: null });
+  });
+
+  it("rejects wrong and dual AI worker authority before opening the database", async () => {
+    memberContext = null;
+    workerContext = {
+      tenantId: TENANT_A,
+      workspaceId: null,
+      workerName: "ai_verification",
+      action: "ai_verification:wrong",
+    };
+    const beforeWrong = dbReads;
+    await expect(getLatestAiVerification("lead-1")).rejects.toThrow("Exact AI worker context is required.");
+    expect(dbReads).toBe(beforeWrong);
+
+    memberContext = {
+      tenantId: TENANT_A,
+      workspaceId: null,
+      membershipId: "10000000-0000-4000-8000-000000000002",
+      role: "owner",
+      roleBindingId: "10000000-0000-4000-8000-000000000003",
+      actorAuthIdentityId: "10000000-0000-4000-8000-000000000004",
+      correlationId: "ai-verification-test",
+    };
+    workerContext.action = "ai_verification:process";
+    const beforeDual = dbReads;
+    await expect(applyAiFoundWebsite("lead-1", "https://example.test")).rejects.toThrow("Conflicting AI tenant contexts.");
+    expect(dbReads).toBe(beforeDual);
   });
 
   it("summarizes advisory AI feedback for offline evaluation", async () => {

@@ -34,6 +34,7 @@ import {
   SQLITE_SCHEMA_V1_APPLICATION_TABLE_COUNT,
   SQLITE_SCHEMA_V1_ACCEPTED_LEGACY_INTERNAL_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_DIGEST,
+  SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_SQL,
   SQLITE_SCHEMA_V1_AUTOINCREMENT_TABLES,
   SQLITE_SCHEMA_V1_CATALOG_DIGEST,
   SQLITE_SCHEMA_V1_DEFINITION_DIGEST,
@@ -58,6 +59,7 @@ import {
   type SqliteBackfillDb,
   prepareSqliteCompatibilityBackfill,
 } from "@/lib/tenancy/compatibility-backfill";
+import { HAS_G006B_WINDOWS_DURABILITY_CAPABILITY } from "./sqlite-windows-durability-capability";
 
 const TENANT_A = "10000000-0000-4000-8000-000000000001";
 const TENANT_B = "10000000-0000-4000-8000-000000000002";
@@ -71,7 +73,7 @@ const PREPARED_LEGACY_SOURCE_TABLES = Object.freeze([
 ] as const);
 
 describe("G-006A staged SQLite schema and coordinator", () => {
-  const windowsFileIdentityIt = process.platform === "win32" ? it : it.skip;
+  const windowsFileIdentityIt = HAS_G006B_WINDOWS_DURABILITY_CAPABILITY ? it : it.skip;
 
   it("rejects forged direct access to the cyclic G006B finalization boundary", () => {
     const forgeries = [
@@ -158,7 +160,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
     const accepted = createAcceptedLegacyDatabase();
     const staged = createStagedDatabase();
     try {
-      raw.exec(SCHEMA_SQL);
+      raw.exec(SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_SQL);
       expect(readInternalCatalogRowCount(raw)).toBe(51);
       expect(sqliteInternalCatalogDigest(raw))
         .toBe("19fac76630dc9db2dcbc4654958e3def38a1dd416e01107832ad5d452f69b823");
@@ -309,7 +311,7 @@ describe("G-006A staged SQLite schema and coordinator", () => {
       });
       unknown.exec("CREATE TABLE unrelated (id TEXT PRIMARY KEY)");
       expect(classifySqliteSchemaV1(unknown).kind).toBe("unknown");
-      partial.exec(SCHEMA_SQL);
+      partial.exec(SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_SQL);
       partial.exec("ALTER TABLE settings ADD COLUMN tenant_id TEXT");
       expect(classifySqliteSchemaV1(partial)).toMatchObject({ kind: "partial" });
       drift.exec("CREATE INDEX g006a_drift_probe ON leads(id)");
@@ -1813,7 +1815,7 @@ function createTemporaryAcceptedLegacyDatabase(): TemporaryDatabaseFixture {
     cleanup: () => undefined,
   };
   fixture.db.pragma("foreign_keys = ON");
-  fixture.db.exec(SCHEMA_SQL);
+  fixture.db.exec(SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_SQL);
   prepareSqliteCompatibilityBackfill(sqliteBackfillAdapter(fixture.db));
   fixture.cleanup = () => {
     if (fixture.db.open) fixture.db.close();
@@ -2036,7 +2038,7 @@ function createStagedDatabase(): Database.Database {
 
 function createAcceptedLegacyDatabase(): Database.Database {
   const db = createEmptyDatabase();
-  db.exec(SCHEMA_SQL);
+  db.exec(SQLITE_SCHEMA_V1_ACCEPTED_SOURCE_SQL);
   prepareSqliteCompatibilityBackfill(sqliteBackfillAdapter(db));
   return db;
 }

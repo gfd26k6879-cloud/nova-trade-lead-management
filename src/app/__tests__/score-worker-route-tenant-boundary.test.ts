@@ -8,6 +8,19 @@ const queryMocks = vi.hoisted(() => ({
   repairAiWebsiteFindingConsistency: vi.fn(),
 }));
 
+const leaseRuntimeMocks = vi.hoisted(() => {
+  const resolveLease = vi.fn();
+  return {
+    resolveLease,
+    createFailClosedWorkerLeaseResolverRuntime: vi.fn((binding: { workerName: string; action: string }) => {
+      if (binding.workerName !== "score_recompute" || binding.action !== "score_recompute:recompute") {
+        throw new Error("Unexpected worker lease binding");
+      }
+      return resolveLease;
+    }),
+  };
+});
+
 vi.mock("@/lib/db/queries", () => ({
   completeWorkerRun: vi.fn(),
   ensureDbReady: vi.fn(),
@@ -18,12 +31,17 @@ vi.mock("@/lib/db/queries", () => ({
   repairAiWebsiteFindingConsistency: queryMocks.repairAiWebsiteFindingConsistency,
   startWorkerRun: vi.fn(),
 }));
+vi.mock("@/lib/tenancy/worker-lease-runtime", () => ({
+  createFailClosedWorkerLeaseResolverRuntime: leaseRuntimeMocks.createFailClosedWorkerLeaseResolverRuntime,
+}));
 
 import { GET, POST } from "@/app/api/scores/recompute-stale/route";
 
 describe("score recompute tenant worker route boundary", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    queryMocks.recomputeAllLeadQualityScores.mockClear();
+    queryMocks.repairAiWebsiteFindingConsistency.mockClear();
+    leaseRuntimeMocks.resolveLease.mockReset();
     vi.stubEnv("WORKER_CRON_SECRET", "worker-secret");
   });
 
@@ -44,6 +62,7 @@ describe("score recompute tenant worker route boundary", () => {
   });
 
   it("fails closed before unscoped score queries when no durable tenant lease resolver exists", async () => {
+    leaseRuntimeMocks.resolveLease.mockResolvedValueOnce(null);
     const request = new NextRequest(
       "https://example.test/api/scores/recompute-stale?tenantId=forged&worker=ai_verification",
       {
@@ -58,6 +77,8 @@ describe("score recompute tenant worker route boundary", () => {
 
     const response = await POST(request);
 
+    expect(leaseRuntimeMocks.resolveLease).toHaveBeenCalledOnce();
+    expect(leaseRuntimeMocks.resolveLease).toHaveBeenCalledWith("opaque-score-worker-lease");
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({
       status: "error",
@@ -67,5 +88,12 @@ describe("score recompute tenant worker route boundary", () => {
     expect(response.headers.get("cache-control")).toContain("no-store");
     expect(queryMocks.repairAiWebsiteFindingConsistency).not.toHaveBeenCalled();
     expect(queryMocks.recomputeAllLeadQualityScores).not.toHaveBeenCalled();
+  });
+
+  it("binds score recompute to its exact runtime resolver", () => {
+    expect(leaseRuntimeMocks.createFailClosedWorkerLeaseResolverRuntime).toHaveBeenCalledWith({
+      workerName: "score_recompute",
+      action: "score_recompute:recompute",
+    });
   });
 });
