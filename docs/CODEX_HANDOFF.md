@@ -1,21 +1,19 @@
 # Nova Trade Agent Handoff
 
-Current as of September 2, 2026. This document replaces the historical June/July handoff state. Older plans and audits remain useful history, but they are not the current task queue.
+Current as of September 3, 2026. This document replaces the historical June/July handoff state. Older plans and audits remain useful history, but they are not the current task queue.
 
 ## Start here
 
-- Workspace: `/home/Masih/Projects/nova-trade-lead-management`
-- GitHub: `https://github.com/Masih-0x3/nova-trade-lead-management`
-- Branch: `codex/nova-multitenant-integration`
-- Checkpoint base: `320fcb3` (`fix: tenant-scope bulk lead ai operations`)
-- Pre-push remote baseline: `58e58f81e6a9b80b87f4aaab428cbf3a703082ac`
-- This handoff is committed with the checkpoint it describes; use `git rev-parse HEAD` and `git status --short --branch` for its final SHA and live remote position.
+- Repository: `https://github.com/gfd26k6879-cloud/nova-trade-lead-management` (standalone; not a fork and it tracks no upstream)
+- Branch: `main` is the only long-lived branch. The former `codex/nova-multitenant-integration` integration branch was merged into `main` in `328df2d` and is retired.
+- Checkpoint base: `328df2d` (`Sync main with codex/nova-multitenant-integration (L-01 included)`)
+- Use `git rev-parse HEAD` and `git status --short --branch` for the live SHA and remote position.
 - Active plan: `docs/plans/2026-08-29-lean-finish-plan.md`
 - Product requirements: `docs/product-requirements-multi-tenant-lead-intelligence-platform.md`
 
-The checkpoint includes the newest tenant-hardening and worker work. After the checkpoint, the only expected working-tree entry is the unrelated local `.commandcode/` directory: do not edit, stage, or commit it.
+The checkpoint includes the newest tenant-hardening and worker work. Local agent-tooling state (for example `.commandcode/`) is ignored by git and must not be committed.
 
-Do not stage, commit, push, deploy, run CI/CD, apply remote migrations, enable paid provider work, or mutate production unless the user explicitly asks. The present goal is a complete local application first.
+Do not deploy, run CI/CD, apply remote migrations, enable paid provider work, or mutate production unless the user explicitly asks. Land code through pull requests against `main`. The present goal is a complete local application first.
 
 ## What is implemented
 
