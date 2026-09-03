@@ -61,3 +61,6 @@ next-env.d.ts
 *.dump
 *.sql.gz
 .env*.local
+
+# Local agent-tooling state (personal preference profiles, never project data)
+.commandcode/
