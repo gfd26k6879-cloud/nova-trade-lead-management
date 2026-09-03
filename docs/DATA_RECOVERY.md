@@ -275,3 +275,37 @@ The July 2026 audit found remote-only migration version `20260610045957`
 idempotent reconciliation for fresh tracked environments; it does not rewrite
 or mark the missing historical version. Before any linked migration operation,
 verify live state with `supabase migration list --linked` and `supabase db pull`.
+
+### 2026-09-03 hosted reconciliation (L-01)
+
+The live history read on 2026-09-03 resolved the divergence above. The hosted
+project's `supabase_migrations` bookkeeping held 20 rows written by a different
+tooling track: 19 rows carried the repository's migration names under
+CLI-generated versions, plus `20260610045957` whose content equals
+`202607120001_reconcile_researcher_ai_feedback_schema.sql`. Catalog comparison
+against a fresh 63-migration replay on disposable PostgreSQL 16 confirmed the
+hosted content matched the repository head through `202606160001` (plus the
+reconciled feedback schema) with no unexplained drift: the only column and
+index differences came from the two Supabase-only migrations the replay lane
+skips and from the later tenant-scope migrations not yet applied.
+
+Repairs performed with a verified backup first:
+
+1. A full logical backup of the hosted project (all public tables, the four
+   `auth` tables, and the recorded bookkeeping SQL) was exported read-only and
+   its restore was verified on a disposable database with exact row-count
+   equality across all 23 public tables.
+2. `supabase migration repair --status applied` marked 29 local versions whose
+   content was already present remotely, including `202607120001`.
+3. `supabase migration repair --status reverted` removed the 19 orphaned
+   platform-named rows after their SQL was captured in the backup.
+4. `supabase db push` applied 13 migrations (`202607100001` through
+   `202607270010`): the review-redaction and hardening migrations plus the
+   tenant-foundation tables, policies, and backfill infrastructure.
+
+The remaining tenant-scope migrations (`202607290001` through
+`20260830030000`) are blocked by their own G002 data-preflight guards: the
+hosted database holds legacy rows (`user_market_access`, `crawl_runs`,
+`crawl_units`, `leads`) that must first be reconciled to a Nova Trade tenant
+per the `L-02` outcome. Do not bypass these guards; the reconciliation is an
+owner-approved data step with its own backup.
