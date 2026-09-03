@@ -2,18 +2,13 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { toast } from "sonner";
 import { PageShell } from "@/components/page-shell";
 import {
   getSchedulerOperationsAction,
-  resumeRecommendedSchedulerWorkersAction,
-  updateAllSchedulerWorkersEnabledAction,
-  updateSchedulerWorkerEnabledAction,
 } from "@/lib/crawl/actions";
 import {
   SCHEDULER_WORKER_METADATA,
   getSchedulerWorkerMetadata,
-  type SchedulerWorkerName,
 } from "@/lib/scheduler/worker-metadata";
 import { getStatusToneStyle, type StatusTone } from "@/lib/status-tone";
 
@@ -41,7 +36,6 @@ const PIPELINE = [
 export function SchedulerClient({ initialOperations }: { initialOperations: SchedulerOperations }) {
   const [operations, setOperations] = useState(initialOperations);
   const [activeTab, setActiveTab] = useState<SchedulerTab>("overview");
-  const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const workersByName = useMemo(() => new Map(operations.health.workers.map((worker) => [worker.workerName, worker])), [operations.health.workers]);
   const activeWorkers = operations.health.workers.filter((worker) => worker.enabled).length;
   const queueDepth = operations.health.workers.reduce((sum, worker) => sum + worker.queueDepth, 0);
@@ -51,44 +45,6 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
   const refresh = async () => {
     const next = await getSchedulerOperationsAction();
     setOperations(next);
-  };
-
-  const toggleWorker = async (workerName: SchedulerWorkerName, enabled: boolean) => {
-    setLoadingAction(workerName);
-    const result = await updateSchedulerWorkerEnabledAction(workerName, enabled);
-    if ("error" in result) {
-      toast.error(result.error);
-    } else {
-      toast.success(`${getSchedulerWorkerMetadata(workerName).label} ${enabled ? "resumed" : "paused"}`);
-      await refresh();
-    }
-    setLoadingAction(null);
-  };
-
-  const pauseAll = async () => {
-    setLoadingAction("pause-all");
-    const result = await updateAllSchedulerWorkersEnabledAction(false);
-    if ("error" in result) toast.error(String(result.error ?? "Unable to pause workers"));
-    else {
-      toast.success("All background workers paused");
-      await refresh();
-    }
-    setLoadingAction(null);
-  };
-
-  const resumeRecommended = async () => {
-    setLoadingAction("resume-recommended");
-    const result = await resumeRecommendedSchedulerWorkersAction();
-    if ("error" in result) toast.error(String(result.error ?? "Unable to resume workers"));
-    else {
-      const blocked = [
-        result.openAiReady ? null : "OpenAI workers stayed paused",
-        result.googleReady ? null : "Google workers stayed paused",
-      ].filter(Boolean).join(". ");
-      toast.success(blocked ? `Recommended workers resumed. ${blocked}.` : "Recommended workers resumed");
-      await refresh();
-    }
-    setLoadingAction(null);
   };
 
   return (
@@ -114,13 +70,8 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
               {tab.label}
             </button>
           ))}
-          <div className="ml-auto flex flex-wrap gap-2">
-            <button type="button" className="btn-glass text-sm" disabled={loadingAction === "pause-all"} onClick={pauseAll}>
-              {loadingAction === "pause-all" ? "Pausing..." : "Pause All"}
-            </button>
-            <button type="button" className="btn-primary text-sm" disabled={loadingAction === "resume-recommended"} onClick={resumeRecommended}>
-              {loadingAction === "resume-recommended" ? "Resuming..." : "Resume Recommended"}
-            </button>
+          <div className="ml-auto rounded-lg px-3 py-2 text-xs" style={{ background: "var(--surface-muted)", color: "var(--text-tertiary)" }}>
+            Worker controls are managed at platform level.
           </div>
         </div>
       </section>
@@ -217,8 +168,6 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
               <WorkerCard
                 key={metadata.workerName}
                 worker={worker}
-                loading={loadingAction === worker.workerName}
-                onToggle={() => toggleWorker(worker.workerName, !worker.enabled)}
               />
             );
           })}
@@ -306,7 +255,7 @@ export function SchedulerClient({ initialOperations }: { initialOperations: Sche
   );
 }
 
-function WorkerCard({ worker, loading, onToggle }: { worker: SchedulerWorker; loading: boolean; onToggle: () => void }) {
+function WorkerCard({ worker }: { worker: SchedulerWorker }) {
   const metadata = getSchedulerWorkerMetadata(worker.workerName);
   const progressPct = workerProgressPct(worker);
   const nextAction = getNextAction(worker);
@@ -321,9 +270,6 @@ function WorkerCard({ worker, loading, onToggle }: { worker: SchedulerWorker; lo
           </div>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>{metadata.purpose}</p>
         </div>
-        <button type="button" className={worker.enabled ? "btn-glass text-sm" : "btn-primary text-sm"} disabled={loading} onClick={onToggle}>
-          {loading ? "Saving..." : worker.enabled ? "Pause" : "Resume"}
-        </button>
       </div>
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2">

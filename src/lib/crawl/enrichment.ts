@@ -22,6 +22,8 @@ import { enqueueAiVerificationForLead } from "@/lib/ai/verification-worker";
 import { runAiPostSuccessBookkeeping } from "@/lib/ai/post-success-bookkeeping";
 import type { WebsiteStatus } from "@/lib/classify-website";
 import { throwIfWorkerAborted } from "@/lib/worker-abort";
+import { getTenantContext } from "@/lib/tenancy/context";
+import { requireWorkerTenantContext } from "@/lib/tenancy/worker-context";
 
 export interface EnrichResult {
   status: "enriched" | "idle" | "error";
@@ -32,10 +34,12 @@ export interface EnrichResult {
 }
 
 export async function enrichNextLead(signal?: AbortSignal): Promise<EnrichResult> {
+  const workerContext = requireExactEnrichmentWorkerContext();
   throwIfWorkerAborted(signal);
   const settings = await getSettings();
   throwIfWorkerAborted(signal);
-  const run = (await getActiveCrawlRun()) ?? (await getLatestCrawlRun());
+  const runScope = { tenantId: workerContext.tenantId, workspaceId: null };
+  const run = (await getActiveCrawlRun(runScope)) ?? (await getLatestCrawlRun(runScope));
   throwIfWorkerAborted(signal);
   const runId = run?.id ?? null;
 
@@ -48,6 +52,9 @@ export async function enrichNextLead(signal?: AbortSignal): Promise<EnrichResult
   if (!lead) {
     return { status: "idle" };
   }
+  if (lead.tenant_id !== workerContext.tenantId) {
+    throw new Error("Leased enrichment tenant does not match the active worker context.");
+  }
   const includeAtmosphere = lead.score >= settings.enrichment_stage_b_min_score;
 
   try {
@@ -58,39 +65,6 @@ export async function enrichNextLead(signal?: AbortSignal): Promise<EnrichResult
     });
     throwIfWorkerAborted(signal);
     const details = detailsResult.place;
-
-    if (!detailsResult.fromCache) {
-      await logApiUsageEvent({
-        crawl_run_id: runId,
-        lead_id: lead.id,
-        endpoint: API_ENDPOINT_PLACE_DETAILS,
-        sku: detailsResult.sku,
-        field_mask: detailsResult.fieldMask,
-        success: true,
-        was_cached: false,
-        billable_units: 1,
-        metadata: {
-          includeAtmosphere,
-          leadScore: lead.score,
-        },
-      });
-      throwIfWorkerAborted(signal);
-    }
-
-    throwIfWorkerAborted(signal);
-    await recordPlaceObservation({
-      place_id: lead.place_id,
-      crawl_run_id: runId,
-      lead_id: lead.id,
-      endpoint: API_ENDPOINT_PLACE_DETAILS,
-      sku: detailsResult.sku,
-      field_mask: detailsResult.fieldMask,
-      raw_json: JSON.stringify(sanitizePlaceDetailsForStorage(details, {
-        includeAtmosphere,
-        reviewInsights: detailsResult.reviewInsights,
-      }) ?? {}),
-    });
-    throwIfWorkerAborted(signal);
 
     const reviewHighlights = detailsResult.reviewInsights?.keywords;
     let editorialSummary: string | null = null;
@@ -153,7 +127,7 @@ export async function enrichNextLead(signal?: AbortSignal): Promise<EnrichResult
     );
 
     throwIfWorkerAborted(signal);
-    await updateLeadEnrichment(lead.id, {
+    const enrichmentUpdated = await updateLeadEnrichment(lead.enrichment_lease, {
       name: details?.displayName?.text ?? null,
       address: details?.formattedAddress ?? null,
       phone: details?.nationalPhoneNumber ?? null,
@@ -176,10 +150,32 @@ export async function enrichNextLead(signal?: AbortSignal): Promise<EnrichResult
       website_checked_at: websiteHealthData ? new Date().toISOString() : null,
       score: newScore,
     });
+    if (!enrichmentUpdated) {
+      throw new Error("Enrichment lease is no longer active.");
+    }
     throwIfWorkerAborted(signal);
 
-    throwIfWorkerAborted(signal);
+    if (!detailsResult.fromCache) {
+      await logApiUsageEvent({
+        tenantId: lead.tenant_id,
+        crawl_run_id: runId,
+        lead_id: lead.id,
+        endpoint: API_ENDPOINT_PLACE_DETAILS,
+        sku: detailsResult.sku,
+        field_mask: detailsResult.fieldMask,
+        success: true,
+        was_cached: false,
+        billable_units: 1,
+        metadata: {
+          includeAtmosphere,
+          leadScore: lead.score,
+        },
+      });
+      throwIfWorkerAborted(signal);
+    }
+
     await upsertPlaceMaster({
+      tenantId: lead.tenant_id,
       place_id: lead.place_id,
       name: details?.displayName?.text ?? lead.name,
       address: details?.formattedAddress ?? lead.address,
@@ -204,9 +200,28 @@ export async function enrichNextLead(signal?: AbortSignal): Promise<EnrichResult
     });
     throwIfWorkerAborted(signal);
 
+    await recordPlaceObservation({
+      tenantId: lead.tenant_id,
+      place_id: lead.place_id,
+      crawl_run_id: runId,
+      lead_id: lead.id,
+      endpoint: API_ENDPOINT_PLACE_DETAILS,
+      sku: detailsResult.sku,
+      field_mask: detailsResult.fieldMask,
+      raw_json: JSON.stringify(sanitizePlaceDetailsForStorage(details, {
+        includeAtmosphere,
+        reviewInsights: detailsResult.reviewInsights,
+      }) ?? {}),
+    });
+    throwIfWorkerAborted(signal);
+
     if (identityChanged && settings.ai_enabled && settings.ai_auto_verify_enabled && settings.ai_reverify_after_enrichment) {
       try {
-        await enqueueAiVerificationForLead(lead.id, "place_details_enrichment", { settings });
+        await enqueueAiVerificationForLead(lead.id, "place_details_enrichment", {
+          settings,
+          tenantId: lead.tenant_id,
+          queueOnly: true,
+        });
         throwIfWorkerAborted(signal);
       } catch (error) {
         throwIfWorkerAborted(signal);
@@ -234,10 +249,18 @@ export async function enrichNextLead(signal?: AbortSignal): Promise<EnrichResult
     throwIfWorkerAborted(signal);
     const errorMessage = err instanceof Error ? err.message : String(err);
     const failurePolicy = classifyEnrichmentFailure(err, lead.enrichment_attempt_count, lead.enrichment_max_attempts);
-    await markLeadEnrichmentFailed(lead.id, errorMessage, failurePolicy.code, {
+    const failureRecorded = await markLeadEnrichmentFailed(lead.enrichment_lease, errorMessage, failurePolicy.code, {
       nextRetryAt: failurePolicy.nextRetryAt,
       terminal: failurePolicy.terminal,
     });
+    if (!failureRecorded) {
+      return {
+        status: "error",
+        leadId: lead.id,
+        leadName: lead.name ?? "Unknown",
+        error: "Enrichment lease is no longer active.",
+      };
+    }
     throwIfWorkerAborted(signal);
     await createAuditLog("enrichment_error", "lead", lead.id, { error: errorMessage });
     throwIfWorkerAborted(signal);
@@ -248,6 +271,20 @@ export async function enrichNextLead(signal?: AbortSignal): Promise<EnrichResult
       error: errorMessage,
     };
   }
+}
+
+function requireExactEnrichmentWorkerContext() {
+  const memberContext = getTenantContext();
+  const workerContext = requireWorkerTenantContext();
+  if (memberContext) throw new Error("Conflicting enrichment tenant contexts.");
+  if (
+    workerContext.workerName !== "enrichment" ||
+    workerContext.action !== "enrichment:process" ||
+    workerContext.workspaceId !== null
+  ) {
+    throw new Error("Exact enrichment worker context is required.");
+  }
+  return workerContext;
 }
 
 type EnrichmentFailurePolicy = {

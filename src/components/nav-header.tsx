@@ -8,7 +8,14 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { ADMIN_NAV_ITEMS, PRIMARY_NAV_ITEMS } from "@/lib/navigation";
 import type { AppRole } from "@/lib/permissions";
 
-export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: { email: string; role: AppRole; fulfillmentCount?: number; logoutAction: () => Promise<void> }) {
+type ShellScope = {
+  tenantLabel: string;
+  workspaceLabel: string | null;
+  roleLabel: string;
+  preview: boolean;
+};
+
+export function NavHeader({ email, role, scope, fulfillmentCount = 0, logoutAction }: { email: string; role: AppRole; scope: ShellScope; fulfillmentCount?: number; logoutAction: () => Promise<void> }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const adminMenuRef = useRef<HTMLDivElement>(null);
@@ -61,21 +68,28 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
         boxShadow: "var(--nav-shadow)",
       }}
     >
-      <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-3.5">
-        <div className="flex items-center gap-3">
+      <div className="mx-auto flex w-full max-w-[1360px] items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
+        <div className="flex min-w-0 items-center gap-3">
           <BrandMark />
-          <div>
+          <div className="min-w-0">
             <h1 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-              Nova Trade Lead Management
+              Nova Trade
             </h1>
-            <p className="text-[0.6875rem] leading-tight" style={{ color: "var(--text-tertiary)" }}>
-              {email} - {role}
+            <p className="hidden text-[0.6875rem] leading-tight xl:block" style={{ color: "var(--text-tertiary)" }}>
+              Lead intelligence
             </p>
           </div>
+          <ScopeContext scope={scope} className="hidden lg:flex" />
         </div>
 
         {/* Desktop nav */}
         <nav className="hidden items-center gap-1 md:flex" aria-label="Primary">
+          <Link href="/onboarding" className={`nav-link ${isActivePath(pathname, "/onboarding", searchParams) ? "nav-link-active" : ""}`}>
+            Setup
+          </Link>
+          <Link href="/knowledge" className={`nav-link ${isActivePath(pathname, "/knowledge", searchParams) ? "nav-link-active" : ""}`}>
+            Knowledge
+          </Link>
           {PRIMARY_NAV_ITEMS.map((item) => (
             <Link key={item.href} href={item.href} className={`nav-link ${isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}>
               <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
@@ -84,7 +98,8 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
         </nav>
 
         <div className="flex items-center gap-2">
-          <ThemeToggle />
+          <ScopeContext scope={scope} compact className="flex lg:hidden" />
+          <ThemeToggle className="min-h-11 min-w-11 md:min-h-10 md:min-w-10" />
 
           {isAdmin && (
             <div ref={adminMenuRef} className="relative hidden md:block">
@@ -122,7 +137,7 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
           )}
 
           <form action={logoutAction} className="hidden md:block">
-            <button type="submit" className="btn-glass text-xs">
+            <button type="submit" className="btn-glass text-xs" aria-label={`Log out ${email}`} title={`Signed in as ${email}`}>
               Log out
             </button>
           </form>
@@ -132,7 +147,7 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
             <button
               ref={mobileButtonRef}
               type="button"
-              className="btn-glass"
+              className="btn-glass min-h-11 min-w-11 px-3"
               onClick={() => {
                 setAdminOpen(false);
                 setMobileOpen((open) => !open);
@@ -169,11 +184,23 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
           style={{ borderColor: "var(--menu-border)", background: "var(--menu-bg)", boxShadow: "var(--menu-shadow)" }}
         >
           <nav className="flex flex-col gap-1" aria-label="Mobile">
+            <div className="mb-2 rounded-xl border p-3" style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)" }}>
+              <p className="section-label">Signed in</p>
+              <p className="mt-1 break-all text-xs" style={{ color: "var(--text-secondary)" }}>{email}</p>
+            </div>
+            <p className="section-label px-3 pt-1">Setup</p>
+            <Link href="/onboarding" className={`nav-link min-h-11 w-full ${isActivePath(pathname, "/onboarding", searchParams) ? "nav-link-active" : ""}`} onClick={() => setMobileOpen(false)}>
+              Onboarding
+            </Link>
+            <Link href="/knowledge" className={`nav-link min-h-11 w-full ${isActivePath(pathname, "/knowledge", searchParams) ? "nav-link-active" : ""}`} onClick={() => setMobileOpen(false)}>
+              Knowledge review
+            </Link>
+            <p className="section-label px-3 pt-3">Legacy</p>
             {PRIMARY_NAV_ITEMS.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`nav-link w-full ${isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}
+                className={`nav-link min-h-11 w-full ${isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}
                 onClick={() => setMobileOpen(false)}
               >
                 <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
@@ -186,7 +213,7 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`nav-link w-full ${isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}
+                    className={`nav-link min-h-11 w-full ${isActivePath(pathname, item.href, searchParams) ? "nav-link-active" : ""}`}
                     onClick={() => setMobileOpen(false)}
                   >
                     <NavLabel label={item.label} count={item.badge === "fulfillment" ? fulfillmentCount : 0} />
@@ -201,6 +228,27 @@ export function NavHeader({ email, role, fulfillmentCount = 0, logoutAction }: {
         </div>
       )}
     </header>
+  );
+}
+
+function ScopeContext({ scope, compact = false, className = "" }: { scope: ShellScope; compact?: boolean; className?: string }) {
+  const workspace = scope.workspaceLabel ?? "Tenant-wide";
+  const previewLabel = scope.preview ? "Preview fixture · " : "";
+  const fullLabel = `${previewLabel}${scope.tenantLabel} · ${workspace} · ${scope.roleLabel}`;
+
+  return (
+    <div
+      aria-label={scope.preview ? "Preview tenant and workspace" : "Current tenant and workspace"}
+      title={fullLabel}
+      className={`${className} min-w-0 items-center rounded-xl border ${compact ? "max-w-24 px-2 py-1.5" : "max-w-64 px-3 py-2"}`}
+      style={{ background: "var(--surface-muted)", borderColor: "var(--surface-card-border)" }}
+    >
+      <div className="min-w-0">
+        <p className="section-label">{scope.preview ? "Preview fixture" : compact ? "Scope" : "Tenant / workspace"}</p>
+        <p className="truncate text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{scope.tenantLabel}</p>
+        <p className="truncate text-[0.65rem]" style={{ color: "var(--text-tertiary)" }}>{workspace} · {scope.roleLabel}</p>
+      </div>
+    </div>
   );
 }
 

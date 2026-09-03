@@ -47,7 +47,8 @@ function getErrorMessage(error?: string): string | null {
   if (!error) return null;
   if (error === "missing_config") return "Supabase Auth is not configured.";
   if (error === "invalid_email") return "Enter a valid email address.";
+  if (error === "reset_failed") return "Password reset could not be requested. Please try again.";
   if (error === "missing_origin") return "Password reset links must use https://www.nosite.xyz. Ask an admin to check NEXT_PUBLIC_APP_URL in Vercel.";
   if (error === "expired_link") return "That account link is expired or was already used. Request a fresh reset link and open only the newest email.";
-  return decodeURIComponent(error);
+  return null;
 }

@@ -1,10 +1,13 @@
+import { randomUUID } from "node:crypto";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { requirePermission } from "@/lib/auth";
-import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
+import { getTenantSession, requirePermission } from "@/lib/auth";
+import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout, withTenantDbContext } from "@/lib/db/index";
 import { ensureDbReady, getStatisticsSummary, type StatisticsSummary } from "@/lib/db/queries";
 import { PageShell } from "@/components/page-shell";
 import { startRouteTiming } from "@/lib/route-timing";
+import { assertTenantPermission } from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
 import { StatisticsClient } from "./statistics-client";
 
 export const metadata: Metadata = { title: "Statistics | Nova Trade Lead Management" };
@@ -19,18 +22,45 @@ interface Props {
 
 export default async function StatisticsPage({ searchParams }: Props) {
   const logRouteTiming = startRouteTiming("/statistics");
-  await requirePermission("crawl:manage");
+  const legacySession = await requirePermission("crawl:manage");
+  let tenantSession: Awaited<ReturnType<typeof getTenantSession>>;
+  try {
+    tenantSession = await getTenantSession({});
+  } catch {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <StatisticsUnavailable reason="tenant_scope_unavailable" />;
+  }
+  if (
+    !tenantSession
+    || tenantSession.userId !== legacySession.userId
+    || tenantSession.workspaceId !== null
+  ) {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <StatisticsUnavailable reason="tenant_scope_unavailable" />;
+  }
+
+  try {
+    await assertTenantPermission(tenantSession, "report:read", { action: "statistics.page" });
+  } catch {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <StatisticsUnavailable reason="tenant_scope_unavailable" />;
+  }
+
   const params = await searchParams;
   let summary: StatisticsSummary;
   try {
-    summary = await withDbStatementTimeout(10_000, async () => {
-      await ensureDbReady();
-      return getStatisticsSummary({
-        range: params.range,
-        from: params.from,
-        to: params.to,
-      });
-    });
+    summary = await runWithTenantContext(
+      tenantSession,
+      `statistics-page:${randomUUID()}`,
+      () => withTenantDbContext(() => withDbStatementTimeout(10_000, async () => {
+        await ensureDbReady();
+        return getStatisticsSummary({
+          range: params.range,
+          from: params.from,
+          to: params.to,
+        });
+      })),
+    );
     logRouteTiming(200);
   } catch (error) {
     const reason = routeFailureReason(error);

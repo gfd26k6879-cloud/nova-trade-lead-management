@@ -2,6 +2,27 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+const crawlActionMocks = vi.hoisted(() => ({
+  getCoverageCellLedgerAction: vi.fn(),
+  getCoverageDiscoveryItemListAction: vi.fn(),
+  getCoverageMarketSummaryAction: vi.fn(),
+  getCoverageProbeCandidatesAction: vi.fn(),
+  getCoverageRunProgressAction: vi.fn(),
+  getCoverageSelectedRunAction: vi.fn(),
+  getCoverageUnitPreviewAction: vi.fn(),
+  getFailedUnitErrorsAction: vi.fn(),
+  pauseCrawlRunAction: vi.fn(),
+  promoteProbeToLeadHarvestAction: vi.fn(),
+  resumeCrawlRunAction: vi.fn(),
+  runGoogleDiscoveryDiagnosticAction: vi.fn(),
+  retryFailedUnitsAction: vi.fn(),
+  stopCrawlRunAction: vi.fn(),
+}));
+
+const leadActionMocks = vi.hoisted(() => ({
+  refreshStaleUnitsAction: vi.fn(),
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
@@ -14,29 +35,17 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("@/lib/crawl/actions", () => ({
-  getCoverageCellLedgerAction: vi.fn(),
-  getCoverageDiscoveryItemListAction: vi.fn(),
-  getCoverageMarketSummaryAction: vi.fn(),
-  getCoverageProbeCandidatesAction: vi.fn(),
-  getCoverageRunProgressAction: vi.fn(),
-  getCoverageSelectedRunAction: vi.fn(),
-  getCoverageUnitPreviewAction: vi.fn(),
-  getFailedUnitErrorsAction: vi.fn(),
-  pauseCrawlRunAction: vi.fn(),
-  promoteProbeToLeadHarvestAction: vi.fn(),
-  resumeRecommendedSchedulerWorkersAction: vi.fn(),
-  resumeCrawlRunAction: vi.fn(),
-  runGoogleDiscoveryDiagnosticAction: vi.fn(),
-  retryFailedUnitsAction: vi.fn(),
-  stopCrawlRunAction: vi.fn(),
-}));
+vi.mock("@/lib/crawl/actions", () => crawlActionMocks);
 
-vi.mock("@/lib/leads/actions", () => ({
-  refreshStaleUnitsAction: vi.fn(),
-}));
+vi.mock("@/lib/leads/actions", () => leadActionMocks);
 
-import { CoverageClient } from "@/app/(protected)/coverage/coverage-client";
+import {
+  CoverageClient,
+  loadCoverageFailedUnits,
+  pauseCoverageDiscovery,
+  promoteCoverageProbe,
+  refreshCoverageStaleUnits,
+} from "@/app/(protected)/coverage/coverage-client";
 
 const baseRun = {
   id: "run-1",
@@ -109,12 +118,43 @@ function renderCoverage(overrides: Partial<React.ComponentProps<typeof CoverageC
       crawlWorker={{ enabled: true, googlePlacesKeyConfigured: true, googlePlacesKeySource: "env" }}
       geography={null}
       unitPreview={[]}
+      crawlWorkspaces={[{
+        tenantId: "10000000-0000-4000-8000-000000000001",
+        workspaceId: "20000000-0000-4000-8000-000000000001",
+        name: "Primary workspace",
+      }]}
+      initialCrawlWorkspaceId="20000000-0000-4000-8000-000000000001"
       {...overrides}
     />,
   );
 }
 
 describe("CoverageClient discovery monitor", () => {
+  it("passes the selected concrete workspace to monitor control and promotion actions", async () => {
+    const workspace = {
+      tenantId: "10000000-0000-4000-8000-000000000001",
+      workspaceId: "20000000-0000-4000-8000-000000000001",
+      name: "Primary workspace",
+    };
+
+    await pauseCoverageDiscovery("run-1", workspace);
+    await promoteCoverageProbe("run-1", workspace);
+    await loadCoverageFailedUnits("run-1", workspace);
+    await refreshCoverageStaleUnits("run-1", 7, workspace);
+
+    expect(crawlActionMocks.pauseCrawlRunAction).toHaveBeenCalledWith("run-1", workspace);
+    expect(crawlActionMocks.promoteProbeToLeadHarvestAction).toHaveBeenCalledWith("run-1", workspace);
+    expect(crawlActionMocks.getFailedUnitErrorsAction).toHaveBeenCalledWith("run-1", workspace);
+    expect(leadActionMocks.refreshStaleUnitsAction).toHaveBeenCalledWith("run-1", 7, workspace);
+  });
+
+  it("renders the concrete workspace used by coverage actions", () => {
+    const html = renderCoverage();
+
+    expect(html).toContain("Discovery workspace");
+    expect(html).toContain("Primary workspace");
+  });
+
   it("renders blocked runs with exact cause and safe actions", () => {
     const html = renderCoverage({
       run: {
@@ -146,7 +186,8 @@ describe("CoverageClient discovery monitor", () => {
     expect(html).toContain("Waiting for worker");
     expect(html).toContain("crawl scheduler is paused");
     expect(html).toContain("Google key source: Settings UI stored");
-    expect(html).toContain("Enable recommended workers");
+    expect(html).toContain("Worker controls are managed at platform level");
+    expect(html).not.toContain("Enable recommended workers");
     expect(html).toContain("Retrying later");
     expect(html).toContain("google_rate_limited");
     expect(html).toContain("1/3");

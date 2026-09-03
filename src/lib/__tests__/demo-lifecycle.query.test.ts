@@ -4,12 +4,18 @@ import { createTestDb } from "./test-helpers";
 
 let testDb: Database.Database;
 const NOW = "2026-06-16T12:00:00.000Z";
+const TENANT_A = "10000000-0000-4000-8000-000000000001";
 
 vi.mock("@/lib/db/index", () => ({
   getDb: () => testDb,
   generateId: () => crypto.randomUUID(),
   nowISO: () => NOW,
   withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
+}));
+
+vi.mock("@/lib/tenancy/context", () => ({
+  getTenantContext: vi.fn(() => null),
+  requireTenantContext: vi.fn(() => ({ tenantId: TENANT_A, workspaceId: null })),
 }));
 
 import {
@@ -23,6 +29,11 @@ import {
 
 beforeEach(() => {
   testDb = createTestDb();
+  testDb.exec(`
+    ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    ALTER TABLE demos ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    CREATE INDEX demos_tenant_lead ON demos (tenant_id, lead_id);
+  `);
   testDb.prepare(
     `INSERT INTO leads (
       id, place_id, name, phone, website_status, maps_uri, categories, score,
@@ -74,5 +85,23 @@ describe("demo lifecycle", () => {
     expect(revoked?.revoked_at).toBe(NOW);
     expect(revoked?.revoke_reason).toBe("Owner requested removal");
     expect(await getPublishedDemoBySlug(published!.slug)).toBeNull();
+  });
+
+  it("keeps one current demo and makes repeated lifecycle transitions idempotent", async () => {
+    const first = await createDemoForLead("lead-1");
+    const second = await createDemoForLead("lead-1");
+    expect(second?.id).toBe(first?.id);
+    expect(testDb.prepare(
+      "SELECT COUNT(*) AS count FROM demos WHERE tenant_id = ? AND lead_id = ? AND revoked_at IS NULL",
+    ).get(TENANT_A, "lead-1")).toEqual({ count: 1 });
+
+    const published = await publishDemoForLead("lead-1", "admin-1");
+    expect((await publishDemoForLead("lead-1", "admin-2"))?.id).toBe(published?.id);
+    const revoked = await revokeDemoForLead("lead-1", "admin-1", "Owner request");
+    expect(revoked?.is_published).toBe(false);
+    expect((await publishDemoForLead("lead-1", "admin-2"))?.id).not.toBe(revoked?.id);
+    expect(testDb.prepare(
+      "SELECT COUNT(*) AS count FROM demos WHERE tenant_id = ? AND lead_id = ? AND revoked_at IS NULL",
+    ).get(TENANT_A, "lead-1")).toEqual({ count: 1 });
   });
 });

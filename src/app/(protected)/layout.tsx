@@ -1,11 +1,22 @@
+import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 
 import { logoutAction } from "@/app/login/actions";
-import { getSession } from "@/lib/auth";
+import { getSession, getTenantSession } from "@/lib/auth";
 import { NavHeader } from "@/components/nav-header";
+import { withTenantDbContext } from "@/lib/db";
 import { getAdminFulfillmentSummary } from "@/lib/db/queries";
+import { assertTenantPermission } from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
 
 export const dynamic = "force-dynamic";
+
+const LEGACY_PREVIEW_SHELL_SCOPE = {
+  tenantLabel: "Legacy compatibility",
+  workspaceLabel: "Legacy website leads",
+  roleLabel: "Tenant role unavailable",
+  preview: true,
+};
 
 export default async function ProtectedLayout({
   children,
@@ -43,10 +54,39 @@ export default async function ProtectedLayout({
     );
   }
 
+  let tenantSession = null;
+  try {
+    tenantSession = await getTenantSession({});
+  } catch {
+    // Scope resolution is deliberately non-enumerating. The legacy preview is
+    // informational only and never grants tenant authority.
+    tenantSession = null;
+  }
+
+  const shellScope = tenantSession?.userId === session.userId
+    ? {
+        tenantLabel: `Tenant ID · ${tenantSession.tenantId}`,
+        workspaceLabel: tenantSession.workspaceId
+          ? `Workspace ID · ${tenantSession.workspaceId}`
+          : null,
+        roleLabel: tenantSession.role,
+        preview: false,
+      }
+    : LEGACY_PREVIEW_SHELL_SCOPE;
+
   let fulfillmentCount = 0;
-  if (session.role === "admin") {
+  if (
+    session.role === "admin"
+    && tenantSession?.userId === session.userId
+    && tenantSession.workspaceId === null
+  ) {
     try {
-      fulfillmentCount = (await getAdminFulfillmentSummary()).openTotal;
+      await assertTenantPermission(tenantSession, "account:read", { action: "layout.fulfillment.badge" });
+      fulfillmentCount = await runWithTenantContext(
+        tenantSession,
+        `protected-layout:${randomUUID()}`,
+        () => withTenantDbContext(async () => (await getAdminFulfillmentSummary()).openTotal),
+      );
     } catch {
       fulfillmentCount = 0;
     }
@@ -54,8 +94,20 @@ export default async function ProtectedLayout({
 
   return (
     <div className="min-h-screen">
-      <NavHeader email={session.email} role={session.role} fulfillmentCount={fulfillmentCount} logoutAction={logoutAction} />
-      <main className="mx-auto w-full max-w-7xl px-6 py-7">{children}</main>
+      <a
+        href="#main-content"
+        className="fixed left-4 top-4 z-[100] -translate-y-24 rounded-lg bg-[var(--surface-card)] px-4 py-2 text-sm font-semibold text-[var(--text-primary)] shadow-lg transition-transform focus:translate-y-0"
+      >
+        Skip to main content
+      </a>
+      <NavHeader
+        email={session.email}
+        role={session.role}
+        scope={shellScope}
+        fulfillmentCount={fulfillmentCount}
+        logoutAction={logoutAction}
+      />
+      <main id="main-content" tabIndex={-1} className="mx-auto w-full max-w-[1360px] px-4 py-5 sm:px-6 sm:py-7">{children}</main>
     </div>
   );
 }

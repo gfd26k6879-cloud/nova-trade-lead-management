@@ -1,183 +1,152 @@
-# Codex Handoff
+# Nova Trade Agent Handoff
 
-Historical handoff: June 16, 2026. The July 12, 2026 remediation checkpoint below supersedes its unqualified current-state claims.
+Current as of September 2, 2026. This document replaces the historical June/July handoff state. Older plans and audits remain useful history, but they are not the current task queue.
 
-## Active Workspace
+## Start here
 
-Use this repo only:
+- Workspace: `/home/Masih/Projects/nova-trade-lead-management`
+- GitHub: `https://github.com/Masih-0x3/nova-trade-lead-management`
+- Branch: `codex/nova-multitenant-integration`
+- Checkpoint base: `320fcb3` (`fix: tenant-scope bulk lead ai operations`)
+- Pre-push remote baseline: `58e58f81e6a9b80b87f4aaab428cbf3a703082ac`
+- This handoff is committed with the checkpoint it describes; use `git rev-parse HEAD` and `git status --short --branch` for its final SHA and live remote position.
+- Active plan: `docs/plans/2026-08-29-lean-finish-plan.md`
+- Product requirements: `docs/product-requirements-multi-tenant-lead-intelligence-platform.md`
 
-`/Users/stevmq/lead-generation`
+The checkpoint includes the newest tenant-hardening and worker work. After the checkpoint, the only expected working-tree entry is the unrelated local `.commandcode/` directory: do not edit, stage, or commit it.
 
-The old local folder was archived because it was stale:
+Do not stage, commit, push, deploy, run CI/CD, apply remote migrations, enable paid provider work, or mutate production unless the user explicitly asks. The present goal is a complete local application first.
 
-`/Users/stevmq/lead-generation-main.archived-20260514-223729`
+## What is implemented
 
-GitHub and Vercel deploy from the active repo. Do not continue work from the archived folder.
+The existing lead-management application is largely implemented and its current code gates are green. Recent work completed these areas:
 
-## July 12, 2026 Remediation Checkpoint
+- Tenant-safe lead reads, writes, ownership changes, quality actions, exclusions, lifecycle actions, outreach/demo actions, dashboard analytics, API usage, cache access, and score recomputation.
+- Compare-and-swap and lease protections for concurrency-sensitive lead, crawl, enrichment, AI-verification, and worker operations.
+- Fail-closed authorization at protected pages, settings/admin actions, exports, and worker routes.
+- Hardened authentication callback redirects.
+- Local SQLite tenant-membership administration with a durable mutation journal, tenant-scoped history, role assignment, and authorization checks.
+- PostgreSQL worker-dispatch migration, lease store, lease runtime, exact worker/action binding, generations, replay protection, cancellation, and restricted-role inspection.
+- Exact lazy lease resolution on all five worker routes:
+  - `/api/crawl/process-next`
+  - `/api/crawl/enrich-next`
+  - `/api/ai/verify-next`
+  - `/api/ai/artifacts/process-next`
+  - `/api/scores/recompute-stale`
+- Tenant-scoped canonical-place backfill, crawl/enrichment queueing, place cache, aggregates, and worker selection.
+- Windows-only durability tests are capability-gated instead of failing other platforms.
 
-- The active local branch is `codex/agile-discovery-engine`; the whole-app remediation is intentionally uncommitted, unpushed, undeployed, and includes three unapplied tracked Supabase migrations.
-- Node 24 `npm run release:check` passed: TypeScript, ESLint, 96 Vitest files / 515 tests, recovery-contract verification, a production build, and five public read-only Playwright checks.
-- Protected-page proxy coverage now has one canonical route list and includes `/explore`; the current production build redirects an unauthenticated `/explore` request to `/login` with private no-store caching before the protected layout runs.
-- AI queue audit bookkeeping is now non-critical: an audit-write failure cannot reprocess discovery or enrichment after the core queue operation succeeds, and a failed queue attempt's audit write cannot turn completed discovery/enrichment work into a retry.
-- Isolated local desktop/mobile browser QA passed for the public login/privacy flow, password-recovery navigation, and unauthenticated protected-route redirects. Authenticated admin/researcher browser QA remains blocked by absent approved E2E state or credentials.
-- Live read-only checks confirmed `https://www.nosite.xyz/api/health` and `/login` return 200 and `/queue` redirects to `/login` with the expected security headers. This does not prove the local branch is deployed.
-- Live `https://www.nosite.xyz/robots.txt` now contains the intended invite-only rules without a prepended Cloudflare-wide `Allow: /` policy. The former Managed-robots follow-up is resolved as of this checkpoint.
-- The local workspace still has no `DATABASE_URL` or linked Supabase CLI project, but read-only Supabase/Vercel connector checks now verify current migration, scheduler/backlog, privilege, deployment, and runtime-error state. Production backup/restore and authenticated browser workflows remain explicitly unverified.
+The branch history also contains foundations for tenant/workspace/RBAC, document intake and extraction, bounded agent execution, connector policy/runtime, lifecycle jobs, audit context, exports, deletion, support access, and private document storage. Treat these as foundations, not proof that their complete user-facing workflows are finished.
 
-## July 12, 2026 Read-Only Production Evidence
+## What is not implemented or proven
 
-- Supabase `nosite-leads-prod` is `ACTIVE_HEALTHY`; its tracked remote migration history currently ends at `202606160001_launch_readiness_reliability`. The three newer local migrations (`202607100001`, `202607120001`, and `202607120002`) are not applied.
-- All 23 public application tables deny direct `SELECT` and `INSERT` to both `anon` and `authenticated`; the advisor's repeated RLS-with-no-policy notices are intentional deny-by-default, not an observed data-access leak.
-- Production is operationally paused: all five scheduler flags are disabled, no worker run exists in the last seven days, 5,744 leads remain in the AI `queued` state (last updated June 12), and one crawl run is paused. Re-enabling this will trigger provider work and was not performed.
-- Vercel production deployment `dpl_9ozH32aFsC6qgtJdK9tiWNetUec7` is `READY` at commit `783127179c8db009c388aa34d8078452063736c5`; it is the pre-remediation baseline, not this uncommitted local work. Vercel reported no runtime error clusters in the last seven days.
+### Immediate local-runtime gap
 
-## Current Production State
+The code compiles, tests, and builds, but the authenticated application and durable workers have not yet been exercised end to end against a local Supabase stack.
 
-- GitHub repo: `https://github.com/Masihhedayati/lead-generation`
-- Production app: `https://www.nosite.xyz`
-- Latest deployed commit confirmed July 12: `783127179c8db009c388aa34d8078452063736c5`
-- Latest production deployment confirmed July 12: `dpl_9ozH32aFsC6qgtJdK9tiWNetUec7`
-- Vercel project: `lead-generation`
-- Runtime: Next.js 16.2.6, React 19.2.6, Node 24.x on Vercel
-- Database: Supabase Postgres in production, SQLite locally when `DATABASE_URL` is not set
-- Launch posture: invite-only public. The app stays private/admin-invited; `/privacy`, `/terms`, `/support`, `/data-sources`, and published demo links are public.
+To close that gap:
 
-## Major Work Completed
+1. Start a local Supabase Auth + PostgreSQL environment and apply the repository migrations locally.
+2. Configure local environment values without committing them.
+3. Seed an admin identity, tenant, workspace, membership, role binding, and policy.
+4. Provision the restricted worker lease issuer/resolver roles.
+5. Add a small local dispatcher that acquires a durable lease and calls the matching worker route.
+6. Run authenticated browser tests for admin and researcher paths, then exercise each worker route.
 
-- Built the AI-verified lead quality pipeline around `gpt-5.4-mini` only.
-- Added automatic AI verification queueing for eligible discovered leads.
-- Added lead intelligence artifacts:
-  - Business Detail / Website Build Brief
-  - Competitive Report / Pitch Brief
-- Added Scheduler Operations Center at `/scheduler`.
-- Added Supabase Cron worker endpoints and shared worker auth support.
-- Improved Discovery/Coverage controls with pause, resume, stop, retry, and clearer run progress.
-- Fixed stale AI website state handling so AI-found usable websites are repaired out of no-site/ready queues.
-- Added atomic worker leasing for:
-  - AI verification jobs
-  - lead AI artifact jobs
-  - crawl units
-- Added artifact retry metadata and retry behavior.
-- Fixed welcome invite and password reset links to use canonical `NEXT_PUBLIC_APP_URL`.
-- Replaced temporary password display with welcome invite/reset email flow.
-- Added CSV formula-injection protection.
-- Added route aliases for `/discover`, `/run-monitor`, `/monitor`, and `/stats`.
-- Archived the stale local repo and documented the active source of truth.
-- Removed the legacy batch worker route so individual scheduler endpoints are the only worker execution API.
-- Added enrichment lease/retry/error terminal state, atomic lead upsert metadata, and failed-run terminal status.
-- Added admin launch readiness checklist, fulfillment pressure badge, public trust pages, demo draft/publish/unpublish/revoke/view lifecycle, and Statistics value-proof reporting.
-- Added shared dialog focus management and keyboard-safe Kanban move controls.
+Authentication is Supabase-only. Without Supabase configuration, public pages and the SQLite-backed application shell can run, but protected pages cannot be used. When `DATABASE_URL` is absent, application data falls back to `nosite-leads.db`; this does not replace Supabase Auth or the PostgreSQL worker lease path.
 
-## Verification From Last Remediation Batch
+Required worker runtime variables include:
 
-These passed locally under Node 24 in the June 16 launch-readiness remediation:
+- `TENANT_WORKER_LEASE_ISSUER_DATABASE_URL`
+- `TENANT_WORKER_LEASE_RESOLVER_DATABASE_URL`
 
-```bash
-npm run lint
-npm run test
-npm run build
-```
+These are not yet documented in `.env.example`. Missing or malformed worker configuration correctly results in `401` and zero work; there is no SQLite or application-role fallback.
 
-Also passed:
+Initial provisioning still explicitly reports these blockers in `src/lib/tenancy/provisioning.ts`:
 
-```text
-npx tsc --noEmit --pretty false
-85 test files passed
-405 tests passed
-```
+- `OWNER_ACCEPTANCE_REQUIRED`
+- `INVITATION_RECORD_NOT_IMPLEMENTED`
+- `INVITATION_DELIVERY_NOT_IMPLEMENTED`
+- `AUTH_USER_CREATION_NOT_IMPLEMENTED`
 
-E2E status:
+### Broader product gap
 
-```text
-Authenticated rendered QA is still blocked until E2E_STORAGE_STATE or E2E_SUPABASE_EMAIL/E2E_SUPABASE_PASSWORD are configured.
-```
+The expanded multi-tenant lead-intelligence product is not “done except for the database.” Major end-to-end product work remains in:
 
-June 16 continuation evidence:
+- invitation acceptance and full tenant operations;
+- document upload, scanning, extraction, evidence review, and citations;
+- business understanding, adaptive questions, ICPs, and lead plays;
+- generalized connectors, canonical accounts, contacts, and buying centers;
+- explainable qualification and reusable review queues;
+- cited outreach approval/export and outcome learning;
+- the complete authenticated UI over real services;
+- local acceptance, then staging/release work after explicit authorization.
 
-- No local `.auth` storage-state file or E2E credential env vars were present.
-- 1Password Environments MCP authenticated successfully, but no visible Environment was named for NoSite or this repo.
-- Vercel production env names include Supabase/runtime/admin variables, but no `E2E_STORAGE_STATE`, `E2E_SUPABASE_EMAIL`, or `E2E_SUPABASE_PASSWORD` variables. Do not treat `NOSITE_ADMIN_PASSWORD` as proof of a Supabase E2E login; the app login path uses Supabase `signInWithPassword`.
-- Wrangler is logged in with zone read and Workers-related scopes, but not zone settings/admin write. The Cloudflare API connector also returned an invalid-token error for a read call, so the Managed robots block still needs dashboard/owner-token access.
+The existing lead-management application is much closer to completion than that expanded product vision. Do not conflate the two scopes.
 
-Local production-mode smoke:
+## Runtime configuration
 
-- `next start` passed on `http://127.0.0.1:3001`.
-- `/privacy`, `/terms`, `/support`, `/data-sources`, and `/login` rendered at desktop and mobile widths with no detected horizontal overflow.
-- `/dashboard`, `/coverage`, `/explore`, `/leads`, `/quality`, `/team`, `/statistics`, `/users`, and `/scheduler` all landed on `/login` when unauthenticated.
-- The deleted legacy batch worker route returned `404`.
-- `/api/health` returned only coarse JSON, but local status was `503` because the local dependency check was unhealthy.
+Copy `.env.example` to an ignored `.env.local` and use local-only values. Never commit credentials. Relevant configuration includes:
 
-Production smoke checks after deploy:
+- `DATABASE_URL` and `POSTGRES_MAX_CONNECTIONS`
+- `NEXT_PUBLIC_APP_URL`
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `NOSITE_BOOTSTRAP_ADMIN_EMAIL`
+- `NOSITE_ENCRYPTION_SECRET`
+- `WORKER_CRON_SECRET`
+- the two worker lease database URLs above
+- optional Google Places, Google Maps, and OpenAI keys when real provider calls are intentionally enabled
 
-- `https://www.nosite.xyz/api/health` returned `{"status":"ok","checkedAt":"..."}` with no dependency details.
-- `/privacy`, `/terms`, `/support`, `/data-sources`, and `/login` rendered live at desktop and mobile widths with no detected horizontal overflow.
-- The live trust pages no longer trigger Cloudflare Email Obfuscation injection or React hydration errors; support contact is rendered as `support [at] nosite.xyz`.
-- `/dashboard`, `/coverage`, `/explore`, `/leads`, `/quality`, `/team`, `/statistics`, `/users`, and `/scheduler` all landed on `/login` when unauthenticated.
-- The deleted legacy batch worker route returned `404`.
-- Unauthenticated worker and explore API probes returned `401`.
-- Production deployment is ready and aliased to `https://www.nosite.xyz`, `https://nosite.xyz`, and existing Vercel aliases.
-- Still not performed: authenticated admin/researcher browser smoke, because `E2E_STORAGE_STATE` and `E2E_SUPABASE_EMAIL`/`E2E_SUPABASE_PASSWORD` were unavailable.
-- Superseded July 12, 2026: live `robots.txt` no longer prepends a broad Cloudflare `Allow: /` block; the invite-only policy is now the full observed response.
+Real provider credentials are not required for the first local structural/authentication pass. Keep paid work disabled until explicitly approved.
 
-## Important Caveats
+## Last verified state
 
-- `npm audit --omit=dev` still reports a moderate advisory from Next's bundled PostCSS under `next@16.2.6`. npm suggests a breaking downgrade to `next@9.3.3`, so it was intentionally not applied.
-- `supabase/migrations/202606160001_launch_readiness_reliability.sql` was applied directly through `supabase db query --linked --file ...`, and `supabase migration repair --linked --status applied 202606160001` succeeded.
-- Supabase migration history is still broadly drifted from prior remote repairs, so do not run a blanket `supabase db push` without first reconciling local and remote migration history.
+On September 2, 2026, with Node 24:
 
-## Next Best Tasks
+- TypeScript passed.
+- Full ESLint passed.
+- Vitest passed: 265 files, 3,990 tests; 16 files and 186 environment/capability-dependent tests skipped.
+- Next.js production build passed and generated all 11 static pages.
+- `git diff --check` passed.
+- The Git index was empty.
+- `/login` returned `200` under `next start`.
+- `/dashboard` returned the expected unauthenticated `307` redirect.
+- `/api/health` returned `503` because required local deployment/auth/runtime configuration was absent.
 
-1. Reconcile Supabase migration history before the next schema migration:
-
-   ```bash
-   supabase migration list --linked
-   supabase db pull
-   ```
-
-2. Add local E2E credentials or storage state so authenticated browser QA can actually run:
-
-   ```bash
-   E2E_STORAGE_STATE=.auth/admin.json
-   E2E_SUPABASE_EMAIL=<admin email>
-   E2E_SUPABASE_PASSWORD=<password>
-   ```
-
-   Then run the read-only launch screenshot audit:
-
-   ```bash
-   E2E_BASE_URL=https://www.nosite.xyz npm run test:e2e:launch
-   ```
-
-3. Open `/scheduler` in production after login and verify:
-   - worker toggles display correctly,
-   - AI verification queue is draining,
-   - worker auth failures, if any, show clear messages,
-   - score recompute repairs AI-found usable websites out of no-site queues,
-   - the legacy batch worker route returns 404 in production.
-
-4. Continue improving lead quality:
-   - review several AI-verified leads manually,
-   - mark false positives/incorrect websites,
-   - tune scoring weights based on actual pitch outcomes.
-
-5. Later, add a true historical coverage ledger across all runs. Current Coverage/Discovery Monitor is intentionally scoped to the selected/latest run.
-
-## Safe Startup For A New Codex Project
-
-Open the new Codex project at:
-
-`/Users/stevmq/lead-generation`
-
-Then run:
+Use the repository's Node 24-compatible commands:
 
 ```bash
-git status
-git pull origin main
-npm install
-npm run lint
-npm run test
-npm run build
+npx -y node@24 ./node_modules/typescript/bin/tsc --noEmit
+npx -y node@24 ./node_modules/eslint/bin/eslint.js .
+npx -y node@24 ./node_modules/vitest/vitest.mjs run
+npx -y node@24 ./node_modules/next/dist/bin/next build
+git diff --check
 ```
 
-If the old chat says "Current working directory missing", that is expected because it started from the archived stale folder. Start new work from the active repo above.
+Run focused tests while editing. Run the full set after a shared foundation or complete workflow changes; do not rerun the entire gate after every tiny edit.
+
+## Git and secret safety
+
+A September 2 pre-push scan found:
+
+- no copy of the exposed callback token in the working tree or outgoing history;
+- no committed `.env`, credential, private-key, or secret files;
+- no outgoing blobs larger than 5 MB;
+- only deliberate fake credential strings inside security tests;
+- an empty staging index.
+
+The GitHub/CodeRabbit credential pasted into the prior conversation must still be revoked or rotated because chat exposure is enough to compromise it.
+
+GitHub will not transfer ignored local state such as `.env.local`, SQLite databases, Supabase local metadata, or provider credentials. Transfer required local secrets through an approved secret channel and recreate disposable local data where possible.
+
+## Next agent workflow
+
+1. Read this file and the lean finish plan.
+2. Run `git status --short --branch` and inspect overlapping changes before editing.
+3. Take the first ready outcome that does not overlap another active writer.
+4. Implement the smallest complete vertical slice and run its focused checks.
+5. Report only changed files, checks, and a real blocker. Update the plan only when an outcome changes state.
+
+The immediate priority is `L-01` in the lean finish plan: make the current application genuinely usable locally with local Supabase, seeded tenant identity, worker roles, dispatcher, and authenticated browser proof.

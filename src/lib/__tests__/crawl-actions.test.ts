@@ -4,10 +4,25 @@ import { createTestDb, seedTestRun, seedTestUnit, seedTestZip } from "./test-hel
 
 let testDb: Database.Database;
 
+const authMocks = vi.hoisted(() => ({
+  requirePermission: vi.fn(),
+}));
+
 const dbIndexMocks = vi.hoisted(() => ({
+  getDb: vi.fn(),
   isDbStatementTimeoutError: vi.fn((error: unknown) => (error as { code?: string }).code === "57014"),
   isTransientDbError: vi.fn(() => false),
   withDbStatementTimeout: vi.fn((_timeoutMs: number, fn: () => Promise<unknown>) => fn()),
+  withTenantDbContext: vi.fn((fn: (db: unknown) => Promise<unknown>) => fn(testDb)),
+}));
+
+const tenantAuthorizationMocks = vi.hoisted(() => ({
+  requireTenantPermission: vi.fn(),
+  runWithTenantContext: vi.fn((_session: unknown, _correlationId: unknown, fn: () => unknown) => fn()),
+  actualRunWithTenantContext: null as null | ((session: unknown, correlationId: unknown, fn: () => unknown) => unknown),
+  actualGetTenantContext: null as null | (() => unknown),
+  getTenantContext: vi.fn(),
+  getCurrentTenantPolicy: vi.fn(),
 }));
 
 const googlePlacesMocks = vi.hoisted(() => ({
@@ -15,18 +30,41 @@ const googlePlacesMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/auth", () => ({
-  requirePermission: vi.fn(() => Promise.resolve({ userId: "admin-1", email: "admin@example.com", role: "admin" })),
+  requirePermission: authMocks.requirePermission,
+}));
+
+vi.mock("@/lib/tenancy/authorize", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/tenancy/authorize")>(),
+  requireTenantPermission: tenantAuthorizationMocks.requireTenantPermission,
+}));
+
+vi.mock("@/lib/tenancy/context", async (importOriginal) => ({
+  ...await (async () => {
+    const actual = await importOriginal<typeof import("@/lib/tenancy/context")>();
+    tenantAuthorizationMocks.actualRunWithTenantContext = actual.runWithTenantContext as typeof tenantAuthorizationMocks.actualRunWithTenantContext;
+    tenantAuthorizationMocks.actualGetTenantContext = actual.getTenantContext;
+    return actual;
+  })(),
+  runWithTenantContext: tenantAuthorizationMocks.runWithTenantContext,
+  getTenantContext: tenantAuthorizationMocks.getTenantContext,
+}));
+
+vi.mock("@/lib/tenancy/queries", () => ({
+  createTenantQueryRepository: vi.fn(() => ({
+    getCurrentTenantPolicy: tenantAuthorizationMocks.getCurrentTenantPolicy,
+  })),
 }));
 
 vi.mock("@/lib/db/index", () => {
   return {
-    getDb: () => testDb,
+    getDb: dbIndexMocks.getDb,
     generateId: () => crypto.randomUUID(),
     nowISO: () => new Date().toISOString(),
     withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
     isDbStatementTimeoutError: dbIndexMocks.isDbStatementTimeoutError,
     isTransientDbError: dbIndexMocks.isTransientDbError,
     withDbStatementTimeout: dbIndexMocks.withDbStatementTimeout,
+    withTenantDbContext: dbIndexMocks.withTenantDbContext,
   };
 });
 
@@ -55,21 +93,81 @@ import {
   getCoverageDiscoveryItemsAction,
   getCoverageProbeCandidatesAction,
   getCoverageSelectedRunAction,
+  getFailedUnitErrorsAction,
   getDashboardAnalyticsAction,
+  getDashboardSummaryPanelsAction,
   getDashboardStatsAction,
+  getSchedulerOperationsAction,
   estimateDiscoveryRunAction,
+  pauseCrawlRunAction,
   promoteProbeToLeadHarvestAction,
   resumeCrawlRunAction,
   retryFailedUnitsAction,
+  runGoogleDiscoveryDiagnosticAction,
+  resumeRecommendedSchedulerWorkersAction,
   startCrawlRunAction,
   stopCrawlRunAction,
+  updateAllSchedulerWorkersEnabledAction,
+  updateSchedulerWorkerEnabledAction,
 } from "@/lib/crawl/actions";
 import { PlacesApiError } from "@/lib/google-places";
+import { API_ENDPOINT_TEXT_SEARCH } from "@/lib/db/queries";
+import { TenantAuthorizationError } from "@/lib/tenancy/authorize";
+import { TENANT_POLICY_DEFAULTS } from "@/lib/tenancy/schemas";
 
 const originalGooglePlacesApiKey = process.env.GOOGLE_PLACES_API_KEY;
+const USER_ID = "00000000-0000-4000-8000-000000000001";
+const TENANT_ID = "10000000-0000-4000-8000-000000000001";
+const WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
+const TENANT_SESSION = Object.freeze({
+  userId: USER_ID,
+  email: "admin@example.com",
+  displayName: "Admin",
+  tenantId: TENANT_ID,
+  workspaceId: WORKSPACE_ID,
+  membershipId: "30000000-0000-4000-8000-000000000001",
+  role: "owner" as const,
+  roleBindingId: "40000000-0000-4000-8000-000000000001",
+});
+const TENANT_WIDE_SESSION = Object.freeze({
+  ...TENANT_SESSION,
+  workspaceId: null,
+});
+
+function sourcePolicy(overrides: Record<string, unknown> = {}) {
+  return {
+    ...TENANT_POLICY_DEFAULTS,
+    id: "50000000-0000-4000-8000-000000000001",
+    tenantId: TENANT_ID,
+    version: 1,
+    sourceResearchEnabled: true,
+    requireSourcePlanApproval: false,
+    createdAt: "2026-08-30T00:00:00.000Z",
+    updatedAt: "2026-08-30T00:00:00.000Z",
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   testDb = createTestDb();
+  dbIndexMocks.getDb.mockReset();
+  dbIndexMocks.getDb.mockImplementation(() => testDb);
+  testDb.exec(`ALTER TABLE crawl_runs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_ID}'`);
+  testDb.exec("ALTER TABLE crawl_runs ADD COLUMN workspace_id TEXT");
+  testDb.exec(`ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_ID}'`);
+  testDb.exec("ALTER TABLE leads ADD COLUMN workspace_id TEXT");
+  testDb.exec(`ALTER TABLE api_usage_events ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_ID}'`);
+  testDb.exec("ALTER TABLE api_usage_events ADD COLUMN source_card_id TEXT NOT NULL DEFAULT 'google_places_legacy'");
+  testDb.prepare("INSERT INTO tenants (id, slug, name, status) VALUES (?, 'crawl-actions', 'Crawl Actions', 'active')")
+    .run(TENANT_ID);
+  testDb.prepare("INSERT INTO workspaces (id, tenant_id, slug, name, status) VALUES (?, ?, 'default', 'Default', 'active')")
+    .run(WORKSPACE_ID, TENANT_ID);
+  testDb.prepare(
+    "INSERT INTO tenant_memberships (id, tenant_id, auth_identity_id, workspace_id, status) VALUES (?, ?, ?, ?, 'active')",
+  ).run(TENANT_SESSION.membershipId, TENANT_ID, USER_ID, WORKSPACE_ID);
+  testDb.prepare(
+    "INSERT INTO tenant_role_bindings (id, tenant_id, membership_id, role, reason_code) VALUES (?, ?, ?, 'owner', 'initial_provisioning')",
+  ).run(TENANT_SESSION.roleBindingId, TENANT_ID, TENANT_SESSION.membershipId);
   seedTestZip(testDb, "80202", "Denver", 39.75, -104.99, "Denver");
   process.env.GOOGLE_PLACES_API_KEY = "test-google-key";
   googlePlacesMocks.textSearch.mockReset();
@@ -77,6 +175,40 @@ beforeEach(() => {
   dbIndexMocks.isDbStatementTimeoutError.mockImplementation((error: unknown) => (error as { code?: string }).code === "57014");
   dbIndexMocks.isTransientDbError.mockReturnValue(false);
   dbIndexMocks.withDbStatementTimeout.mockImplementation((_timeoutMs: number, fn: () => Promise<unknown>) => fn());
+  dbIndexMocks.withTenantDbContext.mockClear();
+  dbIndexMocks.withTenantDbContext.mockImplementation((fn: (db: unknown) => Promise<unknown>) => fn(testDb));
+  tenantAuthorizationMocks.requireTenantPermission.mockReset();
+  tenantAuthorizationMocks.requireTenantPermission.mockImplementation(
+    (selector: { workspaceId?: unknown }, permission: string) => Promise.resolve(
+      permission === "workspace:read" || selector.workspaceId === WORKSPACE_ID
+        ? TENANT_SESSION
+        : TENANT_WIDE_SESSION,
+    ),
+  );
+  authMocks.requirePermission.mockReset();
+  authMocks.requirePermission.mockResolvedValue({
+    userId: USER_ID,
+    email: "admin@example.com",
+    displayName: "Admin",
+    role: "admin",
+  });
+  tenantAuthorizationMocks.runWithTenantContext.mockClear();
+  tenantAuthorizationMocks.runWithTenantContext.mockImplementation(
+    (session: unknown, correlationId: unknown, fn: () => unknown) => {
+      const active = tenantAuthorizationMocks.actualGetTenantContext!() as { correlationId?: string } | null;
+      return tenantAuthorizationMocks.actualRunWithTenantContext!(
+        session,
+        active?.correlationId ?? correlationId,
+        fn,
+      );
+    },
+  );
+  tenantAuthorizationMocks.getTenantContext.mockReset();
+  tenantAuthorizationMocks.getTenantContext.mockImplementation(
+    () => tenantAuthorizationMocks.actualGetTenantContext!(),
+  );
+  tenantAuthorizationMocks.getCurrentTenantPolicy.mockReset();
+  tenantAuthorizationMocks.getCurrentTenantPolicy.mockResolvedValue(sourcePolicy());
 });
 
 afterEach(() => {
@@ -88,7 +220,458 @@ afterEach(() => {
   testDb.close();
 });
 
+describe("scheduler operations action", () => {
+  it("fails tenant-facing global scheduler mutations closed before auth or database access", async () => {
+    const before = testDb.prepare(
+      `SELECT scheduler_ai_verification_enabled, scheduler_crawl_enabled,
+              scheduler_enrichment_enabled, scheduler_artifact_enabled,
+              scheduler_score_recompute_enabled
+       FROM settings WHERE id = 1`,
+    ).get();
+
+    const results = await Promise.all([
+      updateSchedulerWorkerEnabledAction("crawl", false),
+      updateAllSchedulerWorkersEnabledAction(false),
+      resumeRecommendedSchedulerWorkersAction(),
+    ]);
+
+    expect(results).toEqual([
+      { error: "Scheduler worker controls are platform-global and unavailable from tenant-facing actions." },
+      { error: "Scheduler worker controls are platform-global and unavailable from tenant-facing actions." },
+      { error: "Scheduler worker controls are platform-global and unavailable from tenant-facing actions." },
+    ]);
+    expect(authMocks.requirePermission).not.toHaveBeenCalled();
+    expect(dbIndexMocks.getDb).not.toHaveBeenCalled();
+    expect(testDb.prepare(
+      `SELECT scheduler_ai_verification_enabled, scheduler_crawl_enabled,
+              scheduler_enrichment_enabled, scheduler_artifact_enabled,
+              scheduler_score_recompute_enabled
+       FROM settings WHERE id = 1`,
+    ).get()).toEqual(before);
+  });
+
+  it("requires tenant-wide queue read authority before entering tenant database context", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+
+    const result = await getSchedulerOperationsAction({
+      tenantId: TENANT_ID,
+      workspaceId: null,
+    });
+
+    expect(result).toBeDefined();
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_ID, workspaceId: null },
+      "queue:read",
+      { action: "scheduler.operations.read" },
+    );
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("crawl:manage");
+    expect(tenantAuthorizationMocks.runWithTenantContext).toHaveBeenCalledWith(
+      TENANT_WIDE_SESSION,
+      expect.stringMatching(/^scheduler-operations:/),
+      expect.any(Function),
+    );
+    expect(dbIndexMocks.withTenantDbContext).toHaveBeenCalledOnce();
+    expect(tenantAuthorizationMocks.requireTenantPermission.mock.invocationCallOrder[0]).toBeLessThan(
+      tenantAuthorizationMocks.runWithTenantContext.mock.invocationCallOrder[0],
+    );
+    expect(tenantAuthorizationMocks.runWithTenantContext.mock.invocationCallOrder[0]).toBeLessThan(
+      dbIndexMocks.withTenantDbContext.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("rejects workspace-scoped scheduler reads before database work", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_SESSION);
+
+    await expect(getSchedulerOperationsAction({
+      tenantId: TENANT_ID,
+      workspaceId: WORKSPACE_ID,
+    })).rejects.toMatchObject({
+      code: "WORKSPACE_SCOPE_INVALID",
+      status: 403,
+    });
+
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
+
+  it("rejects composed identities before tenant context or scheduler database reads", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+    authMocks.requirePermission.mockResolvedValueOnce({
+      userId: "different-user",
+      email: "different@example.com",
+      displayName: "Different user",
+      role: "admin",
+    });
+
+    await expect(getSchedulerOperationsAction()).rejects.toMatchObject({
+      code: "TENANT_SCOPE_MISMATCH",
+      status: 403,
+    });
+
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
+
+  it("preserves an established correlation when called by the Scheduler page boundary", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+    tenantAuthorizationMocks.getTenantContext.mockReturnValueOnce({
+      tenantId: TENANT_ID,
+      workspaceId: null,
+      membershipId: TENANT_WIDE_SESSION.membershipId,
+      role: TENANT_WIDE_SESSION.role,
+      roleBindingId: TENANT_WIDE_SESSION.roleBindingId,
+      actorAuthIdentityId: TENANT_WIDE_SESSION.userId,
+      correlationId: "scheduler-page:existing",
+    });
+
+    await getSchedulerOperationsAction();
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      {},
+      "queue:read",
+      { action: "scheduler.operations.read" },
+    );
+    expect(tenantAuthorizationMocks.runWithTenantContext).toHaveBeenCalledWith(
+      TENANT_WIDE_SESSION,
+      "scheduler-page:existing",
+      expect.any(Function),
+    );
+  });
+
+  it("propagates canonical tenant authorization failures without reading scheduler data", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockRejectedValueOnce(
+      new TenantAuthorizationError(403, "TENANT_SCOPE_REQUIRED"),
+    );
+
+    await expect(getSchedulerOperationsAction({ tenantId: "forged-tenant" })).rejects.toMatchObject({
+      code: "TENANT_SCOPE_REQUIRED",
+      status: 403,
+    });
+
+    expect(authMocks.requirePermission).not.toHaveBeenCalled();
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
+});
+
+describe("dashboard read action tenant boundary", () => {
+  it("runs dashboard stats under exact tenant-wide report authority and database context", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+
+    const result = await getDashboardStatsAction({ tenantId: TENANT_ID, workspaceId: null });
+
+    expect(result).toBeDefined();
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_ID, workspaceId: null },
+      "report:read",
+      { action: "dashboard.stats.read" },
+    );
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("crawl:manage");
+    expect(tenantAuthorizationMocks.runWithTenantContext).toHaveBeenCalledWith(
+      TENANT_WIDE_SESSION,
+      expect.stringMatching(/^dashboard-stats:/),
+      expect.any(Function),
+    );
+    expect(dbIndexMocks.withTenantDbContext).toHaveBeenCalledOnce();
+    expect(tenantAuthorizationMocks.requireTenantPermission.mock.invocationCallOrder[0]).toBeLessThan(
+      tenantAuthorizationMocks.runWithTenantContext.mock.invocationCallOrder[0],
+    );
+    expect(tenantAuthorizationMocks.runWithTenantContext.mock.invocationCallOrder[0]).toBeLessThan(
+      dbIndexMocks.withTenantDbContext.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("runs dashboard analytics under its explicit tenant-wide report action", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+
+    await getDashboardAnalyticsAction({ tenantId: TENANT_ID, workspaceId: null });
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_ID, workspaceId: null },
+      "report:read",
+      { action: "dashboard.analytics.read" },
+    );
+    expect(tenantAuthorizationMocks.runWithTenantContext).toHaveBeenCalledWith(
+      TENANT_WIDE_SESSION,
+      expect.stringMatching(/^dashboard-analytics:/),
+      expect.any(Function),
+    );
+    expect(dbIndexMocks.withTenantDbContext).toHaveBeenCalledOnce();
+  });
+
+  it("keeps dashboard run, usage, and error reads inside the active tenant", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+    const runA = seedTestRun(testDb, { id: "dashboard-run-a" });
+    const runB = seedTestRun(testDb, { id: "dashboard-run-b" });
+    testDb.prepare("UPDATE crawl_runs SET tenant_id = ?, created_at = ?, last_error = ? WHERE id = ?")
+      .run(TENANT_ID, "2026-08-30T10:00:00.000Z", "tenant-a failure", runA);
+    testDb.prepare("UPDATE crawl_runs SET tenant_id = ?, created_at = ?, last_error = ? WHERE id = ?")
+      .run("90000000-0000-4000-8000-000000000009", "2026-08-30T11:00:00.000Z", "tenant-b failure", runB);
+    const insertUsage = testDb.prepare(
+      `INSERT INTO api_usage_events (
+        tenant_id, id, crawl_run_id, endpoint, sku, success, was_cached,
+        billable_units, estimated_cost, created_at
+      ) VALUES (?, ?, ?, ?, 'places_text_search_enterprise', 1, 0, ?, 0, ?)`,
+    );
+    insertUsage.run(TENANT_ID, "usage-a", runA, API_ENDPOINT_TEXT_SEARCH, 2, new Date().toISOString());
+    insertUsage.run("90000000-0000-4000-8000-000000000009", "usage-b", runB, API_ENDPOINT_TEXT_SEARCH, 9, new Date().toISOString());
+
+    const result = await getDashboardAnalyticsAction({ tenantId: TENANT_ID, workspaceId: null });
+
+    expect(result.apiCallsUsed).toBe(2);
+    expect(result.monthlyApiCalls).toBe(2);
+    expect(result.lastError).toBe("tenant-a failure");
+  });
+
+  it("rejects workspace and composed-identity scopes before dashboard database work", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_SESSION);
+
+    await expect(getDashboardStatsAction({
+      tenantId: TENANT_ID,
+      workspaceId: WORKSPACE_ID,
+    })).rejects.toMatchObject({
+      code: "WORKSPACE_SCOPE_INVALID",
+      status: 403,
+    });
+
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+    authMocks.requirePermission.mockResolvedValueOnce({
+      userId: "different-user",
+      email: "different@example.com",
+      displayName: "Different user",
+      role: "admin",
+    });
+
+    await expect(getDashboardAnalyticsAction()).rejects.toMatchObject({
+      code: "TENANT_SCOPE_MISMATCH",
+      status: 403,
+    });
+
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
+
+  it("propagates forged tenant selector failures before legacy auth or dashboard reads", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockRejectedValueOnce(
+      new TenantAuthorizationError(403, "TENANT_SCOPE_REQUIRED"),
+    );
+
+    await expect(getDashboardStatsAction({ tenantId: "forged-tenant" })).rejects.toMatchObject({
+      code: "TENANT_SCOPE_REQUIRED",
+      status: 403,
+    });
+
+    expect(authMocks.requirePermission).not.toHaveBeenCalled();
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
+
+  it("preserves the generic dashboard fallback for statement timeouts", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+    dbIndexMocks.withDbStatementTimeout.mockRejectedValueOnce(
+      Object.assign(new Error("statement timeout"), { code: "57014" }),
+    );
+
+    const result = await getDashboardStatsAction();
+
+    expect(result.lastError).toBe("db_statement_timeout");
+  });
+
+  it("runs summary panels under source review authority and tenant database context", async () => {
+    await getDashboardSummaryPanelsAction({ tenantId: TENANT_ID, workspaceId: null });
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_ID, workspaceId: null },
+      "source:review",
+      { action: "dashboard.summary.read" },
+    );
+    expect(tenantAuthorizationMocks.runWithTenantContext).toHaveBeenCalledWith(
+      TENANT_WIDE_SESSION,
+      expect.stringMatching(/^dashboard\.summary\.read:/),
+      expect.any(Function),
+    );
+    expect(dbIndexMocks.withTenantDbContext).toHaveBeenCalledOnce();
+  });
+});
+
 describe("crawl discovery item actions", () => {
+  it("rejects a composed identity before a direct crawl mutation or provider call", async () => {
+    seedTestRun(testDb, { id: "running-run", status: "running" });
+    authMocks.requirePermission.mockResolvedValueOnce({
+      userId: "different-user",
+      email: "different@example.com",
+      displayName: "Different user",
+      role: "admin",
+    });
+
+    await expect(pauseCrawlRunAction("running-run")).rejects.toMatchObject({
+      code: "TENANT_SCOPE_MISMATCH",
+      status: 403,
+    });
+
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+    expect(googlePlacesMocks.textSearch).not.toHaveBeenCalled();
+    expect(testDb.prepare("SELECT status FROM crawl_runs WHERE id = 'running-run'").get()).toMatchObject({ status: "running" });
+  });
+
+  it("fails a foreign run closed before a diagnostic provider call or mutation", async () => {
+    seedTestRun(testDb, { id: "foreign-run", status: "running" });
+    testDb.prepare("UPDATE crawl_runs SET tenant_id = ? WHERE id = ?")
+      .run("90000000-0000-4000-8000-000000000009", "foreign-run");
+
+    await expect(runGoogleDiscoveryDiagnosticAction("foreign-run")).rejects.toMatchObject({
+      code: "RESOURCE_NOT_FOUND_OR_FORBIDDEN",
+      status: 404,
+    });
+
+    expect(googlePlacesMocks.textSearch).not.toHaveBeenCalled();
+    expect(testDb.prepare("SELECT status FROM crawl_runs WHERE id = 'foreign-run'").get()).toMatchObject({ status: "running" });
+  });
+
+  it("tenant-binds coverage run reads under source review authority", async () => {
+    seedTestRun(testDb, { id: "coverage-run", status: "paused" });
+
+    const result = await getCoverageSelectedRunAction(
+      "coverage-run",
+      { tenantId: TENANT_ID, workspaceId: null },
+    );
+
+    expect(result.run).toMatchObject({ id: "coverage-run" });
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_ID, workspaceId: null },
+      "source:review",
+      { action: "coverage.selected-run.read" },
+    );
+    expect(dbIndexMocks.withTenantDbContext).toHaveBeenCalledOnce();
+  });
+
+  it("establishes the selected tenant scope and source policy before starting discovery", async () => {
+    const result = await startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    }, { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID });
+
+    expect("error" in result).toBe(false);
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID },
+      "workspace:read",
+    );
+    expect(tenantAuthorizationMocks.getCurrentTenantPolicy).toHaveBeenCalledWith(TENANT_ID);
+    expect(tenantAuthorizationMocks.runWithTenantContext).toHaveBeenCalledWith(
+      TENANT_SESSION,
+      expect.stringMatching(/^crawl-start:/),
+      expect.any(Function),
+    );
+    expect(testDb.prepare(
+      "SELECT tenant_id, workspace_id FROM crawl_runs WHERE id = ?",
+    ).get("runId" in result ? result.runId : null)).toMatchObject({
+      tenant_id: TENANT_ID,
+      workspace_id: WORKSPACE_ID,
+    });
+    expect(googlePlacesMocks.textSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("controls and reads a workspace run without selecting a newer foreign run", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValue(TENANT_SESSION);
+    const selector = { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID };
+
+    const started = await startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    }, selector);
+    expect("error" in started).toBe(false);
+    if (!("runId" in started) || !started.runId) throw new Error("Expected workspace crawl run");
+
+    const runId = started.runId;
+    await expect(getCoverageSelectedRunAction(undefined, selector)).resolves.toMatchObject({
+      run: { id: runId, status: "running" },
+    });
+    await expect(runGoogleDiscoveryDiagnosticAction(runId, selector)).resolves.toMatchObject({
+      diagnostic: { ok: true },
+    });
+    await expect(pauseCrawlRunAction(runId, selector)).resolves.toEqual({ success: true });
+
+    seedTestRun(testDb, { id: "foreign-newer-paused", status: "paused" });
+    testDb.prepare(
+      `UPDATE crawl_runs
+       SET tenant_id = ?, workspace_id = ?, created_at = ?
+       WHERE id = ?`,
+    ).run(
+      "90000000-0000-4000-8000-000000000009",
+      "90000000-0000-4000-8000-000000000010",
+      "2099-01-01T00:00:00.000Z",
+      "foreign-newer-paused",
+    );
+
+    await expect(resumeCrawlRunAction(undefined, selector)).resolves.toMatchObject({ success: true });
+    expect(testDb.prepare("SELECT status FROM crawl_runs WHERE id = ?").get(runId)).toMatchObject({ status: "running" });
+    expect(testDb.prepare("SELECT status FROM crawl_runs WHERE id = ?").get("foreign-newer-paused")).toMatchObject({ status: "paused" });
+
+    testDb.prepare("UPDATE crawl_units SET status = 'failed' WHERE crawl_run_id = ?").run(runId);
+    await expect(retryFailedUnitsAction(runId, selector)).resolves.toMatchObject({ retriedCount: 1 });
+    await expect(stopCrawlRunAction(runId, selector)).resolves.toMatchObject({ success: true, runId });
+  });
+
+  it("fails closed before provider or crawl writes when source approval is still required", async () => {
+    tenantAuthorizationMocks.getCurrentTenantPolicy.mockResolvedValueOnce(sourcePolicy({
+      requireSourcePlanApproval: true,
+    }));
+
+    await expect(startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    }, { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID })).rejects.toMatchObject({
+      code: "POLICY_BLOCKED",
+      status: 403,
+    });
+
+    expect(googlePlacesMocks.textSearch).not.toHaveBeenCalled();
+    expect(testDb.prepare("SELECT COUNT(*) AS count FROM crawl_runs").get()).toMatchObject({ count: 0 });
+  });
+
+  it("rejects composed auth identities before tenant context, policy, database, or provider work", async () => {
+    authMocks.requirePermission.mockResolvedValueOnce({
+      userId: "different-user",
+      email: "different@example.com",
+      displayName: "Different user",
+      role: "admin",
+    });
+
+    await expect(startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    }, { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID })).rejects.toMatchObject({
+      code: "TENANT_SCOPE_MISMATCH",
+      status: 403,
+    });
+
+    expect(tenantAuthorizationMocks.runWithTenantContext).not.toHaveBeenCalled();
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+    expect(tenantAuthorizationMocks.getCurrentTenantPolicy).not.toHaveBeenCalled();
+    expect(googlePlacesMocks.textSearch).not.toHaveBeenCalled();
+    expect(testDb.prepare("SELECT COUNT(*) AS count FROM crawl_runs").get()).toMatchObject({ count: 0 });
+  });
+
   it("returns a blocked estimate when the Text Search cap is exhausted", async () => {
     testDb.prepare(
       `INSERT INTO api_usage_events (id, endpoint, sku, billable_units)
@@ -103,11 +686,45 @@ describe("crawl discovery item actions", () => {
       discoveryMode: "coverage_probe",
       paginationPolicy: "first_page_only",
       testRun: false,
-    });
+    }, { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID });
 
     expect("error" in result).toBe(false);
     expect("canStart" in result ? result.canStart : true).toBe(false);
     expect("blockingReasons" in result ? result.blockingReasons[0] : "").toContain("only 0 remain");
+  });
+
+  it("rejects tenant-wide estimates before database work", async () => {
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
+    await expect(estimateDiscoveryRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    }, { tenantId: TENANT_ID, workspaceId: null })).rejects.toMatchObject({
+      code: "WORKSPACE_SCOPE_INVALID",
+      status: 403,
+    });
+
+    expect(dbIndexMocks.withTenantDbContext).not.toHaveBeenCalled();
+  });
+
+  it("fails failed-unit details closed for a foreign workspace run", async () => {
+    seedTestRun(testDb, { id: "foreign-failed-run", status: "error" });
+    testDb.prepare("UPDATE crawl_runs SET workspace_id = ? WHERE id = ?")
+      .run("90000000-0000-4000-8000-000000000009", "foreign-failed-run");
+
+    await expect(getFailedUnitErrorsAction(
+      "foreign-failed-run",
+      { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID },
+    )).resolves.toEqual([]);
+
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenCalledWith(
+      { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID },
+      "workspace:read",
+    );
   });
 
   it("blocks starting a discovery item before creating a run when the cap is exhausted", async () => {
@@ -176,6 +793,8 @@ describe("crawl discovery item actions", () => {
 
   it("blocks a new discovery item while another item is processing", async () => {
     seedTestRun(testDb, { id: "running-run", status: "running" });
+    testDb.prepare("UPDATE crawl_runs SET workspace_id = ? WHERE id = ?")
+      .run(WORKSPACE_ID, "running-run");
 
     const result = await startCrawlRunAction({
       state: "CO",
@@ -188,6 +807,35 @@ describe("crawl discovery item actions", () => {
     });
 
     expect("error" in result ? result.error : "").toContain("already processing");
+  });
+
+  it("does not let another tenant's processing item block this workspace", async () => {
+    seedTestRun(testDb, { id: "foreign-running-run", status: "running" });
+    testDb.prepare(
+      "UPDATE crawl_runs SET tenant_id = ?, workspace_id = ? WHERE id = ?",
+    ).run(
+      "90000000-0000-4000-8000-000000000009",
+      "90000000-0000-4000-8000-000000000010",
+      "foreign-running-run",
+    );
+
+    const result = await startCrawlRunAction({
+      state: "CO",
+      counties: [],
+      zipCodes: ["80202"],
+      categories: ["dentist"],
+      discoveryMode: "coverage_probe",
+      paginationPolicy: "first_page_only",
+      testRun: true,
+    }, { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID });
+
+    expect("error" in result).toBe(false);
+    expect(testDb.prepare(
+      "SELECT tenant_id, workspace_id FROM crawl_runs WHERE id = ?",
+    ).get("runId" in result ? result.runId : null)).toMatchObject({
+      tenant_id: TENANT_ID,
+      workspace_id: WORKSPACE_ID,
+    });
   });
 
   it("does not resume a paused item while another item is processing", async () => {
@@ -397,6 +1045,45 @@ describe("crawl discovery item actions", () => {
       "places.id",
       JSON.stringify({ id: "places/directory-place-1" }),
     );
+    testDb.prepare(
+      `INSERT INTO places_master (
+        place_id, name, address, website_uri, maps_uri, categories, rating, user_rating_count,
+        business_status, primary_type, lat, lng, completeness_score, freshness_score
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "excluded-place-2",
+      "Excluded Dentist",
+      "456 Excluded St, Denver, CO 80202",
+      null,
+      "https://maps.example/excluded-place-2",
+      JSON.stringify(["dentist"]),
+      4.5,
+      21,
+      "OPERATIONAL",
+      "dentist",
+      39.76,
+      -104.98,
+      0.6,
+      1,
+    );
+    testDb.prepare(
+      `INSERT INTO leads (id, place_id, score, status, website_status, categories, is_excluded)
+       VALUES ('excluded-lead-2', 'excluded-place-2', 10, 'new', 'none', '[]', 2)`,
+    ).run();
+    testDb.prepare(
+      `INSERT INTO place_observations (
+        id, place_id, crawl_run_id, crawl_unit_id, endpoint, sku, field_mask, raw_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "observation-2",
+      "excluded-place-2",
+      "probe-run",
+      "probe-unit",
+      "places.searchText",
+      "places_text_search_pro",
+      "places.id",
+      JSON.stringify({ id: "places/excluded-place-2" }),
+    );
 
     const result = await getCoverageProbeCandidatesAction("probe-run");
 
@@ -409,8 +1096,17 @@ describe("crawl discovery item actions", () => {
         locationCellId: "cell-us-co-80202",
         category: "dentist",
         hasLead: false,
+        leadIsExcluded: false,
         websiteStatusLabel: "No website",
         listingStatus: "Directory candidate",
+      }),
+      expect.objectContaining({
+        placeId: "excluded-place-2",
+        name: "Excluded Dentist",
+        hasLead: true,
+        leadId: "excluded-lead-2",
+        leadIsExcluded: true,
+        listingStatus: "Excluded lead",
       }),
     ]);
   });
@@ -419,8 +1115,9 @@ describe("crawl discovery item actions", () => {
     seedTestRun(testDb, { id: "probe-run", status: "done" });
     seedTestUnit(testDb, { id: "probe-unit", runId: "probe-run" });
     testDb.prepare(
-      "UPDATE crawl_runs SET market_id = ?, selection_json = ? WHERE id = ?",
+      "UPDATE crawl_runs SET workspace_id = ?, market_id = ?, selection_json = ? WHERE id = ?",
     ).run(
+      WORKSPACE_ID,
       "market-colorado",
       JSON.stringify({
         marketId: "market-colorado",
@@ -435,7 +1132,10 @@ describe("crawl discovery item actions", () => {
     );
     testDb.prepare("UPDATE crawl_units SET status = 'done' WHERE id = 'probe-unit'").run();
 
-    const result = await promoteProbeToLeadHarvestAction("probe-run");
+    const result = await promoteProbeToLeadHarvestAction(
+      "probe-run",
+      { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID },
+    );
 
     expect("error" in result).toBe(false);
     const newRunId = "runId" in result ? result.runId : null;
@@ -443,7 +1143,11 @@ describe("crawl discovery item actions", () => {
     expect(newRunId).not.toBe("probe-run");
     expect(testDb.prepare("SELECT status FROM crawl_runs WHERE id = 'probe-run'").get()).toMatchObject({ status: "done" });
 
-    const harvestRun = testDb.prepare("SELECT market_id, selection_json FROM crawl_runs WHERE id = ?").get(newRunId) as Record<string, unknown>;
+    const harvestRun = testDb.prepare(
+      "SELECT tenant_id, workspace_id, market_id, selection_json FROM crawl_runs WHERE id = ?",
+    ).get(newRunId) as Record<string, unknown>;
+    expect(harvestRun.tenant_id).toBe(TENANT_ID);
+    expect(harvestRun.workspace_id).toBe(WORKSPACE_ID);
     expect(harvestRun.market_id).toBe("market-colorado");
     const selection = JSON.parse(String(harvestRun.selection_json));
     expect(selection).toMatchObject({
@@ -457,6 +1161,32 @@ describe("crawl discovery item actions", () => {
       promotedFromRunId: "probe-run",
     });
     expect(testDb.prepare("SELECT COUNT(*) AS count FROM crawl_units WHERE crawl_run_id = ?").get(newRunId)).toMatchObject({ count: 1 });
+    expect(tenantAuthorizationMocks.requireTenantPermission).toHaveBeenLastCalledWith(
+      { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID },
+      "workspace:read",
+    );
+  });
+
+  it("fails a foreign probe promotion closed before provider or crawl writes", async () => {
+    seedTestRun(testDb, { id: "foreign-probe", status: "done" });
+    testDb.prepare(
+      "UPDATE crawl_runs SET tenant_id = ?, workspace_id = ? WHERE id = ?",
+    ).run(
+      "90000000-0000-4000-8000-000000000009",
+      "90000000-0000-4000-8000-000000000010",
+      "foreign-probe",
+    );
+
+    await expect(promoteProbeToLeadHarvestAction(
+      "foreign-probe",
+      { tenantId: TENANT_ID, workspaceId: WORKSPACE_ID },
+    )).rejects.toMatchObject({
+      code: "RESOURCE_NOT_FOUND_OR_FORBIDDEN",
+      status: 404,
+    });
+
+    expect(googlePlacesMocks.textSearch).not.toHaveBeenCalled();
+    expect(testDb.prepare("SELECT COUNT(*) AS count FROM crawl_runs").get()).toMatchObject({ count: 1 });
   });
 
   it("returns a fallback cell ledger result when the coverage read times out", async () => {
@@ -470,6 +1200,7 @@ describe("crawl discovery item actions", () => {
 
   it("logs dashboard stats subquery timings", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
 
     await getDashboardStatsAction();
 
@@ -489,6 +1220,7 @@ describe("crawl discovery item actions", () => {
 
   it("logs dashboard analytics timings separately from core stats", async () => {
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    tenantAuthorizationMocks.requireTenantPermission.mockResolvedValueOnce(TENANT_WIDE_SESSION);
 
     await getDashboardAnalyticsAction();
 

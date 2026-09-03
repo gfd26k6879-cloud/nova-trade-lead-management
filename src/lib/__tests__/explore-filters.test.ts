@@ -22,6 +22,64 @@ describe("explore command filters", () => {
     expect(result.chips.map((chip) => chip.label)).toEqual(["City", "Country", "Website", "Owner"]);
   });
 
+  it("normalizes cell commands to canonical lowercase IDs", () => {
+    const canonicalCellId = "cell-us-co-p36-selective";
+    const commands = [
+      `cell:${canonicalCellId}`,
+      "CELL:CELL-US-CO-P36-SELECTIVE",
+      "CeLl:Cell-US-Co-P36-Selective",
+      "cell:'CELL-US-CO-P36-SELECTIVE'",
+      'cell:"Cell-US-Co-P36-Selective"',
+    ];
+
+    for (const command of commands) {
+      const result = parseExploreCommand(command);
+
+      expect(result.errors).toEqual([]);
+      expect(result.filters.locationCellId).toBe(canonicalCellId);
+      expect(result.chips).toContainEqual({
+        key: "locationCellId",
+        label: "Cell",
+        value: canonicalCellId,
+        removeParams: { locationCellId: null },
+      });
+    }
+  });
+
+  it("passes a parsed cell command through query-state construction", () => {
+    const canonicalCellId = "cell-us-co-p36-selective";
+    const parsed = parseExploreCommand("CELL:CELL-US-CO-P36-SELECTIVE");
+    const queryState = buildExploreQueryState({ locationCellId: parsed.filters.locationCellId ?? undefined });
+
+    expect(queryState.filters.locationCellId).toBe(canonicalCellId);
+  });
+
+  it("preserves direct URL cell ID casing in query state and chips", () => {
+    const mixedCaseCellId = "Cell-US-Co-P36-Selective";
+    const queryState = buildExploreQueryState({ locationCellId: mixedCaseCellId });
+    const chips = buildExploreFilterChips({ locationCellId: mixedCaseCellId });
+
+    expect(queryState.filters.locationCellId).toBe(mixedCaseCellId);
+    expect(chips).toContainEqual({
+      key: "locationCellId",
+      label: "Cell",
+      value: mixedCaseCellId,
+      removeParams: { locationCellId: null },
+    });
+  });
+
+  it("keeps postal command normalization uppercase", () => {
+    const result = parseExploreCommand("postal:m5v");
+
+    expect(result.filters.zip).toBe("M5V");
+    expect(result.chips).toContainEqual({
+      key: "zip",
+      label: "Postal",
+      value: "M5V",
+      removeParams: { zip: null },
+    });
+  });
+
   it("parses numeric threshold commands", () => {
     const result = parseExploreCommand("reviews>50 rating>4.2 score>70");
 
@@ -41,6 +99,55 @@ describe("explore command filters", () => {
       minReviews: "50",
       minRating: "4.2",
       minScore: "70",
+    });
+  });
+
+  it("keeps minimum-review comparison aliases inclusive and canonicalizes valid integers", () => {
+    for (const command of ["reviews>+00050", "reviews>=00050"]) {
+      const result = parseExploreCommand(command);
+
+      expect(result.errors).toEqual([]);
+      expect(result.unparsedText).toBe("");
+      expect(result.filters.minReviews).toBe("50");
+      expect(result.chips).toContainEqual({
+        key: "minReviews",
+        label: "Reviews >",
+        value: "50",
+        removeParams: { minReviews: null },
+      });
+      expect(buildExploreQueryState({ minReviews: result.filters.minReviews ?? undefined }).filters.minReviews).toBe(50);
+    }
+  });
+
+  it.each(["reviews>4.5", "reviews>=-1", "reviews>1e3", "reviews>0x10", "reviews>１２"])(
+    "omits invalid minimum-review command %s without turning it into search text",
+    (command) => {
+      const result = parseExploreCommand(command);
+
+      expect(result.errors).toEqual([]);
+      expect(result.unparsedText).toBe("");
+      expect(result.filters.minReviews).toBeUndefined();
+      expect(result.filters.search).toBeUndefined();
+      expect(result.chips).toEqual([]);
+    },
+  );
+
+  it("applies the shared minimum-review grammar only to review count", () => {
+    expect(buildExploreQueryState({ minReviews: "  +00050 " }).filters.minReviews).toBe(50);
+    expect(buildExploreQueryState({ minReviews: "4.5", minRating: "4.5", minScore: "70.5" }).filters).toMatchObject({
+      minReviews: undefined,
+      minRating: 4.5,
+      minScore: 70.5,
+    });
+  });
+
+  it("preserves raw invalid URL chip display while omitting the query filter", () => {
+    expect(buildExploreQueryState({ minReviews: "4.5" }).filters.minReviews).toBeUndefined();
+    expect(buildExploreFilterChips({ minReviews: "4.5" })).toContainEqual({
+      key: "minReviews",
+      label: "Reviews",
+      value: "4.5",
+      removeParams: { minReviews: null },
     });
   });
 

@@ -23,7 +23,9 @@
     "auth:supabase:apply": "APPLY_SUPABASE_AUTH_CONFIG=1 node scripts/supabase-auth-config.mjs",
     "db:export:sqlite": "node scripts/export-sqlite-data.mjs",
     "db:import:supabase": "node scripts/import-supabase-data.mjs",
-    "db:verify:recovery": "node scripts/verify-data-recovery.mjs"
+    "db:verify:recovery": "node scripts/verify-data-recovery.mjs",
+    "local:seed": "node scripts/seed-local-tenant.mjs",
+    "local:dispatch": "node scripts/run-local-workers.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

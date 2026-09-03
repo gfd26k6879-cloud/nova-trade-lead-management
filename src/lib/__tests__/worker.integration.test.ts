@@ -10,15 +10,58 @@ import {
 } from "./test-helpers";
 
 let testDb: Database.Database;
+const TENANT_A = "10000000-0000-4000-8000-000000000001";
+const TENANT_B = "20000000-0000-4000-8000-000000000002";
+let memberContext: { tenantId: string; workspaceId: string | null } | null = null;
+let dbReads = 0;
+const TEST_WORKER_ACTIONS = {
+  crawl: "crawl:process",
+  enrichment: "enrichment:process",
+  score_recompute: "score_recompute:recompute",
+} as const;
+type TestWorkerName = keyof typeof TEST_WORKER_ACTIONS;
+
+function testWorkerContext(workerName: TestWorkerName) {
+  return {
+    tenantId: TENANT_A,
+    workspaceId: null,
+    jobId: "20000000-0000-4000-8000-000000000001",
+    runId: "30000000-0000-4000-8000-000000000001",
+    leaseId: "40000000-0000-4000-8000-000000000001",
+    leaseGeneration: 1,
+    workerName,
+    action: TEST_WORKER_ACTIONS[workerName],
+    sourcePrincipalKind: "cron" as const,
+    correlationId: "worker-integration",
+  };
+}
+
+let workerContext = testWorkerContext("crawl");
 
 vi.mock("@/lib/db/index", () => {
   return {
-    getDb: () => testDb,
+    getDb: () => {
+      dbReads += 1;
+      return testDb;
+    },
     generateId: () => crypto.randomUUID(),
     nowISO: () => new Date().toISOString(),
     withDbTransaction: async <T>(fn: () => Promise<T>) => fn(),
   };
 });
+
+vi.mock("@/lib/tenancy/worker-context", () => ({
+  getWorkerTenantContext: vi.fn(() => workerContext),
+  requireWorkerTenantContext: vi.fn(() => workerContext),
+}));
+
+vi.mock("@/lib/tenancy/context", () => ({
+  getTenantContext: vi.fn(() => memberContext),
+  requireTenantContext: vi.fn(() => {
+    if (!memberContext) throw new Error("A tenant context is required");
+    return memberContext;
+  }),
+}));
 
 vi.mock("@/lib/google-places", () => {
   class PlacesApiError extends Error {
@@ -44,13 +87,45 @@ vi.mock("@/lib/google-places", () => {
 import { processNextUnit } from "@/lib/crawl/worker";
 import { enrichNextLead } from "@/lib/crawl/enrichment";
 import { getPlaceDetails, PlacesApiError, textSearch } from "@/lib/google-places";
-import { createCrawlUnitsForSelection, recomputeAllLeadQualityScores } from "@/lib/db/queries";
+import { createCrawlUnitsForSelection, placeMasterExists, recomputeAllLeadQualityScores } from "@/lib/db/queries";
 
 const mockTextSearch = textSearch as ReturnType<typeof vi.fn>;
 const mockGetPlaceDetails = getPlaceDetails as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  workerContext = testWorkerContext("crawl");
+  memberContext = null;
+  dbReads = 0;
   testDb = createTestDb();
+  testDb.exec(`
+    ALTER TABLE crawl_runs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    ALTER TABLE crawl_runs ADD COLUMN workspace_id TEXT;
+    ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    CREATE UNIQUE INDEX leads_tenant_place_id_unique ON leads (tenant_id, place_id);
+    ALTER TABLE settings ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    CREATE UNIQUE INDEX settings_tenant_id_unique ON settings (tenant_id);
+    ALTER TABLE api_usage_events ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    ALTER TABLE api_usage_events ADD COLUMN source_card_id TEXT NOT NULL DEFAULT 'invalid_source'
+      CHECK (source_card_id = 'google_places_legacy');
+    ALTER TABLE place_observations ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    ALTER TABLE place_observations ADD COLUMN source_card_id TEXT NOT NULL DEFAULT 'invalid_source'
+      CHECK (source_card_id = 'google_places_legacy');
+    ALTER TABLE places_master ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    ALTER TABLE places_master ADD COLUMN source_card_id TEXT NOT NULL DEFAULT 'invalid_source'
+      CHECK (source_card_id = 'google_places_legacy');
+    CREATE UNIQUE INDEX places_master_tenant_source_place_unique
+      ON places_master (tenant_id, source_card_id, place_id);
+    CREATE TRIGGER place_observation_requires_scoped_master
+    BEFORE INSERT ON place_observations
+    FOR EACH ROW BEGIN
+      SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM places_master master
+        WHERE master.tenant_id = NEW.tenant_id
+          AND master.source_card_id = NEW.source_card_id
+          AND master.place_id = NEW.place_id
+      ) THEN RAISE(ABORT, 'scoped place master is required') END;
+    END;
+  `);
   seedTestZip(testDb);
   mockTextSearch.mockReset();
   mockGetPlaceDetails.mockReset();
@@ -61,6 +136,43 @@ afterEach(() => {
 });
 
 describe("crawl worker integration", () => {
+  it("rejects a crawl worker with the wrong action before database or provider access", async () => {
+    workerContext = { ...testWorkerContext("crawl"), action: "enrichment:process" };
+    dbReads = 0;
+
+    await expect(processNextUnit()).rejects.toThrow("Exact crawl worker context is required");
+    expect(dbReads).toBe(0);
+    expect(mockTextSearch).not.toHaveBeenCalled();
+  });
+
+  it("rejects simultaneous member and crawl worker authority before database or provider access", async () => {
+    memberContext = { tenantId: TENANT_A, workspaceId: null };
+    dbReads = 0;
+
+    await expect(processNextUnit()).rejects.toThrow("Conflicting crawl tenant contexts");
+    expect(dbReads).toBe(0);
+    expect(mockTextSearch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an enrichment worker with the wrong action before database or provider access", async () => {
+    workerContext = { ...testWorkerContext("enrichment"), action: "crawl:process" };
+    dbReads = 0;
+
+    await expect(enrichNextLead()).rejects.toThrow("Exact enrichment worker context is required");
+    expect(dbReads).toBe(0);
+    expect(mockGetPlaceDetails).not.toHaveBeenCalled();
+  });
+
+  it("rejects simultaneous member and enrichment worker authority before database or provider access", async () => {
+    workerContext = testWorkerContext("enrichment");
+    memberContext = { tenantId: TENANT_A, workspaceId: null };
+    dbReads = 0;
+
+    await expect(enrichNextLead()).rejects.toThrow("Conflicting enrichment tenant contexts");
+    expect(dbReads).toBe(0);
+    expect(mockGetPlaceDetails).not.toHaveBeenCalled();
+  });
+
   it("returns idle when no active run exists", async () => {
     const result = await processNextUnit();
     expect(result.status).toBe("idle");
@@ -94,6 +206,44 @@ describe("crawl worker integration", () => {
     const row = testDb.prepare("SELECT * FROM leads WHERE place_id = 'abc123'").get() as Record<string, unknown>;
     expect(row).toBeDefined();
     expect(row.name).toBe("Test Business");
+    expect(testDb.prepare(
+      "SELECT source_card_id FROM place_observations WHERE place_id = 'abc123'",
+    ).get()).toEqual({ source_card_id: "google_places_legacy" });
+    expect(testDb.prepare(
+      "SELECT source_card_id FROM places_master WHERE place_id = 'abc123'",
+    ).get()).toEqual({ source_card_id: "google_places_legacy" });
+  });
+
+  it("does not treat another tenant's canonical place as existing", async () => {
+    const timestamp = new Date().toISOString();
+    testDb.prepare(
+      `INSERT INTO places_master (
+        tenant_id, source_card_id, place_id, categories, first_seen_at, last_seen_at, created_at, updated_at
+      ) VALUES (?, 'google_places_legacy', 'foreign-place', '[]', ?, ?, ?, ?)`,
+    ).run(TENANT_B, timestamp, timestamp, timestamp, timestamp);
+
+    await expect(placeMasterExists("foreign-place", TENANT_A)).resolves.toBe(false);
+  });
+
+  it("selects only the worker tenant's run when a newer foreign run exists", async () => {
+    const runA = seedTestRun(testDb, { id: "run-a" });
+    seedTestUnit(testDb, { id: "unit-a", runId: runA, zip: "80202", category: "dentist" });
+    const runB = seedTestRun(testDb, { id: "run-b" });
+    seedTestUnit(testDb, { id: "unit-b", runId: runB, zip: "80301", category: "plumber" });
+    testDb.prepare("UPDATE crawl_runs SET tenant_id = ?, created_at = ? WHERE id = ?")
+      .run(TENANT_A, "2026-08-30T10:00:00.000Z", runA);
+    testDb.prepare("UPDATE crawl_runs SET tenant_id = ?, created_at = ? WHERE id = ?")
+      .run("20000000-0000-4000-8000-000000000002", "2026-08-30T11:00:00.000Z", runB);
+    mockTextSearch.mockResolvedValueOnce(mockTextSearchResponse([]));
+
+    const result = await processNextUnit();
+
+    expect(result).toMatchObject({ status: "processed", unitId: "unit-a" });
+    expect(mockTextSearch).toHaveBeenCalledTimes(1);
+    expect(mockTextSearch.mock.calls[0][0]).toContain("80202");
+    expect(mockTextSearch.mock.calls[0][0]).not.toContain("80301");
+    expect(testDb.prepare("SELECT status FROM crawl_units WHERE id = 'unit-b'").get())
+      .toEqual({ status: "pending" });
   });
 
   it("forwards the route AbortSignal into Google Text Search", async () => {
@@ -253,8 +403,9 @@ describe("crawl worker integration", () => {
     seedTestUnit(testDb, { runId });
     const now = new Date().toISOString();
     const insert = testDb.prepare(
-      `INSERT INTO api_usage_events (id, endpoint, sku, success, was_cached, billable_units, created_at)
-       VALUES (?, 'places.searchText', 'places_text_search_enterprise', 1, 0, 1, ?)`,
+      `INSERT INTO api_usage_events (
+         source_card_id, id, endpoint, sku, success, was_cached, billable_units, created_at
+       ) VALUES ('google_places_legacy', ?, 'places.searchText', 'places_text_search_enterprise', 1, 0, 1, ?)`,
     );
 
     for (let i = 0; i < 900; i++) {
@@ -585,6 +736,7 @@ describe("crawl worker integration", () => {
   });
 
   it("preserves existing review intelligence when Stage A has no review metadata", async () => {
+    workerContext = testWorkerContext("enrichment");
     testDb.prepare(
       `INSERT INTO leads (
         id, place_id, name, score, website_status, enrichment_status, review_highlights
@@ -613,6 +765,7 @@ describe("crawl worker integration", () => {
   });
 
   it("persists derived review intelligence restored from a raw-review-free Stage-B cache hit", async () => {
+    workerContext = testWorkerContext("enrichment");
     testDb.prepare(
       `INSERT INTO leads (id, place_id, name, score, website_status, enrichment_status)
        VALUES ('enrich-stage-b', 'enrich-stage-b-place', 'Stage B Dental', 100, 'none', 'pending')`,
@@ -638,12 +791,17 @@ describe("crawl worker integration", () => {
     ).get() as { review_highlights: string };
     expect(JSON.parse(lead.review_highlights)).toEqual(["outdated presence"]);
     const master = testDb.prepare(
-      "SELECT review_highlights FROM places_master WHERE place_id = 'enrich-stage-b-place'",
-    ).get() as { review_highlights: string };
+      "SELECT review_highlights, source_card_id FROM places_master WHERE place_id = 'enrich-stage-b-place'",
+    ).get() as { review_highlights: string; source_card_id: string };
     expect(JSON.parse(master.review_highlights)).toEqual(["outdated presence"]);
+    expect(master.source_card_id).toBe("google_places_legacy");
+    expect(testDb.prepare(
+      "SELECT source_card_id FROM place_observations WHERE place_id = 'enrich-stage-b-place'",
+    ).get()).toEqual({ source_card_id: "google_places_legacy" });
   });
 
   it("does not record enrichment failure or success after an in-flight details request is aborted", async () => {
+    workerContext = testWorkerContext("enrichment");
     testDb.prepare(
       `INSERT INTO leads (id, place_id, name, score, website_status, enrichment_status)
        VALUES ('enrich-abort', 'enrich-abort-place', 'Abort Dental', 10, 'none', 'pending')`,
@@ -670,6 +828,7 @@ describe("crawl worker integration", () => {
   });
 
   it("does not persist enrichment success after a late details response observes abort", async () => {
+    workerContext = testWorkerContext("enrichment");
     testDb.prepare(
       `INSERT INTO leads (id, place_id, name, score, website_status, enrichment_status)
        VALUES ('enrich-late', 'enrich-late-place', 'Late Dental', 10, 'none', 'pending')`,
@@ -695,6 +854,7 @@ describe("crawl worker integration", () => {
   });
 
   it("does not begin score recomputation when its worker signal is already aborted", async () => {
+    workerContext = testWorkerContext("score_recompute");
     testDb.prepare(
       `INSERT INTO leads (id, place_id, name, score, website_status, enrichment_status, last_quality_scored_at)
        VALUES ('score-abort', 'score-abort-place', 'Score Abort', 10, 'none', 'pending', NULL)`,

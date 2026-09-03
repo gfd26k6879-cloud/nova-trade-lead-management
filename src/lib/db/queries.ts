@@ -20,6 +20,12 @@ import {
 } from "@/lib/lead-quality";
 import { decryptSecret, encryptSecret } from "@/lib/secret-crypto";
 import { getAuditActor } from "@/lib/audit-context";
+import {
+  getTenantContext,
+  requireTenantContext,
+  type TenantContext,
+} from "@/lib/tenancy/context";
+import { getWorkerTenantContext } from "@/lib/tenancy/worker-context";
 import { resolveCanonicalAppUrl } from "@/lib/app-url";
 import {
   SCHEDULER_WORKER_METADATA,
@@ -39,6 +45,8 @@ import {
 import type { AppRole } from "@/lib/permissions";
 import { throwIfWorkerAborted } from "@/lib/worker-abort";
 import { readPlaceCacheMetadata } from "@/lib/place-cache-contract";
+import { isLeadExcluded } from "./lead-exclusion";
+import { parseMinReviewsFilter, POSTGRES_INT4_MAX } from "@/lib/lead-filter-parsing";
 
 // ─── Types ───
 
@@ -805,6 +813,7 @@ export interface ApiUsageSummary {
 }
 
 export interface ApiUsageEventInput {
+  tenantId?: string;
   crawl_run_id?: string | null;
   crawl_unit_id?: string | null;
   lead_id?: string | null;
@@ -818,6 +827,7 @@ export interface ApiUsageEventInput {
 }
 
 export interface PlaceObservationInput {
+  tenantId?: string;
   place_id: string;
   endpoint: string;
   sku: GooglePlacesSku;
@@ -830,6 +840,7 @@ export interface PlaceObservationInput {
 }
 
 interface PlaceMasterUpsertInput {
+  tenantId?: string;
   place_id: string;
   name?: string | null;
   address?: string | null;
@@ -1669,8 +1680,6 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_leads_assigned_to_user ON leads(assigned_to_user_id, updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_outreach_events_actor_created ON outreach_events(actor_user_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_ai_usage_actor_created ON ai_usage_events(actor_user_id, created_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_ai_verifications_requester_created ON ai_lead_verifications(requested_by_user_id, created_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_requester_created ON lead_ai_artifacts(requested_by_user_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_lead_created ON ai_feedback_events(lead_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_actor_created ON ai_feedback_events(actor_user_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_ai_feedback_events_kind_verdict ON ai_feedback_events(feedback_kind, verdict, created_at DESC)",
@@ -1686,8 +1695,6 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
     "ALTER TABLE IF EXISTS admin_requests ENABLE ROW LEVEL SECURITY",
     "ALTER TABLE IF EXISTS ai_feedback_events ENABLE ROW LEVEL SECURITY",
     "REVOKE ALL ON TABLE lead_notes, admin_requests, ai_feedback_events FROM anon, authenticated",
-    "CREATE INDEX IF NOT EXISTS idx_lead_ai_artifacts_retry_ready ON lead_ai_artifacts(status, next_retry_at, created_at) WHERE status = 'queued'",
-    "CREATE INDEX IF NOT EXISTS idx_leads_ai_queue_ready ON leads(ai_queue_status, ai_next_retry_at, sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at) WHERE ai_queue_status = 'queued'",
     "CREATE INDEX IF NOT EXISTS idx_leads_score_recompute_stale ON leads(updated_at DESC, last_quality_scored_at)",
   ];
 
@@ -1703,13 +1710,15 @@ async function ensureRuntimePostgresRepairs(): Promise<void> {
 
 export async function repairAiWebsiteFindingConsistency(limit = 500, signal?: AbortSignal): Promise<number> {
   throwIfWorkerAborted(signal);
+  const { tenantId } = requireTenantWideScoreContext();
   const db = await getDb();
   throwIfWorkerAborted(signal);
-  const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
+  const normalizedLimit = Number.isFinite(limit) ? Math.floor(limit) : 500;
+  const safeLimit = Math.max(1, Math.min(1000, normalizedLimit));
   const rows = await db.prepare(
     `SELECT id
      FROM leads
-     WHERE (
+     WHERE tenant_id = ? AND ((
        ai_verification_status = 'site_found'
        AND ai_website_viability_status = 'usable'
        AND COALESCE(ai_found_website_url, '') != ''
@@ -1734,10 +1743,10 @@ export async function repairAiWebsiteFindingConsistency(limit = 500, signal?: Ab
          OR COALESCE(website_uri, '') != ai_found_website_url
          OR quality_bucket = 'needs_ai_verify'
        )
-     )
+     ))
      ORDER BY updated_at ASC
      LIMIT ?`
-  ).all(safeLimit) as Array<{ id: string }>;
+  ).all(tenantId, safeLimit) as Array<{ id: string }>;
   throwIfWorkerAborted(signal);
 
   if (rows.length === 0) return 0;
@@ -1775,25 +1784,26 @@ export async function repairAiWebsiteFindingConsistency(limit = 500, signal?: Ab
          ELSE win_probability_score
        END,
        updated_at = ?
-     WHERE id = ?`
+     WHERE tenant_id = ? AND id = ?`
   );
 
+  let repaired = 0;
   for (const row of rows) {
     throwIfWorkerAborted(signal);
-    await update.run(timestamp, row.id);
+    const result = await update.run(timestamp, tenantId, row.id);
+    if (result.changes === 0) continue;
     throwIfWorkerAborted(signal);
     await updateLeadQualityScores(row.id);
+    repaired += 1;
     throwIfWorkerAborted(signal);
   }
 
-  return rows.length;
+  return repaired;
 }
 
 // ─── Settings ───
 
-export async function getSettings(): Promise<Settings>{
-  const db = await getDb();
-  const row = await db.prepare("SELECT * FROM settings WHERE id = 1").get() as Record<string, unknown>;
+function parseSettingsRow(row: Record<string, unknown>): Settings {
   assertAllowedOpenAIModel(row.ai_model as string | null | undefined);
   const configuredModel = assertAllowedOpenAIModel(process.env.OPENAI_MODEL || OPENAI_LEAD_VERIFICATION_MODEL);
   return {
@@ -1853,6 +1863,32 @@ export async function getSettings(): Promise<Settings>{
           ? "manual_extra_pages"
           : "auto_yield_based",
   };
+}
+
+export async function getTenantScoreRecomputeSettings(): Promise<Settings> {
+  const { tenantId } = requireTenantWideScoreContext();
+  const db = await getDb();
+  const row = await db.prepare("SELECT * FROM settings WHERE tenant_id = ?").get(tenantId) as Record<string, unknown> | undefined;
+  if (!row) throw new Error("Tenant score settings are unavailable");
+  return parseSettingsRow(row);
+}
+
+export async function getSettings(): Promise<Settings>{
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) throw new Error("Conflicting settings tenant contexts.");
+  const isExactScoreRecomputeWorker = workerContext?.workerName === "score_recompute" &&
+    workerContext.action === "score_recompute:recompute";
+  if (isExactScoreRecomputeWorker) {
+    return getTenantScoreRecomputeSettings();
+  }
+  if (workerContext?.workerName === "score_recompute" || workerContext?.action === "score_recompute:recompute") {
+    throw new Error("Exact score recompute worker context is required.");
+  }
+  const db = await getDb();
+  const row = await db.prepare("SELECT * FROM settings WHERE id = 1").get() as Record<string, unknown> | undefined;
+  if (!row) throw new Error("Settings are unavailable");
+  return parseSettingsRow(row);
 }
 
 export async function updateSettings(settings: Partial<Settings>): Promise<void>{
@@ -2442,11 +2478,11 @@ async function getSchedulerOperationsSummaryInternal(): Promise<SchedulerOperati
     getDashboardStats(),
   ]);
   const activeRun = await getActiveCrawlRun();
-  const activeRunUsage = activeRun ? await getRunApiUsageSummary(activeRun.id) : emptyApiUsageSummary();
-  const activeRunLastError = activeRun ? await getRunLastError(activeRun.id) : null;
+  const activeRunUsage = activeRun ? await getPlatformRunApiUsageSummary(activeRun.id) : emptyApiUsageSummary();
+  const activeRunLastError = activeRun ? await getPlatformRunLastError(activeRun.id) : null;
   const [todayUsage, monthUsage, leadBacklog, enrichmentBacklog, artifactBacklog, scoreBacklog] = await Promise.all([
     getApiUsageSummarySince(startOfToday()),
-    getMonthlyApiUsageSummary(),
+    getPlatformMonthlyApiUsageSummary(),
     getSchedulerLeadBacklogSummary(),
     getSchedulerEnrichmentBacklogSummary(),
     getSchedulerArtifactBacklogSummary(),
@@ -3201,9 +3237,28 @@ export async function userCanAccessMarket(userId: string, marketId: string | nul
   return Boolean(row);
 }
 
-export async function getMarketCoverageSummary(runId?: string): Promise<MarketCoverageSummary[]> {
+export async function getMarketCoverageSummary(
+  runId?: string,
+  scope?: CrawlRunScope,
+): Promise<MarketCoverageSummary[]> {
   const db = await getDb();
   const runFilter = runId ? "AND cu.crawl_run_id = ?" : "";
+  const scopeRunFilter = scope
+    ? `AND EXISTS (
+         SELECT 1 FROM crawl_runs cr
+         WHERE cr.id = cu.crawl_run_id
+           AND cr.tenant_id = ?
+           AND (? IS NULL OR cr.workspace_id = ?)
+       )`
+    : "";
+  const leadScopeFilter = scope
+    ? "AND l.tenant_id = ? AND (? IS NULL OR l.workspace_id = ?)"
+    : "";
+  const args = [
+    ...(scope ? [scope.tenantId, scope.workspaceId, scope.workspaceId] : []),
+    ...(runId ? [runId] : []),
+    ...(scope ? [scope.tenantId, scope.workspaceId, scope.workspaceId] : []),
+  ];
   const rows = await db.prepare(
     `SELECT
        m.id as marketId,
@@ -3219,21 +3274,40 @@ export async function getMarketCoverageSummary(runId?: string): Promise<MarketCo
        COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) as openUnits,
        COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) as canceledUnits,
        COALESCE(SUM(cu.discovered_count), 0) as leadsDiscovered,
-       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.market_id = m.id), 0) as activeLeads,
+       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.market_id = m.id ${leadScopeFilter}), 0) as activeLeads,
        MAX(COALESCE(cu.finished_at, cu.started_at, cu.created_at)) as lastRunAt
      FROM location_markets m
      LEFT JOIN location_cells c ON c.market_id = m.id
-     LEFT JOIN crawl_units cu ON cu.location_cell_id = c.id ${runFilter}
+     LEFT JOIN crawl_units cu ON cu.location_cell_id = c.id ${runFilter} ${scopeRunFilter}
      WHERE m.status <> 'archived'
      GROUP BY m.id, m.name, m.country_code, m.admin_area1
      ORDER BY m.country_code, m.name`
-  ).all(...(runId ? [runId] : [])) as Array<Record<string, unknown>>;
+  ).all(...args) as Array<Record<string, unknown>>;
   return rows.map(normalizeMarketCoverageSummary);
 }
 
-export async function getLocationCellCoverage(runId?: string): Promise<LocationCellCoverage[]> {
+export async function getLocationCellCoverage(
+  runId?: string,
+  scope?: CrawlRunScope,
+): Promise<LocationCellCoverage[]> {
   const db = await getDb();
   const runFilter = runId ? "AND cu.crawl_run_id = ?" : "";
+  const scopeRunFilter = scope
+    ? `AND EXISTS (
+         SELECT 1 FROM crawl_runs cr
+         WHERE cr.id = cu.crawl_run_id
+           AND cr.tenant_id = ?
+           AND (? IS NULL OR cr.workspace_id = ?)
+       )`
+    : "";
+  const leadScopeFilter = scope
+    ? "AND l.tenant_id = ? AND (? IS NULL OR l.workspace_id = ?)"
+    : "";
+  const args = [
+    ...(scope ? [scope.tenantId, scope.workspaceId, scope.workspaceId] : []),
+    ...(runId ? [runId] : []),
+    ...(scope ? [scope.tenantId, scope.workspaceId, scope.workspaceId] : []),
+  ];
   const rows = await db.prepare(
     `SELECT
        c.id as cellId,
@@ -3252,15 +3326,15 @@ export async function getLocationCellCoverage(runId?: string): Promise<LocationC
        COALESCE(SUM(CASE WHEN cu.status IN ('pending','running','retry_wait') THEN 1 ELSE 0 END), 0) as openUnits,
        COALESCE(SUM(CASE WHEN cu.status = 'canceled' THEN 1 ELSE 0 END), 0) as canceledUnits,
        COALESCE(SUM(cu.discovered_count), 0) as leadsDiscovered,
-       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.location_cell_id = c.id), 0) as activeLeads,
+       COALESCE((SELECT COUNT(*) FROM leads l WHERE l.location_cell_id = c.id ${leadScopeFilter}), 0) as activeLeads,
        MAX(COALESCE(cu.finished_at, cu.started_at, cu.created_at)) as lastRunAt
      FROM location_cells c
      INNER JOIN location_markets m ON m.id = c.market_id
-     LEFT JOIN crawl_units cu ON cu.location_cell_id = c.id ${runFilter}
+     LEFT JOIN crawl_units cu ON cu.location_cell_id = c.id ${runFilter} ${scopeRunFilter}
      WHERE c.is_active = 1
      GROUP BY c.id, c.market_id, m.name, m.country_code, c.country_code, c.cell_type, c.cell_label, c.postal_code, c.locality, c.admin_area1, c.admin_area2
      ORDER BY m.country_code, m.name, c.cell_type, c.cell_label`
-  ).all(...(runId ? [runId] : [])) as Array<Record<string, unknown>>;
+  ).all(...args) as Array<Record<string, unknown>>;
   return rows.map(normalizeLocationCellCoverage);
 }
 
@@ -3480,12 +3554,14 @@ export async function getZipCoverageStatus(zip: string, categories?: readonly st
 export async function createCrawlRun(
   categories: string[],
   options: {
+    tenantId: string;
+    workspaceId: string | null;
     marketId?: string | null;
     selection?: Record<string, unknown> | null;
     name?: string | null;
     scopeLabel?: string | null;
     createdByUserId?: string | null;
-  } = {},
+  },
 ): Promise<CrawlRun>{
   const db = await getDb();
   const id = generateId();
@@ -3493,12 +3569,14 @@ export async function createCrawlRun(
 
   await db.prepare(
     `INSERT INTO crawl_runs (
-       id, mode, status, categories, market_id, selection_json, name, scope_label,
+       id, tenant_id, workspace_id, mode, status, categories, market_id, selection_json, name, scope_label,
        created_by_user_id, started_at, created_at, updated_at
      )
-     VALUES (?, 'coverage', 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, 'coverage', 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
+    options.tenantId,
+    options.workspaceId,
     JSON.stringify(categories),
     options.marketId ?? null,
     options.selection ? JSON.stringify(options.selection) : null,
@@ -3531,57 +3609,103 @@ function parseCrawlRunRow(row: Record<string, unknown>): CrawlRun {
   } as unknown as CrawlRun;
 }
 
-export async function getCrawlRun(id: string): Promise<CrawlRun | null>{
+export interface CrawlRunScope {
+  tenantId: string;
+  workspaceId: string | null;
+}
+
+export async function getCrawlRun(id: string, scope?: CrawlRunScope): Promise<CrawlRun | null>{
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM crawl_runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  const row = scope
+    ? await db.prepare(
+      `SELECT * FROM crawl_runs
+       WHERE id = ?
+         AND tenant_id = ?
+         AND (? IS NULL OR workspace_id = ?)`,
+    ).get(id, scope.tenantId, scope.workspaceId, scope.workspaceId) as Record<string, unknown> | undefined
+    : await db.prepare("SELECT * FROM crawl_runs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
   if (!row) return null;
   return parseCrawlRunRow(row);
 }
 
-export async function getProcessingCrawlRun(): Promise<CrawlRun | null>{
+export async function getProcessingCrawlRun(scope?: CrawlRunScope): Promise<CrawlRun | null>{
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM crawl_runs WHERE status IN ('running', 'queued') ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+  const row = scope
+    ? await db.prepare(
+      `SELECT * FROM crawl_runs
+       WHERE tenant_id = ?
+         AND ((? IS NULL AND workspace_id IS NULL) OR workspace_id = ?)
+         AND status IN ('running', 'queued')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(scope.tenantId, scope.workspaceId, scope.workspaceId) as Record<string, unknown> | undefined
+    : await db.prepare("SELECT * FROM crawl_runs WHERE status IN ('running', 'queued') ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
   if (!row) return null;
   return parseCrawlRunRow(row);
 }
 
-export async function getActiveCrawlRun(): Promise<CrawlRun | null>{
-  return getDefaultVisibleCrawlRun();
+export async function getActiveCrawlRun(scope?: CrawlRunScope): Promise<CrawlRun | null>{
+  return getDefaultVisibleCrawlRun(scope);
 }
 
-export async function getDefaultVisibleCrawlRun(): Promise<CrawlRun | null>{
-  const processing = await getProcessingCrawlRun();
+export async function getDefaultVisibleCrawlRun(scope?: CrawlRunScope): Promise<CrawlRun | null>{
+  const processing = await getProcessingCrawlRun(scope);
   if (processing) return processing;
-  return getLatestCrawlRun();
+  return getLatestCrawlRun(scope);
 }
 
-export async function getSelectedOrDefaultVisibleCrawlRun(runId?: string | null): Promise<CrawlRun | null>{
+export async function getSelectedOrDefaultVisibleCrawlRun(
+  runId?: string | null,
+  scope?: CrawlRunScope,
+): Promise<CrawlRun | null>{
   const cleanRunId = normalizeNullableText(runId);
-  if (cleanRunId) return getCrawlRun(cleanRunId);
-  return getDefaultVisibleCrawlRun();
+  if (cleanRunId) return getCrawlRun(cleanRunId, scope);
+  return getDefaultVisibleCrawlRun(scope);
 }
 
-export async function getLatestPausedCrawlRun(): Promise<CrawlRun | null>{
+export async function getLatestPausedCrawlRun(scope?: CrawlRunScope): Promise<CrawlRun | null>{
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM crawl_runs WHERE status = 'paused' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+  const row = scope
+    ? await db.prepare(
+      `SELECT * FROM crawl_runs
+       WHERE tenant_id = ?
+         AND (? IS NULL OR workspace_id = ?)
+         AND status = 'paused'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(scope.tenantId, scope.workspaceId, scope.workspaceId) as Record<string, unknown> | undefined
+    : await db.prepare("SELECT * FROM crawl_runs WHERE status = 'paused' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
   if (!row) return null;
   return parseCrawlRunRow(row);
 }
 
-export async function getLatestCrawlRun(): Promise<CrawlRun | null>{
+export async function getLatestCrawlRun(scope?: CrawlRunScope): Promise<CrawlRun | null>{
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM crawl_runs ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+  const row = scope
+    ? await db.prepare(
+      `SELECT * FROM crawl_runs
+       WHERE tenant_id = ?
+         AND (? IS NULL OR workspace_id = ?)
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(scope.tenantId, scope.workspaceId, scope.workspaceId) as Record<string, unknown> | undefined
+    : await db.prepare("SELECT * FROM crawl_runs ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
   if (!row) return null;
   return parseCrawlRunRow(row);
 }
 
-export async function listDiscoveryItems(limit = 12): Promise<DiscoveryItemSummary[]> {
+export async function listDiscoveryItems(limit = 12, scope?: CrawlRunScope): Promise<DiscoveryItemSummary[]> {
   const db = await getDb();
   const boundedLimit = Math.max(1, Math.min(Math.floor(limit), 50));
+  const scopeFilter = scope
+    ? "WHERE tenant_id = ? AND (? IS NULL OR workspace_id = ?)"
+    : "";
+  const scopeArgs = scope ? [scope.tenantId, scope.workspaceId, scope.workspaceId] : [];
   const rows = await db.prepare(
     `WITH latest_runs AS (
        SELECT *
        FROM crawl_runs
+       ${scopeFilter}
        ORDER BY created_at DESC
        LIMIT ?
      ),
@@ -3640,7 +3764,7 @@ export async function listDiscoveryItems(limit = 12): Promise<DiscoveryItemSumma
      LEFT JOIN unit_counts uc ON uc.crawl_run_id = cr.id
      ORDER BY cr.created_at DESC
      `
-  ).all(boundedLimit) as Array<Record<string, unknown>>;
+  ).all(...scopeArgs, boundedLimit) as Array<Record<string, unknown>>;
 
   return rows.map((row) => {
     const categories = safeParseJson<string[]>(row.categories, []);
@@ -4298,7 +4422,7 @@ export async function getDiscoveryRunCandidates(runId: string, limit = 100): Pro
 
   return rows.map((row) => {
     const hasLead = Boolean(row.lead_id);
-    const leadIsExcluded = Boolean(Number(row.lead_is_excluded) || row.lead_is_excluded === true);
+    const leadIsExcluded = hasLead ? isLeadExcluded(row.lead_is_excluded) : false;
     return {
       placeId: row.place_id as string,
       name: normalizeNullableText(row.name as string | null),
@@ -4383,6 +4507,8 @@ export async function getCoverageByZip(runId?: string): Promise<ZipProgress[]>{
 }
 
 export async function getLeadMapZipCoverage(): Promise<LeadMapZipCoverage[]> {
+  const { tenantId, workspaceId } = requireTenantContext();
+  if (workspaceId !== null) throw new Error("Tenant-wide context is required");
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT
@@ -4399,8 +4525,14 @@ export async function getLeadMapZipCoverage(): Promise<LeadMapZipCoverage[]> {
      WHERE c.is_active = 1
        AND c.lat IS NOT NULL
        AND c.lng IS NOT NULL
+       AND EXISTS (
+         SELECT 1
+         FROM leads tenant_lead
+         WHERE tenant_lead.tenant_id = ?
+           AND tenant_lead.location_cell_id = c.id
+       )
      ORDER BY c.country_code, c.postal_code_normalized, c.cell_label`
-  ).all() as Array<{
+  ).all(tenantId) as Array<{
     id: string;
     postal_code_normalized: string | null;
     postal_code: string | null;
@@ -4531,7 +4663,65 @@ export interface UpsertLeadResult {
   created: boolean;
 }
 
+function requireLeadWriteTenantId(explicitTenantId?: string): string {
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) {
+    throw new Error("Conflicting lead tenant contexts.");
+  }
+  if (workerContext && (
+    workerContext.workerName !== "crawl" ||
+    workerContext.action !== "crawl:process" ||
+    workerContext.workspaceId !== null
+  )) {
+    throw new Error("Exact crawl worker context is required.");
+  }
+  const tenantId = memberContext?.tenantId ?? workerContext?.tenantId ?? requireTenantContext().tenantId;
+  if (explicitTenantId !== undefined && explicitTenantId !== tenantId) {
+    throw new Error("Lead tenant does not match the active tenant context.");
+  }
+  return tenantId;
+}
+
+function requireGooglePlacesCacheTenantId(): string {
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) {
+    throw new Error("Conflicting place cache tenant contexts.");
+  }
+  if (workerContext) {
+    const hasExactWorkerAuthority = workerContext.workspaceId === null && (
+      (workerContext.workerName === "crawl" && workerContext.action === "crawl:process") ||
+      (workerContext.workerName === "enrichment" && workerContext.action === "enrichment:process")
+    );
+    if (!hasExactWorkerAuthority) {
+      throw new Error("Exact crawl or enrichment worker context is required.");
+    }
+  }
+  return memberContext?.tenantId ?? workerContext?.tenantId ?? requireTenantContext().tenantId;
+}
+
+function requireExactEnrichmentWorkerTenantId(leasedTenantId?: string): string {
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) throw new Error("Conflicting enrichment tenant contexts.");
+  if (
+    memberContext ||
+    !workerContext ||
+    workerContext.workerName !== "enrichment" ||
+    workerContext.action !== "enrichment:process" ||
+    workerContext.workspaceId !== null
+  ) {
+    throw new Error("Exact enrichment worker context is required.");
+  }
+  if (leasedTenantId !== undefined && leasedTenantId !== workerContext.tenantId) {
+    throw new Error("Enrichment tenant does not match the active worker context.");
+  }
+  return workerContext.tenantId;
+}
+
 export async function upsertLead(data: {
+  tenantId?: string;
   place_id: string;
   name?: string | null;
   address?: string | null;
@@ -4567,6 +4757,7 @@ export async function upsertLead(data: {
   is_excluded?: boolean;
   exclusion_reason?: string | null;
 }): Promise<UpsertLeadResult>{
+  const tenantId = requireLeadWriteTenantId(data.tenantId);
   return withDbTransaction(async () => {
     const db = await getDb();
     const categories = data.categories ?? [];
@@ -4594,17 +4785,17 @@ export async function upsertLead(data: {
     const estimatedDealValue = data.estimated_deal_value ?? qualification.estimatedDealValue;
 
     const inserted = await db.prepare(
-    `INSERT INTO leads (id, place_id, name, address, phone, categories, rating, review_count,
+    `INSERT INTO leads (tenant_id, id, place_id, name, address, phone, categories, rating, review_count,
       website_uri, website_status, maps_uri, business_status, price_level,
       photo_count, has_opening_hours, primary_type, lat, lng,
       market_id, location_cell_id, country_code, admin_area1, admin_area2, locality, postal_code,
       score, selling_niche, business_type, qualification_status, disqualification_reason, website_verified_at,
       contactability_score, estimated_deal_value, is_excluded, exclusion_reason, excluded_at,
       discovered_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      + " ON CONFLICT(place_id) DO NOTHING RETURNING id"
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      + " ON CONFLICT(tenant_id, place_id) DO NOTHING RETURNING id"
   ).get<{ id: string }>(
-    id, data.place_id, data.name ?? null, data.address ?? null, data.phone ?? null,
+    tenantId, id, data.place_id, data.name ?? null, data.address ?? null, data.phone ?? null,
     categoriesJson, data.rating ?? null, data.review_count ?? null,
     data.website_uri ?? null, websiteStatus,
     data.maps_uri ?? null, data.business_status ?? null,
@@ -4633,7 +4824,7 @@ export async function upsertLead(data: {
   );
 
   if (inserted?.id) {
-    await updateLeadQualityScores(inserted.id);
+    await updateLeadQualityScoresForTenant(tenantId, inserted.id);
     return { id: inserted.id, created: true };
   }
 
@@ -4665,7 +4856,7 @@ export async function upsertLead(data: {
       exclusion_reason = COALESCE(exclusion_reason, ?),
       excluded_at = CASE WHEN ? = 1 AND excluded_at IS NULL THEN ? ELSE excluded_at END,
       updated_at = ?
-     WHERE place_id = ?
+     WHERE tenant_id = ? AND place_id = ?
      RETURNING id`
   ).get<{ id: string }>(
     data.name ?? null, data.address ?? null, data.phone ?? null,
@@ -4696,15 +4887,17 @@ export async function upsertLead(data: {
     shouldExclude ? 1 : 0,
     now,
     now,
+    tenantId,
     data.place_id,
   );
   if (!updated) throw new Error(`Failed to upsert lead for place_id ${data.place_id}.`);
-  await updateLeadQualityScores(updated.id);
+  await updateLeadQualityScoresForTenant(tenantId, updated.id);
   return { id: updated.id, created: false };
   });
 }
 
 export interface ManualLeadInput {
+  tenantId: string;
   name: string;
   businessType: BusinessType | string;
   phone?: string | null;
@@ -4720,6 +4913,7 @@ export async function createManualLead(input: ManualLeadInput): Promise<Lead> {
   const websiteStatus = normalizeWebsiteStatus(input.websiteStatus);
   const notes = composeManualLeadNotes(input);
   const { id } = await upsertLead({
+    tenantId: input.tenantId,
     place_id: `manual:${generateId()}`,
     name: input.name,
     address: input.address ?? null,
@@ -4745,8 +4939,8 @@ export async function createManualLead(input: ManualLeadInput): Promise<Lead> {
          archived_by_user_id = NULL,
          archive_reason = NULL,
          updated_at = ?
-     WHERE id = ?`
-  ).run(notes, nowISO(), id);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(notes, nowISO(), input.tenantId, id);
   const lead = await getLeadById(id);
   if (!lead) throw new Error("Manual lead was created but could not be loaded.");
   return lead;
@@ -4901,9 +5095,12 @@ function buildLeadFilterWhere(filters: LeadFilters): { where: string; params: un
     conditions.push("l.lng IS NOT NULL AND l.lng <= ?");
     params.push(filters.maxLng);
   }
-  if (filters.minReviews != null && filters.minReviews > 0) {
+  const minReviews = parseMinReviewsFilter(filters.minReviews);
+  if (minReviews != null && minReviews > POSTGRES_INT4_MAX) {
+    conditions.push("1 = 0");
+  } else if (minReviews != null && minReviews > 0) {
     conditions.push("l.review_count >= ?");
-    params.push(filters.minReviews);
+    params.push(minReviews);
   }
   if (filters.minRating != null && filters.minRating > 0) {
     conditions.push("l.rating >= ?");
@@ -4956,6 +5153,89 @@ function buildLeadFilterWhere(filters: LeadFilters): { where: string; params: un
   return { where, params };
 }
 
+function requireTenantWideLeadReadContext(): { tenantId: string } {
+  const { tenantId, workspaceId } = requireTenantContext();
+  if (workspaceId !== null) throw new Error("Tenant-wide context is required");
+  return { tenantId };
+}
+
+function requireTenantWideScoreContext(): { tenantId: string } {
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) throw new Error("Conflicting score tenant contexts.");
+  if (
+    workerContext &&
+    (workerContext.workerName !== "score_recompute" || workerContext.action !== "score_recompute:recompute")
+  ) {
+    throw new Error("Exact score recompute worker context is required.");
+  }
+  const context = memberContext ?? workerContext ?? requireTenantContext();
+  if (context.workspaceId !== null) throw new Error("Tenant-wide context is required");
+  return { tenantId: context.tenantId };
+}
+
+type AiTenantWorkerName = "ai_verification" | "artifact" | "crawl" | "enrichment";
+
+const EXACT_AI_TENANT_WORKER_ACTIONS: Record<AiTenantWorkerName, string> = {
+  ai_verification: "ai_verification:process",
+  artifact: "artifact:process",
+  crawl: "crawl:process",
+  enrichment: "enrichment:process",
+};
+
+function requireAiTenantId(
+  explicitTenantId?: string,
+  allowedWorkers: readonly AiTenantWorkerName[] = ["ai_verification"],
+): string {
+  const memberContext = getTenantContext();
+  const workerContext = getWorkerTenantContext();
+  if (memberContext && workerContext) throw new Error("Conflicting AI tenant contexts.");
+
+  if (memberContext) {
+    if (memberContext.workspaceId !== null) throw new Error("Tenant-wide AI context is required.");
+    if (explicitTenantId !== undefined && explicitTenantId !== memberContext.tenantId) {
+      throw new Error("AI tenant does not match the active tenant context.");
+    }
+    return memberContext.tenantId;
+  }
+
+  const workerName = workerContext?.workerName as AiTenantWorkerName | undefined;
+  if (
+    !workerContext ||
+    workerContext.workspaceId !== null ||
+    !workerName ||
+    !allowedWorkers.includes(workerName) ||
+    EXACT_AI_TENANT_WORKER_ACTIONS[workerName] !== workerContext.action
+  ) {
+    throw new Error("Exact AI worker context is required.");
+  }
+  if (explicitTenantId !== undefined && explicitTenantId !== workerContext.tenantId) {
+    throw new Error("AI tenant does not match the active worker context.");
+  }
+  return workerContext.tenantId;
+}
+
+function bindLeadTenantScope(
+  where: string,
+  params: unknown[],
+  tenantId: string,
+): { where: string; params: unknown[] } {
+  return {
+    where: where ? `${where} AND l.tenant_id = ?` : "WHERE l.tenant_id = ?",
+    params: [...params, tenantId],
+  };
+}
+
+const TENANT_BOUND_ASSIGNEE_JOIN = `LEFT JOIN app_users au
+       ON au.user_id = l.assigned_to_user_id
+      AND EXISTS (
+        SELECT 1
+        FROM tenant_memberships tenant_membership
+        WHERE tenant_membership.tenant_id = l.tenant_id
+          AND tenant_membership.auth_identity_id = au.user_id
+          AND tenant_membership.status = 'active'
+      )`;
+
 function leadUnassignedCondition(column: string): string {
   return `(${column} IS NULL OR CAST(${column} AS TEXT) = '')`;
 }
@@ -4998,8 +5278,10 @@ function fastLeadMapOrderBySql(filters: LeadFilters): string {
 }
 
 export async function getLeads(filters: LeadFilters = {}): Promise<{ leads: Lead[]; total: number }> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const { where, params } = buildLeadFilterWhere(filters);
+  const filter = buildLeadFilterWhere(filters);
+  const { where, params } = bindLeadTenantScope(filter.where, filter.params, tenantId);
   const { orderBySql } = resolveLeadSort(filters);
 
   const page = Math.max(1, filters.page ?? 1);
@@ -5011,7 +5293,7 @@ export async function getLeads(filters: LeadFilters = {}): Promise<{ leads: Lead
   const leads = await db.prepare(
     `SELECT l.*, au.email as assigned_user_email, au.display_name as assigned_user_display_name
      FROM leads l
-     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${TENANT_BOUND_ASSIGNEE_JOIN}
      ${where}
      ORDER BY ${orderBySql}
      LIMIT ? OFFSET ?`
@@ -5028,17 +5310,21 @@ export async function getLeadMapPoints(
   limit = 600,
   options: { includeTotal?: boolean; fastOrder?: boolean } = {},
 ): Promise<{ points: LeadMapPoint[]; totalMapped: number }> {
+  const { tenantId, workspaceId } = requireTenantContext();
+  if (workspaceId !== null) throw new Error("Tenant-wide context is required");
   const db = await getDb();
   const { where, params } = buildLeadFilterWhere(filters);
   const { orderBySql } = resolveLeadSort(filters);
   const mapOrderBySql = options.fastOrder ? fastLeadMapOrderBySql(filters) : orderBySql;
   const coordinateCondition = "l.lat IS NOT NULL AND l.lng IS NOT NULL";
   const mapWhere = where ? `${where} AND ${coordinateCondition}` : `WHERE ${coordinateCondition}`;
+  const scopedMapWhere = `${mapWhere} AND l.tenant_id = ?`;
+  const scopedParams = [...params, tenantId];
   const safeLimit = Math.min(1000, Math.max(1, Math.floor(limit)));
 
   const countRow = options.includeTotal === false
     ? null
-    : await db.prepare(`SELECT COUNT(*) as count FROM leads l ${mapWhere}`).get(...params) as { count: number };
+    : await db.prepare(`SELECT COUNT(*) as count FROM leads l ${scopedMapWhere}`).get(...scopedParams) as { count: number };
   const rows = await db.prepare(
     `SELECT
        l.id,
@@ -5061,11 +5347,19 @@ export async function getLeadMapPoints(
        au.email as assigned_user_email,
        au.display_name as assigned_user_display_name
      FROM leads l
-     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
-     ${mapWhere}
+     LEFT JOIN app_users au
+       ON au.user_id = l.assigned_to_user_id
+      AND EXISTS (
+        SELECT 1
+        FROM tenant_memberships tenant_membership
+        WHERE tenant_membership.tenant_id = l.tenant_id
+          AND tenant_membership.auth_identity_id = au.user_id
+          AND tenant_membership.status = 'active'
+      )
+     ${scopedMapWhere}
      ORDER BY ${mapOrderBySql}
      LIMIT ?`
-  ).all(...params, safeLimit) as Array<Record<string, unknown>>;
+  ).all(...scopedParams, safeLimit) as Array<Record<string, unknown>>;
 
   return {
     totalMapped: countRow ? Number(countRow.count ?? 0) : rows.length,
@@ -5094,26 +5388,30 @@ export async function getLeadMapPoints(
 }
 
 export async function getLeadsForExport(filters: LeadFilters = {}, limit = 50000): Promise<Lead[]>{
+  const { tenantId } = requireTenantContext();
   const db = await getDb();
   const { where, params } = buildLeadFilterWhere(filters);
   const { orderBySql } = resolveLeadSort(filters);
   const safeLimit = Math.min(100000, Math.max(1, Math.floor(limit)));
+  const scopedWhere = where ? `${where} AND l.tenant_id = ?` : "WHERE l.tenant_id = ?";
 
   const rows = await db.prepare(
     `SELECT l.*, au.email as assigned_user_email, au.display_name as assigned_user_display_name
      FROM leads l
-     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
-     ${where}
+     ${TENANT_BOUND_ASSIGNEE_JOIN}
+     ${scopedWhere}
      ORDER BY ${orderBySql}
      LIMIT ?`
-  ).all(...params, safeLimit) as Array<Record<string, unknown>>;
+  ).all(...params, tenantId, safeLimit) as Array<Record<string, unknown>>;
 
   return rows.map(parseLeadRow);
 }
 
 export async function getBusinessTypeCounts(filters: LeadFilters = {}): Promise<BusinessTypeCount[]>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const { where, params } = buildLeadFilterWhere({ ...filters, businessType: undefined, page: undefined, pageSize: undefined });
+  const filter = buildLeadFilterWhere({ ...filters, businessType: undefined, page: undefined, pageSize: undefined });
+  const { where, params } = bindLeadTenantScope(filter.where, filter.params, tenantId);
   const rows = await db.prepare(
     `SELECT COALESCE(l.business_type, 'local_services') as business_type,
             COUNT(*) as total,
@@ -5136,8 +5434,10 @@ export async function getBusinessTypeCounts(filters: LeadFilters = {}): Promise<
 }
 
 export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads: KanbanLead[]; total: number }> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const { where, params } = buildLeadFilterWhere(filters);
+  const filter = buildLeadFilterWhere(filters);
+  const { where, params } = bindLeadTenantScope(filter.where, filter.params, tenantId);
   const { orderBySql } = resolveLeadSort(filters);
 
   const page = Math.max(1, filters.page ?? 1);
@@ -5156,7 +5456,7 @@ export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads
       l.raw_opportunity_score, l.verification_score, l.sales_priority_score, l.qualification_status,
       l.assigned_to_user_id, au.email as assigned_user_email, au.display_name as assigned_user_display_name
      FROM leads l
-     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${TENANT_BOUND_ASSIGNEE_JOIN}
      ${where}
      ORDER BY ${orderBySql}
      LIMIT ? OFFSET ?`
@@ -5171,7 +5471,7 @@ export async function getKanbanLeads(filters: LeadFilters = {}): Promise<{ leads
     website_status: (row.website_status as string) ?? "none",
     score: (row.score as number) ?? 0,
     status: (row.status as string) ?? "new",
-    is_excluded: ((row.is_excluded as number) ?? 0) === 1,
+    is_excluded: isLeadExcluded(row.is_excluded),
     exclusion_reason: (row.exclusion_reason as string | null) ?? null,
     enrichment_status: (row.enrichment_status as string) ?? "pending",
     primary_type: (row.primary_type as string | null) ?? null,
@@ -5310,7 +5610,18 @@ export async function updateLeadNotes(id: string, notes: string): Promise<void>{
   await db.prepare("UPDATE leads SET notes = ?, updated_at = ? WHERE id = ?").run(notes, nowISO(), id);
 }
 
+export async function lockTenantLeadForMutation(id: string): Promise<Lead | null> {
+  const { tenantId } = requireTenantWideLeadReadContext();
+  const db = await getDb();
+  const result = await db.prepare(
+    "UPDATE leads SET updated_at = updated_at WHERE tenant_id = ? AND id = ?",
+  ).run(tenantId, id);
+  if (result.changes === 0) return null;
+  return getLeadById(id);
+}
+
 export async function updateLeadFacts(id: string, input: LeadFactsInput): Promise<Lead | null> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const current = await getLeadById(id);
   if (!current) {
     return null;
@@ -5371,15 +5682,17 @@ export async function updateLeadFacts(id: string, input: LeadFactsInput): Promis
   }
 
   setLead("updated_at", now);
-  leadValues.push(id);
 
-  await db.prepare(`UPDATE leads SET ${leadUpdates.join(", ")} WHERE id = ?`).run(...leadValues);
+  const updated = await db.prepare(
+    `UPDATE leads SET ${leadUpdates.join(", ")} WHERE tenant_id = ? AND id = ?`,
+  ).run(...leadValues, tenantId, id);
+  if (updated.changes === 0) return null;
 
   if (current.place_id && placeUpdates.length > 0) {
     placeUpdates.push("updated_at = ?");
-    placeValues.push(now, current.place_id);
+    placeValues.push(now, tenantId, current.place_id);
     await db
-      .prepare(`UPDATE places_master SET ${placeUpdates.join(", ")} WHERE place_id = ?`)
+      .prepare(`UPDATE places_master SET ${placeUpdates.join(", ")} WHERE tenant_id = ? AND place_id = ?`)
       .run(...placeValues);
   }
 
@@ -5419,14 +5732,30 @@ export async function assignLeadToUser(leadId: string, userId: string | null): P
     .run(userId, nowISO(), leadId);
 }
 
-export async function claimLeadForUser(leadId: string, userId: string): Promise<number> {
+export async function claimLeadForUser(
+  leadId: string,
+  userId: string,
+  options: { preserveAdminSemantics?: boolean } = {},
+): Promise<number> {
   const db = await getDb();
+  if (options.preserveAdminSemantics) {
+    const result = await db.prepare(
+      `UPDATE leads
+       SET assigned_to_user_id = ?, updated_at = ?
+       WHERE id = ?
+         AND (${leadUnassignedCondition("assigned_to_user_id")} OR assigned_to_user_id = ?)`
+    ).run(userId, nowISO(), leadId, userId);
+    return result.changes;
+  }
+
   const result = await db.prepare(
     `UPDATE leads
      SET assigned_to_user_id = ?, updated_at = ?
      WHERE id = ?
-       AND (${leadUnassignedCondition("assigned_to_user_id")} OR assigned_to_user_id = ?)`
-  ).run(userId, nowISO(), leadId, userId);
+       AND archived_at IS NULL
+       AND COALESCE(is_excluded, 0) = 0
+       AND ${leadUnassignedCondition("assigned_to_user_id")}`
+  ).run(userId, nowISO(), leadId);
   return result.changes;
 }
 
@@ -5547,32 +5876,40 @@ function uniqueIds(ids: string[]): string[] {
 // ─── AI Verification ───
 
 export async function getLatestAiVerification(leadId: string): Promise<AiLeadVerification | null>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const row = await db.prepare(
-    "SELECT * FROM ai_lead_verifications WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1"
-  ).get(leadId) as Record<string, unknown> | undefined;
+    "SELECT * FROM ai_lead_verifications WHERE tenant_id = ? AND lead_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).get(tenantId, leadId) as Record<string, unknown> | undefined;
   return row ? parseAiLeadVerificationRow(row) : null;
 }
 
 export async function getAiVerificationById(id: string): Promise<AiLeadVerification | null>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM ai_lead_verifications WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  const row = await db.prepare("SELECT * FROM ai_lead_verifications WHERE tenant_id = ? AND id = ?")
+    .get(tenantId, id) as Record<string, unknown> | undefined;
   return row ? parseAiLeadVerificationRow(row) : null;
 }
 
 export async function createAiLeadVerification(input: AiLeadVerificationInput): Promise<AiLeadVerification>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
+  const lead = await db.prepare("SELECT 1 FROM leads WHERE tenant_id = ? AND id = ?")
+    .get(tenantId, input.lead_id);
+  if (!lead) throw new Error("Lead is unavailable.");
   const id = generateId();
   const now = nowISO();
   await db.prepare(
     `INSERT INTO ai_lead_verifications (
-      id, lead_id, model, status, confidence, found_website_url, found_email, found_phone,
+      tenant_id, id, lead_id, model, status, confidence, found_website_url, found_email, found_phone,
       social_profiles, sources, recommendation, reason, summary, raw_json, input_hash,
       website_viability_status, website_health_json, website_viability_reason,
       usage_input_tokens, usage_output_tokens, estimated_cost, error,
       requested_by_user_id, request_source, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
+    tenantId,
     id,
     input.lead_id,
     assertAllowedOpenAIModel(input.model),
@@ -5610,7 +5947,12 @@ export async function updateLeadAiVerificationSummary(
   verification: AiLeadVerification,
   winProbabilityScore: number,
 ): Promise<void>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
+  const ownedVerification = await db.prepare(
+    "SELECT 1 FROM ai_lead_verifications WHERE tenant_id = ? AND id = ? AND lead_id = ?",
+  ).get(tenantId, verification.id, leadId);
+  if (!ownedVerification) throw new Error("AI verification is unavailable.");
   const foundWebsiteUrl = verification.found_website_url?.trim() || null;
   const hasUsableWebsite = verification.status === "site_found" && verification.website_viability_status === "usable" && Boolean(foundWebsiteUrl);
   const hasWeakWebsiteOpportunity = verification.status === "weak_site_found" && isWeakWebsiteViability(verification.website_viability_status) && Boolean(foundWebsiteUrl);
@@ -5647,7 +5989,7 @@ export async function updateLeadAiVerificationSummary(
       END,
       win_probability_score = ?,
       updated_at = ?
-     WHERE id = ?`
+     WHERE tenant_id = ? AND id = ?`
   ).run(
     verification.status,
     clamp01(verification.confidence),
@@ -5667,14 +6009,28 @@ export async function updateLeadAiVerificationSummary(
     hasUsableWebsite ? 1 : 0,
     clampPercentage(winProbabilityScore),
     nowISO(),
+    tenantId,
     leadId,
   );
-  await updateLeadQualityScores(leadId);
+  await updateLeadQualityScoresForTenant(tenantId, leadId);
+}
+
+export async function getLeadForAiQueue(leadId: string): Promise<Lead | null> {
+  const tenantId = requireAiTenantId(undefined, ["ai_verification", "crawl", "enrichment"]);
+  const db = await getDb();
+  const row = await db.prepare(
+    `SELECT l.*, au.email as assigned_user_email, au.display_name as assigned_user_display_name
+     FROM leads l
+     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     WHERE l.tenant_id = ? AND l.id = ?`,
+  ).get(tenantId, leadId) as Record<string, unknown> | undefined;
+  return row ? parseLeadRow(row) : null;
 }
 
 export async function markLeadAiError(leadId: string, message: string): Promise<void>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
-  await db.prepare(
+  const result = await db.prepare(
     `UPDATE leads SET
       ai_verification_status = 'error',
       ai_summary = ?,
@@ -5682,22 +6038,35 @@ export async function markLeadAiError(leadId: string, message: string): Promise<
       ai_website_viability_status = NULL,
       ai_website_health = NULL,
       updated_at = ?
-     WHERE id = ?`
-  ).run(message, nowISO(), nowISO(), leadId);
-  await updateLeadQualityScores(leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(message, nowISO(), nowISO(), tenantId, leadId);
+  if (result.changes > 0) await updateLeadQualityScoresForTenant(tenantId, leadId);
 }
 
 export async function logAiUsageEvent(input: AiUsageEventInput): Promise<void>{
+  const tenantId = requireAiTenantId(undefined, ["ai_verification", "artifact"]);
   const db = await getDb();
+  if (input.lead_id) {
+    const lead = await db.prepare("SELECT 1 FROM leads WHERE tenant_id = ? AND id = ?")
+      .get(tenantId, input.lead_id);
+    if (!lead) throw new Error("Lead is unavailable.");
+  }
+  if (input.verification_id) {
+    const verification = await db.prepare(
+      "SELECT 1 FROM ai_lead_verifications WHERE tenant_id = ? AND id = ?",
+    ).get(tenantId, input.verification_id);
+    if (!verification) throw new Error("AI verification is unavailable.");
+  }
   const inputTokens = Math.max(0, Math.floor(input.input_tokens ?? 0));
   const outputTokens = Math.max(0, Math.floor(input.output_tokens ?? 0));
   await db.prepare(
     `INSERT INTO ai_usage_events (
-      id, lead_id, verification_id, model, endpoint, success, was_cached,
+      tenant_id, id, lead_id, verification_id, model, endpoint, success, was_cached,
       input_tokens, output_tokens, total_tokens, estimated_cost, metadata,
       actor_user_id, request_source, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
+    tenantId,
     generateId(),
     input.lead_id ?? null,
     input.verification_id ?? null,
@@ -5721,15 +6090,17 @@ export async function getAiUsageForActor(
   sinceIso: string,
   requestSources: string[] = ["researcher_ai_check", "researcher_pitch_pack"],
 ): Promise<ActorAiUsageSummary> {
+  const tenantId = requireAiTenantId(undefined, ["ai_verification", "artifact"]);
   const db = await getDb();
   const sources = requestSources.map((source) => source.trim()).filter(Boolean);
   if (!actorUserId || sources.length === 0) return { calls: 0, cost: 0 };
   const placeholders = sources.map(() => "?").join(",");
-  const params = [actorUserId, ...sources, sinceIso];
+  const params = [tenantId, actorUserId, ...sources, sinceIso];
   const events = await db.prepare(
     `SELECT id, verification_id, estimated_cost, was_cached, metadata
      FROM ai_usage_events
-     WHERE actor_user_id = ?
+     WHERE tenant_id = ?
+       AND actor_user_id = ?
        AND request_source IN (${placeholders})
        AND created_at >= ?`
   ).all(...params) as Array<{
@@ -5742,7 +6113,8 @@ export async function getAiUsageForActor(
   const verifications = await db.prepare(
     `SELECT id, estimated_cost
      FROM ai_lead_verifications
-     WHERE requested_by_user_id = ?
+     WHERE tenant_id = ?
+       AND requested_by_user_id = ?
        AND request_source IN (${placeholders})
        AND created_at >= ?
        AND estimated_cost > 0`
@@ -5750,7 +6122,8 @@ export async function getAiUsageForActor(
   const artifacts = await db.prepare(
     `SELECT id, estimated_cost, attempt_count
      FROM lead_ai_artifacts
-     WHERE requested_by_user_id = ?
+     WHERE tenant_id = ?
+       AND requested_by_user_id = ?
        AND request_source IN (${placeholders})
        AND updated_at >= ?
        AND estimated_cost > 0`
@@ -6181,6 +6554,7 @@ export async function markLeadAiArtifactRetry(
 }
 
 export async function markLeadAiQueued(leadId: string, inputHash: string, resetAttempts = false): Promise<number> {
+  const tenantId = requireAiTenantId(undefined, ["ai_verification", "crawl", "enrichment"]);
   const db = await getDb();
   const result = await db.prepare(
     `UPDATE leads SET
@@ -6190,12 +6564,13 @@ export async function markLeadAiQueued(leadId: string, inputHash: string, resetA
       ai_next_retry_at = NULL,
       ai_input_hash = ?,
       updated_at = ?
-     WHERE id = ?`
-  ).run(resetAttempts ? 1 : 0, inputHash, nowISO(), leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(resetAttempts ? 1 : 0, inputHash, nowISO(), tenantId, leadId);
   return result.changes;
 }
 
 export async function markLeadAiRunning(leadId: string, inputHash: string): Promise<number> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const result = await db.prepare(
     `UPDATE leads SET
@@ -6204,13 +6579,14 @@ export async function markLeadAiRunning(leadId: string, inputHash: string): Prom
       ai_last_error = NULL,
       ai_input_hash = ?,
       updated_at = ?
-     WHERE id = ?
+     WHERE tenant_id = ? AND id = ?
        AND ai_queue_status = 'queued'`
-  ).run(inputHash, nowISO(), leadId);
+  ).run(inputHash, nowISO(), tenantId, leadId);
   return result.changes;
 }
 
 export async function markLeadAiVerified(leadId: string, inputHash: string): Promise<number> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const result = await db.prepare(
     `UPDATE leads SET
@@ -6219,14 +6595,17 @@ export async function markLeadAiVerified(leadId: string, inputHash: string): Pro
       ai_next_retry_at = NULL,
       ai_input_hash = ?,
       updated_at = ?
-     WHERE id = ?`
-  ).run(inputHash, nowISO(), leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(inputHash, nowISO(), tenantId, leadId);
   return result.changes;
 }
 
 export async function markLeadAiQueueError(leadId: string, message: string, maxAttempts: number): Promise<void> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
-  const row = await db.prepare("SELECT ai_attempt_count FROM leads WHERE id = ?").get(leadId) as { ai_attempt_count: number } | undefined;
+  const row = await db.prepare("SELECT ai_attempt_count FROM leads WHERE tenant_id = ? AND id = ?")
+    .get(tenantId, leadId) as { ai_attempt_count: number } | undefined;
+  if (!row) return;
   const attempts = Math.max(0, Number(row?.ai_attempt_count ?? 0));
   const safeMaxAttempts = Math.max(1, Math.floor(maxAttempts));
   const retryable = attempts < safeMaxAttempts;
@@ -6241,26 +6620,29 @@ export async function markLeadAiQueueError(leadId: string, message: string, maxA
       ai_last_error = ?,
       ai_next_retry_at = ?,
       updated_at = ?
-     WHERE id = ?`
-  ).run(retryable ? "queued" : "error", message.slice(0, 1000), nextRetry, nowISO(), leadId);
-  await updateLeadQualityScores(leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(retryable ? "queued" : "error", message.slice(0, 1000), nextRetry, nowISO(), tenantId, leadId);
+  await updateLeadQualityScoresForTenant(tenantId, leadId);
 }
 
 export async function getNextAiVerificationJob(maxAttempts = 3): Promise<Lead | null> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   await db.prepare(
     `UPDATE leads SET
       ai_queue_status = 'queued',
       ai_next_retry_at = NULL,
       updated_at = ?
-     WHERE ai_queue_status = 'running'
+     WHERE tenant_id = ?
+       AND ai_queue_status = 'running'
        AND updated_at < datetime('now', '-5 minutes')`
-  ).run(nowISO());
+  ).run(nowISO(), tenantId);
 
   const row = await db.prepare(
     `SELECT *
      FROM leads
-     WHERE ai_queue_status = 'queued'
+     WHERE tenant_id = ?
+       AND ai_queue_status = 'queued'
        AND (ai_next_retry_at IS NULL OR ai_next_retry_at <= ?)
        AND ai_attempt_count < ?
        AND COALESCE(is_excluded, 0) = 0
@@ -6273,21 +6655,23 @@ export async function getNextAiVerificationJob(maxAttempts = 3): Promise<Lead | 
        score DESC,
        updated_at ASC
      LIMIT 1`
-  ).get(nowISO(), Math.max(1, Math.floor(maxAttempts))) as Record<string, unknown> | undefined;
+  ).get(tenantId, nowISO(), Math.max(1, Math.floor(maxAttempts))) as Record<string, unknown> | undefined;
 
   return row ? parseLeadRow(row) : null;
 }
 
 export async function leaseNextAiVerificationJob(maxAttempts = 3): Promise<Lead | null> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   await db.prepare(
     `UPDATE leads SET
       ai_queue_status = 'queued',
       ai_next_retry_at = NULL,
       updated_at = ?
-     WHERE ai_queue_status = 'running'
+     WHERE tenant_id = ?
+       AND ai_queue_status = 'running'
        AND updated_at < datetime('now', '-5 minutes')`
-  ).run(nowISO());
+  ).run(nowISO(), tenantId);
 
   const safeMaxAttempts = Math.max(1, Math.floor(maxAttempts));
   const now = nowISO();
@@ -6298,10 +6682,12 @@ export async function leaseNextAiVerificationJob(maxAttempts = 3): Promise<Lead 
       ai_last_error = NULL,
       ai_next_retry_at = NULL,
       updated_at = ?
-     WHERE id = (
+     WHERE tenant_id = ?
+       AND id = (
        SELECT id
        FROM leads
-       WHERE ai_queue_status = 'queued'
+       WHERE tenant_id = ?
+         AND ai_queue_status = 'queued'
          AND (ai_next_retry_at IS NULL OR ai_next_retry_at <= ?)
          AND ai_attempt_count < ?
          AND COALESCE(is_excluded, 0) = 0
@@ -6317,35 +6703,40 @@ export async function leaseNextAiVerificationJob(maxAttempts = 3): Promise<Lead 
      )
        AND ai_queue_status = 'queued'
      RETURNING *`
-  ).get(now, now, safeMaxAttempts) as Record<string, unknown> | undefined;
+  ).get(now, tenantId, tenantId, now, safeMaxAttempts) as Record<string, unknown> | undefined;
 
-  return row ? parseLeadRow(row) : null;
+  if (!row) return null;
+  if (row.tenant_id !== tenantId) throw new Error("Leased AI tenant does not match the active worker context.");
+  return parseLeadRow(row);
 }
 
-export async function getAiVerificationBackfillCandidates(limit = 10000): Promise<Lead[]> {
+export async function getAiVerificationBackfillCandidates(limit: number, tenantId: string): Promise<Lead[]> {
+  tenantId = requireAiTenantId(tenantId, ["ai_verification"]);
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT *
      FROM leads
-     WHERE ai_queue_status NOT IN ('queued','running')
+     WHERE tenant_id = ?
+       AND ai_queue_status NOT IN ('queued','running')
        AND COALESCE(is_excluded, 0) = 0
        AND archived_at IS NULL
        AND status NOT IN ('closed_won','closed_lost')
        AND COALESCE(business_status, '') NOT IN ('CLOSED_PERMANENTLY','CLOSED_TEMPORARILY')
      ORDER BY sales_priority_score DESC, raw_opportunity_score DESC, score DESC, updated_at ASC
      LIMIT ?`
-  ).all(Math.max(1, Math.floor(limit))) as Array<Record<string, unknown>>;
+  ).all(tenantId, Math.max(1, Math.floor(limit))) as Array<Record<string, unknown>>;
   return rows.map(parseLeadRow);
 }
 
 export async function getAiQueueStats(): Promise<AiQueueStats> {
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT COALESCE(ai_queue_status, 'not_checked') as status, COUNT(*) as count
      FROM leads
-     WHERE archived_at IS NULL
+     WHERE tenant_id = ? AND archived_at IS NULL
      GROUP BY COALESCE(ai_queue_status, 'not_checked')`
-  ).all() as Array<{ status: string; count: number }>;
+  ).all(tenantId) as Array<{ status: string; count: number }>;
   const stats: AiQueueStats = { notChecked: 0, queued: 0, running: 0, verified: 0, error: 0, total: 0 };
   for (const row of rows) {
     const count = Number(row.count) || 0;
@@ -6360,7 +6751,12 @@ export async function getAiQueueStats(): Promise<AiQueueStats> {
   return stats;
 }
 
-export async function getAiVerificationCandidates(limit: number, businessType?: BusinessType | string | null): Promise<Lead[]>{
+export async function getAiVerificationCandidates(
+  limit: number,
+  tenantId: string,
+  businessType?: BusinessType | string | null,
+): Promise<Lead[]>{
+  tenantId = requireAiTenantId(tenantId);
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
   const conditions = [
@@ -6372,6 +6768,7 @@ export async function getAiVerificationCandidates(limit: number, businessType?: 
     "COALESCE(l.is_excluded, 0) = 0",
     "l.archived_at IS NULL",
   ];
+  conditions.unshift("l.tenant_id = ?");
   const params: unknown[] = [];
   if (businessType) {
     conditions.push("l.business_type = ?");
@@ -6387,12 +6784,13 @@ export async function getAiVerificationCandidates(limit: number, businessType?: 
        l.win_probability_score DESC,
        l.score DESC
      LIMIT ?`
-  ).all(...params, safeLimit) as Array<Record<string, unknown>>;
+  ).all(tenantId, ...params, safeLimit) as Array<Record<string, unknown>>;
 
   return rows.map(parseLeadRow);
 }
 
 export async function applyAiFoundWebsite(leadId: string, websiteUrl: string): Promise<number>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const now = nowISO();
   const result = await db.prepare(
@@ -6405,9 +6803,9 @@ export async function applyAiFoundWebsite(leadId: string, websiteUrl: string): P
       score = 0,
       win_probability_score = 0,
       updated_at = ?
-     WHERE id = ?`
-  ).run(websiteUrl, now, now, leadId);
-  await updateLeadQualityScores(leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(websiteUrl, now, now, tenantId, leadId);
+  if (result.changes > 0) await updateLeadQualityScoresForTenant(tenantId, leadId);
   return result.changes;
 }
 
@@ -6415,6 +6813,7 @@ export async function applyManualWebsiteCorrection(
   leadId: string,
   input: ManualWebsiteCorrectionInput,
 ): Promise<Lead | null> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const current = await getLeadById(leadId);
   if (!current) {
     return null;
@@ -6434,9 +6833,10 @@ export async function applyManualWebsiteCorrection(
     notes,
     now,
   ];
+  let changes = 0;
 
   if (input.resolution === "official_website_found") {
-    await db.prepare(
+    const result = await db.prepare(
       `UPDATE leads SET
         website_uri = ?,
         website_status = ?,
@@ -6456,10 +6856,11 @@ export async function applyManualWebsiteCorrection(
         score = 0,
         win_probability_score = 0,
         updated_at = ?
-       WHERE id = ?`
-    ).run(...baseValues, now, now, leadId);
+       WHERE tenant_id = ? AND id = ?`
+    ).run(...baseValues, now, now, tenantId, leadId);
+    changes = result.changes;
   } else if (input.resolution === "weak_or_basic_site") {
-    await db.prepare(
+    const result = await db.prepare(
       `UPDATE leads SET
         website_uri = ?,
         website_status = 'basic',
@@ -6477,10 +6878,11 @@ export async function applyManualWebsiteCorrection(
         quality_bucket = 'broken_site_opportunity',
         ai_recommendation = 'prioritize',
         updated_at = ?
-       WHERE id = ?`
-    ).run(websiteUrl, now, websiteUrl, correctionReason, notes, now, now, leadId);
+       WHERE tenant_id = ? AND id = ?`
+    ).run(websiteUrl, now, websiteUrl, correctionReason, notes, now, now, tenantId, leadId);
+    changes = result.changes;
   } else if (input.resolution === "candidate_website_needs_review") {
-    await db.prepare(
+    const result = await db.prepare(
       `UPDATE leads SET
         website_uri = ?,
         website_status = ?,
@@ -6498,10 +6900,11 @@ export async function applyManualWebsiteCorrection(
         quality_bucket = 'needs_manual_review',
         ai_recommendation = 'manual_review',
         updated_at = ?
-       WHERE id = ?`
-    ).run(...baseValues, now, leadId);
+       WHERE tenant_id = ? AND id = ?`
+    ).run(...baseValues, now, tenantId, leadId);
+    changes = result.changes;
   } else if (input.resolution === "social_or_directory_only") {
-    await db.prepare(
+    const result = await db.prepare(
       `UPDATE leads SET
         website_uri = ?,
         website_status = ?,
@@ -6519,10 +6922,11 @@ export async function applyManualWebsiteCorrection(
         quality_bucket = 'needs_manual_review',
         ai_recommendation = 'manual_review',
         updated_at = ?
-       WHERE id = ?`
-    ).run(...baseValues, now, leadId);
+       WHERE tenant_id = ? AND id = ?`
+    ).run(...baseValues, now, tenantId, leadId);
+    changes = result.changes;
   } else {
-    await db.prepare(
+    const result = await db.prepare(
       `UPDATE leads SET
         website_uri = NULL,
         website_status = 'none',
@@ -6540,24 +6944,36 @@ export async function applyManualWebsiteCorrection(
         quality_bucket = 'needs_ai_verify',
         ai_recommendation = 'manual_review',
         updated_at = ?
-       WHERE id = ?`
-    ).run(correctionReason, notes, now, now, leadId);
+       WHERE tenant_id = ? AND id = ?`
+    ).run(correctionReason, notes, now, now, tenantId, leadId);
+    changes = result.changes;
   }
+
+  if (changes === 0) return null;
 
   if (current.place_id) {
     await db
-      .prepare("UPDATE places_master SET website_uri = ?, updated_at = ? WHERE place_id = ?")
-      .run(websiteUrl, now, current.place_id);
+      .prepare("UPDATE places_master SET website_uri = ?, updated_at = ? WHERE tenant_id = ? AND place_id = ?")
+      .run(websiteUrl, now, tenantId, current.place_id);
   }
 
   await updateLeadQualityScores(leadId, input.actorUserId ?? null);
   return getLeadById(leadId);
 }
 
-export async function updateLeadQualityScores(leadId: string, actorUserId?: string | null): Promise<void>{
+export async function updateLeadQualityScores(leadId: string, actorUserId?: string | null): Promise<number>{
+  const { tenantId } = requireTenantWideScoreContext();
+  return updateLeadQualityScoresForTenant(tenantId, leadId, actorUserId);
+}
+
+async function updateLeadQualityScoresForTenant(
+  tenantId: string,
+  leadId: string,
+  actorUserId?: string | null,
+): Promise<number> {
   const db = await getDb();
-  const row = await db.prepare("SELECT * FROM leads WHERE id = ?").get(leadId) as Record<string, unknown> | undefined;
-  if (!row) return;
+  const row = await db.prepare("SELECT * FROM leads WHERE tenant_id = ? AND id = ?").get(tenantId, leadId) as Record<string, unknown> | undefined;
+  if (!row) return 0;
   const lead = parseLeadRow(row);
   const normalizedPhoneStatus: PhoneVerificationStatus = lead.phone?.trim()
     ? lead.phone_verification_status === "no_phone" ? "unknown" : lead.phone_verification_status
@@ -6597,7 +7013,7 @@ export async function updateLeadQualityScores(leadId: string, actorUserId?: stri
     verificationScore,
     phoneVerificationStatus: normalizedPhoneStatus,
   });
-  await db.prepare(
+  const result = await db.prepare(
     `UPDATE leads SET
       win_probability_score = ?,
       lead_quality_score = ?,
@@ -6615,7 +7031,7 @@ export async function updateLeadQualityScores(leadId: string, actorUserId?: stri
       last_quality_scored_at = ?,
       quality_checked_by_user_id = COALESCE(?, quality_checked_by_user_id),
       updated_at = ?
-     WHERE id = ?`
+     WHERE tenant_id = ? AND id = ?`
   ).run(
     winProbabilityScore,
     quality.leadQualityScore,
@@ -6633,8 +7049,10 @@ export async function updateLeadQualityScores(leadId: string, actorUserId?: stri
     nowISO(),
     actorUserId ?? null,
     nowISO(),
+    tenantId,
     leadId,
   );
+  return result.changes;
 }
 
 function computeLeadWinProbability(lead: Lead): number {
@@ -6756,25 +7174,29 @@ function isWeakWebsiteViability(status: WebsiteViabilityStatus | null): boolean 
 
 export async function recomputeAllLeadQualityScores(limit = 100000, signal?: AbortSignal): Promise<number>{
   throwIfWorkerAborted(signal);
+  const { tenantId } = requireTenantWideScoreContext();
   const db = await getDb();
   throwIfWorkerAborted(signal);
-  const safeLimit = Math.max(1, Math.min(100000, Math.floor(limit)));
+  const normalizedLimit = Number.isFinite(limit) ? Math.floor(limit) : 100000;
+  const safeLimit = Math.max(1, Math.min(100000, normalizedLimit));
   const rows = await db.prepare(
     `SELECT id
      FROM leads
-     WHERE archived_at IS NULL
+     WHERE tenant_id = ?
+       AND archived_at IS NULL
        AND (last_quality_scored_at IS NULL
         OR julianday(updated_at) > julianday(last_quality_scored_at))
      ORDER BY updated_at DESC
      LIMIT ?`
-  ).all(safeLimit) as Array<{ id: string }>;
+  ).all(tenantId, safeLimit) as Array<{ id: string }>;
   throwIfWorkerAborted(signal);
+  let recomputed = 0;
   for (const row of rows) {
     throwIfWorkerAborted(signal);
-    await updateLeadQualityScores(row.id);
+    if (await updateLeadQualityScores(row.id) > 0) recomputed += 1;
     throwIfWorkerAborted(signal);
   }
-  return rows.length;
+  return recomputed;
 }
 
 export async function updateLeadPhoneVerificationStatus(
@@ -6782,11 +7204,12 @@ export async function updateLeadPhoneVerificationStatus(
   status: PhoneVerificationStatus,
   actorUserId?: string | null,
 ): Promise<number>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const result = await db.prepare(
-    "UPDATE leads SET phone_verification_status = ?, quality_checked_by_user_id = COALESCE(?, quality_checked_by_user_id), updated_at = ? WHERE id = ?"
-  ).run(status, actorUserId ?? null, nowISO(), leadId);
-  await updateLeadQualityScores(leadId, actorUserId);
+    "UPDATE leads SET phone_verification_status = ?, quality_checked_by_user_id = COALESCE(?, quality_checked_by_user_id), updated_at = ? WHERE tenant_id = ? AND id = ?"
+  ).run(status, actorUserId ?? null, nowISO(), tenantId, leadId);
+  if (result.changes > 0) await updateLeadQualityScores(leadId, actorUserId);
   return result.changes;
 }
 
@@ -6795,6 +7218,7 @@ export async function setLeadQualityBucket(
   bucket: QualityBucket,
   actorUserId?: string | null,
 ): Promise<number>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const nextAction = bucket === "ready_to_call"
     ? "Call and confirm the owner or decision maker."
@@ -6809,8 +7233,8 @@ export async function setLeadQualityBucket(
       next_best_action = COALESCE(?, next_best_action),
       quality_checked_by_user_id = COALESCE(?, quality_checked_by_user_id),
       updated_at = ?
-     WHERE id = ?`
-  ).run(bucket, nextAction, actorUserId ?? null, nowISO(), leadId);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(bucket, nextAction, actorUserId ?? null, nowISO(), tenantId, leadId);
   return result.changes;
 }
 
@@ -6834,6 +7258,7 @@ export async function updateLeadAiFeedback(
   input: LeadAiFeedbackInput,
   actorUserId?: string | null,
 ): Promise<number> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const status = input.status === "correct" || input.status === "incorrect" || input.status === "uncertain"
     ? input.status
@@ -6859,7 +7284,7 @@ export async function updateLeadAiFeedback(
         ELSE ai_recommendation
       END,
       updated_at = ?
-     WHERE id = ?`
+     WHERE tenant_id = ? AND id = ?`
   ).run(
     status,
     correctedWebsiteUrl,
@@ -6870,9 +7295,10 @@ export async function updateLeadAiFeedback(
     status,
     status,
     now,
+    tenantId,
     leadId,
   );
-  await updateLeadQualityScores(leadId, actorUserId);
+  if (result.changes > 0) await updateLeadQualityScores(leadId, actorUserId);
   return result.changes;
 }
 
@@ -6896,18 +7322,20 @@ export async function markLeadBrokenSiteOpportunity(leadId: string, reason: stri
 }
 
 export async function getAiWebsiteViabilityRepairLeads(limit = 50): Promise<Lead[]>{
+  const tenantId = requireAiTenantId();
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
   const rows = await db.prepare(
     `SELECT *
      FROM leads
-     WHERE ai_verification_status = 'site_found'
+     WHERE tenant_id = ?
+       AND ai_verification_status = 'site_found'
        AND ai_found_website_url IS NOT NULL
        AND ai_found_website_url != ''
        AND COALESCE(ai_website_viability_status, '') != 'usable'
      ORDER BY ai_checked_at DESC
      LIMIT ?`
-  ).all(safeLimit) as Array<Record<string, unknown>>;
+  ).all(tenantId, safeLimit) as Array<Record<string, unknown>>;
   return rows.map(parseLeadRow);
 }
 
@@ -7024,8 +7452,10 @@ function buildQualityRemovedWebsiteWhere(filters: QualityFilters = {}): { where:
 }
 
 export async function getQualitySummary(filters: QualityFilters = {}): Promise<QualitySummary>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const { where, params } = buildQualityWhere(filters);
+  const qualityFilter = buildQualityWhere(filters);
+  const { where, params } = bindLeadTenantScope(qualityFilter.where, qualityFilter.params, tenantId);
   const row = await db.prepare(
     `SELECT
        COALESCE(SUM(CASE WHEN l.quality_bucket = 'ready_to_call' THEN 1 ELSE 0 END), 0) as ready_to_call,
@@ -7037,7 +7467,12 @@ export async function getQualitySummary(filters: QualityFilters = {}): Promise<Q
        COALESCE(SUM(CASE WHEN l.quality_bucket IN ('ready_to_call','broken_site_opportunity') THEN l.estimated_deal_value ELSE 0 END), 0) as estimated_pipeline_value
      FROM leads l ${where}`
   ).get(...params) as Record<string, number>;
-  const removedWebsiteWhere = buildQualityRemovedWebsiteWhere(filters);
+  const removedWebsiteFilter = buildQualityRemovedWebsiteWhere(filters);
+  const removedWebsiteWhere = bindLeadTenantScope(
+    removedWebsiteFilter.where,
+    removedWebsiteFilter.params,
+    tenantId,
+  );
   const removedRow = await db.prepare(
     `SELECT COUNT(*) as count
      FROM leads l
@@ -7057,8 +7492,10 @@ export async function getQualitySummary(filters: QualityFilters = {}): Promise<Q
 }
 
 export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ leads: QualityLead[]; total: number }>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const { where, params } = buildQualityWhere(filters);
+  const filter = buildQualityWhere(filters);
+  const { where, params } = bindLeadTenantScope(filter.where, filter.params, tenantId);
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, filters.pageSize ?? 50));
   const offset = (page - 1) * pageSize;
@@ -7111,19 +7548,23 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
        (
          SELECT a.status
          FROM lead_ai_artifacts a
-         WHERE a.lead_id = l.id AND a.artifact_type = 'business_detail'
+         WHERE a.tenant_id = l.tenant_id
+           AND a.lead_id = l.id
+           AND a.artifact_type = 'business_detail'
          ORDER BY a.created_at DESC
          LIMIT 1
        ) as business_detail_status,
        (
          SELECT a.status
          FROM lead_ai_artifacts a
-         WHERE a.lead_id = l.id AND a.artifact_type = 'competitive_report'
+         WHERE a.tenant_id = l.tenant_id
+           AND a.lead_id = l.id
+           AND a.artifact_type = 'competitive_report'
          ORDER BY a.created_at DESC
          LIMIT 1
        ) as competitive_report_status
      FROM leads l
-     LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+     ${TENANT_BOUND_ASSIGNEE_JOIN}
      ${where}
      ORDER BY
        CASE l.quality_bucket
@@ -7158,6 +7599,7 @@ export async function getQualityLeads(filters: QualityFilters = {}): Promise<{ l
 }
 
 export async function getQualityAiVerificationCandidates(input: {
+  tenantId: string;
   limit: number;
   businessType?: BusinessType | string | null;
   denverOnly?: boolean;
@@ -7184,7 +7626,8 @@ export async function getQualityAiVerificationCandidates(input: {
     "COALESCE(l.is_excluded, 0) = 0",
     "l.archived_at IS NULL",
   ];
-  const params: unknown[] = [];
+  conditions.unshift("l.tenant_id = ?");
+  const params: unknown[] = [input.tenantId];
   if (input.businessType) {
     conditions.push("l.business_type = ?");
     params.push(input.businessType);
@@ -7236,12 +7679,14 @@ export async function getQualityAiVerificationCandidates(input: {
   return rows.map(parseLeadRow);
 }
 
-export async function getQualityActionCandidateIds(filters: QualityFilters & { limit: number; ids?: string[] }): Promise<string[]>{
+export async function getQualityActionCandidateIds(
+  filters: QualityFilters & { tenantId: string; limit: number; ids?: string[] },
+): Promise<string[]>{
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(100, Math.floor(filters.limit)));
   const { where, params } = buildQualityWhere(filters);
-  const idConditions: string[] = [];
-  const idParams: unknown[] = [];
+  const idConditions: string[] = ["l.tenant_id = ?"];
+  const idParams: unknown[] = [filters.tenantId];
   if (filters.ids && filters.ids.length > 0) {
     idConditions.push(`l.id IN (${filters.ids.map(() => "?").join(",")})`);
     idParams.push(...filters.ids);
@@ -7266,7 +7711,7 @@ export async function getQualityActionCandidateIds(filters: QualityFilters & { l
   return rows.map((row) => row.id);
 }
 
-export async function queueLeadsForEnrichment(ids: string[]): Promise<number>{
+export async function queueLeadsForEnrichment(ids: string[], tenantId: string): Promise<number>{
   const db = await getDb();
   const uniqueIds = Array.from(new Set(ids)).filter(Boolean).slice(0, 100);
   if (uniqueIds.length === 0) return 0;
@@ -7276,10 +7721,11 @@ export async function queueLeadsForEnrichment(ids: string[]): Promise<number>{
      SET enrichment_status = 'pending',
          enriched_at = NULL,
          updated_at = ?
-     WHERE id IN (${placeholders})
+     WHERE tenant_id = ?
+       AND id IN (${placeholders})
        AND COALESCE(is_excluded, 0) = 0
        AND archived_at IS NULL`
-  ).run(nowISO(), ...uniqueIds);
+  ).run(nowISO(), tenantId, ...uniqueIds);
   return Number(result.changes ?? 0);
 }
 
@@ -7289,7 +7735,7 @@ function parseLeadRow(row: Record<string, unknown>): Lead {
     categories: safeParseJson<string[]>(row.categories, []),
     has_opening_hours: (row.has_opening_hours as number) === 1,
     photo_count: (row.photo_count as number) ?? 0,
-    is_excluded: ((row.is_excluded as number) ?? 0) === 1,
+    is_excluded: isLeadExcluded(row.is_excluded),
     market_id: (row.market_id as string | null) ?? null,
     location_cell_id: (row.location_cell_id as string | null) ?? null,
     country_code: row.country_code ? normalizeCountryCode(row.country_code) : null,
@@ -7763,6 +8209,8 @@ export async function getLaunchReadinessSummary(): Promise<LaunchReadinessSummar
 
 // ─── Budget Queries ───
 
+const GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID = "google_places_legacy";
+
 export async function getTodayApiCalls(): Promise<number>{
   const db = await getDb();
   const today = startOfToday();
@@ -7800,9 +8248,35 @@ export async function getRunApiCalls(runId: string): Promise<number>{
   return Number(row?.api_calls_used) || 0;
 }
 
-export async function getRunApiUsageSummary(runId: string): Promise<ApiUsageSummary>{
+export async function getRunApiUsageSummary(runId: string, scope: CrawlRunScope): Promise<ApiUsageSummary>{
+  return getRunApiUsageSummaryInternal(runId, scope);
+}
+
+export async function getPlatformRunApiUsageSummary(runId: string): Promise<ApiUsageSummary> {
+  return getRunApiUsageSummaryInternal(runId, null);
+}
+
+async function getRunApiUsageSummaryInternal(runId: string, scope: CrawlRunScope | null): Promise<ApiUsageSummary>{
   const db = await getDb();
-  const rows = await db.prepare(
+  const rows = scope ? await db.prepare(
+    `SELECT endpoint,
+            COALESCE(SUM(billable_units), 0) as calls,
+            COALESCE(SUM(estimated_cost), 0) as cost,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN billable_units ELSE 0 END), 0) as atmosphere_calls,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN estimated_cost ELSE 0 END), 0) as atmosphere_cost
+     FROM api_usage_events
+     WHERE tenant_id = ?
+       AND crawl_run_id = ?
+       AND success = 1
+       AND COALESCE(was_cached, 0) = 0
+     GROUP BY endpoint`
+  ).all(scope.tenantId, runId) as Array<{
+    endpoint: string;
+    calls: number;
+    cost: number;
+    atmosphere_calls: number;
+    atmosphere_cost: number;
+  }> : await db.prepare(
     `SELECT endpoint,
             COALESCE(SUM(billable_units), 0) as calls,
             COALESCE(SUM(estimated_cost), 0) as cost,
@@ -7812,7 +8286,7 @@ export async function getRunApiUsageSummary(runId: string): Promise<ApiUsageSumm
      WHERE crawl_run_id = ?
        AND success = 1
        AND COALESCE(was_cached, 0) = 0
-     GROUP BY endpoint`
+     GROUP BY endpoint`,
   ).all(runId) as Array<{
     endpoint: string;
     calls: number;
@@ -7857,10 +8331,36 @@ export async function getRunApiUsageSummary(runId: string): Promise<ApiUsageSumm
   };
 }
 
-export async function getMonthlyApiUsageSummary(): Promise<ApiUsageSummary>{
+export async function getMonthlyApiUsageSummary(scope: CrawlRunScope): Promise<ApiUsageSummary>{
+  return getMonthlyApiUsageSummaryInternal(scope);
+}
+
+export async function getPlatformMonthlyApiUsageSummary(): Promise<ApiUsageSummary> {
+  return getMonthlyApiUsageSummaryInternal(null);
+}
+
+async function getMonthlyApiUsageSummaryInternal(scope: CrawlRunScope | null): Promise<ApiUsageSummary>{
   const db = await getDb();
   const monthStart = startOfCurrentMonth();
-  const rows = await db.prepare(
+  const rows = scope ? await db.prepare(
+    `SELECT endpoint,
+            COALESCE(SUM(billable_units), 0) as calls,
+            COALESCE(SUM(estimated_cost), 0) as cost,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN billable_units ELSE 0 END), 0) as atmosphere_calls,
+            COALESCE(SUM(CASE WHEN sku = 'places_place_details_enterprise_plus_atmosphere' THEN estimated_cost ELSE 0 END), 0) as atmosphere_cost
+     FROM api_usage_events
+     WHERE tenant_id = ?
+       AND success = 1
+       AND COALESCE(was_cached, 0) = 0
+       AND created_at >= ?
+     GROUP BY endpoint`
+  ).all(scope.tenantId, monthStart) as Array<{
+    endpoint: string;
+    calls: number;
+    cost: number;
+    atmosphere_calls: number;
+    atmosphere_cost: number;
+  }> : await db.prepare(
     `SELECT endpoint,
             COALESCE(SUM(billable_units), 0) as calls,
             COALESCE(SUM(estimated_cost), 0) as cost,
@@ -7870,7 +8370,7 @@ export async function getMonthlyApiUsageSummary(): Promise<ApiUsageSummary>{
      WHERE success = 1
        AND COALESCE(was_cached, 0) = 0
        AND created_at >= ?
-     GROUP BY endpoint`
+     GROUP BY endpoint`,
   ).all(monthStart) as Array<{
     endpoint: string;
     calls: number;
@@ -7915,16 +8415,18 @@ export async function getMonthlyApiUsageSummary(): Promise<ApiUsageSummary>{
   };
 }
 
-export async function getMonthlyBillableEventsForSku(sku: GooglePlacesSku): Promise<number> {
+export async function getMonthlyBillableEventsForSku(sku: GooglePlacesSku, tenantId = requireTenantContext().tenantId): Promise<number> {
   const db = await getDb();
   const monthStart = startOfCurrentMonth();
   const row = await db.prepare(
     `SELECT COALESCE(SUM(billable_units), 0) as total
      FROM api_usage_events
-     WHERE sku = ?
+     WHERE tenant_id = ?
+       AND source_card_id = ?
+       AND sku = ?
        AND COALESCE(was_cached, 0) = 0
        AND created_at >= ?`
-  ).get(sku, monthStart) as { total: number };
+  ).get(tenantId, GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID, sku, monthStart) as { total: number };
   return Number(row.total) || 0;
 }
 
@@ -7934,6 +8436,7 @@ export async function logApiUsageEvent(input: ApiUsageEventInput): Promise<{
   estimatedUnitPrice: number;
   billableUnits: number;
 }> {
+  const tenantId = input.tenantId ?? requireTenantContext().tenantId;
   const db = await getDb();
   const id = generateId();
   const success = input.success ?? true;
@@ -7944,7 +8447,7 @@ export async function logApiUsageEvent(input: ApiUsageEventInput): Promise<{
   let estimatedUnitPrice = 0;
 
   if (success && !wasCached && billableUnits > 0) {
-    const priorEvents = await getMonthlyBillableEventsForSku(input.sku);
+    const priorEvents = await getMonthlyBillableEventsForSku(input.sku, tenantId);
     const marginal = estimateMarginalSkuCost(input.sku, priorEvents, billableUnits);
     estimatedCost = marginal.estimatedCost;
     estimatedUnitPrice = marginal.estimatedUnitPrice;
@@ -7952,10 +8455,12 @@ export async function logApiUsageEvent(input: ApiUsageEventInput): Promise<{
 
   await db.prepare(
     `INSERT INTO api_usage_events (
-      id, crawl_run_id, crawl_unit_id, lead_id, endpoint, sku, field_mask,
+      tenant_id, source_card_id, id, crawl_run_id, crawl_unit_id, lead_id, endpoint, sku, field_mask,
       success, was_cached, billable_units, estimated_unit_price, estimated_cost, metadata, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
+    tenantId,
+    GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID,
     id,
     input.crawl_run_id ?? null,
     input.crawl_unit_id ?? null,
@@ -7975,41 +8480,269 @@ export async function logApiUsageEvent(input: ApiUsageEventInput): Promise<{
   return { id, estimatedCost, estimatedUnitPrice, billableUnits };
 }
 
-export async function getRunLastError(runId: string): Promise<string | null>{
+export async function getRunLastError(runId: string, scope: CrawlRunScope): Promise<string | null>{
   const db = await getDb();
   const row = await db.prepare(
-    "SELECT last_error FROM crawl_runs WHERE id = ?"
-  ).get(runId) as { last_error: string | null } | undefined;
+    `SELECT last_error FROM crawl_runs
+     WHERE id = ? AND tenant_id = ?
+       AND ((? IS NULL AND workspace_id IS NULL) OR workspace_id = ?)`,
+  ).get(runId, scope.tenantId, scope.workspaceId, scope.workspaceId) as { last_error: string | null } | undefined;
+  return row?.last_error ?? null;
+}
+
+export async function getPlatformRunLastError(runId: string): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.prepare("SELECT last_error FROM crawl_runs WHERE id = ?")
+    .get(runId) as { last_error: string | null } | undefined;
   return row?.last_error ?? null;
 }
 
 // ─── Audit Logs ───
+
+export type AuditScopeKind = "tenant" | "platform" | "legacy_unscoped";
+export type AuditActorLayer = "member" | "support" | "worker" | "agent" | "system";
+export type TenantAuditActorLayer = "member";
+export type PlatformAuditActorLayer = Exclude<AuditActorLayer, TenantAuditActorLayer>;
+
+export interface LegacyAuditLogOptions {
+  actor?: { userId?: string | null; email?: string | null; role?: AppRole | null } | null;
+  /** Compatibility-only selector-shaped values are never authority. */
+  tenantId?: unknown;
+  workspaceId?: unknown;
+  correlationId?: unknown;
+  actorLaunchRole?: unknown;
+  actorLayer?: unknown;
+}
+
+export interface PlatformAuditLogOptions {
+  scope: "platform";
+  actor: {
+    authIdentityId?: string | null;
+    layer: PlatformAuditActorLayer;
+    legacyRole?: AppRole | null;
+  };
+  /** Optional because D-001 makes correlation mandatory for tenant actions, not platform-global events. */
+  correlationId?: string | null;
+}
+
+export class AuditInputError extends Error {
+  constructor() {
+    super("The audit input is invalid");
+    this.name = "AuditInputError";
+  }
+}
+
+const AUDIT_ACTION_PATTERN = /^[a-z][a-z0-9_.:-]{0,127}$/;
+const AUDIT_ENTITY_TYPE_PATTERN = /^[a-z][a-z0-9_.:-]{0,63}$/;
+const AUDIT_ENTITY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const AUDIT_CORRELATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const AUDIT_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const AUDIT_ACTOR_LAYERS = new Set<AuditActorLayer>(["member", "support", "worker", "agent", "system"]);
+
+function assertAuditText(value: string | undefined, pattern: RegExp, nullable: boolean): void {
+  if (value === undefined || value === null) {
+    if (nullable) return;
+    throw new AuditInputError();
+  }
+  if (!pattern.test(value)) throw new AuditInputError();
+}
+
+function assertTenantContextShape(context: TenantContext): void {
+  if (
+    !AUDIT_UUID_PATTERN.test(context.tenantId) ||
+    (context.workspaceId !== null && !AUDIT_UUID_PATTERN.test(context.workspaceId)) ||
+    !AUDIT_UUID_PATTERN.test(context.membershipId) ||
+    !AUDIT_UUID_PATTERN.test(context.roleBindingId) ||
+    !AUDIT_UUID_PATTERN.test(context.actorAuthIdentityId) ||
+    !AUDIT_CORRELATION_PATTERN.test(context.correlationId)
+  ) {
+    throw new AuditInputError();
+  }
+}
+
+function assertSafeAuditMetadataValue(value: unknown, depth: number, seen: Set<object>): void {
+  if (depth > 5) throw new AuditInputError();
+  if (value === null || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new AuditInputError();
+    return;
+  }
+  if (typeof value === "string") {
+    if (value.length > 512 || /[\u0000-\u001f\u007f]/.test(value)) throw new AuditInputError();
+    return;
+  }
+  if (typeof value !== "object" || seen.has(value)) throw new AuditInputError();
+  seen.add(value);
+  if (Array.isArray(value)) {
+    if (value.length > 64) throw new AuditInputError();
+    for (const item of value) assertSafeAuditMetadataValue(item, depth + 1, seen);
+  } else {
+    const entries = Object.entries(value);
+    if (entries.length > 64) throw new AuditInputError();
+    for (const [key, item] of entries) {
+      if (!/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(key)) {
+        throw new AuditInputError();
+      }
+      assertSafeAuditMetadataValue(item, depth + 1, seen);
+    }
+  }
+  seen.delete(value);
+}
+
+function serializeTenantAuditMetadata(metadata: Record<string, unknown> | undefined): string {
+  const value = metadata ?? {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new AuditInputError();
+  assertSafeAuditMetadataValue(value, 0, new Set());
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized !== "string" || serialized.length > 16_384) throw new AuditInputError();
+    return serialized;
+  } catch {
+    throw new AuditInputError();
+  }
+}
+
+function assertAuditArguments(action: string, entityType: string | undefined, entityId: string | undefined): void {
+  assertAuditText(action, AUDIT_ACTION_PATTERN, false);
+  assertAuditText(entityType, AUDIT_ENTITY_TYPE_PATTERN, true);
+  assertAuditText(entityId, AUDIT_ENTITY_ID_PATTERN, true);
+}
+
+async function insertAuditLog(row: {
+  action: string;
+  entityType?: string;
+  entityId?: string;
+  metadata: string;
+  createdAt: string;
+  scopeKind: AuditScopeKind;
+  tenantId?: string | null;
+  workspaceId?: string | null;
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  actorRole?: AppRole | null;
+  correlationId?: string | null;
+  actorAuthIdentityId?: string | null;
+  actorMembershipId?: string | null;
+  actorLaunchRole?: TenantContext["role"] | null;
+  actorRoleBindingId?: string | null;
+  actorLayer?: AuditActorLayer | null;
+}): Promise<void> {
+  const db = await getDb();
+  await db.prepare(
+    `INSERT INTO audit_logs (
+      id, action, entity_type, entity_id, actor_user_id, actor_email, actor_role, metadata, created_at,
+      scope_kind, tenant_id, workspace_id, correlation_id, actor_auth_identity_id, actor_membership_id,
+      actor_launch_role, actor_role_binding_id, actor_layer
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    generateId(),
+    row.action,
+    row.entityType ?? null,
+    row.entityId ?? null,
+    row.actorUserId ?? null,
+    row.actorEmail ?? null,
+    row.actorRole ?? null,
+    row.metadata,
+    row.createdAt,
+    row.scopeKind,
+    row.tenantId ?? null,
+    row.workspaceId ?? null,
+    row.correlationId ?? null,
+    row.actorAuthIdentityId ?? null,
+    row.actorMembershipId ?? null,
+    row.actorLaunchRole ?? null,
+    row.actorRoleBindingId ?? null,
+    row.actorLayer ?? null,
+  );
+}
+
+export async function createTenantAuditLog(
+  action: string,
+  entityType?: string,
+  entityId?: string,
+  metadata?: Record<string, unknown>,
+): Promise<void> {
+  const context = requireTenantContext();
+  assertTenantContextShape(context);
+  assertAuditArguments(action, entityType, entityId);
+  await insertAuditLog({
+    action,
+    entityType,
+    entityId,
+    metadata: serializeTenantAuditMetadata(metadata),
+    createdAt: nowISO(),
+    scopeKind: "tenant",
+    tenantId: context.tenantId,
+    workspaceId: context.workspaceId,
+    actorUserId: context.actorAuthIdentityId,
+    actorEmail: null,
+    actorRole: null,
+    correlationId: context.correlationId,
+    actorAuthIdentityId: context.actorAuthIdentityId,
+    actorMembershipId: context.membershipId,
+    actorLaunchRole: context.role,
+    actorRoleBindingId: context.roleBindingId,
+    actorLayer: "member",
+  });
+}
+
+export async function createPlatformAuditLog(
+  action: string,
+  entityType: string | undefined,
+  entityId: string | undefined,
+  metadata: Record<string, unknown> | undefined,
+  options: PlatformAuditLogOptions,
+): Promise<void> {
+  if (!options || options.scope !== "platform" || !options.actor || !AUDIT_ACTOR_LAYERS.has(options.actor.layer)) {
+    throw new AuditInputError();
+  }
+  if (options.correlationId !== undefined && options.correlationId !== null) {
+    assertAuditText(options.correlationId, AUDIT_CORRELATION_PATTERN, false);
+  }
+  if (options.actor.authIdentityId !== undefined && options.actor.authIdentityId !== null && !AUDIT_UUID_PATTERN.test(options.actor.authIdentityId)) {
+    throw new AuditInputError();
+  }
+  assertAuditArguments(action, entityType, entityId);
+  await insertAuditLog({
+    action,
+    entityType,
+    entityId,
+    metadata: serializeTenantAuditMetadata(metadata),
+    createdAt: nowISO(),
+    scopeKind: "platform",
+    correlationId: options.correlationId ?? null,
+    actorAuthIdentityId: options.actor.authIdentityId ?? null,
+    actorLayer: options.actor.layer,
+    actorRole: options.actor.legacyRole ?? null,
+  });
+}
 
 export async function createAuditLog(
   action: string,
   entityType?: string,
   entityId?: string,
   metadata?: Record<string, unknown>,
-  options: { actor?: { userId?: string | null; email?: string | null; role?: AppRole | null } | null } = {},
+  options: LegacyAuditLogOptions = {},
 ): Promise<void>{
-  const db = await getDb();
+  const context = getTenantContext();
+  if (context) {
+    await createTenantAuditLog(action, entityType, entityId, metadata);
+    return;
+  }
+
   const contextActor = getAuditActor();
   const actor = options.actor === undefined ? contextActor : options.actor;
-  await db.prepare(
-    `INSERT INTO audit_logs (
-      id, action, entity_type, entity_id, actor_user_id, actor_email, actor_role, metadata, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    generateId(),
+  await insertAuditLog({
     action,
-    entityType ?? null,
-    entityId ?? null,
-    actor?.userId ?? null,
-    actor?.email ?? null,
-    actor?.role ?? null,
-    JSON.stringify(metadata ?? {}),
-    nowISO(),
-  );
+    entityType,
+    entityId,
+    metadata: JSON.stringify(metadata ?? {}),
+    createdAt: nowISO(),
+    scopeKind: "legacy_unscoped",
+    actorUserId: actor?.userId ?? null,
+    actorEmail: actor?.email ?? null,
+    actorRole: actor?.role ?? null,
+  });
 }
 
 // ─── Bulk Lead Operations ───
@@ -8035,13 +8768,14 @@ export async function getAllLeadsForRecompute(): Promise<Array<{
   website_health: string | null; address: string | null;
   contactability_score: number; estimated_deal_value: number;
 }>>{
+  const { tenantId } = requireTenantWideScoreContext();
   const db = await getDb();
   return await db.prepare(
     `SELECT id, review_count, rating, categories, website_status, photo_count, has_opening_hours, business_status,
       website_health, address, contactability_score, estimated_deal_value
      FROM leads
-     WHERE ${SCORE_ELIGIBLE_CONDITION}`
-  ).all() as Array<{
+     WHERE tenant_id = ? AND ${SCORE_ELIGIBLE_CONDITION}`
+  ).all(tenantId) as Array<{
     id: string; review_count: number | null; rating: number | null;
     categories: string; website_status: string; photo_count: number;
     has_opening_hours: number; business_status: string | null;
@@ -8146,32 +8880,54 @@ function normalizeAiFeedbackVerdict(value: unknown): AiFeedbackVerdict {
   return "uncertain";
 }
 
-export async function batchUpdateScores(updates: Array<{ id: string; score: number }>): Promise<void>{
+export async function batchUpdateScores(updates: Array<{ id: string; score: number }>): Promise<number>{
+  const { tenantId } = requireTenantWideScoreContext();
   const db = await getDb();
   const now = nowISO();
-  const stmt = await db.prepare("UPDATE leads SET score = ?, updated_at = ? WHERE id = ?");
+  const stmt = await db.prepare("UPDATE leads SET score = ?, updated_at = ? WHERE tenant_id = ? AND id = ?");
+  let count = 0;
   for (const { id, score } of updates) {
-    await stmt.run(score, now, id);
+    const result = await stmt.run(score, now, tenantId, id);
+    if (result.changes === 0) continue;
     await updateLeadQualityScores(id);
+    count += 1;
   }
+  return count;
 }
 
 // ─── Enrichment ───
 
+export interface EnrichmentLeaseToken {
+  tenantId: string;
+  leadId: string;
+  startedAt: string;
+  attemptCount: number;
+}
+
+export type EnrichmentLeasedLead = Lead & {
+  tenant_id: string;
+  enrichment_lease: EnrichmentLeaseToken;
+};
+
 export async function getUnenrichedLeads(limit: number): Promise<Lead[]>{
+  const tenantId = requireExactEnrichmentWorkerTenantId();
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT * FROM leads
-     WHERE enrichment_status = 'pending'
+     WHERE tenant_id = ?
+       AND enrichment_status = 'pending'
        AND score > 0
        AND enrichment_attempt_count < enrichment_max_attempts
        AND ${SCORE_ELIGIBLE_CONDITION}
      ORDER BY score DESC LIMIT ?`
-  ).all(limit) as Array<Record<string, unknown>>;
+  ).all(tenantId, limit) as Array<Record<string, unknown>>;
   return rows.map(parseLeadRow);
 }
 
-export async function leaseNextLeadForEnrichment(staleAfterMinutes = 10): Promise<Lead | null>{
+export async function leaseNextLeadForEnrichment(
+  staleAfterMinutes = 10,
+): Promise<EnrichmentLeasedLead | null>{
+  const tenantId = requireExactEnrichmentWorkerTenantId();
   const db = await getDb();
   const now = nowISO();
   const staleBefore = new Date(Date.now() - Math.max(1, staleAfterMinutes) * 60_000).toISOString();
@@ -8182,10 +8938,11 @@ export async function leaseNextLeadForEnrichment(staleAfterMinutes = 10): Promis
          enrichment_started_at = NULL,
          enrichment_finished_at = ?,
          updated_at = ?
-     WHERE enrichment_status = 'running'
+     WHERE tenant_id = ?
+       AND enrichment_status = 'running'
        AND (enrichment_started_at IS NULL OR enrichment_started_at <= ?)
        AND enrichment_attempt_count < enrichment_max_attempts`
-  ).run(now, now, staleBefore);
+  ).run(now, now, tenantId, staleBefore);
 
   await db.prepare(
     `UPDATE leads
@@ -8195,19 +8952,21 @@ export async function leaseNextLeadForEnrichment(staleAfterMinutes = 10): Promis
          enrichment_last_error = COALESCE(enrichment_last_error, 'Max enrichment attempts exhausted.'),
          enrichment_last_error_code = COALESCE(enrichment_last_error_code, 'max_attempts_exhausted'),
          updated_at = ?
-     WHERE enrichment_status IN ('pending','running','retry_wait')
+     WHERE tenant_id = ?
+       AND enrichment_status IN ('pending','running','retry_wait')
        AND enrichment_attempt_count >= enrichment_max_attempts`
-  ).run(now, now);
+  ).run(now, now, tenantId);
 
   await db.prepare(
     `UPDATE leads
      SET enrichment_status = 'pending',
          enrichment_next_retry_at = NULL,
          updated_at = ?
-     WHERE enrichment_status = 'retry_wait'
+     WHERE tenant_id = ?
+       AND enrichment_status = 'retry_wait'
        AND enrichment_attempt_count < enrichment_max_attempts
        AND (enrichment_next_retry_at IS NULL OR enrichment_next_retry_at <= ?)`
-  ).run(now, now);
+  ).run(now, tenantId, now);
 
   const row = await db.prepare(
     `UPDATE leads
@@ -8219,10 +8978,12 @@ export async function leaseNextLeadForEnrichment(staleAfterMinutes = 10): Promis
          enrichment_last_error = NULL,
          enrichment_last_error_code = NULL,
          updated_at = ?
-     WHERE id = (
+     WHERE tenant_id = ?
+       AND id = (
        SELECT id
        FROM leads
-       WHERE enrichment_status = 'pending'
+       WHERE tenant_id = ?
+         AND enrichment_status = 'pending'
          AND enrichment_attempt_count < enrichment_max_attempts
          AND score > 0
          AND ${SCORE_ELIGIBLE_CONDITION}
@@ -8231,26 +8992,46 @@ export async function leaseNextLeadForEnrichment(staleAfterMinutes = 10): Promis
      )
        AND enrichment_status = 'pending'
      RETURNING *`
-  ).get(now, now) as Record<string, unknown> | undefined;
+  ).get(now, now, tenantId, tenantId) as Record<string, unknown> | undefined;
 
-  return row ? parseLeadRow(row) : null;
+  if (!row) return null;
+  if (row.tenant_id !== tenantId) throw new Error("Leased enrichment tenant does not match the active worker context.");
+  const lead = parseLeadRow(row);
+  if (!lead.enrichment_started_at) throw new Error("Enrichment lease is missing its start fence.");
+  return {
+    ...lead,
+    tenant_id: tenantId,
+    enrichment_lease: {
+      tenantId,
+      leadId: lead.id,
+      startedAt: lead.enrichment_started_at,
+      attemptCount: lead.enrichment_attempt_count,
+    },
+  };
 }
 
 export async function markLeadEnrichmentFailed(
-  id: string,
+  lease: EnrichmentLeaseToken,
   error: string,
   errorCode: string,
   options: { nextRetryAt?: string | null; terminal?: boolean } = {},
-): Promise<void>{
+): Promise<boolean>{
+  const tenantId = requireExactEnrichmentWorkerTenantId(lease.tenantId);
   const db = await getDb();
   const row = await db.prepare(
-    "SELECT enrichment_attempt_count, enrichment_max_attempts FROM leads WHERE id = ?"
-  ).get(id) as { enrichment_attempt_count: number; enrichment_max_attempts: number } | undefined;
+    `SELECT enrichment_attempt_count, enrichment_max_attempts
+     FROM leads
+     WHERE tenant_id = ? AND id = ?
+       AND enrichment_status = 'running'
+       AND enrichment_started_at = ?
+       AND enrichment_attempt_count = ?`
+  ).get(tenantId, lease.leadId, lease.startedAt, lease.attemptCount) as { enrichment_attempt_count: number; enrichment_max_attempts: number } | undefined;
+  if (!row) return false;
   const attempts = Number(row?.enrichment_attempt_count ?? 0);
   const maxAttempts = Math.max(1, Number(row?.enrichment_max_attempts ?? 3) || 3);
   const terminal = options.terminal || attempts >= maxAttempts;
   const now = nowISO();
-  await db.prepare(
+  const result = await db.prepare(
     `UPDATE leads
      SET enrichment_status = ?,
          enrichment_started_at = NULL,
@@ -8259,7 +9040,10 @@ export async function markLeadEnrichmentFailed(
          enrichment_last_error = ?,
          enrichment_last_error_code = ?,
          updated_at = ?
-     WHERE id = ?`
+     WHERE tenant_id = ? AND id = ?
+       AND enrichment_status = 'running'
+       AND enrichment_started_at = ?
+       AND enrichment_attempt_count = ?`
   ).run(
     terminal ? "error" : "retry_wait",
     now,
@@ -8267,11 +9051,15 @@ export async function markLeadEnrichmentFailed(
     error.slice(0, 1000),
     errorCode,
     now,
-    id,
+    tenantId,
+    lease.leadId,
+    lease.startedAt,
+    lease.attemptCount,
   );
+  return result.changes > 0;
 }
 
-export async function updateLeadEnrichment(id: string, data: {
+export async function updateLeadEnrichment(lease: EnrichmentLeaseToken, data: {
   name?: string | null;
   address?: string | null;
   phone?: string | null;
@@ -8293,9 +9081,17 @@ export async function updateLeadEnrichment(id: string, data: {
   website_health?: Record<string, unknown> | null;
   website_checked_at?: string | null;
   score?: number;
-}): Promise<void>{
+}): Promise<boolean>{
+  const tenantId = requireExactEnrichmentWorkerTenantId(lease.tenantId);
   const db = await getDb();
-  const current = await db.prepare("SELECT * FROM leads WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  const current = await db.prepare(
+    `SELECT * FROM leads
+     WHERE tenant_id = ? AND id = ?
+       AND enrichment_status = 'running'
+       AND enrichment_started_at = ?
+       AND enrichment_attempt_count = ?`,
+  ).get(tenantId, lease.leadId, lease.startedAt, lease.attemptCount) as Record<string, unknown> | undefined;
+  if (!current) return false;
   const categories = data.categories ?? (current ? safeParseJson<string[]>((current.categories as string | null) ?? "[]", []) : []);
   const websiteStatus = data.website_status ?? ((current?.website_status as WebsiteStatus | undefined) ?? "none");
   const primaryType = data.primary_type ?? (current?.primary_type as string | null | undefined);
@@ -8311,7 +9107,7 @@ export async function updateLeadEnrichment(id: string, data: {
   });
   const shouldExclude = qualification.qualificationStatus === "disqualified";
 
-  await db.prepare(
+  const result = await db.prepare(
     `UPDATE leads SET
       enrichment_status = 'enriched',
       enriched_at = ?,
@@ -8351,7 +9147,10 @@ export async function updateLeadEnrichment(id: string, data: {
       website_checked_at = COALESCE(?, website_checked_at),
       score = COALESCE(?, score),
       updated_at = ?
-    WHERE id = ?`
+    WHERE tenant_id = ? AND id = ?
+      AND enrichment_status = 'running'
+      AND enrichment_started_at = ?
+      AND enrichment_attempt_count = ?`
   ).run(
     nowISO(),
     nowISO(),
@@ -8386,9 +9185,11 @@ export async function updateLeadEnrichment(id: string, data: {
     data.website_health ? JSON.stringify(data.website_health) : null,
     data.website_checked_at ?? null,
     data.score ?? null,
-    nowISO(), id,
+    nowISO(), tenantId, lease.leadId, lease.startedAt, lease.attemptCount,
   );
-  await updateLeadQualityScores(id);
+  if (result.changes === 0) return false;
+  await updateLeadQualityScoresForTenant(tenantId, lease.leadId);
+  return true;
 }
 
 export async function getEnrichmentStats(): Promise<{ pending: number; enriched: number; total: number }> {
@@ -8480,13 +9281,16 @@ export async function getCachedPlaceResponse(
   requireAtmosphere = false,
 ): Promise<Record<string, unknown> | null>{
   if (!Number.isFinite(maxAgeDays) || maxAgeDays <= 0) return null;
+  const tenantId = requireGooglePlacesCacheTenantId();
   const db = await getDb();
   const row = await db.prepare(
     `SELECT raw_json, fetched_at
      FROM place_cache
-     WHERE place_id = ?
+     WHERE tenant_id = ?
+       AND source_card_id = ?
+       AND place_id = ?
        AND fetched_at >= datetime('now', '-' || ? || ' days')`
-  ).get(placeId, Math.floor(maxAgeDays)) as { raw_json: string; fetched_at: string } | undefined;
+  ).get(tenantId, GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID, placeId, Math.floor(maxAgeDays)) as { raw_json: string; fetched_at: string } | undefined;
   if (!row) return null;
 
   const parsed = safeParseJson<Record<string, unknown>>(row.raw_json, {});
@@ -8503,22 +9307,27 @@ export async function getCachedPlaceResponse(
 }
 
 export async function cachePlaceResponse(placeId: string, rawJson: string): Promise<void>{
+  const tenantId = requireGooglePlacesCacheTenantId();
   const db = await getDb();
   await db.prepare(
-    `INSERT INTO place_cache (place_id, raw_json, fetched_at)
-     VALUES (?, ?, ?)
-     ON CONFLICT(place_id) DO UPDATE SET raw_json = excluded.raw_json, fetched_at = excluded.fetched_at`
-  ).run(placeId, rawJson, nowISO());
+    `INSERT INTO place_cache (tenant_id, source_card_id, place_id, raw_json, fetched_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(tenant_id, source_card_id, place_id) DO UPDATE
+       SET raw_json = excluded.raw_json, fetched_at = excluded.fetched_at`
+  ).run(tenantId, GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID, placeId, rawJson, nowISO());
 }
 
 export async function recordPlaceObservation(input: PlaceObservationInput): Promise<void>{
+  const tenantId = input.tenantId ?? requireTenantContext().tenantId;
   const db = await getDb();
   await db.prepare(
     `INSERT INTO place_observations (
-      id, place_id, crawl_run_id, crawl_unit_id, lead_id,
+      tenant_id, source_card_id, id, place_id, crawl_run_id, crawl_unit_id, lead_id,
       endpoint, sku, field_mask, raw_json, observed_at, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
+    tenantId,
+    GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID,
     generateId(),
     input.place_id,
     input.crawl_run_id ?? null,
@@ -8533,13 +9342,20 @@ export async function recordPlaceObservation(input: PlaceObservationInput): Prom
   );
 }
 
-export async function placeMasterExists(placeId: string): Promise<boolean>{
+export async function placeMasterExists(placeId: string, explicitTenantId?: string): Promise<boolean>{
+  const tenantId = requireLeadWriteTenantId(explicitTenantId);
   const db = await getDb();
-  const row = await db.prepare("SELECT 1 as exists_flag FROM places_master WHERE place_id = ? LIMIT 1").get(placeId) as { exists_flag: number } | undefined;
+  const row = await db.prepare(
+    `SELECT 1 as exists_flag
+     FROM places_master
+     WHERE tenant_id = ? AND source_card_id = ? AND place_id = ?
+     LIMIT 1`,
+  ).get(tenantId, GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID, placeId) as { exists_flag: number } | undefined;
   return !!row;
 }
 
 export async function upsertPlaceMaster(input: PlaceMasterUpsertInput): Promise<void>{
+  const tenantId = input.tenantId ?? requireTenantContext().tenantId;
   const db = await getDb();
   const now = nowISO();
   const completeness = computeCompletenessScore(input);
@@ -8548,15 +9364,15 @@ export async function upsertPlaceMaster(input: PlaceMasterUpsertInput): Promise<
 
   await db.prepare(
     `INSERT INTO places_master (
-      place_id, name, address, phone, website_uri, maps_uri, categories,
+      tenant_id, source_card_id, place_id, name, address, phone, website_uri, maps_uri, categories,
       rating, user_rating_count, business_status, price_level,
       photo_count, has_opening_hours, primary_type, lat, lng,
       editorial_summary, review_highlights, website_health,
       first_seen_at, last_seen_at, last_details_at, last_enriched_at,
       completeness_score, freshness_score, verification_coverage,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(place_id) DO UPDATE SET
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(tenant_id, source_card_id, place_id) DO UPDATE SET
       name = COALESCE(excluded.name, places_master.name),
       address = COALESCE(excluded.address, places_master.address),
       phone = COALESCE(excluded.phone, places_master.phone),
@@ -8587,6 +9403,8 @@ export async function upsertPlaceMaster(input: PlaceMasterUpsertInput): Promise<
       END,
       updated_at = excluded.updated_at`
   ).run(
+    tenantId,
+    GOOGLE_PLACES_LEGACY_SOURCE_CARD_ID,
     input.place_id,
     input.name ?? null,
     input.address ?? null,
@@ -8619,6 +9437,7 @@ export async function upsertPlaceMaster(input: PlaceMasterUpsertInput): Promise<
 }
 
 export async function getCanonicalPlacesForExport(limit = 10000): Promise<Array<Record<string, unknown>>>{
+  const { tenantId } = requireTenantContext();
   const db = await getDb();
   return await db.prepare(
     `SELECT
@@ -8648,16 +9467,19 @@ export async function getCanonicalPlacesForExport(limit = 10000): Promise<Array<
       l.status as lead_status,
       l.is_excluded as lead_is_excluded
      FROM places_master pm
-     LEFT JOIN leads l ON l.place_id = pm.place_id
+     LEFT JOIN leads l ON l.tenant_id = pm.tenant_id AND l.place_id = pm.place_id
+     WHERE pm.tenant_id = ?
      ORDER BY pm.freshness_score DESC, pm.completeness_score DESC
      LIMIT ?`
-  ).all(limit) as Array<Record<string, unknown>>;
+  ).all(tenantId, limit) as Array<Record<string, unknown>>;
 }
 
 export async function backfillPlacesMasterFromLeads(limit = 10000): Promise<number>{
+  const { tenantId } = requireTenantContext();
   const db = await getDb();
   const rows = await db.prepare(
     `SELECT
+      tenant_id,
       place_id,
       name,
       address,
@@ -8680,9 +9502,10 @@ export async function backfillPlacesMasterFromLeads(limit = 10000): Promise<numb
       discovered_at,
       verification
      FROM leads
+     WHERE tenant_id = ?
      ORDER BY discovered_at DESC
      LIMIT ?`
-  ).all(limit) as Array<Record<string, unknown>>;
+  ).all(tenantId, limit) as Array<Record<string, unknown>>;
 
   for (const row of rows) {
     const verification = safeParseJson<Record<string, boolean>>((row.verification as string | null) ?? "{}", {});
@@ -8691,7 +9514,8 @@ export async function backfillPlacesMasterFromLeads(limit = 10000): Promise<numb
       ? (verifiedCount / Object.keys(verification).length) * 100
       : 0;
 
-    upsertPlaceMaster({
+    await upsertPlaceMaster({
+      tenantId: row.tenant_id as string,
       place_id: row.place_id as string,
       name: (row.name as string | null) ?? null,
       address: (row.address as string | null) ?? null,
@@ -8832,99 +9656,140 @@ function parseDemoRow(row: Record<string, unknown>): Demo {
 }
 
 export async function getDemoByLeadId(leadId: string): Promise<Demo | null> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
-  const row = (await db.prepare("SELECT * FROM demos WHERE lead_id = ? ORDER BY created_at DESC LIMIT 1").get(leadId)) as
+  const row = (await db.prepare(
+    "SELECT * FROM demos WHERE tenant_id = ? AND lead_id = ? ORDER BY created_at DESC LIMIT 1",
+  ).get(tenantId, leadId)) as
     | Record<string, unknown>
     | undefined;
   return row ? parseDemoRow(row) : null;
 }
 
-export async function createDemoForLead(leadId: string): Promise<Demo | null>{
+async function getCurrentDemoByLeadId(tenantId: string, leadId: string): Promise<Demo | null> {
   const db = await getDb();
-  const existing = await getDemoByLeadId(leadId);
+  const row = await db.prepare(
+    `SELECT * FROM demos
+     WHERE tenant_id = ? AND lead_id = ? AND revoked_at IS NULL
+     ORDER BY created_at DESC LIMIT 1`,
+  ).get<Record<string, unknown>>(tenantId, leadId);
+  return row ? parseDemoRow(row) : null;
+}
 
-  const lead = await getLeadById(leadId);
-  if (!lead) return null;
-  const config = await buildDemoConfigForLead(lead);
-  const now = nowISO();
+async function lockLeadForDemoTransition(db: DbClient, tenantId: string, leadId: string): Promise<boolean> {
+  const result = await db.prepare(
+    "UPDATE leads SET updated_at = updated_at WHERE tenant_id = ? AND id = ?",
+  ).run(tenantId, leadId);
+  return result.changes > 0;
+}
 
-  if (existing && !existing.is_published && !existing.revoked_at) {
+export async function createDemoForLead(leadId: string): Promise<Demo | null>{
+  const { tenantId } = requireTenantWideLeadReadContext();
+  return withDbTransaction(async () => {
+    const db = await getDb();
+    if (!await lockLeadForDemoTransition(db, tenantId, leadId)) return null;
+    const existing = await getCurrentDemoByLeadId(tenantId, leadId);
+    const lead = await getLeadById(leadId);
+    if (!lead) return null;
+    if (existing?.is_published) return existing;
+
+    const config = await buildDemoConfigForLead(lead);
+    const now = nowISO();
+    if (existing) {
+      const refreshed = await db.prepare(
+        `UPDATE demos
+         SET config_json = ?, updated_at = ?
+         WHERE tenant_id = ? AND id = ? AND revoked_at IS NULL AND is_published = 0`,
+      ).run(JSON.stringify(config), now, tenantId, existing.id);
+      if (refreshed.changes === 0) return getCurrentDemoByLeadId(tenantId, leadId);
+      await createAuditLog("demo_refreshed", "demo", existing.id, { leadId });
+      return getCurrentDemoByLeadId(tenantId, leadId);
+    }
+
+    const slug = `${slugify(lead.name ?? "business")}-${generateId().slice(0, 8)}`;
     await db.prepare(
-      `UPDATE demos
-       SET config_json = ?,
-           updated_at = ?
-       WHERE id = ?`
-    ).run(JSON.stringify(config), now, existing.id);
-    await createAuditLog("demo_refreshed", "demo", existing.id, { leadId });
-    return getDemoByLeadId(leadId);
-  }
-
-  if (existing && existing.is_published && !existing.revoked_at) return existing;
-
-  const slug = `${slugify(lead.name ?? "business")}-${generateId().slice(0, 8)}`;
-
-  await db.prepare(
-    `INSERT INTO demos (id, lead_id, slug, template_id, config_json, is_published, created_at, updated_at)
-     VALUES (?, ?, ?, 'local-service-v1', ?, 0, ?, ?)`
-  ).run(generateId(), leadId, slug, JSON.stringify(config), now, now);
-  const demo = await getDemoByLeadId(leadId);
-  if (demo) await createAuditLog("demo_created", "demo", demo.id, { leadId, slug: demo.slug, published: false });
-  return demo;
+      `INSERT INTO demos (tenant_id, id, lead_id, slug, template_id, config_json, is_published, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'local-service-v1', ?, 0, ?, ?)`,
+    ).run(tenantId, generateId(), leadId, slug, JSON.stringify(config), now, now);
+    const demo = await getCurrentDemoByLeadId(tenantId, leadId);
+    if (demo) await createAuditLog("demo_created", "demo", demo.id, { leadId, slug: demo.slug, published: false });
+    return demo;
+  });
 }
 
 export async function publishDemoForLead(leadId: string, actorUserId: string | null = null): Promise<Demo | null>{
-  const demo = (await getDemoByLeadId(leadId)) ?? (await createDemoForLead(leadId));
-  if (!demo || demo.revoked_at) return null;
-  const db = await getDb();
-  const now = nowISO();
-  await db.prepare(
-    `UPDATE demos
-     SET is_published = 1,
-         published_at = COALESCE(published_at, ?),
-         published_by_user_id = COALESCE(published_by_user_id, ?),
-         unpublished_at = NULL,
-         unpublished_by_user_id = NULL,
-         updated_at = ?
-     WHERE id = ?`
-  ).run(now, actorUserId, now, demo.id);
-  await db.prepare("UPDATE leads SET demo_sent_at = COALESCE(demo_sent_at, ?), updated_at = ? WHERE id = ?").run(now, now, leadId);
-  await createAuditLog("demo_published", "demo", demo.id, { leadId, actorUserId });
-  return getDemoByLeadId(leadId);
+  const { tenantId } = requireTenantWideLeadReadContext();
+  if (!await getCurrentDemoByLeadId(tenantId, leadId) && !await createDemoForLead(leadId)) return null;
+  return withDbTransaction(async () => {
+    const db = await getDb();
+    if (!await lockLeadForDemoTransition(db, tenantId, leadId)) return null;
+    const demo = await getCurrentDemoByLeadId(tenantId, leadId);
+    if (!demo) return null;
+    if (demo.is_published) return demo;
+    const now = nowISO();
+    const published = await db.prepare(
+      `UPDATE demos
+       SET is_published = 1,
+           published_at = COALESCE(published_at, ?),
+           published_by_user_id = COALESCE(published_by_user_id, ?),
+           unpublished_at = NULL,
+           unpublished_by_user_id = NULL,
+           updated_at = ?
+       WHERE tenant_id = ? AND id = ? AND revoked_at IS NULL AND is_published = 0`,
+    ).run(now, actorUserId, now, tenantId, demo.id);
+    if (published.changes === 0) return getCurrentDemoByLeadId(tenantId, leadId);
+    await db.prepare(
+      "UPDATE leads SET demo_sent_at = COALESCE(demo_sent_at, ?), updated_at = ? WHERE tenant_id = ? AND id = ?",
+    ).run(now, now, tenantId, leadId);
+    await createAuditLog("demo_published", "demo", demo.id, { leadId, actorUserId });
+    return getCurrentDemoByLeadId(tenantId, leadId);
+  });
 }
 
 export async function unpublishDemoForLead(leadId: string, actorUserId: string | null = null): Promise<Demo | null>{
-  const demo = await getDemoByLeadId(leadId);
-  if (!demo) return null;
-  const db = await getDb();
-  const now = nowISO();
-  await db.prepare(
-    `UPDATE demos
-     SET is_published = 0,
-         unpublished_at = ?,
-         unpublished_by_user_id = ?,
-         updated_at = ?
-     WHERE id = ?`
-  ).run(now, actorUserId, now, demo.id);
-  await createAuditLog("demo_unpublished", "demo", demo.id, { leadId, actorUserId });
-  return getDemoByLeadId(leadId);
+  const { tenantId } = requireTenantWideLeadReadContext();
+  return withDbTransaction(async () => {
+    const db = await getDb();
+    if (!await lockLeadForDemoTransition(db, tenantId, leadId)) return null;
+    const demo = await getCurrentDemoByLeadId(tenantId, leadId);
+    if (!demo) return null;
+    if (!demo.is_published) return demo;
+    const now = nowISO();
+    const unpublished = await db.prepare(
+      `UPDATE demos
+       SET is_published = 0,
+           unpublished_at = ?,
+           unpublished_by_user_id = ?,
+           updated_at = ?
+       WHERE tenant_id = ? AND id = ? AND revoked_at IS NULL AND is_published = 1`,
+    ).run(now, actorUserId, now, tenantId, demo.id);
+    if (unpublished.changes === 0) return getCurrentDemoByLeadId(tenantId, leadId);
+    await createAuditLog("demo_unpublished", "demo", demo.id, { leadId, actorUserId });
+    return getCurrentDemoByLeadId(tenantId, leadId);
+  });
 }
 
 export async function revokeDemoForLead(leadId: string, actorUserId: string | null = null, reason: string | null = null): Promise<Demo | null>{
-  const demo = await getDemoByLeadId(leadId);
-  if (!demo) return null;
-  const db = await getDb();
-  const now = nowISO();
-  await db.prepare(
-    `UPDATE demos
-     SET is_published = 0,
-         revoked_at = COALESCE(revoked_at, ?),
-         revoked_by_user_id = COALESCE(revoked_by_user_id, ?),
-         revoke_reason = COALESCE(revoke_reason, ?),
-         updated_at = ?
-     WHERE id = ?`
-  ).run(now, actorUserId, reason, now, demo.id);
-  await createAuditLog("demo_revoked", "demo", demo.id, { leadId, actorUserId, reason });
-  return getDemoByLeadId(leadId);
+  const { tenantId } = requireTenantWideLeadReadContext();
+  return withDbTransaction(async () => {
+    const db = await getDb();
+    if (!await lockLeadForDemoTransition(db, tenantId, leadId)) return null;
+    const demo = await getCurrentDemoByLeadId(tenantId, leadId);
+    if (!demo) return getDemoByLeadId(leadId);
+    const now = nowISO();
+    const revoked = await db.prepare(
+      `UPDATE demos
+       SET is_published = 0,
+           revoked_at = ?,
+           revoked_by_user_id = COALESCE(revoked_by_user_id, ?),
+           revoke_reason = COALESCE(revoke_reason, ?),
+           updated_at = ?
+       WHERE tenant_id = ? AND id = ? AND revoked_at IS NULL`,
+    ).run(now, actorUserId, reason, now, tenantId, demo.id);
+    if (revoked.changes === 0) return getDemoByLeadId(leadId);
+    await createAuditLog("demo_revoked", "demo", demo.id, { leadId, actorUserId, reason });
+    return getDemoByLeadId(leadId);
+  });
 }
 
 export async function recordDemoView(demoId: string): Promise<void>{
@@ -9118,43 +9983,81 @@ function adminRequestSelectSql(): string {
       owner.display_name as lead_owner_display_name,
       creator.email as creator_email,
       creator.display_name as creator_display_name,
-      COALESCE(creator.team_lead_user_id, CASE WHEN creator.is_team_lead = 1 THEN creator.user_id ELSE NULL END) as creator_team_lead_user_id,
+      team_lead.user_id as creator_team_lead_user_id,
       team_lead.email as creator_team_lead_email,
       team_lead.display_name as creator_team_lead_display_name,
       creator.team_label as creator_team_label
     FROM admin_requests ar
-    LEFT JOIN leads l ON l.id = ar.lead_id
-    LEFT JOIN app_users owner ON owner.user_id = l.assigned_to_user_id
-    LEFT JOIN app_users creator ON creator.user_id = ar.created_by_user_id
-    LEFT JOIN app_users team_lead ON team_lead.user_id = COALESCE(creator.team_lead_user_id, CASE WHEN creator.is_team_lead = 1 THEN creator.user_id ELSE NULL END)`;
+    LEFT JOIN leads l ON l.tenant_id = ar.tenant_id AND l.id = ar.lead_id
+    LEFT JOIN app_users owner
+      ON owner.user_id = l.assigned_to_user_id
+     AND EXISTS (
+       SELECT 1
+       FROM tenant_memberships owner_membership
+       WHERE owner_membership.tenant_id = ar.tenant_id
+         AND owner_membership.auth_identity_id = owner.user_id
+         AND owner_membership.status = 'active'
+     )
+    LEFT JOIN app_users creator
+      ON creator.user_id = ar.created_by_user_id
+     AND EXISTS (
+       SELECT 1
+       FROM tenant_memberships creator_membership
+       WHERE creator_membership.tenant_id = ar.tenant_id
+         AND creator_membership.auth_identity_id = creator.user_id
+         AND creator_membership.status = 'active'
+     )
+    LEFT JOIN app_users team_lead
+      ON team_lead.user_id = COALESCE(creator.team_lead_user_id, CASE WHEN creator.is_team_lead = 1 THEN creator.user_id ELSE NULL END)
+     AND EXISTS (
+       SELECT 1
+       FROM tenant_memberships team_lead_membership
+       WHERE team_lead_membership.tenant_id = ar.tenant_id
+         AND team_lead_membership.auth_identity_id = team_lead.user_id
+         AND team_lead_membership.status = 'active'
+     )`;
+}
+
+function requireTenantWideAdminRequestContext(): { tenantId: string } {
+  const { tenantId, workspaceId } = requireTenantContext();
+  if (workspaceId !== null) throw new Error("Tenant-wide context is required");
+  return { tenantId };
 }
 
 export async function getOpenAdminRequestForLead(leadId: string, requestType: AdminRequestType): Promise<AdminRequest | null> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
   const db = await getDb();
   const row = await db.prepare(
     `${adminRequestSelectSql()}
-     WHERE ar.lead_id = ? AND ar.request_type = ? AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+     WHERE ar.tenant_id = ? AND ar.lead_id = ? AND ar.request_type = ? AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
      ORDER BY ar.created_at DESC
      LIMIT 1`
-  ).get<Record<string, unknown>>(leadId, requestType);
+  ).get<Record<string, unknown>>(tenantId, leadId, requestType);
   return row ? parseAdminRequestRow(row) : null;
 }
 
 export async function createAdminRequest(input: AdminRequestInput): Promise<{ request: AdminRequest; alreadyExists: boolean }> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
+  const db = await getDb();
+  const lead = await db.prepare(
+    "SELECT id FROM leads WHERE tenant_id = ? AND id = ? LIMIT 1"
+  ).get<{ id: string }>(tenantId, input.leadId);
+  if (!lead) throw new Error("Unable to create admin request");
+
   const existing = await getOpenAdminRequestForLead(input.leadId, input.requestType);
   if (existing) return { request: existing, alreadyExists: true };
 
-  const db = await getDb();
   const id = generateId();
   const now = nowISO();
   await db.prepare(
     `INSERT INTO admin_requests (
-      id, lead_id, created_by_user_id, created_by_email, assigned_admin_user_id,
+      id, tenant_id, workspace_id, lead_id, created_by_user_id, created_by_email, assigned_admin_user_id,
       request_type, status, priority, summary, contact_person_name, budget_hint,
       due_at, next_step, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
+    tenantId,
     input.leadId,
     input.createdByUserId ?? null,
     input.createdByEmail ?? null,
@@ -9176,14 +10079,16 @@ export async function createAdminRequest(input: AdminRequestInput): Promise<{ re
 }
 
 export async function getAdminRequestById(id: string): Promise<AdminRequest | null> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
   const db = await getDb();
   const row = await db.prepare(
-    `${adminRequestSelectSql()} WHERE ar.id = ? LIMIT 1`
-  ).get<Record<string, unknown>>(id);
+    `${adminRequestSelectSql()} WHERE ar.tenant_id = ? AND ar.id = ? LIMIT 1`
+  ).get<Record<string, unknown>>(tenantId, id);
   return row ? parseAdminRequestRow(row) : null;
 }
 
 export async function updateAdminRequestStatus(id: string, status: AdminRequestStatus): Promise<AdminRequest | null> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
   const db = await getDb();
   const now = nowISO();
   await db.prepare(
@@ -9195,8 +10100,8 @@ export async function updateAdminRequestStatus(id: string, status: AdminRequestS
          END,
          completed_at = CASE WHEN ? IN ('done','cancelled') THEN ? ELSE NULL END,
          updated_at = ?
-     WHERE id = ?`
-  ).run(status, status, now, status, now, now, id);
+     WHERE tenant_id = ? AND id = ?`
+  ).run(status, status, now, status, now, now, tenantId, id);
   return getAdminRequestById(id);
 }
 
@@ -9206,9 +10111,10 @@ export async function getAdminRequests(filters: {
   requestType?: AdminRequestType;
   limit?: number;
 } = {}): Promise<AdminRequest[]> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
   const db = await getDb();
-  const conditions: string[] = [];
-  const params: unknown[] = [];
+  const conditions: string[] = ["ar.tenant_id = ?"];
+  const params: unknown[] = [tenantId];
   if (filters.leadId) {
     conditions.push("ar.lead_id = ?");
     params.push(filters.leadId);
@@ -9238,6 +10144,7 @@ export async function getAdminRequests(filters: {
 }
 
 export async function getAdminFulfillmentSummary(): Promise<AdminFulfillmentSummary> {
+  const { tenantId } = requireTenantWideAdminRequestContext();
   const db = await getDb();
   const now = nowISO();
   const row = await db.prepare(
@@ -9248,8 +10155,9 @@ export async function getAdminFulfillmentSummary(): Promise<AdminFulfillmentSumm
        COALESCE(SUM(CASE WHEN status = 'waiting_on_researcher' THEN 1 ELSE 0 END), 0) as waiting_on_researcher,
        COALESCE(SUM(CASE WHEN status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL}) AND due_at IS NOT NULL AND due_at <= ? THEN 1 ELSE 0 END), 0) as overdue,
        COALESCE(SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END), 0) as new_requests
-     FROM admin_requests`
-  ).get<Record<string, unknown>>(now);
+     FROM admin_requests
+     WHERE tenant_id = ?`
+  ).get<Record<string, unknown>>(now, tenantId);
   const latestRequests = await getAdminRequests({ status: "open", limit: 6 });
   return {
     openTotal: Number(row?.open_total ?? 0),
@@ -9280,12 +10188,41 @@ export async function updateLeadTimestamp(id: string, field: string, value: stri
   await updateLeadQualityScores(id);
 }
 
+export async function markLeadRepliedIfUnset(id: string): Promise<number> {
+  const { tenantId } = requireTenantWideLeadReadContext();
+  const db = await getDb();
+  const now = nowISO();
+  const result = await db.prepare(
+    `UPDATE leads
+     SET first_reply_at = ?, updated_at = ?
+     WHERE tenant_id = ? AND id = ? AND first_reply_at IS NULL`,
+  ).run(now, now, tenantId, id);
+  if (result.changes > 0) await updateLeadQualityScores(id);
+  return result.changes;
+}
+
+export async function markLeadMeetingBookedIfUnset(id: string): Promise<number> {
+  const { tenantId } = requireTenantWideLeadReadContext();
+  const db = await getDb();
+  const now = nowISO();
+  const result = await db.prepare(
+    `UPDATE leads
+     SET meeting_booked_at = ?,
+         status = CASE WHEN status IN ('closed_won', 'closed_lost') THEN status ELSE 'meeting_set' END,
+         updated_at = ?
+     WHERE tenant_id = ? AND id = ? AND meeting_booked_at IS NULL`,
+  ).run(now, now, tenantId, id);
+  if (result.changes > 0) await updateLeadQualityScores(id);
+  return result.changes;
+}
+
 // ─── Now Queue ───
 
 export async function getNowQueue(
   limit = 25,
   options: { assignedToUserId?: string; unassignedOnly?: boolean; visibleToUserId?: string; includeAllAssignedActive?: boolean } = {},
 ): Promise<QueueLead[]>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const candidateLimit = Math.max(limit * 20, 200);
@@ -9293,15 +10230,24 @@ export async function getNowQueue(
   const assignmentConditions: string[] = [];
   const assignmentParams: unknown[] = [];
   if (options.assignedToUserId) {
-    assignmentConditions.push("assigned_to_user_id = ?");
+    assignmentConditions.push(`l.assigned_to_user_id = ?
+      AND EXISTS (
+        SELECT 1 FROM tenant_memberships assigned_member
+        WHERE assigned_member.tenant_id = l.tenant_id
+          AND assigned_member.auth_identity_id = l.assigned_to_user_id
+          AND assigned_member.status = 'active'
+      )`);
     assignmentParams.push(options.assignedToUserId);
   }
   if (options.unassignedOnly) {
-    assignmentConditions.push(leadUnassignedCondition("assigned_to_user_id"));
+    assignmentConditions.push(leadUnassignedCondition("l.assigned_to_user_id"));
   }
   if (options.visibleToUserId) {
-    assignmentConditions.push("market_id IN (SELECT market_id FROM user_market_access WHERE user_id = ?)");
-    assignmentParams.push(options.visibleToUserId);
+    assignmentConditions.push(`l.market_id IN (
+      SELECT uma.market_id FROM user_market_access uma
+      WHERE uma.tenant_id = ? AND uma.user_id = ?
+    )`);
+    assignmentParams.push(tenantId, options.visibleToUserId);
   }
   const assignmentWhere = assignmentConditions.length > 0 ? `AND ${assignmentConditions.join(" AND ")}` : "";
   const candidateWhere = includeAllAssignedActive
@@ -9325,9 +10271,10 @@ export async function getNowQueue(
   const rows = await db.prepare(`
     WITH candidates AS (
       SELECT id
-      FROM leads
+      FROM leads l
       WHERE ${candidateWhere}
-      ORDER BY ${leadWebsiteNeedRankExpression("leads")} DESC, sales_priority_score DESC, lead_quality_score DESC, score DESC
+        AND l.tenant_id = ?
+      ORDER BY ${leadWebsiteNeedRankExpression("l")} DESC, sales_priority_score DESC, lead_quality_score DESC, score DESC
       LIMIT ?
     ),
     ranked AS (
@@ -9377,28 +10324,32 @@ export async function getNowQueue(
         (
           SELECT a.status
           FROM lead_ai_artifacts a
-          WHERE a.lead_id = l.id AND a.artifact_type = 'business_detail'
+          WHERE a.tenant_id = l.tenant_id
+            AND a.lead_id = l.id AND a.artifact_type = 'business_detail'
           ORDER BY a.created_at DESC
           LIMIT 1
         ) as business_detail_status,
         (
           SELECT a.status
           FROM lead_ai_artifacts a
-          WHERE a.lead_id = l.id AND a.artifact_type = 'competitive_report'
+          WHERE a.tenant_id = l.tenant_id
+            AND a.lead_id = l.id AND a.artifact_type = 'competitive_report'
           ORDER BY a.created_at DESC
           LIMIT 1
         ) as competitive_report_status,
         (
           SELECT d.slug
           FROM demos d
-          WHERE d.lead_id = l.id AND d.is_published = 1
+          WHERE d.tenant_id = l.tenant_id
+            AND d.lead_id = l.id AND d.is_published = 1
           ORDER BY d.created_at DESC
           LIMIT 1
         ) as demo_slug,
         (
           SELECT ar.id
           FROM admin_requests ar
-          WHERE ar.lead_id = l.id
+          WHERE ar.tenant_id = l.tenant_id
+            AND ar.lead_id = l.id
             AND ar.request_type = 'website_request'
             AND ar.status IN ('new','seen','in_progress','waiting_on_researcher')
           ORDER BY ar.created_at DESC
@@ -9407,7 +10358,8 @@ export async function getNowQueue(
         (
           SELECT ar.id
           FROM admin_requests ar
-          WHERE ar.lead_id = l.id
+          WHERE ar.tenant_id = l.tenant_id
+            AND ar.lead_id = l.id
             AND ar.request_type = 'quote_request'
             AND ar.status IN ('new','seen','in_progress','waiting_on_researcher')
           ORDER BY ar.created_at DESC
@@ -9428,7 +10380,7 @@ export async function getNowQueue(
           ELSE 0.2
         END as freshness
       FROM leads l
-      LEFT JOIN app_users au ON au.user_id = l.assigned_to_user_id
+      ${TENANT_BOUND_ASSIGNEE_JOIN}
       INNER JOIN candidates c ON c.id = l.id
     )
     SELECT *
@@ -9441,7 +10393,7 @@ export async function getNowQueue(
       win_probability_score DESC,
       score DESC
     LIMIT ?
-  `).all(...assignmentParams, candidateLimit, today, limit) as Array<Record<string, unknown>>;
+  `).all(...assignmentParams, tenantId, candidateLimit, today, limit) as Array<Record<string, unknown>>;
 
   return rows.map((row) => ({
     id: row.id as string,
@@ -9456,7 +10408,7 @@ export async function getNowQueue(
     last_contacted_at: (row.last_contacted_at as string | null) ?? null,
     reminder_date: (row.reminder_date as string | null) ?? null,
     status: (row.status as string) ?? "new",
-    is_excluded: ((row.is_excluded as number) ?? 0) === 1,
+    is_excluded: isLeadExcluded(row.is_excluded),
     exclusion_reason: (row.exclusion_reason as string | null) ?? null,
     selling_niche: (row.selling_niche as string | null) ?? null,
     business_type: ((row.business_type as BusinessType | null) ?? "local_services"),
@@ -9495,18 +10447,32 @@ export async function getNowQueue(
 }
 
 export async function getResearcherWorkbench(userId: string, options: { viewerRole?: string } = {}): Promise<ResearcherWorkbench> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const visibleToUserId = options.viewerRole === "admin" ? undefined : userId;
+  const activeMembership = await db.prepare(
+    `SELECT 1 FROM tenant_memberships
+     WHERE tenant_id = ? AND auth_identity_id = ? AND status = 'active'
+     LIMIT 1`,
+  ).get(tenantId, userId);
+  if (!activeMembership) {
+    return {
+      nextAction: null,
+      myLeads: [],
+      unclaimedLeads: [],
+      summary: { myClaimed: 0, dueToday: 0, contactedThisWeek: 0, bestUnclaimed: 0 },
+    };
+  }
   const [myLeads, unclaimedLeads] = await Promise.all([
     getNowQueue(25, { assignedToUserId: userId, visibleToUserId, includeAllAssignedActive: true }),
     getNowQueue(25, { unassignedOnly: true, visibleToUserId }),
   ]);
   const marketCondition = visibleToUserId
-    ? "AND l.market_id IN (SELECT market_id FROM user_market_access WHERE user_id = ?)"
+    ? "AND l.market_id IN (SELECT market_id FROM user_market_access WHERE tenant_id = ? AND user_id = ?)"
     : "";
-  const marketParams = visibleToUserId ? [visibleToUserId] : [];
+  const marketParams = visibleToUserId ? [tenantId, visibleToUserId] : [];
 
   const summaryRow = await db.prepare(
     `SELECT
@@ -9516,11 +10482,12 @@ export async function getResearcherWorkbench(userId: string, options: { viewerRo
      FROM leads l
      WHERE COALESCE(l.is_excluded, 0) = 0
        AND l.archived_at IS NULL
+       AND l.tenant_id = ?
        ${marketCondition}`
-  ).get(userId, userId, today, ...marketParams) as Record<string, unknown>;
+  ).get(userId, userId, today, tenantId, ...marketParams) as Record<string, unknown>;
   const contactRow = await db.prepare(
-    "SELECT COUNT(*) as count FROM outreach_events WHERE actor_user_id = ? AND created_at >= ?"
-  ).get(userId, weekAgo) as { count: number } | undefined;
+    "SELECT COUNT(*) as count FROM outreach_events WHERE tenant_id = ? AND actor_user_id = ? AND created_at >= ?"
+  ).get(tenantId, userId, weekAgo) as { count: number } | undefined;
 
   return {
     nextAction: myLeads[0] ?? null,
@@ -9536,71 +10503,84 @@ export async function getResearcherWorkbench(userId: string, options: { viewerRo
 }
 
 export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const staleBefore = weekAgo;
+  const roleBindingAsOf = new Date().toISOString();
 
   const members = await db.prepare(
-    `SELECT
+    `WITH tenant_scope(tenant_id) AS (VALUES (?))
+     SELECT
        au.user_id,
        au.email,
        au.display_name,
-       au.role,
-       au.is_team_lead,
-       au.team_lead_user_id,
-       au.team_label,
-       tl.email as team_lead_email,
-       tl.display_name as team_lead_display_name,
+       member_role.role,
+       0 as is_team_lead,
+       NULL as team_lead_user_id,
+       NULL as team_label,
+       NULL as team_lead_email,
+       NULL as team_lead_display_name,
        COALESCE(COUNT(CASE WHEN l.status NOT IN ('closed_won','closed_lost') THEN l.id END), 0) as claimed_active,
        COALESCE(SUM(CASE WHEN l.reminder_date IS NOT NULL AND l.reminder_date <= ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as due_today,
        COALESCE(SUM(CASE WHEN l.updated_at < ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as stale_claimed,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM lead_notes n
-         WHERE n.author_user_id = au.user_id AND n.created_at >= ? AND n.deleted_at IS NULL
+         WHERE n.tenant_id = member.tenant_id
+           AND n.author_user_id = au.user_id AND n.created_at >= ? AND n.deleted_at IS NULL
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         WHERE ar.created_by_user_id = au.user_id AND ar.created_at >= ?
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.created_by_user_id = au.user_id AND ar.created_at >= ?
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM audit_logs al
-         WHERE al.actor_user_id = au.user_id
+         WHERE al.scope_kind = 'tenant'
+           AND al.tenant_id = member.tenant_id
+           AND al.actor_user_id = au.user_id
            AND al.created_at >= ?
            AND al.action NOT IN ('outreach_logged','lead_note_created','admin_request_created','admin_request_duplicate_open')
        ), 0) as activity_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0) as contacts_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.channel = 'call'
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.channel = 'call'
        ), 0) as calls_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND COALESCE(oe.decision_maker_reached, 0) = 1
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND COALESCE(oe.decision_maker_reached, 0) = 1
        ), 0) as decision_makers_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.follow_up_at IS NOT NULL
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.follow_up_at IS NOT NULL
        ), 0) as followups_set_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0) as contacts_7d,
        COALESCE(SUM(CASE WHEN l.status = 'meeting_set' THEN 1 ELSE 0 END), 0) as meetings,
        COALESCE(SUM(CASE WHEN l.status = 'closed_won' THEN 1 ELSE 0 END), 0) as closed_won,
@@ -9608,45 +10588,75 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
        COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         LEFT JOIN app_users creator ON creator.user_id = ar.created_by_user_id
-         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
            AND ar.request_type = 'website_request'
-           AND (ar.created_by_user_id = au.user_id OR (au.is_team_lead = 1 AND creator.team_lead_user_id = au.user_id))
+           AND ar.created_by_user_id = au.user_id
        ), 0) as website_requests_open,
        COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         LEFT JOIN app_users creator ON creator.user_id = ar.created_by_user_id
-         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
            AND ar.request_type = 'quote_request'
-           AND (ar.created_by_user_id = au.user_id OR (au.is_team_lead = 1 AND creator.team_lead_user_id = au.user_id))
+           AND ar.created_by_user_id = au.user_id
        ), 0) as quote_requests_open
-     FROM app_users au
-     LEFT JOIN app_users tl ON tl.user_id = au.team_lead_user_id
-     LEFT JOIN leads l ON l.assigned_to_user_id = au.user_id AND COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL
-     WHERE au.status = 'active'
-     GROUP BY au.user_id, au.email, au.display_name, au.role, au.is_team_lead, au.team_lead_user_id, au.team_label, tl.email, tl.display_name
-     ORDER BY au.role ASC, au.is_team_lead DESC, au.email ASC`
-  ).all<Record<string, unknown>>(today, staleBefore, today, today, today, today, today, today, today, today, weekAgo);
+     FROM tenant_scope tenant
+     JOIN tenant_memberships member
+       ON member.tenant_id = tenant.tenant_id
+      AND member.status = 'active'
+      AND member.auth_identity_id IS NOT NULL
+     JOIN tenant_role_bindings member_role
+       ON member_role.tenant_id = member.tenant_id
+      AND member_role.membership_id = member.id
+      AND member_role.revoked_at IS NULL
+      AND member_role.valid_from <= ?
+     JOIN app_users au
+       ON au.user_id = member.auth_identity_id
+      AND au.status = 'active'
+     LEFT JOIN leads l
+       ON l.tenant_id = member.tenant_id
+      AND l.assigned_to_user_id = au.user_id
+      AND COALESCE(l.is_excluded, 0) = 0
+      AND l.archived_at IS NULL
+     GROUP BY au.user_id, au.email, au.display_name, member_role.role
+     ORDER BY member_role.role ASC, au.email ASC`
+  ).all<Record<string, unknown>>(
+    tenantId,
+    today,
+    staleBefore,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    weekAgo,
+    roleBindingAsOf,
+  );
 
   const unassignedRow = await db.prepare(
     `SELECT COUNT(*) as count
-     FROM leads
-     WHERE COALESCE(is_excluded, 0) = 0
-       AND archived_at IS NULL
-       AND ${leadUnassignedCondition("assigned_to_user_id")}
-       AND quality_bucket IN ('ready_to_call','broken_site_opportunity')
-       AND status IN ('new','verified','contacted')`
-  ).get() as { count: number } | undefined;
+     FROM leads l
+     WHERE l.tenant_id = ?
+       AND COALESCE(l.is_excluded, 0) = 0
+       AND l.archived_at IS NULL
+       AND ${leadUnassignedCondition("l.assigned_to_user_id")}
+       AND l.quality_bucket IN ('ready_to_call','broken_site_opportunity')
+       AND l.status IN ('new','verified','contacted')`
+  ).get(tenantId) as { count: number } | undefined;
   const overdueRow = await db.prepare(
     `SELECT COUNT(*) as count
-     FROM leads
-     WHERE COALESCE(is_excluded, 0) = 0
-       AND archived_at IS NULL
-       AND reminder_date IS NOT NULL
-       AND reminder_date <= ?
-       AND status NOT IN ('closed_won','closed_lost')`
-  ).get(today) as { count: number } | undefined;
+     FROM leads l
+     WHERE l.tenant_id = ?
+       AND COALESCE(l.is_excluded, 0) = 0
+       AND l.archived_at IS NULL
+       AND l.reminder_date IS NOT NULL
+       AND l.reminder_date <= ?
+       AND l.status NOT IN ('closed_won','closed_lost')`
+  ).get(tenantId, today) as { count: number } | undefined;
   const todayActivityRows = await getTeamBoardActivityRows({ since: today, limit: 100 });
   const activityRows = await getTeamBoardActivityRows({ limit: 25 });
 
@@ -9685,71 +10695,84 @@ export async function getTeamBoardSummary(): Promise<TeamBoardSummary> {
 }
 
 export async function getResearcherTeamBoardSummary(userId: string): Promise<TeamBoardSummary> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const staleBefore = weekAgo;
+  const roleBindingAsOf = new Date().toISOString();
 
   const memberRow = await db.prepare(
-    `SELECT
+    `WITH tenant_scope(tenant_id) AS (VALUES (?))
+     SELECT
        au.user_id,
        au.email,
        au.display_name,
-       au.role,
-       au.is_team_lead,
-       au.team_lead_user_id,
-       au.team_label,
-       tl.email as team_lead_email,
-       tl.display_name as team_lead_display_name,
+       member_role.role,
+       0 as is_team_lead,
+       NULL as team_lead_user_id,
+       NULL as team_label,
+       NULL as team_lead_email,
+       NULL as team_lead_display_name,
        COALESCE(COUNT(CASE WHEN l.status NOT IN ('closed_won','closed_lost') THEN l.id END), 0) as claimed_active,
        COALESCE(SUM(CASE WHEN l.reminder_date IS NOT NULL AND l.reminder_date <= ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as due_today,
        COALESCE(SUM(CASE WHEN l.updated_at < ? AND l.status NOT IN ('closed_won','closed_lost') THEN 1 ELSE 0 END), 0) as stale_claimed,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM lead_notes n
-         WHERE n.author_user_id = au.user_id AND n.created_at >= ? AND n.deleted_at IS NULL
+         WHERE n.tenant_id = member.tenant_id
+           AND n.author_user_id = au.user_id AND n.created_at >= ? AND n.deleted_at IS NULL
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         WHERE ar.created_by_user_id = au.user_id AND ar.created_at >= ?
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.created_by_user_id = au.user_id AND ar.created_at >= ?
        ), 0)
        + COALESCE((
          SELECT COUNT(*)
          FROM audit_logs al
-         WHERE al.actor_user_id = au.user_id
+         WHERE al.scope_kind = 'tenant'
+           AND al.tenant_id = member.tenant_id
+           AND al.actor_user_id = au.user_id
            AND al.created_at >= ?
            AND al.action NOT IN ('outreach_logged','lead_note_created','admin_request_created','admin_request_duplicate_open')
        ), 0) as activity_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0) as contacts_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.channel = 'call'
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.channel = 'call'
        ), 0) as calls_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND COALESCE(oe.decision_maker_reached, 0) = 1
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND COALESCE(oe.decision_maker_reached, 0) = 1
        ), 0) as decision_makers_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.follow_up_at IS NOT NULL
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ? AND oe.follow_up_at IS NOT NULL
        ), 0) as followups_set_today,
        COALESCE((
          SELECT COUNT(*)
          FROM outreach_events oe
-         WHERE oe.actor_user_id = au.user_id AND oe.created_at >= ?
+         WHERE oe.tenant_id = member.tenant_id
+           AND oe.actor_user_id = au.user_id AND oe.created_at >= ?
        ), 0) as contacts_7d,
        COALESCE(SUM(CASE WHEN l.status = 'meeting_set' THEN 1 ELSE 0 END), 0) as meetings,
        COALESCE(SUM(CASE WHEN l.status = 'closed_won' THEN 1 ELSE 0 END), 0) as closed_won,
@@ -9757,23 +10780,54 @@ export async function getResearcherTeamBoardSummary(userId: string): Promise<Tea
        COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
            AND ar.request_type = 'website_request'
            AND ar.created_by_user_id = au.user_id
        ), 0) as website_requests_open,
        COALESCE((
          SELECT COUNT(*)
          FROM admin_requests ar
-         WHERE ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
+         WHERE ar.tenant_id = member.tenant_id
+           AND ar.status IN (${OPEN_ADMIN_REQUEST_STATUS_SQL})
            AND ar.request_type = 'quote_request'
            AND ar.created_by_user_id = au.user_id
        ), 0) as quote_requests_open
-     FROM app_users au
-     LEFT JOIN app_users tl ON tl.user_id = au.team_lead_user_id
-     LEFT JOIN leads l ON l.assigned_to_user_id = au.user_id AND COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL
-     WHERE au.status = 'active' AND au.user_id = ?
-     GROUP BY au.user_id, au.email, au.display_name, au.role, au.is_team_lead, au.team_lead_user_id, au.team_label, tl.email, tl.display_name`
-  ).get<Record<string, unknown>>(today, staleBefore, today, today, today, today, today, today, today, today, weekAgo, userId);
+     FROM tenant_scope tenant
+     JOIN tenant_memberships member
+       ON member.tenant_id = tenant.tenant_id
+      AND member.status = 'active'
+      AND member.auth_identity_id = ?
+     JOIN tenant_role_bindings member_role
+       ON member_role.tenant_id = member.tenant_id
+      AND member_role.membership_id = member.id
+      AND member_role.revoked_at IS NULL
+      AND member_role.valid_from <= ?
+     JOIN app_users au
+       ON au.user_id = member.auth_identity_id
+      AND au.status = 'active'
+     LEFT JOIN leads l
+       ON l.tenant_id = member.tenant_id
+      AND l.assigned_to_user_id = au.user_id
+      AND COALESCE(l.is_excluded, 0) = 0
+      AND l.archived_at IS NULL
+     GROUP BY au.user_id, au.email, au.display_name, member_role.role`
+  ).get<Record<string, unknown>>(
+    tenantId,
+    today,
+    staleBefore,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    today,
+    weekAgo,
+    userId,
+    roleBindingAsOf,
+  );
 
   const todayActivityRows = await getTeamBoardActivityRows({ since: today, actorUserId: userId, limit: 100 });
   const activityRows = await getTeamBoardActivityRows({ actorUserId: userId, limit: 25 });
@@ -9823,6 +10877,7 @@ async function getTeamBoardActivityRows({
   actorUserId?: string;
   limit: number;
 }): Promise<Array<Record<string, unknown>>> {
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const safeLimit = Math.max(1, Math.min(250, Math.floor(limit)));
   const params: unknown[] = [];
@@ -9831,12 +10886,14 @@ async function getTeamBoardActivityRows({
   const noteWhere = buildActivityWhere("n", "author_user_id", since, actorUserId, params, ["n.deleted_at IS NULL"]);
   const adminRequestWhere = buildActivityWhere("ar", "created_by_user_id", since, actorUserId, params);
   const auditWhere = buildActivityWhere("al", "actor_user_id", since, actorUserId, params, [
+    "al.scope_kind = 'tenant'",
     "al.action NOT IN ('outreach_logged','lead_note_created','admin_request_created','admin_request_duplicate_open')",
   ]);
   params.push(safeLimit);
 
   return db.prepare(
-    `SELECT *
+    `WITH tenant_scope(tenant_id) AS (VALUES (?))
+     SELECT *
      FROM (
        SELECT
          'outreach:' || oe.id as id,
@@ -9862,8 +10919,19 @@ async function getTeamBoardActivityRows({
          '{}' as metadata_json,
          oe.created_at
        FROM outreach_events oe
-       LEFT JOIN leads l ON l.id = oe.lead_id
-       LEFT JOIN app_users au ON au.user_id = oe.actor_user_id
+       LEFT JOIN leads l ON l.tenant_id = oe.tenant_id AND l.id = oe.lead_id
+       LEFT JOIN tenant_memberships actor_membership
+         ON actor_membership.tenant_id = oe.tenant_id
+        AND actor_membership.auth_identity_id = oe.actor_user_id
+        AND actor_membership.status = 'active'
+       LEFT JOIN tenant_role_bindings actor_role
+         ON actor_role.tenant_id = actor_membership.tenant_id
+        AND actor_role.membership_id = actor_membership.id
+        AND actor_role.revoked_at IS NULL
+       LEFT JOIN app_users au
+         ON au.user_id = actor_membership.auth_identity_id
+        AND au.status = 'active'
+        AND actor_role.id IS NOT NULL
        ${outreachWhere}
 
        UNION ALL
@@ -9892,8 +10960,19 @@ async function getTeamBoardActivityRows({
          '{}' as metadata_json,
          n.created_at
        FROM lead_notes n
-       LEFT JOIN leads l ON l.id = n.lead_id
-       LEFT JOIN app_users au ON au.user_id = n.author_user_id
+       LEFT JOIN leads l ON l.tenant_id = n.tenant_id AND l.id = n.lead_id
+       LEFT JOIN tenant_memberships actor_membership
+         ON actor_membership.tenant_id = n.tenant_id
+        AND actor_membership.auth_identity_id = n.author_user_id
+        AND actor_membership.status = 'active'
+       LEFT JOIN tenant_role_bindings actor_role
+         ON actor_role.tenant_id = actor_membership.tenant_id
+        AND actor_role.membership_id = actor_membership.id
+        AND actor_role.revoked_at IS NULL
+       LEFT JOIN app_users au
+         ON au.user_id = actor_membership.auth_identity_id
+        AND au.status = 'active'
+        AND actor_role.id IS NOT NULL
        ${noteWhere}
 
        UNION ALL
@@ -9922,8 +11001,19 @@ async function getTeamBoardActivityRows({
          '{}' as metadata_json,
          ar.created_at
        FROM admin_requests ar
-       LEFT JOIN leads l ON l.id = ar.lead_id
-       LEFT JOIN app_users au ON au.user_id = ar.created_by_user_id
+       LEFT JOIN leads l ON l.tenant_id = ar.tenant_id AND l.id = ar.lead_id
+       LEFT JOIN tenant_memberships actor_membership
+         ON actor_membership.tenant_id = ar.tenant_id
+        AND actor_membership.auth_identity_id = ar.created_by_user_id
+        AND actor_membership.status = 'active'
+       LEFT JOIN tenant_role_bindings actor_role
+         ON actor_role.tenant_id = actor_membership.tenant_id
+        AND actor_role.membership_id = actor_membership.id
+        AND actor_role.revoked_at IS NULL
+       LEFT JOIN app_users au
+         ON au.user_id = actor_membership.auth_identity_id
+        AND au.status = 'active'
+        AND actor_role.id IS NOT NULL
        ${adminRequestWhere}
 
        UNION ALL
@@ -9952,13 +11042,24 @@ async function getTeamBoardActivityRows({
          CAST(al.metadata AS TEXT) as metadata_json,
          al.created_at
        FROM audit_logs al
-       LEFT JOIN leads l ON al.entity_type = 'lead' AND l.id = al.entity_id
-       LEFT JOIN app_users au ON au.user_id = al.actor_user_id
+       LEFT JOIN leads l ON l.tenant_id = al.tenant_id AND al.entity_type = 'lead' AND l.id = al.entity_id
+       LEFT JOIN tenant_memberships actor_membership
+         ON actor_membership.tenant_id = al.tenant_id
+        AND actor_membership.auth_identity_id = al.actor_user_id
+        AND actor_membership.status = 'active'
+       LEFT JOIN tenant_role_bindings actor_role
+         ON actor_role.tenant_id = actor_membership.tenant_id
+        AND actor_role.membership_id = actor_membership.id
+        AND actor_role.revoked_at IS NULL
+       LEFT JOIN app_users au
+         ON au.user_id = actor_membership.auth_identity_id
+        AND au.status = 'active'
+        AND actor_role.id IS NOT NULL
        ${auditWhere}
      ) activity
      ORDER BY created_at DESC
      LIMIT ?`
-  ).all<Record<string, unknown>>(...params);
+  ).all<Record<string, unknown>>(tenantId, ...params);
 }
 
 function buildActivityWhere(
@@ -9969,7 +11070,10 @@ function buildActivityWhere(
   params: unknown[],
   extraConditions: string[] = [],
 ): string {
-  const conditions = [...extraConditions];
+  const conditions = [
+    `${alias}.tenant_id = (SELECT tenant_id FROM tenant_scope)`,
+    ...extraConditions,
+  ];
   if (since) {
     conditions.push(`${alias}.created_at >= ?`);
     params.push(since);
@@ -10123,6 +11227,7 @@ export function resolveStatisticsRange(input: StatisticsRangeInput = {}): Resolv
 }
 
 export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Promise<StatisticsSummary>{
+  const { tenantId } = requireTenantWideLeadReadContext();
   const db = await getDb();
   const range = resolveStatisticsRange(input);
   const leadWindow = dateWindow("l.discovered_at", range);
@@ -10136,22 +11241,24 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
   const aiVerificationWindow = dateWindow("av.created_at", range);
   const runWindow = dateWindow("cr.created_at", range);
 
-  const totalDiscovered = await countRows(db, "leads l", leadWindow, "l.archived_at IS NULL");
-  const activeLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL");
-  const qualifiedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status = 'qualified'");
+  const totalDiscovered = await countRows(db, "leads l", leadWindow, "l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const activeLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const qualifiedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status = 'qualified' AND l.tenant_id = ?", [tenantId]);
   const queueCandidates = await countRows(
     db,
     "leads l",
     leadWindow,
-    `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")} AND l.qualification_status IN ('qualified','needs_verification') AND l.status IN ('new','verified','contacted') AND l.score > 0`,
+    `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")} AND l.qualification_status IN ('qualified','needs_verification') AND l.status IN ('new','verified','contacted') AND l.score > 0 AND l.tenant_id = ?`,
+    [tenantId],
   );
-  const excludedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 1 AND l.archived_at IS NULL");
-  const demosCreated = await countRows(db, "demos d", demoWindow);
+  const excludedLeads = await countRows(db, "leads l", leadWindow, "COALESCE(l.is_excluded, 0) = 1 AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const demosCreated = await countRows(db, "demos d", demoWindow, "d.tenant_id = ?", [tenantId]);
   const qualifiedNoSiteLeads = await countRows(
     db,
     "leads l",
     leadWindow,
-    `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status = 'qualified' AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")}`,
+    `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status = 'qualified' AND l.website_status IN ('none','social','basic') AND ${noUsableAiWebsiteCondition("l")} AND l.tenant_id = ?`,
+    [tenantId],
   );
   const contactableLeads = await countRows(
     db,
@@ -10160,47 +11267,49 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     `COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND (COALESCE(l.phone, '') != '' OR EXISTS (
       SELECT 1 FROM ai_lead_verifications av
       WHERE av.lead_id = l.id
+        AND av.tenant_id = l.tenant_id
         AND (COALESCE(av.found_email, '') != '' OR COALESCE(av.found_phone, '') != '')
-    ))`,
+    )) AND l.tenant_id = ?`,
+    [tenantId],
   );
-  const contactedLeads = await countDistinctRows(db, "outreach_events oe", "oe.lead_id", outreachWindow);
-  const replies = await countRows(db, "leads l", replyWindow, "l.first_reply_at IS NOT NULL AND l.archived_at IS NULL");
-  const meetings = await countRows(db, "leads l", meetingWindow, "l.meeting_booked_at IS NOT NULL AND l.archived_at IS NULL");
-  const closedWon = await countRows(db, "leads l", statusWindow, "l.status = 'closed_won' AND l.archived_at IS NULL");
-  const closedLost = await countRows(db, "leads l", statusWindow, "l.status = 'closed_lost' AND l.archived_at IS NULL");
+  const contactedLeads = await countDistinctRows(db, "outreach_events oe", "oe.lead_id", outreachWindow, "oe.tenant_id = ?", [tenantId]);
+  const replies = await countRows(db, "leads l", replyWindow, "l.first_reply_at IS NOT NULL AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const meetings = await countRows(db, "leads l", meetingWindow, "l.meeting_booked_at IS NOT NULL AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const closedWon = await countRows(db, "leads l", statusWindow, "l.status = 'closed_won' AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
+  const closedLost = await countRows(db, "leads l", statusWindow, "l.status = 'closed_lost' AND l.archived_at IS NULL AND l.tenant_id = ?", [tenantId]);
 
   const economicsRow = await db.prepare(
     `SELECT COALESCE(SUM(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.qualification_status IN ('qualified','needs_verification') THEN l.estimated_deal_value ELSE 0 END), 0) as pipeline_value,
             COALESCE(AVG(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.estimated_deal_value > 0 THEN l.estimated_deal_value END), 0) as average_deal_value
-     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL")}`
-  ).get(...leadWindow.params) as { pipeline_value: number; average_deal_value: number };
+     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL AND l.tenant_id = ?")}`
+  ).get(...leadWindow.params, tenantId) as { pipeline_value: number; average_deal_value: number };
 
   const apiRow = await db.prepare(
     `SELECT COALESCE(COUNT(*), 0) as calls, COALESCE(SUM(a.estimated_cost), 0) as cost
-     FROM api_usage_events a ${whereFromWindow(apiWindow, "a.success = 1 AND COALESCE(a.was_cached, 0) = 0")}`
-  ).get(...apiWindow.params) as { calls: number; cost: number };
+     FROM api_usage_events a ${whereFromWindow(apiWindow, "a.success = 1 AND COALESCE(a.was_cached, 0) = 0 AND a.tenant_id = ?")}`
+  ).get(...apiWindow.params, tenantId) as { calls: number; cost: number };
 
   const demoProofRow = await db.prepare(
     `SELECT COALESCE(COUNT(*), 0) as published,
             COALESCE(SUM(d.view_count), 0) as views
-     FROM demos d ${whereFromWindow(demoWindow, "d.is_published = 1 AND d.revoked_at IS NULL")}`
-  ).get(...demoWindow.params) as { published: number; views: number };
+     FROM demos d ${whereFromWindow(demoWindow, "d.is_published = 1 AND d.revoked_at IS NULL AND d.tenant_id = ?")}`
+  ).get(...demoWindow.params, tenantId) as { published: number; views: number };
 
   const failureRow = await db.prepare(
     `SELECT COALESCE(COUNT(cu.id), 0) as total_units,
             COALESCE(SUM(CASE WHEN cu.status = 'failed' THEN 1 ELSE 0 END), 0) as failed_units,
             COALESCE(COUNT(DISTINCT CASE WHEN cr.status IN ('blocked','error') THEN cr.id END), 0) as blocked_runs
      FROM crawl_runs cr
-     LEFT JOIN crawl_units cu ON cu.crawl_run_id = cr.id
-     ${whereFromWindow(runWindow, "1 = 1")}`
-  ).get(...runWindow.params) as { total_units: number; failed_units: number; blocked_runs: number };
+     LEFT JOIN crawl_units cu ON cu.crawl_run_id = cr.id AND cu.tenant_id = cr.tenant_id
+     ${whereFromWindow(runWindow, "cr.tenant_id = ?")}`
+  ).get(...runWindow.params, tenantId) as { total_units: number; failed_units: number; blocked_runs: number };
 
   const aiUsageRow = await db.prepare(
     `SELECT COALESCE(COUNT(*), 0) as calls,
             COALESCE(SUM(ai.estimated_cost), 0) as cost,
             COALESCE(SUM(CASE WHEN COALESCE(ai.was_cached, 0) = 1 THEN 1 ELSE 0 END), 0) as cached
-     FROM ai_usage_events ai ${whereFromWindow(aiUsageWindow, "ai.success = 1")}`
-  ).get(...aiUsageWindow.params) as { calls: number; cost: number; cached: number };
+     FROM ai_usage_events ai ${whereFromWindow(aiUsageWindow, "ai.success = 1 AND ai.tenant_id = ?")}`
+  ).get(...aiUsageWindow.params, tenantId) as { calls: number; cost: number; cached: number };
 
   const aiVerificationRow = await db.prepare(
     `SELECT COALESCE(COUNT(*), 0) as verifications,
@@ -10208,8 +11317,8 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
             COALESCE(SUM(CASE WHEN av.status = 'weak_site_found' THEN 1 ELSE 0 END), 0) as weak_site_found,
             COALESCE(SUM(CASE WHEN av.status IN ('no_site_found','weak_site_found') THEN 1 ELSE 0 END), 0) as website_opportunity_found,
             COALESCE(SUM(CASE WHEN av.status IN ('uncertain','mismatch') THEN 1 ELSE 0 END), 0) as uncertain
-     FROM ai_lead_verifications av ${whereFromWindow(aiVerificationWindow, "av.error IS NULL")}`
-  ).get(...aiVerificationWindow.params) as {
+     FROM ai_lead_verifications av ${whereFromWindow(aiVerificationWindow, "av.error IS NULL AND av.tenant_id = ?")}`
+  ).get(...aiVerificationWindow.params, tenantId) as {
     verifications: number;
     usable_site_found: number;
     weak_site_found: number;
@@ -10227,17 +11336,17 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
        COALESCE(SUM(CASE WHEN l.ai_verification_status = 'no_site_found' OR l.ai_website_viability_status = 'directory_only' THEN 1 ELSE 0 END), 0) as ai_no_site,
        COALESCE(SUM(CASE WHEN l.ai_verification_status = 'site_found' AND l.ai_website_viability_status = 'usable' THEN 1 ELSE 0 END), 0) as usable_site_found,
        COALESCE(SUM(CASE WHEN l.quality_bucket = 'broken_site_opportunity' OR l.ai_website_viability_status IN ('broken','parked','placeholder') THEN 1 ELSE 0 END), 0) as broken_site_found
-     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL")}`
-  ).get(...leadWindow.params) as Record<string, number>;
+     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL AND l.tenant_id = ?")}`
+  ).get(...leadWindow.params, tenantId) as Record<string, number>;
   const qualityPipelineRows = await getQualityValueRows(
     db,
     `SELECT COALESCE(l.quality_bucket, 'needs_ai_verify') as key,
             COUNT(*) as count,
             COALESCE(SUM(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL THEN l.estimated_deal_value ELSE 0 END), 0) as value
-     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL")}
+     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.quality_bucket, 'needs_ai_verify')
      ORDER BY value DESC, count DESC`,
-    leadWindow.params,
+    [...leadWindow.params, tenantId],
     "bucket",
   );
   const topReadyByType = await getQualityValueRows(
@@ -10245,11 +11354,11 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     `SELECT COALESCE(l.business_type, 'local_services') as key,
             COUNT(*) as count,
             COALESCE(SUM(l.estimated_deal_value), 0) as value
-     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.quality_bucket = 'ready_to_call'")}
+     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.quality_bucket = 'ready_to_call' AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')
      ORDER BY count DESC, value DESC
      LIMIT 8`,
-    leadWindow.params,
+    [...leadWindow.params, tenantId],
     "businessType",
   );
   const topValueByType = await getQualityValueRows(
@@ -10257,27 +11366,29 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     `SELECT COALESCE(l.business_type, 'local_services') as key,
             COUNT(*) as count,
             COALESCE(SUM(l.estimated_deal_value), 0) as value
-     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.quality_bucket IN ('ready_to_call','broken_site_opportunity')")}
+     FROM leads l ${whereFromWindow(leadWindow, "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.quality_bucket IN ('ready_to_call','broken_site_opportunity') AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')
      ORDER BY value DESC, count DESC
      LIMIT 8`,
-    leadWindow.params,
+    [...leadWindow.params, tenantId],
     "businessType",
   );
 
-  const businessTypes = await getStatisticsBusinessTypes(db, range);
-  const verification = await getVerificationCoverage(db, leadWindow);
+  const businessTypes = await getStatisticsBusinessTypes(db, range, tenantId);
+  const verification = await getVerificationCoverage(db, leadWindow, tenantId);
   const failedUnits = await countRows(
     db,
-    "crawl_units cu INNER JOIN crawl_runs cr ON cr.id = cu.crawl_run_id",
+    "crawl_units cu INNER JOIN crawl_runs cr ON cr.id = cu.crawl_run_id AND cr.tenant_id = cu.tenant_id",
     runWindow,
-    "cu.status = 'failed'",
+    "cu.status = 'failed' AND cu.tenant_id = ?",
+    [tenantId],
   );
   const enrichmentBacklog = await countRows(
     db,
     "leads l",
     { clause: "", params: [] },
-    "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.enrichment_status = 'pending' AND l.score > 0",
+    "COALESCE(l.is_excluded, 0) = 0 AND l.archived_at IS NULL AND l.enrichment_status = 'pending' AND l.score > 0 AND l.tenant_id = ?",
+    [tenantId],
   );
 
   return {
@@ -10349,24 +11460,24 @@ export async function getStatisticsSummary(input: StatisticsRangeInput = {}): Pr
     },
     businessTypes,
     dataQuality: {
-      websiteStatus: await getLeadBreakdown(db, "website_status", leadWindow),
-      qualificationStatus: await getLeadBreakdown(db, "qualification_status", leadWindow),
-      enrichmentStatus: await getLeadBreakdown(db, "enrichment_status", leadWindow),
-      exclusionReasons: await getExclusionReasonBreakdown(db, leadWindow),
+      websiteStatus: await getLeadBreakdown(db, "website_status", leadWindow, tenantId),
+      qualificationStatus: await getLeadBreakdown(db, "qualification_status", leadWindow, tenantId),
+      enrichmentStatus: await getLeadBreakdown(db, "enrichment_status", leadWindow, tenantId),
+      exclusionReasons: await getExclusionReasonBreakdown(db, leadWindow, tenantId),
       verificationAverage: verification.average,
       verificationCheckedLeads: verification.checkedLeads,
     },
     operations: {
-      apiByEndpoint: await getApiBreakdown(db, "endpoint", apiWindow),
-      apiBySku: await getApiBreakdown(db, "sku", apiWindow),
-      crawlRunsByStatus: await getCrawlRunBreakdown(db, runWindow),
+      apiByEndpoint: await getApiBreakdown(db, "endpoint", apiWindow, tenantId),
+      apiBySku: await getApiBreakdown(db, "sku", apiWindow, tenantId),
+      crawlRunsByStatus: await getCrawlRunBreakdown(db, runWindow, tenantId),
       failedUnits,
       enrichmentBacklog,
     },
   };
 }
 
-async function getStatisticsBusinessTypes(db: DbClient, range: ResolvedStatisticsRange): Promise<StatisticsBusinessTypeRow[]> {
+async function getStatisticsBusinessTypes(db: DbClient, range: ResolvedStatisticsRange, tenantId: string): Promise<StatisticsBusinessTypeRow[]> {
   const leadWindow = dateWindow("l.discovered_at", range);
   const outreachWindow = dateWindow("oe.created_at", range);
   const demoWindow = dateWindow("d.created_at", range);
@@ -10387,39 +11498,39 @@ async function getStatisticsBusinessTypes(db: DbClient, range: ResolvedStatistic
             COALESCE(AVG(l.score), 0) as average_score,
             COALESCE(AVG(CASE WHEN l.estimated_deal_value > 0 THEN l.estimated_deal_value END), 0) as average_deal_value,
             COALESCE(SUM(CASE WHEN COALESCE(l.is_excluded, 0) = 0 AND l.qualification_status IN ('qualified','needs_verification') THEN l.estimated_deal_value ELSE 0 END), 0) as pipeline_value
-     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL")}
+     FROM leads l ${whereFromWindow(leadWindow, "l.archived_at IS NULL AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`
-  ).all(...leadWindow.params) as Array<Record<string, unknown>>;
+  ).all(...leadWindow.params, tenantId) as Array<Record<string, unknown>>;
 
   const contacted = await countByBusinessType(db,
     `SELECT COALESCE(l.business_type, 'local_services') as business_type, COUNT(DISTINCT oe.lead_id) as count
-     FROM outreach_events oe INNER JOIN leads l ON l.id = oe.lead_id ${whereFromWindow(outreachWindow)}
+     FROM outreach_events oe INNER JOIN leads l ON l.id = oe.lead_id AND l.tenant_id = oe.tenant_id ${whereFromWindow(outreachWindow, "oe.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`,
-    outreachWindow.params,
+    [...outreachWindow.params, tenantId],
   );
   const demos = await countByBusinessType(db,
     `SELECT COALESCE(l.business_type, 'local_services') as business_type, COUNT(*) as count
-     FROM demos d INNER JOIN leads l ON l.id = d.lead_id ${whereFromWindow(demoWindow)}
+     FROM demos d INNER JOIN leads l ON l.id = d.lead_id AND l.tenant_id = d.tenant_id ${whereFromWindow(demoWindow, "d.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`,
-    demoWindow.params,
+    [...demoWindow.params, tenantId],
   );
   const meetings = await countByBusinessType(db,
     `SELECT COALESCE(l.business_type, 'local_services') as business_type, COUNT(*) as count
-     FROM leads l ${whereFromWindow(meetingWindow, "l.meeting_booked_at IS NOT NULL")}
+     FROM leads l ${whereFromWindow(meetingWindow, "l.meeting_booked_at IS NOT NULL AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`,
-    meetingWindow.params,
+    [...meetingWindow.params, tenantId],
   );
   const won = await countByBusinessType(db,
     `SELECT COALESCE(l.business_type, 'local_services') as business_type, COUNT(*) as count
-     FROM leads l ${whereFromWindow(statusWindow, "l.status = 'closed_won'")}
+     FROM leads l ${whereFromWindow(statusWindow, "l.status = 'closed_won' AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`,
-    statusWindow.params,
+    [...statusWindow.params, tenantId],
   );
   const lost = await countByBusinessType(db,
     `SELECT COALESCE(l.business_type, 'local_services') as business_type, COUNT(*) as count
-     FROM leads l ${whereFromWindow(statusWindow, "l.status = 'closed_lost'")}
+     FROM leads l ${whereFromWindow(statusWindow, "l.status = 'closed_lost' AND l.tenant_id = ?")}
      GROUP BY COALESCE(l.business_type, 'local_services')`,
-    statusWindow.params,
+    [...statusWindow.params, tenantId],
   );
 
   const baseByType = new Map(baseRows.map((row) => [String(row.business_type), row]));
@@ -10449,13 +11560,13 @@ async function getStatisticsBusinessTypes(db: DbClient, range: ResolvedStatistic
   }).sort((a, b) => b.qualified - a.qualified || b.active - a.active || b.total - a.total);
 }
 
-async function getLeadBreakdown(db: DbClient, column: "website_status" | "qualification_status" | "enrichment_status", window: SqlWindow): Promise<StatisticsBreakdownRow[]> {
+async function getLeadBreakdown(db: DbClient, column: "website_status" | "qualification_status" | "enrichment_status", window: SqlWindow, tenantId: string): Promise<StatisticsBreakdownRow[]> {
   const rows = await db.prepare(
     `SELECT COALESCE(l.${column}, 'unknown') as key, COUNT(*) as count
-     FROM leads l ${whereFromWindow(window)}
+     FROM leads l ${whereFromWindow(window, "l.tenant_id = ?")}
      GROUP BY COALESCE(l.${column}, 'unknown')
      ORDER BY count DESC`
-  ).all(...window.params) as Array<{ key: string; count: number }>;
+  ).all(...window.params, tenantId) as Array<{ key: string; count: number }>;
   return rows.map((row) => ({
     key: row.key,
     label: row.key.replace(/_/g, " "),
@@ -10463,24 +11574,24 @@ async function getLeadBreakdown(db: DbClient, column: "website_status" | "qualif
   }));
 }
 
-async function getExclusionReasonBreakdown(db: DbClient, window: SqlWindow): Promise<StatisticsBreakdownRow[]> {
+async function getExclusionReasonBreakdown(db: DbClient, window: SqlWindow, tenantId: string): Promise<StatisticsBreakdownRow[]> {
   const rows = await db.prepare(
     `SELECT COALESCE(NULLIF(TRIM(l.exclusion_reason), ''), 'No reason recorded') as key, COUNT(*) as count
-     FROM leads l ${whereFromWindow(window, "COALESCE(l.is_excluded, 0) = 1")}
+     FROM leads l ${whereFromWindow(window, "COALESCE(l.is_excluded, 0) = 1 AND l.tenant_id = ?")}
      GROUP BY COALESCE(NULLIF(TRIM(l.exclusion_reason), ''), 'No reason recorded')
      ORDER BY count DESC
      LIMIT 8`
-  ).all(...window.params) as Array<{ key: string; count: number }>;
+  ).all(...window.params, tenantId) as Array<{ key: string; count: number }>;
   return rows.map((row) => ({ key: row.key, label: row.key, count: row.count }));
 }
 
-async function getApiBreakdown(db: DbClient, column: "endpoint" | "sku", window: SqlWindow): Promise<Array<{ key: string; calls: number; cost: number }>> {
+async function getApiBreakdown(db: DbClient, column: "endpoint" | "sku", window: SqlWindow, tenantId: string): Promise<Array<{ key: string; calls: number; cost: number }>> {
   const rows = await db.prepare(
     `SELECT a.${column} as key, COUNT(*) as calls, COALESCE(SUM(a.estimated_cost), 0) as cost
-     FROM api_usage_events a ${whereFromWindow(window, "a.success = 1 AND COALESCE(a.was_cached, 0) = 0")}
+     FROM api_usage_events a ${whereFromWindow(window, "a.success = 1 AND COALESCE(a.was_cached, 0) = 0 AND a.tenant_id = ?")}
      GROUP BY a.${column}
      ORDER BY cost DESC, calls DESC`
-  ).all(...window.params) as Array<Record<string, unknown>>;
+  ).all(...window.params, tenantId) as Array<Record<string, unknown>>;
   return rows.map((row) => ({
     key: String((row as Record<string, unknown>).key),
     calls: Number((row as Record<string, unknown>).calls ?? 0),
@@ -10488,20 +11599,20 @@ async function getApiBreakdown(db: DbClient, column: "endpoint" | "sku", window:
   }));
 }
 
-async function getCrawlRunBreakdown(db: DbClient, window: SqlWindow): Promise<StatisticsBreakdownRow[]> {
+async function getCrawlRunBreakdown(db: DbClient, window: SqlWindow, tenantId: string): Promise<StatisticsBreakdownRow[]> {
   const rows = await db.prepare(
     `SELECT cr.status as key, COUNT(*) as count
-     FROM crawl_runs cr ${whereFromWindow(window)}
+     FROM crawl_runs cr ${whereFromWindow(window, "cr.tenant_id = ?")}
      GROUP BY cr.status
      ORDER BY count DESC`
-  ).all(...window.params) as Array<{ key: string; count: number }>;
+  ).all(...window.params, tenantId) as Array<{ key: string; count: number }>;
   return rows.map((row) => ({ key: row.key, label: row.key.replace(/_/g, " "), count: row.count }));
 }
 
-async function getVerificationCoverage(db: DbClient, window: SqlWindow): Promise<{ average: number; checkedLeads: number }> {
+async function getVerificationCoverage(db: DbClient, window: SqlWindow, tenantId: string): Promise<{ average: number; checkedLeads: number }> {
   const rows = await db.prepare(
-    `SELECT l.verification FROM leads l ${whereFromWindow(window)}`
-  ).all(...window.params) as Array<{ verification: string | null }>;
+    `SELECT l.verification FROM leads l ${whereFromWindow(window, "l.tenant_id = ?")}`
+  ).all(...window.params, tenantId) as Array<{ verification: string | null }>;
   if (rows.length === 0) return { average: 0, checkedLeads: 0 };
 
   let totalCoverage = 0;
@@ -10536,13 +11647,13 @@ function whereFromWindow(window: SqlWindow, extra?: string): string {
   return conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 }
 
-async function countRows(db: DbClient, from: string, window: SqlWindow, extra?: string): Promise<number> {
-  const row = await db.prepare(`SELECT COUNT(*) as count FROM ${from} ${whereFromWindow(window, extra)}`).get(...window.params) as { count: number };
+async function countRows(db: DbClient, from: string, window: SqlWindow, extra?: string, extraParams: string[] = []): Promise<number> {
+  const row = await db.prepare(`SELECT COUNT(*) as count FROM ${from} ${whereFromWindow(window, extra)}`).get(...window.params, ...extraParams) as { count: number };
   return row.count ?? 0;
 }
 
-async function countDistinctRows(db: DbClient, from: string, column: string, window: SqlWindow, extra?: string): Promise<number> {
-  const row = await db.prepare(`SELECT COUNT(DISTINCT ${column}) as count FROM ${from} ${whereFromWindow(window, extra)}`).get(...window.params) as { count: number };
+async function countDistinctRows(db: DbClient, from: string, column: string, window: SqlWindow, extra?: string, extraParams: string[] = []): Promise<number> {
+  const row = await db.prepare(`SELECT COUNT(DISTINCT ${column}) as count FROM ${from} ${whereFromWindow(window, extra)}`).get(...window.params, ...extraParams) as { count: number };
   return row.count ?? 0;
 }
 

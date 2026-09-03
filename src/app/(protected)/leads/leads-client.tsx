@@ -15,6 +15,7 @@ import { bulkArchiveLeadsAction, bulkRestoreArchivedLeadsAction, bulkUpdateLeadS
 import { getBusinessTypeLabel } from "@/lib/business-types";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
 import type { Lead } from "@/lib/db/queries";
+import { CsvExportControl, type LeadExportScope } from "./csv-export-control";
 
 interface Props {
   leads: Lead[];
@@ -39,6 +40,7 @@ interface Props {
   scoreThresholds: ScoreBandThresholds;
   businessTypeCounts: Array<{ id: string; label: string; total: number; active: number }>;
   canExport: boolean;
+  exportScope: LeadExportScope | null;
   canClose: boolean;
   canArchive: boolean;
 }
@@ -85,7 +87,7 @@ const CATEGORY_OPTIONS = [
   "restaurant","gym","landscaper","veterinarian","accountant","lawyer",
 ];
 
-export function LeadsClient({ leads, total, filters, scoreThresholds, businessTypeCounts, canExport, canClose, canArchive }: Props) {
+export function LeadsClient({ leads, total, filters, scoreThresholds, businessTypeCounts, canExport, exportScope, canClose, canArchive }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [search, setSearch] = useState(filters.search ?? "");
@@ -258,15 +260,12 @@ export function LeadsClient({ leads, total, filters, scoreThresholds, businessTy
             </button>
           )}
 
-          {canExport && (
-            <a
-              href={`/api/export/csv?${searchParams.toString()}`}
-              className="btn-glass text-xs ml-auto"
-              download
-            >
-              Export CSV
-            </a>
-          )}
+          <CsvExportControl
+            canExport={canExport}
+            exportScope={exportScope}
+            searchParams={searchParams}
+            className="ml-auto"
+          />
           <select
             className="glass-select"
             aria-label="Archive filter"

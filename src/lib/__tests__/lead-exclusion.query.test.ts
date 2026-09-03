@@ -3,6 +3,12 @@ import Database from "better-sqlite3";
 import { createTestDb } from "./test-helpers";
 
 let testDb: Database.Database;
+const TENANT_A = "10000000-0000-4000-8000-000000000001";
+const TENANT_B = "20000000-0000-4000-8000-000000000001";
+
+const tenantContextMocks = vi.hoisted(() => ({
+  requireTenantContext: vi.fn(),
+}));
 
 vi.mock("@/lib/db/index", () => {
   return {
@@ -13,17 +19,27 @@ vi.mock("@/lib/db/index", () => {
   };
 });
 
+vi.mock("@/lib/tenancy/context", () => ({
+  getTenantContext: vi.fn(() => null),
+  requireTenantContext: tenantContextMocks.requireTenantContext,
+}));
+
 import {
   clearLeadExclusion,
+  claimLeadForUser,
   archiveLead,
   restoreArchivedLead,
   createManualLead,
   getAllLeadsForRecompute,
+  getKanbanLeads,
+  getLeadById,
   getLeadMapPoints,
   getLeads,
   getNowQueue,
   getQualifiedLeadCount,
   getScoreBandThresholds,
+  markLeadMeetingBookedIfUnset,
+  markLeadRepliedIfUnset,
   recomputeAllLeadQualityScores,
   setLeadExclusion,
   updateLeadQualityScores,
@@ -44,6 +60,15 @@ function insertLead(
 
 beforeEach(() => {
   testDb = createTestDb();
+  testDb.exec(`
+    ALTER TABLE leads ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '${TENANT_A}';
+    CREATE UNIQUE INDEX leads_tenant_place_id_unique ON leads (tenant_id, place_id);
+    ALTER TABLE lead_ai_artifacts ADD COLUMN tenant_id TEXT;
+    ALTER TABLE demos ADD COLUMN tenant_id TEXT;
+    ALTER TABLE admin_requests ADD COLUMN tenant_id TEXT;
+  `);
+  tenantContextMocks.requireTenantContext.mockReset();
+  tenantContextMocks.requireTenantContext.mockReturnValue({ tenantId: TENANT_A, workspaceId: null });
 });
 
 afterEach(() => {
@@ -51,6 +76,94 @@ afterEach(() => {
 });
 
 describe("lead exclusion query behavior", () => {
+  it("keeps now-queue candidates inside the current tenant", async () => {
+    const ownId = insertLead(testDb, 920, { score: 20 });
+    const foreignId = insertLead(testDb, 921, { score: 100 });
+    testDb.prepare("UPDATE leads SET tenant_id = ? WHERE id = ?").run(TENANT_B, foreignId);
+    testDb.prepare(
+      `UPDATE leads SET
+         phone = '303-555-0100', contactability_score = 1, estimated_deal_value = 3500,
+         ai_verification_status = 'no_site_found', ai_website_viability_status = 'directory_only',
+         ai_queue_status = 'verified', quality_bucket = 'ready_to_call', qualification_status = 'qualified'`,
+    ).run();
+
+    const queue = await getNowQueue(10);
+
+    expect(queue.map((lead) => lead.id)).toEqual([ownId]);
+  });
+
+  it("fails closed for stored nonzero exclusion values across mapped and SQL-filtered surfaces", async () => {
+    const storedValues = [0, 1, 2, -1] as const;
+    const ids = storedValues.map((value, index) => {
+      const id = insertLead(testDb, 910 + index, { score: 20 - index });
+      testDb.prepare(
+        `UPDATE leads
+         SET is_excluded = ?,
+             phone = '303-555-0100',
+             contactability_score = 1,
+             estimated_deal_value = 3500,
+             ai_verification_status = 'no_site_found',
+             ai_website_viability_status = 'directory_only',
+             ai_queue_status = 'verified',
+             quality_bucket = 'ready_to_call',
+             qualification_status = 'qualified'
+         WHERE id = ?`,
+      ).run(value, id);
+      return id;
+    });
+
+    const mapped = await Promise.all(ids.map((id) => getLeadById(id)));
+    expect(mapped.map((lead) => lead?.is_excluded)).toEqual([false, true, true, true]);
+
+    const activeList = await getLeads({ pageSize: 10 });
+    expect(activeList.leads.map((lead) => lead.id)).toEqual([ids[0]]);
+    expect(activeList.leads[0]?.is_excluded).toBe(false);
+
+    const adminList = await getLeads({ includeExcluded: true, pageSize: 10 });
+    expect(new Map(adminList.leads.map((lead) => [lead.id, lead.is_excluded]))).toEqual(new Map([
+      [ids[0], false],
+      [ids[1], true],
+      [ids[2], true],
+      [ids[3], true],
+    ]));
+
+    const kanban = await getKanbanLeads({ includeExcluded: true, pageSize: 10 });
+    expect(new Map(kanban.leads.map((lead) => [lead.id, lead.is_excluded]))).toEqual(new Map([
+      [ids[0], false],
+      [ids[1], true],
+      [ids[2], true],
+      [ids[3], true],
+    ]));
+
+    const queue = await getNowQueue(10);
+    expect(queue.map((lead) => lead.id)).toEqual([ids[0]]);
+    expect(queue[0]?.is_excluded).toBe(false);
+    await expect(claimLeadForUser(ids[0], "researcher-1")).resolves.toBe(1);
+    for (const id of ids.slice(1)) {
+      await expect(claimLeadForUser(id, "researcher-1")).resolves.toBe(0);
+      await expect(claimLeadForUser(id, "admin-1", { preserveAdminSemantics: true })).resolves.toBe(1);
+    }
+  });
+
+  it("atomically restricts researcher claims while preserving the legacy admin path", async () => {
+    const availableId = insertLead(testDb, 900, { score: 10 });
+    const selfOwnedId = insertLead(testDb, 901, { score: 10 });
+    const archivedId = insertLead(testDb, 902, { score: 10 });
+    const excludedId = insertLead(testDb, 903, { score: 10 });
+    testDb.prepare("UPDATE leads SET assigned_to_user_id = ? WHERE id = ?").run("researcher-1", selfOwnedId);
+    testDb.prepare("UPDATE leads SET archived_at = ? WHERE id = ?").run("2026-08-01T00:00:00.000Z", archivedId);
+    testDb.prepare("UPDATE leads SET is_excluded = 1 WHERE id = ?").run(excludedId);
+
+    await expect(claimLeadForUser(availableId, "researcher-1")).resolves.toBe(1);
+    await expect(claimLeadForUser(selfOwnedId, "researcher-1")).resolves.toBe(0);
+    await expect(claimLeadForUser(archivedId, "researcher-1")).resolves.toBe(0);
+    await expect(claimLeadForUser(excludedId, "researcher-1")).resolves.toBe(0);
+
+    await expect(claimLeadForUser(archivedId, "admin-1", { preserveAdminSemantics: true })).resolves.toBe(1);
+    await expect(claimLeadForUser(excludedId, "admin-1", { preserveAdminSemantics: true })).resolves.toBe(1);
+    await expect(claimLeadForUser(excludedId, "admin-1", { preserveAdminSemantics: true })).resolves.toBe(1);
+  });
+
   it("removes excluded leads from qualified count", async () => {
     const keepId = insertLead(testDb, 1, { score: 12 });
     const excludedId = insertLead(testDb, 2, { score: 11 });
@@ -246,6 +359,7 @@ describe("lead exclusion query behavior", () => {
 
   it("creates manual leads with safe defaults", async () => {
     const lead = await createManualLead({
+      tenantId: TENANT_A,
       name: "Manual Candidate",
       businessType: "local_services",
       phone: "303-555-0100",
@@ -270,6 +384,38 @@ describe("lead exclusion query behavior", () => {
     expect(row.enrichment_status).toBe("pending");
     expect(row.ai_queue_status).toBe("queued");
     expect(row.notes).toBe("Source: Google Maps\n\nContact person: Jamie Owner\n\nAdded from user flow");
+  });
+
+  it("rejects a manual lead tenant that differs from the active context before insert", async () => {
+    await expect(createManualLead({
+      tenantId: TENANT_B,
+      name: "Foreign Candidate",
+      businessType: "local_services",
+      phone: "303-555-0199",
+    })).rejects.toThrow("Lead tenant does not match the active tenant context.");
+
+    expect(testDb.prepare("SELECT COUNT(*) AS count FROM leads WHERE name = ?").get("Foreign Candidate"))
+      .toEqual({ count: 0 });
+  });
+
+  it("fences reply and meeting timestamps and preserves terminal closed status", async () => {
+    const repliedId = insertLead(testDb, 930, { score: 10, status: "contacted" });
+    expect(await markLeadRepliedIfUnset(repliedId)).toBe(1);
+    const firstReply = testDb.prepare("SELECT first_reply_at FROM leads WHERE id = ?").get(repliedId) as { first_reply_at: string };
+    expect(firstReply.first_reply_at).toBeTruthy();
+    expect(await markLeadRepliedIfUnset(repliedId)).toBe(0);
+    expect(testDb.prepare("SELECT first_reply_at FROM leads WHERE id = ?").get(repliedId)).toEqual(firstReply);
+
+    const meetingId = insertLead(testDb, 931, { score: 10, status: "closed_lost" });
+    expect(await markLeadMeetingBookedIfUnset(meetingId)).toBe(1);
+    const firstMeeting = testDb.prepare(
+      "SELECT meeting_booked_at, status FROM leads WHERE id = ?",
+    ).get(meetingId) as { meeting_booked_at: string; status: string };
+    expect(firstMeeting.meeting_booked_at).toBeTruthy();
+    expect(firstMeeting.status).toBe("closed_lost");
+    expect(await markLeadMeetingBookedIfUnset(meetingId)).toBe(0);
+    expect(testDb.prepare("SELECT meeting_booked_at, status FROM leads WHERE id = ?").get(meetingId))
+      .toEqual(firstMeeting);
   });
 
   it("filters leads by assigned researcher markets", async () => {

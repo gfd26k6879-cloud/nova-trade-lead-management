@@ -3,6 +3,12 @@ import Database from "better-sqlite3";
 import { createTestDb } from "./test-helpers";
 
 let testDb: Database.Database;
+const TENANT_A = "10000000-0000-4000-8000-000000000001";
+const TENANT_B = "20000000-0000-4000-8000-000000000001";
+
+const tenantContextMocks = vi.hoisted(() => ({
+  requireTenantContext: vi.fn(),
+}));
 
 vi.mock("@/lib/db/index", () => {
   return {
@@ -23,6 +29,11 @@ vi.mock("@/lib/db/index", () => {
   };
 });
 
+vi.mock("@/lib/tenancy/context", () => ({
+  getTenantContext: () => null,
+  requireTenantContext: tenantContextMocks.requireTenantContext,
+}));
+
 import {
   claimLeadForUser,
   createAdminRequest,
@@ -38,6 +49,12 @@ import {
 } from "@/lib/db/queries";
 
 function insertUser(userId: string, email: string, displayName: string) {
+  const membershipId = userId === "user-1"
+    ? "10000000-0000-4000-8000-000000000011"
+    : "10000000-0000-4000-8000-000000000012";
+  const roleBindingId = userId === "user-1"
+    ? "10000000-0000-4000-8000-000000000021"
+    : "10000000-0000-4000-8000-000000000022";
   testDb.prepare(
     `INSERT INTO app_users (id, user_id, email, display_name, role, status, created_at, updated_at)
      VALUES (?, ?, ?, ?, 'researcher', 'active', '2026-05-15T10:00:00.000Z', '2026-05-15T10:00:00.000Z')`
@@ -45,6 +62,20 @@ function insertUser(userId: string, email: string, displayName: string) {
   testDb.prepare(
     "INSERT OR IGNORE INTO user_market_access (user_id, market_id) VALUES (?, 'market-colorado')"
   ).run(userId);
+  testDb.pragma("ignore_check_constraints = ON");
+  testDb.prepare(
+    `INSERT INTO tenant_memberships (id, tenant_id, auth_identity_id, status)
+     VALUES (?, ?, ?, 'active')`
+  ).run(
+    membershipId,
+    TENANT_A,
+    userId,
+  );
+  testDb.pragma("ignore_check_constraints = OFF");
+  testDb.prepare(
+    `INSERT INTO tenant_role_bindings (id, tenant_id, membership_id, role, reason_code)
+     VALUES (?, ?, ?, ?, 'initial_provisioning')`
+  ).run(roleBindingId, TENANT_A, membershipId, userId === "user-1" ? "admin" : "researcher");
 }
 
 function insertLead(input: {
@@ -58,18 +89,20 @@ function insertLead(input: {
   aiVerificationStatus?: string;
   aiWebsiteViabilityStatus?: string | null;
   aiQueueStatus?: string;
+  tenantId?: string;
 }) {
   testDb.prepare(
     `INSERT INTO leads (
       id, place_id, name, address, phone, categories, website_status, score, status,
       business_type, qualification_status, quality_bucket, ai_verification_status,
       ai_website_viability_status, ai_queue_status, sales_priority_score, lead_quality_score,
-      assigned_to_user_id, reminder_date, market_id, country_code, location_cell_id, postal_code, discovered_at, created_at, updated_at
+      assigned_to_user_id, reminder_date, market_id, country_code, location_cell_id, postal_code,
+      tenant_id, discovered_at, created_at, updated_at
     ) VALUES (
       ?, ?, ?, '123 Main St, Denver, CO 80202', '303-555-0100', '["plumber"]', ?, 20, 'new',
       'plumbing', 'qualified', ?, ?,
       ?, ?, ?, ?,
-      ?, ?, 'market-colorado', 'US', 'cell-us-co-80202', '80202', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z'
+      ?, ?, 'market-colorado', 'US', 'cell-us-co-80202', '80202', ?, '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z'
     )`
   ).run(
     input.id,
@@ -84,13 +117,30 @@ function insertLead(input: {
     input.leadQuality ?? 80,
     input.assignedTo ?? null,
     input.reminder ?? null,
+    input.tenantId ?? TENANT_A,
   );
 }
 
 beforeEach(() => {
   testDb = createTestDb();
+  testDb.exec(`
+    ALTER TABLE leads ADD COLUMN tenant_id TEXT;
+    ALTER TABLE outreach_events ADD COLUMN tenant_id TEXT;
+    ALTER TABLE demos ADD COLUMN tenant_id TEXT;
+    ALTER TABLE lead_ai_artifacts ADD COLUMN tenant_id TEXT;
+    ALTER TABLE user_market_access ADD COLUMN tenant_id TEXT;
+    ALTER TABLE lead_notes ADD COLUMN tenant_id TEXT;
+    ALTER TABLE admin_requests ADD COLUMN tenant_id TEXT;
+    ALTER TABLE admin_requests ADD COLUMN workspace_id TEXT;
+    INSERT INTO tenants (id, slug, name, status) VALUES
+      ('${TENANT_A}', 'researcher-workbench', 'Researcher Workbench', 'active'),
+      ('${TENANT_B}', 'other-team', 'Other Team', 'active');
+  `);
+  tenantContextMocks.requireTenantContext.mockReset();
+  tenantContextMocks.requireTenantContext.mockReturnValue({ tenantId: TENANT_A, workspaceId: null });
   insertUser("user-1", "one@example.com", "One");
   insertUser("user-2", "two@example.com", "Two");
+  testDb.prepare("UPDATE user_market_access SET tenant_id = ?").run(TENANT_A);
 });
 
 afterEach(() => {
@@ -98,6 +148,116 @@ afterEach(() => {
 });
 
 describe("researcher workbench queries", () => {
+  it("requires a tenant-wide context before queue database reads", async () => {
+    tenantContextMocks.requireTenantContext.mockImplementationOnce(() => {
+      throw new Error("Tenant context is required");
+    });
+    await expect(getResearcherWorkbench("user-1")).rejects.toThrow("Tenant context is required");
+
+    tenantContextMocks.requireTenantContext.mockReturnValueOnce({ tenantId: TENANT_A, workspaceId: "workspace-a" });
+    await expect(getResearcherWorkbench("user-1")).rejects.toThrow("Tenant-wide context is required");
+  });
+
+  it("keeps queue candidates, assignees, metadata, market access, and summaries tenant-bound", async () => {
+    insertLead({ id: "tenant-a-visible", assignedTo: "user-1", reminder: "2026-05-15" });
+    insertLead({ id: "tenant-b-hidden", assignedTo: "user-1", tenantId: TENANT_B, salesPriority: 999 });
+
+    testDb.prepare(
+      `INSERT INTO lead_ai_artifacts (id, lead_id, artifact_type, status, input_hash, prompt_version, tenant_id)
+       VALUES ('foreign-artifact', 'tenant-a-visible', 'business_detail', 'complete', 'hash', 'v1', ?)`,
+    ).run(TENANT_B);
+    testDb.prepare(
+      `INSERT INTO demos (id, lead_id, slug, is_published, tenant_id)
+       VALUES ('foreign-demo', 'tenant-a-visible', 'foreign-demo', 1, ?)`,
+    ).run(TENANT_B);
+    testDb.prepare(
+      `INSERT INTO admin_requests (id, lead_id, request_type, status, tenant_id)
+       VALUES ('foreign-request', 'tenant-a-visible', 'website_request', 'new', ?)`,
+    ).run(TENANT_B);
+    testDb.prepare(
+      `INSERT INTO outreach_events (id, lead_id, channel, actor_user_id, created_at, tenant_id)
+       VALUES ('foreign-contact', 'tenant-a-visible', 'call', 'user-1', '2026-05-15T11:00:00.000Z', ?)`,
+    ).run(TENANT_B);
+
+    const workbench = await getResearcherWorkbench("user-1");
+
+    expect(workbench.myLeads.map((lead) => lead.id)).toEqual(["tenant-a-visible"]);
+    expect(workbench.myLeads[0]).toMatchObject({
+      assigned_user_email: "one@example.com",
+      business_detail_status: null,
+      demo_slug: null,
+      open_website_request_id: null,
+    });
+    expect(workbench.summary).toMatchObject({ myClaimed: 1, dueToday: 1, contactedThisWeek: 0 });
+  });
+
+  it("derives members from current tenant roles without exposing global hierarchy metadata", async () => {
+    testDb.prepare(
+      `INSERT INTO app_users (id, user_id, email, display_name, role, status, created_at, updated_at)
+       VALUES
+         ('app-user-b', 'user-b', 'b@example.com', 'Tenant B User', 'admin', 'active', '2026-05-15T10:00:00.000Z', '2026-05-15T10:00:00.000Z'),
+         ('app-no-role', 'user-no-role', 'no-role@example.com', 'No Current Role', 'admin', 'active', '2026-05-15T10:00:00.000Z', '2026-05-15T10:00:00.000Z'),
+         ('app-future-role', 'user-future-role', 'future-role@example.com', 'Future Role', 'admin', 'active', '2026-05-15T10:00:00.000Z', '2026-05-15T10:00:00.000Z')`
+    ).run();
+    testDb.pragma("ignore_check_constraints = ON");
+    testDb.prepare(
+      `INSERT INTO tenant_memberships (id, tenant_id, auth_identity_id, status) VALUES
+         ('20000000-0000-4000-8000-000000000011', ?, 'user-b', 'active'),
+         ('10000000-0000-4000-8000-000000000013', ?, 'user-no-role', 'active'),
+         ('10000000-0000-4000-8000-000000000014', ?, 'user-future-role', 'active')`
+    ).run(TENANT_B, TENANT_A, TENANT_A);
+    testDb.pragma("ignore_check_constraints = OFF");
+    testDb.prepare(
+      `INSERT INTO tenant_role_bindings (id, tenant_id, membership_id, role, reason_code)
+       VALUES ('20000000-0000-4000-8000-000000000021', ?, '20000000-0000-4000-8000-000000000011', 'admin', 'initial_provisioning')`
+    ).run(TENANT_B);
+    testDb.prepare(
+      `INSERT INTO tenant_role_bindings (id, tenant_id, membership_id, role, valid_from, reason_code)
+       VALUES ('10000000-0000-4000-8000-000000000024', ?, '10000000-0000-4000-8000-000000000014', 'admin', '2099-01-01T00:00:00.000Z', 'initial_provisioning')`
+    ).run(TENANT_A);
+    insertLead({ id: "tenant-a-owned", assignedTo: "user-1" });
+    testDb.prepare(
+      `INSERT INTO leads (
+        id, place_id, name, categories, website_status, score, status, business_type,
+        qualification_status, quality_bucket, assigned_to_user_id, reminder_date, tenant_id,
+        discovered_at, created_at, updated_at
+      ) VALUES (
+        'tenant-b-hidden', 'place-tenant-b-hidden', 'Tenant B Hidden', '[]', 'none', 20, 'new', 'plumbing',
+        'qualified', 'ready_to_call', 'user-b', '2026-05-15', ?,
+        '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z', '2026-05-14T10:00:00.000Z'
+      )`
+    ).run(TENANT_B);
+    testDb.prepare(
+      "UPDATE app_users SET is_team_lead = 1, team_lead_user_id = 'user-b', team_label = 'Other tenant team' WHERE user_id = 'user-2'"
+    ).run();
+
+    const summary = await getTeamBoardSummary();
+    const researcher = await getResearcherTeamBoardSummary("user-2");
+
+    expect(summary.members.map((member) => member.user_id).sort()).toEqual(["user-1", "user-2"]);
+    expect(summary.members.find((member) => member.user_id === "user-1")?.role).toBe("admin");
+    expect(summary.members.find((member) => member.user_id === "user-1")?.claimed_active).toBe(1);
+    expect(summary.members.find((member) => member.user_id === "user-b")).toBeUndefined();
+    expect(summary.members.find((member) => member.user_id === "user-no-role")).toBeUndefined();
+    expect(summary.members.find((member) => member.user_id === "user-future-role")).toBeUndefined();
+    expect(summary.overdueFollowUps).toBe(0);
+    expect(summary.members.find((member) => member.user_id === "user-2")).toMatchObject({
+      is_team_lead: false,
+      team_lead_user_id: null,
+      team_lead_email: null,
+      team_lead_display_name: null,
+      team_label: null,
+    });
+    expect(researcher.members[0]).toMatchObject({
+      user_id: "user-2",
+      is_team_lead: false,
+      team_lead_user_id: null,
+      team_lead_email: null,
+      team_lead_display_name: null,
+      team_label: null,
+    });
+  });
+
   it("claims a lead atomically without overwriting another researcher", async () => {
     insertLead({ id: "lead-1" });
 
@@ -222,7 +382,7 @@ describe("researcher workbench queries", () => {
     expect(lead?.last_contacted_at).toBeNull();
   });
 
-  it("deduplicates open admin requests and rolls them up to team leads", async () => {
+  it("deduplicates open admin requests without applying global team rollups", async () => {
     insertLead({ id: "lead-1", assignedTo: "user-2" });
     testDb.prepare("UPDATE app_users SET is_team_lead = 1, team_label = 'Brother team' WHERE user_id = 'user-1'").run();
     testDb.prepare("UPDATE app_users SET team_lead_user_id = 'user-1' WHERE user_id = 'user-2'").run();
@@ -253,7 +413,12 @@ describe("researcher workbench queries", () => {
     const summary = await getTeamBoardSummary();
     const teamLead = summary.members.find((member) => member.user_id === "user-1");
     const member = summary.members.find((row) => row.user_id === "user-2");
-    expect(teamLead?.website_requests_open).toBe(1);
+    expect(teamLead).toMatchObject({
+      is_team_lead: false,
+      team_lead_user_id: null,
+      team_label: null,
+      website_requests_open: 0,
+    });
     expect(member?.website_requests_open).toBe(1);
 
     const updated = await updateAdminRequestStatus(first.request.id, "done");
@@ -295,13 +460,24 @@ describe("researcher workbench queries", () => {
       createdByEmail: "one@example.com",
       summary: "Owner wants a website preview.",
     });
+    testDb.prepare("UPDATE outreach_events SET tenant_id = ?").run(TENANT_A);
+    testDb.prepare("UPDATE lead_notes SET tenant_id = ?").run(TENANT_A);
     testDb.prepare("UPDATE outreach_events SET created_at = ?").run(new Date().toISOString());
     testDb.prepare("UPDATE lead_notes SET created_at = ?, updated_at = ?").run(new Date().toISOString(), new Date().toISOString());
     testDb.prepare("UPDATE admin_requests SET created_at = ?, updated_at = ?").run(new Date().toISOString(), new Date().toISOString());
+    testDb.pragma("ignore_check_constraints = ON");
     testDb.prepare(
-      `INSERT INTO audit_logs (id, action, entity_type, entity_id, actor_user_id, actor_email, actor_role, metadata, created_at)
-       VALUES ('audit-1', 'lead_reminder_updated', 'lead', 'mine', 'user-1', 'one@example.com', 'researcher', ?, ?)`
-    ).run(JSON.stringify({ reminderDate: "2026-05-20" }), new Date().toISOString());
+      `INSERT INTO audit_logs (
+         id, action, entity_type, entity_id, actor_user_id, actor_role, metadata, created_at,
+         scope_kind, tenant_id, correlation_id, actor_auth_identity_id, actor_membership_id,
+         actor_launch_role, actor_role_binding_id, actor_layer
+       ) VALUES (
+         'audit-1', 'lead_reminder_updated', 'lead', 'mine', 'user-1', 'admin', ?, ?,
+         'tenant', ?, 'correlation-1', 'user-1', '10000000-0000-4000-8000-000000000011',
+         'admin', '10000000-0000-4000-8000-000000000021', 'member'
+       )`
+    ).run(JSON.stringify({ reminderDate: "2026-05-20" }), new Date().toISOString(), TENANT_A);
+    testDb.pragma("ignore_check_constraints = OFF");
 
     const summary = await getResearcherTeamBoardSummary("user-1");
 

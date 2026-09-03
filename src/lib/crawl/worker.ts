@@ -33,6 +33,8 @@ import {
 import { enqueueAiVerificationForLead } from "@/lib/ai/verification-worker";
 import { runAiPostSuccessBookkeeping } from "@/lib/ai/post-success-bookkeeping";
 import { throwIfWorkerAborted } from "@/lib/worker-abort";
+import { requireWorkerTenantContext } from "@/lib/tenancy/worker-context";
+import { getTenantContext } from "@/lib/tenancy/context";
 
 const SKIP_BUSINESS_STATUSES = new Set(["CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"]);
 export interface ProcessResult {
@@ -65,12 +67,23 @@ const TRANSIENT_RETRY_BASE_DELAY_SECONDS = 60;
 const TRANSIENT_RETRY_MAX_DELAY_SECONDS = 15 * 60;
 
 export async function processNextUnit(signal?: AbortSignal): Promise<ProcessResult> {
+  const workerContext = requireExactCrawlWorkerContext();
   throwIfWorkerAborted(signal);
-  const run = await getProcessingCrawlRun();
+  const run = await getProcessingCrawlRun({
+    tenantId: workerContext.tenantId,
+    workspaceId: workerContext.workspaceId,
+  });
   throwIfWorkerAborted(signal);
 
   if (!run) {
     return { status: "idle" };
+  }
+  const scopedRun = run as typeof run & { tenant_id?: string | null; workspace_id?: string | null };
+  if (
+    scopedRun.tenant_id !== workerContext.tenantId ||
+    (scopedRun.workspace_id ?? null) !== workerContext.workspaceId
+  ) {
+    throw new Error("Selected crawl run does not match the active worker context.");
   }
 
   const unit = await leaseNextCrawlUnit(run.id);
@@ -135,6 +148,7 @@ export async function processNextUnit(signal?: AbortSignal): Promise<ProcessResu
       apiCalls++;
 
       await logApiUsageEvent({
+        tenantId: workerContext.tenantId,
         crawl_run_id: run.id,
         crawl_unit_id: unit.id,
         endpoint: API_ENDPOINT_TEXT_SEARCH,
@@ -166,24 +180,14 @@ export async function processNextUnit(signal?: AbortSignal): Promise<ProcessResu
         pageRawPlaces++;
         const placeId = extractPlaceId(place.id);
         if (!placeId) continue;
-        const existedInPlaces = await placeMasterExists(placeId);
-        throwIfWorkerAborted(signal);
-
-        await recordPlaceObservation({
-          place_id: placeId,
-          crawl_run_id: run.id,
-          crawl_unit_id: unit.id,
-          endpoint: API_ENDPOINT_TEXT_SEARCH,
-          sku: discoverySku,
-          field_mask: fieldMask,
-          raw_json: JSON.stringify(place),
-        });
+        const existedInPlaces = await placeMasterExists(placeId, workerContext.tenantId);
         throwIfWorkerAborted(signal);
 
         const categories = place.types ?? [];
         const photoCount = place.photos?.length ?? 0;
         const hasOpeningHours = !!(place.regularOpeningHours?.periods?.length);
         await upsertPlaceMaster({
+          tenantId: workerContext.tenantId,
           place_id: placeId,
           name: place.displayName?.text ?? null,
           address: place.formattedAddress ?? null,
@@ -200,6 +204,18 @@ export async function processNextUnit(signal?: AbortSignal): Promise<ProcessResu
           primary_type: place.primaryType ?? null,
           lat: place.location?.latitude ?? null,
           lng: place.location?.longitude ?? null,
+        });
+        throwIfWorkerAborted(signal);
+
+        await recordPlaceObservation({
+          tenantId: workerContext.tenantId,
+          place_id: placeId,
+          crawl_run_id: run.id,
+          crawl_unit_id: unit.id,
+          endpoint: API_ENDPOINT_TEXT_SEARCH,
+          sku: discoverySku,
+          field_mask: fieldMask,
+          raw_json: JSON.stringify(place),
         });
         throwIfWorkerAborted(signal);
 
@@ -246,6 +262,7 @@ export async function processNextUnit(signal?: AbortSignal): Promise<ProcessResu
         );
 
         const { id: leadId, created } = await upsertLead({
+          tenantId: workerContext.tenantId,
           place_id: placeId,
           name: place.displayName?.text ?? null,
           address: place.formattedAddress ?? null,
@@ -282,7 +299,11 @@ export async function processNextUnit(signal?: AbortSignal): Promise<ProcessResu
         }
         if (settings.ai_enabled && settings.ai_auto_verify_enabled && settings.ai_verify_after_discovery) {
           try {
-            await enqueueAiVerificationForLead(leadId, "places_discovery", { settings });
+            await enqueueAiVerificationForLead(leadId, "places_discovery", {
+              settings,
+              tenantId: workerContext.tenantId,
+              queueOnly: true,
+            });
             throwIfWorkerAborted(signal);
           } catch (error) {
             throwIfWorkerAborted(signal);
@@ -345,6 +366,7 @@ export async function processNextUnit(signal?: AbortSignal): Promise<ProcessResu
     if (googleError || isLikelyBillableGoogleAttemptError(rawErrorMessage)) {
       try {
         await logApiUsageEvent({
+          tenantId: workerContext.tenantId,
           crawl_run_id: run.id,
           crawl_unit_id: unit.id,
           endpoint: API_ENDPOINT_TEXT_SEARCH,
@@ -435,6 +457,20 @@ export async function processNextUnit(signal?: AbortSignal): Promise<ProcessResu
       progress: await getCrawlProgress(run.id),
     };
   }
+}
+
+function requireExactCrawlWorkerContext() {
+  const memberContext = getTenantContext();
+  const workerContext = requireWorkerTenantContext();
+  if (memberContext) throw new Error("Conflicting crawl tenant contexts.");
+  if (
+    workerContext.workerName !== "crawl" ||
+    workerContext.action !== "crawl:process" ||
+    workerContext.workspaceId !== null
+  ) {
+    throw new Error("Exact crawl worker context is required.");
+  }
+  return workerContext;
 }
 
 function classifyUnitFailure(error: unknown, attemptCount: number, maxAttempts: number | null | undefined): UnitFailurePolicy {

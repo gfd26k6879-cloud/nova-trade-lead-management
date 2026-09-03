@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { requirePermission } from "@/lib/auth";
+import { getTenantSession, requirePermission } from "@/lib/auth";
+import { withTenantDbContext } from "@/lib/db";
 import { isDbStatementTimeoutError, isTransientDbError, withDbStatementTimeout } from "@/lib/db/index";
 import {
   ensureDbReady,
@@ -13,6 +15,8 @@ import {
 } from "@/lib/db/queries";
 import { PageShell } from "@/components/page-shell";
 import { startRouteTiming } from "@/lib/route-timing";
+import { assertTenantPermission } from "@/lib/tenancy/authorize";
+import { runWithTenantContext } from "@/lib/tenancy/context";
 import { QualityClient } from "./quality-client";
 
 export const metadata: Metadata = { title: "Quality | Nova Trade Lead Management" };
@@ -38,7 +42,30 @@ interface Props {
 
 export default async function QualityPage({ searchParams }: Props) {
   const logRouteTiming = startRouteTiming("/quality");
-  await requirePermission("crawl:manage");
+  const legacySession = await requirePermission("crawl:manage");
+  let tenantSession: Awaited<ReturnType<typeof getTenantSession>>;
+  try {
+    tenantSession = await getTenantSession({});
+  } catch {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <QualityUnavailable reason="tenant_scope_unavailable" />;
+  }
+  if (
+    !tenantSession
+    || tenantSession.userId !== legacySession.userId
+    || tenantSession.workspaceId !== null
+  ) {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <QualityUnavailable reason="tenant_scope_unavailable" />;
+  }
+
+  try {
+    await assertTenantPermission(tenantSession, "account:read", { action: "quality.page.read" });
+  } catch {
+    logRouteTiming(403, { reason: "tenant_scope_unavailable" });
+    return <QualityUnavailable reason="tenant_scope_unavailable" />;
+  }
+
   const params = await searchParams;
   const filters: QualityFilters = {
     search: params.search,
@@ -60,7 +87,11 @@ export default async function QualityPage({ searchParams }: Props) {
 
   let loaded: Awaited<ReturnType<typeof loadQualityData>>;
   try {
-    loaded = await loadQualityData(filters);
+    loaded = await runWithTenantContext(
+      tenantSession,
+      `quality-page:${randomUUID()}`,
+      () => withTenantDbContext(() => loadQualityData(filters)),
+    );
     logRouteTiming(200);
   } catch (error) {
     const reason = routeFailureReason(error);

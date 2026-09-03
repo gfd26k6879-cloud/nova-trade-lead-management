@@ -1,15 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppUser } from "@/lib/app-users";
 
 const authMocks = vi.hoisted(() => ({
   requirePermission: vi.fn(),
 }));
 
 const appUserMocks = vi.hoisted(() => ({
+  createAppUserForAuthUser: vi.fn(),
   getAppUserByUserId: vi.fn(),
   listAppUsers: vi.fn(),
   updateAppUserRole: vi.fn(),
   updateAppUserStatus: vi.fn(),
+  updateAppUserTeam: vi.fn(),
 }));
 
 const queryMocks = vi.hoisted(() => ({
@@ -20,160 +21,165 @@ const queryMocks = vi.hoisted(() => ({
   replaceUserMarketAccess: vi.fn(),
 }));
 
-const cacheMocks = vi.hoisted(() => ({
-  revalidatePath: vi.fn(),
-}));
+const cacheMocks = vi.hoisted(() => ({ revalidatePath: vi.fn() }));
+const supabaseMocks = vi.hoisted(() => ({ createSupabaseAdminClient: vi.fn() }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => cacheMocks);
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requirePermission: authMocks.requirePermission }));
 vi.mock("@/lib/app-users", () => ({
-  createAppUserForAuthUser: vi.fn(),
+  createAppUserForAuthUser: appUserMocks.createAppUserForAuthUser,
   getAppUserByUserId: appUserMocks.getAppUserByUserId,
   listAppUsers: appUserMocks.listAppUsers,
-  removeAppUser: vi.fn(),
   updateAppUserRole: appUserMocks.updateAppUserRole,
   updateAppUserStatus: appUserMocks.updateAppUserStatus,
-  updateAppUserTeam: vi.fn(),
+  updateAppUserTeam: appUserMocks.updateAppUserTeam,
 }));
 vi.mock("@/lib/db/queries", () => queryMocks);
-vi.mock("@/lib/supabase/admin", () => ({ createSupabaseAdminClient: vi.fn() }));
+vi.mock("@/lib/supabase/admin", () => supabaseMocks);
 
-import { updateUserMarketAccessAction, updateUserRoleAction, updateUserStatusAction } from "@/lib/users/actions";
-
-function user(input: Partial<AppUser> & Pick<AppUser, "user_id" | "email" | "role">): AppUser {
-  return {
-    id: input.id ?? input.user_id,
-    user_id: input.user_id,
-    email: input.email,
-    display_name: input.display_name ?? null,
-    role: input.role,
-    status: input.status ?? "active",
-    created_by: input.created_by ?? null,
-    is_team_lead: input.is_team_lead ?? false,
-    team_lead_user_id: input.team_lead_user_id ?? null,
-    team_lead_email: input.team_lead_email ?? null,
-    team_lead_display_name: input.team_lead_display_name ?? null,
-    team_label: input.team_label ?? null,
-    last_seen_at: input.last_seen_at ?? null,
-    created_at: input.created_at ?? "2026-06-16T00:00:00.000Z",
-    updated_at: input.updated_at ?? "2026-06-16T00:00:00.000Z",
-  };
-}
-
-const admin = user({ user_id: "admin-1", email: "admin@example.com", role: "admin" });
-const otherAdmin = user({ user_id: "admin-2", email: "other-admin@example.com", role: "admin" });
-const researcher = user({ user_id: "researcher-1", email: "researcher@example.com", role: "researcher" });
+import {
+  createUserAction,
+  listUserMarketAccessAction,
+  listUsersAction,
+  resetUserPasswordAction,
+  updateUserMarketAccessAction,
+  updateUserRoleAction,
+  updateUserStatusAction,
+  updateUserTeamAction,
+} from "@/lib/users/actions";
 
 beforeEach(() => {
   vi.clearAllMocks();
   authMocks.requirePermission.mockResolvedValue({
-    userId: "admin-1",
+    userId: "platform-admin-1",
     email: "admin@example.com",
     role: "admin",
   });
-  queryMocks.ensureDbReady.mockResolvedValue(undefined);
-  queryMocks.createAuditLog.mockResolvedValue(undefined);
-  appUserMocks.getAppUserByUserId.mockResolvedValue(admin);
-  appUserMocks.listAppUsers.mockResolvedValue([admin]);
-  appUserMocks.updateAppUserRole.mockResolvedValue(undefined);
-  appUserMocks.updateAppUserStatus.mockResolvedValue(undefined);
 });
 
-describe("user admin guard actions", () => {
-  it("prevents an admin from demoting their own account", async () => {
-    const result = await updateUserRoleAction("admin-1", "researcher");
+function expectNoGlobalUserSideEffects(): void {
+  expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+  expect(appUserMocks.createAppUserForAuthUser).not.toHaveBeenCalled();
+  expect(appUserMocks.getAppUserByUserId).not.toHaveBeenCalled();
+  expect(appUserMocks.listAppUsers).not.toHaveBeenCalled();
+  expect(appUserMocks.updateAppUserRole).not.toHaveBeenCalled();
+  expect(appUserMocks.updateAppUserStatus).not.toHaveBeenCalled();
+  expect(appUserMocks.updateAppUserTeam).not.toHaveBeenCalled();
+  expect(queryMocks.replaceUserMarketAccess).not.toHaveBeenCalled();
+  expect(queryMocks.listUserMarketAccessForUsers).not.toHaveBeenCalled();
+  expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  expect(cacheMocks.revalidatePath).not.toHaveBeenCalled();
+  expect(supabaseMocks.createSupabaseAdminClient).not.toHaveBeenCalled();
+}
 
-    expect(result).toEqual({ error: "You cannot demote your own admin account." });
-    expect(appUserMocks.updateAppUserRole).not.toHaveBeenCalled();
-    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
-  });
-
-  it("prevents demoting the last active admin", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "admin-2", email: "other@example.com", role: "admin" });
-
-    const result = await updateUserRoleAction("admin-1", "researcher");
-
-    expect(result).toEqual({ error: "Cannot demote the last active admin." });
-    expect(appUserMocks.listAppUsers).toHaveBeenCalled();
-    expect(appUserMocks.updateAppUserRole).not.toHaveBeenCalled();
-    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
-  });
-
-  it("allows admin demotion when another active admin remains", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "admin-3", email: "third@example.com", role: "admin" });
-    appUserMocks.listAppUsers.mockResolvedValue([admin, otherAdmin]);
-
-    const result = await updateUserRoleAction("admin-1", "researcher");
-
-    expect(result).toEqual({ success: true });
-    expect(appUserMocks.updateAppUserRole).toHaveBeenCalledWith("admin-1", "researcher");
-    expect(queryMocks.createAuditLog).toHaveBeenCalledWith("app_user_role_updated", "app_user", "admin-1", {
-      role: "researcher",
+describe("platform-global user mutation guards", () => {
+  it("fails the platform-global user directory read closed", async () => {
+    await expect(listUsersAction()).resolves.toEqual({
+      error: "User not found or unavailable.",
     });
-    expect(cacheMocks.revalidatePath).toHaveBeenCalledWith("/users");
+
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
   });
 
-  it("allows role updates that do not remove active admin coverage", async () => {
-    appUserMocks.getAppUserByUserId.mockResolvedValue(researcher);
-
-    const result = await updateUserRoleAction("researcher-1", "admin");
-
-    expect(result).toEqual({ success: true });
-    expect(appUserMocks.listAppUsers).not.toHaveBeenCalled();
-    expect(appUserMocks.updateAppUserRole).toHaveBeenCalledWith("researcher-1", "admin");
-  });
-
-  it("prevents an admin from disabling their own account", async () => {
-    const result = await updateUserStatusAction("admin-1", "disabled");
-
-    expect(result).toEqual({ error: "You cannot disable your own account." });
-    expect(appUserMocks.updateAppUserStatus).not.toHaveBeenCalled();
-    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
-  });
-
-  it("prevents disabling the last active admin", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "admin-2", email: "other@example.com", role: "admin" });
-
-    const result = await updateUserStatusAction("admin-1", "disabled");
-
-    expect(result).toEqual({ error: "Cannot disable the last active admin." });
-    expect(appUserMocks.listAppUsers).toHaveBeenCalled();
-    expect(appUserMocks.updateAppUserStatus).not.toHaveBeenCalled();
-    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
-  });
-
-  it("allows disabling an admin when another active admin remains", async () => {
-    authMocks.requirePermission.mockResolvedValue({ userId: "admin-3", email: "third@example.com", role: "admin" });
-    appUserMocks.listAppUsers.mockResolvedValue([admin, otherAdmin]);
-
-    const result = await updateUserStatusAction("admin-1", "disabled");
-
-    expect(result).toEqual({ success: true });
-    expect(appUserMocks.updateAppUserStatus).toHaveBeenCalledWith("admin-1", "disabled");
-    expect(queryMocks.createAuditLog).toHaveBeenCalledWith("app_user_status_updated", "app_user", "admin-1", {
-      status: "disabled",
+  it.each([
+    ["existing-looking targets", ["researcher-1", "researcher-2"]],
+    ["empty targets", []],
+    ["malformed targets", ["", "  "]],
+  ])("fails market-access reads closed for %s", async (_label, userIds) => {
+    await expect(listUserMarketAccessAction(userIds)).resolves.toEqual({
+      error: "User not found or unavailable.",
     });
-    expect(cacheMocks.revalidatePath).toHaveBeenCalledWith("/users");
+
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
   });
 
-  it("allows disabling non-admin users", async () => {
-    appUserMocks.getAppUserByUserId.mockResolvedValue(researcher);
+  it.each([
+    ["valid input", { email: "new-user@example.com", displayName: "New User", role: "admin" as const }],
+    ["invalid input", { email: "not-an-email", role: "researcher" as const }],
+  ])("fails user creation closed for %s before invite or persistence", async (_label, input) => {
+    await expect(createUserAction(input)).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
 
-    const result = await updateUserStatusAction("researcher-1", "disabled");
-
-    expect(result).toEqual({ success: true });
-    expect(appUserMocks.listAppUsers).not.toHaveBeenCalled();
-    expect(appUserMocks.updateAppUserStatus).toHaveBeenCalledWith("researcher-1", "disabled");
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
   });
 
-  it("returns a territory update error when market replacement validation fails", async () => {
-    queryMocks.replaceUserMarketAccess.mockRejectedValue(new Error("Unknown market id: missing-market"));
+  it.each([
+    ["existing-looking target", "researcher-1"],
+    ["unknown target", "missing-user"],
+    ["malformed target", ""],
+  ])("fails password resets closed for an %s before provider access", async (_label, userId) => {
+    await expect(resetUserPasswordAction(userId)).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
 
-    const result = await updateUserMarketAccessAction("researcher-1", { marketIds: ["missing-market"] });
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
+  });
 
-    expect(result).toEqual({ error: "Unknown market id: missing-market" });
-    expect(queryMocks.createAuditLog).not.toHaveBeenCalled();
+  it.each([
+    ["existing target", "researcher-1"],
+    ["unknown target", "missing-user"],
+  ])("fails role changes closed with a non-enumerating result for an %s", async (_label, userId) => {
+    await expect(updateUserRoleAction(userId, "admin")).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
+
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
+  });
+
+  it("fails status changes closed before database or provider side effects", async () => {
+    await expect(updateUserStatusAction("researcher-1", "disabled")).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
+
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
+  });
+
+  it("fails team changes closed before database or provider side effects", async () => {
+    await expect(updateUserTeamAction("researcher-1", {
+      isTeamLead: true,
+      teamLeadUserId: "researcher-2",
+      teamLabel: "West",
+    })).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
+
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
+  });
+
+  it("does not reveal validation differences before a tenant-safe adapter exists", async () => {
+    await expect(updateUserRoleAction("missing-user", "not-a-role" as never)).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
+    await expect(updateUserStatusAction("missing-user", "not-a-status" as never)).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
+    await expect(updateUserTeamAction("missing-user", { teamLabel: "x".repeat(121) })).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
+
+    expectNoGlobalUserSideEffects();
+  });
+
+  it.each([
+    ["existing target", "researcher-1", { marketIds: ["market-1"] }],
+    ["unknown target", "missing-user", { marketIds: ["missing-market"] }],
+    ["invalid input", "researcher-1", { marketIds: [""] }],
+  ])("fails territory changes closed for an %s before global side effects", async (_label, userId, input) => {
+    await expect(updateUserMarketAccessAction(userId, input)).resolves.toEqual({
+      error: "User not found or unavailable.",
+    });
+
+    expect(authMocks.requirePermission).toHaveBeenCalledWith("users:manage");
+    expectNoGlobalUserSideEffects();
   });
 });

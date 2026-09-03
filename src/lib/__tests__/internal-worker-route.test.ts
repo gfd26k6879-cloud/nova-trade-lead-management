@@ -25,11 +25,36 @@ vi.mock("@/lib/internal-worker-auth", () => authMocks);
 vi.mock("@/lib/db/index", () => dbIndexMocks);
 vi.mock("@/lib/db/queries", () => queryMocks);
 
-import { runInternalWorkerRoute } from "@/lib/internal-worker-route";
+import { runInternalWorkerRoute, runTenantInternalWorkerRoute } from "@/lib/internal-worker-route";
 import { ForbiddenError, UnauthorizedError } from "@/lib/auth";
+import { getWorkerTenantContext } from "@/lib/tenancy/worker-context";
 
 function request(path = "/api/crawl/process-next") {
   return new NextRequest(`https://example.test${path}`);
+}
+
+function expectPrivateNoStore(response: Response) {
+  expect(response.headers.get("Cache-Control")).toBe("private, no-store, max-age=0, must-revalidate, no-transform");
+  expect(response.headers.get("Pragma")).toBe("no-cache");
+  expect(response.headers.get("Expires")).toBe("0");
+}
+
+function tenantAuthorization(tenantId: string, source: "cron" | "session" = "cron") {
+  return {
+    source,
+    context: Object.freeze({
+      tenantId,
+      workspaceId: null,
+      jobId: "20000000-0000-4000-8000-000000000001",
+      runId: "30000000-0000-4000-8000-000000000001",
+      leaseId: "40000000-0000-4000-8000-000000000001",
+      leaseGeneration: 2,
+      workerName: "crawl" as const,
+      action: "crawl:process" as const,
+      sourcePrincipalKind: source,
+      correlationId: `corr-${tenantId.slice(-1)}`,
+    }),
+  };
 }
 
 describe("runInternalWorkerRoute", () => {
@@ -64,6 +89,11 @@ describe("runInternalWorkerRoute", () => {
     );
 
     expect(response.status).toBe(504);
+    expectPrivateNoStore(response);
+    await expect(response.json()).resolves.toEqual({
+      status: "error",
+      error: "Worker exceeded internal timeout before Vercel runtime limit.",
+    });
     expect(queryMocks.completeWorkerRun).toHaveBeenCalledWith(
       "run-1",
       "error",
@@ -113,6 +143,10 @@ describe("runInternalWorkerRoute", () => {
     );
 
     expect(response.status).toBe(504);
+    await expect(response.json()).resolves.toEqual({
+      status: "error",
+      error: "Worker database operation timed out.",
+    });
     expect(queryMocks.completeWorkerRun).toHaveBeenCalledWith(
       "run-1",
       "error",
@@ -125,10 +159,150 @@ describe("runInternalWorkerRoute", () => {
     );
   });
 
+  it("redacts credential details from pre-run setup failures", async () => {
+    const diagnostic = "setup failed for api_key=private-worker-key";
+    queryMocks.ensureDbReady.mockRejectedValue(new Error(diagnostic));
+    const task = vi.fn();
+
+    const response = await runInternalWorkerRoute(
+      request(),
+      "crawl",
+      "crawl:manage",
+      task,
+    );
+
+    expect(response.status).toBe(500);
+    expectPrivateNoStore(response);
+    await expect(response.json()).resolves.toEqual({ status: "error", error: "Worker failed." });
+    expect(queryMocks.startWorkerRun).not.toHaveBeenCalled();
+    expect(queryMocks.completeWorkerRun).not.toHaveBeenCalled();
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it("keeps legacy task failure details internal while returning a stable public error", async () => {
+    const diagnostic = "connect failed: postgres://db_user:db_password@db.internal/nova";
+    const response = await runInternalWorkerRoute(
+      request(),
+      "crawl",
+      "crawl:manage",
+      async () => {
+        throw new Error(diagnostic);
+      },
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ status: "error", error: "Worker failed." });
+    expect(queryMocks.completeWorkerRun).toHaveBeenCalledWith(
+      "run-1",
+      "error",
+      { status: "error", error: diagnostic },
+      500,
+      diagnostic,
+    );
+  });
+
   it.each([
-    [new UnauthorizedError(), 401],
-    [new ForbiddenError(), 403],
-  ])("rejects unauthorized requests before database initialization without recording a run", async (error, status) => {
+    ["error", "error"],
+    ["retrying", "processed"],
+  ] as const)("redacts resolved %s task errors without changing persisted diagnostics", async (taskStatus, runStatus) => {
+    const diagnostic = "provider rejected credential sk-live-private";
+    const taskResult = {
+      status: taskStatus,
+      error: diagnostic,
+      leadId: "lead-1",
+      nextRetryAt: taskStatus === "retrying" ? "2026-08-23T12:00:00.000Z" : null,
+    };
+
+    const response = await runInternalWorkerRoute(
+      request(),
+      "crawl",
+      "crawl:manage",
+      async () => taskResult,
+    );
+
+    expect(response.status).toBe(200);
+    expectPrivateNoStore(response);
+    await expect(response.json()).resolves.toEqual({ ...taskResult, error: "Worker failed." });
+    expect(queryMocks.completeWorkerRun).toHaveBeenCalledWith(
+      "run-1",
+      runStatus,
+      taskResult,
+      200,
+      diagnostic,
+    );
+  });
+
+  it("redacts non-string resolved task errors without changing persisted diagnostics", async () => {
+    const secret = "sk-live-nested-private";
+    const diagnostic = {
+      message: "provider rejected credentials",
+      credentials: [secret],
+    };
+    const taskResult = {
+      status: "error",
+      error: diagnostic,
+      leadId: "lead-1",
+      nextRetryAt: null,
+    };
+
+    const response = await runInternalWorkerRoute(
+      request(),
+      "crawl",
+      "crawl:manage",
+      async () => taskResult,
+    );
+    const body: unknown = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ ...taskResult, error: "Worker failed." });
+    expect(JSON.stringify(body)).not.toContain(secret);
+    expect(queryMocks.completeWorkerRun).toHaveBeenCalledWith(
+      "run-1",
+      "error",
+      taskResult,
+      200,
+      diagnostic,
+    );
+  });
+
+  it("ignores JSON-irrelevant symbol getters while redacting resolved task errors", async () => {
+    const diagnostic = "provider rejected credential sk-live-private";
+    const ignoredSymbol = Symbol("json-ignored");
+    const taskResult = {
+      status: "error",
+      error: diagnostic,
+      leadId: "lead-1",
+    };
+    Object.defineProperty(taskResult, ignoredSymbol, {
+      enumerable: true,
+      get() {
+        throw new Error("JSON-ignored symbol getter must not run");
+      },
+    });
+
+    const response = await runInternalWorkerRoute(
+      request(),
+      "crawl",
+      "crawl:manage",
+      async () => taskResult,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "error",
+      error: "Worker failed.",
+      leadId: "lead-1",
+    });
+    expect(queryMocks.completeWorkerRun).toHaveBeenCalledTimes(1);
+    expect(queryMocks.completeWorkerRun.mock.calls[0]?.[2]).toBe(taskResult);
+    expect(taskResult.error).toBe(diagnostic);
+  });
+
+  it.each([
+    [new UnauthorizedError("Authentication failed for tenant-private"), 401, "Authentication required"],
+    [new ForbiddenError("Tenant tenant-private is outside caller scope"), 403, "You do not have permission to perform this action"],
+  ])("rejects unauthorized requests without returning caller-specific details or recording a run", async (error, status, message) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     authMocks.authorizeInternalWorkerRequest.mockRejectedValue(error);
     const task = vi.fn();
 
@@ -140,10 +314,137 @@ describe("runInternalWorkerRoute", () => {
     );
 
     expect(response.status).toBe(status);
+    expectPrivateNoStore(response);
+    await expect(response.json()).resolves.toEqual({ status: "error", error: message });
+    expect(warn).toHaveBeenCalledWith("route_timing", expect.objectContaining({ status, error: error.message }));
     expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
     expect(queryMocks.markStaleWorkerRunsInterrupted).not.toHaveBeenCalled();
     expect(queryMocks.startWorkerRun).not.toHaveBeenCalled();
     expect(queryMocks.completeWorkerRun).not.toHaveBeenCalled();
     expect(task).not.toHaveBeenCalled();
+  });
+
+  it("marks disabled worker responses private and non-cacheable", async () => {
+    queryMocks.isSchedulerWorkerEnabled.mockReturnValue(false);
+    const task = vi.fn();
+
+    const response = await runInternalWorkerRoute(
+      request(),
+      "crawl",
+      "crawl:manage",
+      task,
+    );
+
+    expect(response.status).toBe(200);
+    expectPrivateNoStore(response);
+    await expect(response.json()).resolves.toEqual({
+      status: "disabled",
+      reason: "Scheduler toggle is paused.",
+    });
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it("authorizes the tenant lease before DB startup, then passes exact context and signal to the task", async () => {
+    const authorize = vi.fn().mockResolvedValue(tenantAuthorization("00000000-0000-4000-8000-000000000001"));
+    const task = vi.fn(async (context, signal) => ({
+      status: "ok",
+      tenantId: context.tenantId,
+      contextTenantId: getWorkerTenantContext()?.tenantId,
+      aborted: signal?.aborted,
+    }));
+    const response = await runTenantInternalWorkerRoute(
+      request(),
+      "crawl",
+      "queue:operate",
+      task,
+      { authorization: { authorize }, action: "crawl:process" },
+    );
+
+    expect(response.status).toBe(200);
+    expectPrivateNoStore(response);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ok",
+      tenantId: "00000000-0000-4000-8000-000000000001",
+      contextTenantId: "00000000-0000-4000-8000-000000000001",
+      aborted: false,
+    });
+    expect(authorize).toHaveBeenCalledBefore(queryMocks.ensureDbReady);
+    expect(task).toHaveBeenCalledTimes(1);
+    expect(queryMocks.startWorkerRun).toHaveBeenCalledTimes(1);
+    expect(getWorkerTenantContext()).toBeNull();
+  });
+
+  it("does not initialize DB, start a worker run, or call the task when tenant auth denies", async () => {
+    const secret = "lease-secret-private";
+    const authorize = vi.fn().mockRejectedValue({
+      status: 401,
+      code: "WORKER_AUTHORIZATION_FAILED",
+      message: `Worker authorization failed for bearer ${secret}`,
+    });
+    const task = vi.fn();
+    const response = await runTenantInternalWorkerRoute(
+      request(),
+      "crawl",
+      "queue:operate",
+      task,
+      { authorization: { authorize } },
+    );
+
+    expect(response.status).toBe(401);
+    expectPrivateNoStore(response);
+    const body: unknown = await response.json();
+    expect(body).toEqual({ status: "error", error: "Worker authorization failed" });
+    expect(JSON.stringify(body)).not.toContain(secret);
+    expect(queryMocks.ensureDbReady).not.toHaveBeenCalled();
+    expect(queryMocks.startWorkerRun).not.toHaveBeenCalled();
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it("preserves session source and cleans the worker context when the task rejects", async () => {
+    const authorize = vi.fn().mockResolvedValue(tenantAuthorization("00000000-0000-4000-8000-000000000002", "session"));
+    const task = vi.fn(async (context) => {
+      expect(context.sourcePrincipalKind).toBe("session");
+      expect(getWorkerTenantContext()?.tenantId).toBe("00000000-0000-4000-8000-000000000002");
+      throw new Error("synthetic task failure");
+    });
+
+    const response = await runTenantInternalWorkerRoute(
+      request(),
+      "crawl",
+      "queue:operate",
+      task,
+      { authorization: { authorize } },
+    );
+
+    expect(response.status).toBe(500);
+    expectPrivateNoStore(response);
+    await expect(response.json()).resolves.toEqual({ status: "error", error: "Worker failed." });
+    expect(getWorkerTenantContext()).toBeNull();
+    expect(queryMocks.completeWorkerRun).toHaveBeenCalledWith(
+      "run-1",
+      "error",
+      { status: "error", error: "Worker failed." },
+      500,
+      "Worker failed.",
+    );
+  });
+
+  it("keeps tenant A and tenant B worker callbacks isolated", async () => {
+    const authorizeA = vi.fn().mockResolvedValue(tenantAuthorization("00000000-0000-4000-8000-000000000001"));
+    const authorizeB = vi.fn().mockResolvedValue(tenantAuthorization("00000000-0000-4000-8000-000000000002"));
+    const taskA = vi.fn(async (context) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { status: "ok", tenantId: context.tenantId, activeTenant: getWorkerTenantContext()?.tenantId };
+    });
+    const taskB = vi.fn(async (context) => ({ status: "ok", tenantId: context.tenantId, activeTenant: getWorkerTenantContext()?.tenantId }));
+
+    const [responseA, responseB] = await Promise.all([
+      runTenantInternalWorkerRoute(request(), "crawl", "queue:operate", taskA, { authorization: { authorize: authorizeA } }),
+      runTenantInternalWorkerRoute(request(), "crawl", "queue:operate", taskB, { authorization: { authorize: authorizeB } }),
+    ]);
+
+    await expect(responseA.json()).resolves.toMatchObject({ tenantId: "00000000-0000-4000-8000-000000000001", activeTenant: "00000000-0000-4000-8000-000000000001" });
+    await expect(responseB.json()).resolves.toMatchObject({ tenantId: "00000000-0000-4000-8000-000000000002", activeTenant: "00000000-0000-4000-8000-000000000002" });
+    expect(getWorkerTenantContext()).toBeNull();
   });
 });

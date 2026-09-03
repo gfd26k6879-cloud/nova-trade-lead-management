@@ -41,7 +41,11 @@ vi.mock("@/lib/leads/actions", () => ({
   submitResearcherAiFeedbackAction: vi.fn(),
 }));
 
-import { ArchiveConfirmDialog, LeadDetailClient } from "@/app/(protected)/leads/[id]/lead-detail-client";
+import {
+  ArchiveConfirmDialog,
+  LeadDetailClient,
+  resolveLeadDetailTabTargetIndex,
+} from "@/app/(protected)/leads/[id]/lead-detail-client";
 
 function renderLead(
   overrides: Record<string, unknown> = {},
@@ -156,6 +160,26 @@ function renderLead(
   );
 }
 
+describe("LeadDetailClient tabs", () => {
+  it("resolves lead detail tab keyboard navigation", () => {
+    expect(resolveLeadDetailTabTargetIndex(0, "ArrowLeft")).toBe(4);
+    expect(resolveLeadDetailTabTargetIndex(4, "ArrowRight")).toBe(0);
+    expect(resolveLeadDetailTabTargetIndex(3, "Home")).toBe(0);
+    expect(resolveLeadDetailTabTargetIndex(1, "End")).toBe(4);
+    expect(resolveLeadDetailTabTargetIndex(2, "Tab")).toBeNull();
+  });
+
+  it("keeps only the active lead detail tab in the sequential focus order", () => {
+    const html = renderLead({ archive_reason: "" });
+    const tabs = html.match(/<button[^>]*role="tab"[^>]*>/g) ?? [];
+
+    expect(tabs).toHaveLength(5);
+    expect(tabs.filter((tab) => tab.includes('tabindex="0"'))).toHaveLength(1);
+    expect(tabs.filter((tab) => tab.includes('tabindex="-1"'))).toHaveLength(4);
+    expect(tabs.find((tab) => tab.includes('aria-selected="true"'))).toContain('tabindex="0"');
+  });
+});
+
 describe("LeadDetailClient archive UX", () => {
   it("defaults to the Work tab and renders the compact call brief", () => {
     const html = renderLead({ archive_reason: "" });
@@ -171,6 +195,18 @@ describe("LeadDetailClient archive UX", () => {
     expect(html).toContain("Spoke to owner");
     expect(html).toContain("Send preview");
     expect(html).toContain("Recent activity");
+  });
+
+  it("exposes qualification status independently from the derived readiness label", () => {
+    const html = renderLead({
+      qualification_status: "needs_verification",
+      quality_bucket: "needs_ai_verify",
+    });
+
+    expect(html).toContain("Needs AI verify");
+    expect(html).toContain('data-role="lead-qualification-status"');
+    expect(html).toContain('data-qualification-status="needs_verification"');
+    expect(html).toContain("Qualification status: needs verification");
   });
 
   it("labels recent outreach activity with the actual channel", () => {

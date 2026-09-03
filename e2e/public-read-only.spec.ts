@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const publicRoutes = [
-  { path: "/privacy", heading: /How NoSite Leads handles business and workspace data/i },
-  { path: "/terms", heading: /Terms for the invite-only NoSite Leads workspace/i },
+  { path: "/privacy", heading: /How Nova Trade Lead Management handles business and workspace data/i },
+  { path: "/terms", heading: /Terms for the invite-only Nova Trade Lead Management workspace/i },
   { path: "/support", heading: /Support for accounts, corrections, removals, and demos/i },
   { path: "/data-sources", heading: "Business discovery data comes from official sources" },
 ] as const;
@@ -37,7 +37,7 @@ test.describe("public read-only smoke", () => {
       await page.setViewportSize(viewport);
       const response = await page.goto("/login", { waitUntil: "networkidle" });
       expect(response?.status(), `${viewport.name} /login status`).toBe(200);
-      await expect(page.getByRole("heading", { name: "NoSite Leads" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Nova Trade Lead Management" })).toBeVisible();
       await expect(page.getByLabel("Email")).toBeVisible();
       await expect(page.getByLabel("Password")).toBeVisible();
       await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();

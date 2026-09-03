@@ -29,6 +29,7 @@ import {
 import { getBusinessTypeLabel } from "@/lib/business-types";
 import type { ScoreBandThresholds } from "@/lib/score-bands";
 import type { KanbanLead } from "@/lib/db/queries";
+import { CsvExportControl, type LeadExportScope } from "./csv-export-control";
 
 type Lead = KanbanLead;
 
@@ -74,6 +75,7 @@ interface Props {
   scoreThresholds: ScoreBandThresholds;
   businessTypeCounts: Array<{ id: string; label: string; total: number; active: number }>;
   canExport: boolean;
+  exportScope: LeadExportScope | null;
   canClose: boolean;
 }
 
@@ -112,7 +114,7 @@ function groupLeadsByStatus(leads: Lead[]): Record<string, Lead[]> {
   return grouped;
 }
 
-export function KanbanClient({ leads, total, displayLimit, scoreThresholds, businessTypeCounts, canExport, canClose }: Props) {
+export function KanbanClient({ leads, total, displayLimit, scoreThresholds, businessTypeCounts, canExport, exportScope, canClose }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const groupedFromServer = useMemo(() => groupLeadsByStatus(leads), [leads]);
@@ -303,15 +305,12 @@ export function KanbanClient({ leads, total, displayLimit, scoreThresholds, busi
             </option>
           ))}
         </select>
-        {canExport && (
-          <a
-            href={`/api/export/csv?${searchParams.toString()}`}
-            className="btn-glass text-xs ml-auto"
-            download
-          >
-            Export CSV
-          </a>
-        )}
+        <CsvExportControl
+          canExport={canExport}
+          exportScope={exportScope}
+          searchParams={searchParams}
+          className="ml-auto"
+        />
       </div>
 
       <div className="mb-4">
