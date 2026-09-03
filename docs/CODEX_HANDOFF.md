@@ -13,7 +13,7 @@ Current as of September 3, 2026. This document replaces the historical June/July
 
 The checkpoint includes the newest tenant-hardening and worker work. Local agent-tooling state (for example `.commandcode/`) is ignored by git and must not be committed.
 
-Do not deploy, run CI/CD, apply remote migrations, enable paid provider work, or mutate production unless the user explicitly asks. Land code through pull requests against `main`. The present goal is a complete local application first.
+Do not deploy, run CI/CD, apply remote migrations, enable paid provider work, or mutate production unless the user explicitly asks. Land code through pull requests against `main`; GitHub Actions is off by decision, so run the local gate before merging. The present goal is Phase A of the lean finish plan: Nova Trade's own internal tool, at production quality, on the hosted Supabase project behind the current site. External launch is Phase B and is parked.
 
 ## What is implemented
 
@@ -38,18 +38,18 @@ The branch history also contains foundations for tenant/workspace/RBAC, document
 
 ## What is not implemented or proven
 
-### Immediate local-runtime gap
+### Immediate runtime gap
 
-The code compiles, tests, and builds, but the authenticated application and durable workers have not yet been exercised end to end against a local Supabase stack.
+The code compiles, tests, and builds, but the authenticated application and durable workers have not yet been exercised end to end against the hosted Supabase project. There is no local Supabase stack by decision; migrations are rehearsed on disposable PostgreSQL 16 (the existing env-gated lanes) and applied to the hosted project only after a backup and the owner's go-ahead.
 
-To close that gap:
+To close that gap (`L-01`):
 
-1. Start a local Supabase Auth + PostgreSQL environment and apply the repository migrations locally.
-2. Configure local environment values without committing them.
-3. Seed an admin identity, tenant, workspace, membership, role binding, and policy.
-4. Provision the restricted worker lease issuer/resolver roles.
-5. Add a small local dispatcher that acquires a durable lease and calls the matching worker route.
-6. Run authenticated browser tests for admin and researcher paths, then exercise each worker route.
+1. Read the hosted project's migration history (`supabase migration list --linked`), reconcile the known remote-only `20260610045957` entry, take a backup, and verify its restore on a disposable database.
+2. Replay all repository migrations on disposable PostgreSQL 16, then apply them to the hosted project in order with approval.
+3. Configure `.env.local` values without committing them.
+4. Seed the Nova Trade tenant, an admin, and a researcher on the hosted project with `LOCAL_SEED_ALLOW_REMOTE=1` set deliberately for that run (`npm run local:seed`).
+5. Provision the restricted worker lease issuer/resolver roles and run the dispatcher (`npm run local:dispatch`) against every worker route.
+6. Run authenticated browser tests for admin and researcher paths.
 
 Authentication is Supabase-only. Without Supabase configuration, public pages and the SQLite-backed application shell can run, but protected pages cannot be used. When `DATABASE_URL` is absent, application data falls back to `nosite-leads.db`; this does not replace Supabase Auth or the PostgreSQL worker lease path.
 
@@ -147,4 +147,4 @@ GitHub will not transfer ignored local state such as `.env.local`, SQLite databa
 4. Implement the smallest complete vertical slice and run its focused checks.
 5. Report only changed files, checks, and a real blocker. Update the plan only when an outcome changes state.
 
-The immediate priority is `L-01` in the lean finish plan: make the current application genuinely usable locally with local Supabase, seeded tenant identity, worker roles, dispatcher, and authenticated browser proof.
+The immediate priorities are `L-01` and `L-02` in the lean finish plan: put the current application on the hosted Supabase project with seeded tenant identity, worker roles, dispatcher, and authenticated browser proof, and remove the provisioning blockers so Nova Trade's team can be added to its tenant.
