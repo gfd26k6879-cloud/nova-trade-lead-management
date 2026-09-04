@@ -50,7 +50,7 @@ export default async function ResetPasswordPage({ searchParams }: ResetPasswordP
           </div>
         ) : (
           <form action={updatePasswordAction} className="space-y-5">
-            <PasswordField name="password" label="New password" autoComplete="new-password" />
+            <PasswordField name="password" label="New password" autoComplete="new-password" hint="Use at least 12 characters." />
             <PasswordField name="confirmPassword" label="Confirm password" autoComplete="new-password" />
 
             {errorMessage && (
@@ -86,11 +86,14 @@ function PasswordField({
   name,
   label,
   autoComplete,
+  hint,
 }: {
   name: string;
   label: string;
   autoComplete: string;
+  hint?: string;
 }) {
+  const hintId = hint ? `${name}-hint` : undefined;
   return (
     <div>
       <label
@@ -107,8 +110,14 @@ function PasswordField({
         required
         minLength={12}
         autoComplete={autoComplete}
+        aria-describedby={hintId}
         className="glass-input w-full"
       />
+      {hint && (
+        <p id={hintId} className="mt-1.5 text-xs" style={{ color: "var(--text-tertiary)" }}>
+          {hint}
+        </p>
+      )}
     </div>
   );
 }
